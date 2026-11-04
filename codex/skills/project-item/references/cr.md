@@ -8,6 +8,10 @@
 
 계획·검증 범위는 `~/.codex/references/planning-execution.md`를, 필요한 독립 검토는 `~/.codex/references/plan-review-budget.md`를, release evidence는 `~/.codex/references/verification-rtm.md`를 따릅니다. CR은 작업 흐름이며 별도의 검증 정책을 만들지 않습니다.
 
+## 운영 대상
+
+CR 항목은 각 저장소의 git CR 디렉토리(`open/`, `todo/`, `done/`, `deferred/`) 파일로 관리합니다. 등록 프로그램과 CR 디렉토리의 대응은 `~/.codex/tools/cr/programs.json`이 소유합니다. 담당 session은 시작할 때 `cr list <program>`으로 자기 프로그램의 `open/`, `todo/`, `deferred/`를 확인합니다. 등록 대상이 아닌 저장소도 CR 방식을 적용할 때 같은 형식을 씁니다.
+
 ## 도구
 
 `cr`(`~/.codex/tools/cr/bin/cr`, 설명은 `~/.codex/tools/cr/README.md`)을 사용합니다. Codex와 Claude Code가 같은 도구를 씁니다.
@@ -174,7 +178,14 @@ CR은 project-team의 JOB을 겸합니다. 기능·리팩터링·조사 작업�
 
 ## 다른 프로그램에 결함을 요청할 때
 
-전역 `AGENTS.md`의 "다른 프로그램의 결함 요청" 절을 따릅니다. 요청자는 대상 프로그램의 `open/`에 `cr new`로 항목을 열고 `- Requester:`를 남깁니다. 요청자 쪽에 같은 항목이 있으면 `deferred/`로 보내고 `Outcome: moved <program> <ID>`를 적습니다.
+다른 프로그램(`cr programs`의 목록)의 결함은 해당 담당자가 수정합니다. 요청자는 그 프로그램을 직접 고치지 않습니다.
+
+1. 최소 재현을 확인하십시오. 명령, 입력, 도구 경로와 version을 기록하십시오.
+2. `cr new <program> --area <AREA> --title ... --body-file -`로 대상 프로그램의 `open/`에 CR을 여십시오. 본문 절은 `cr new -h`를 따르십시오. `- Requester:`를 남기십시오. 요청자는 파일을 commit하지 않습니다. 담당 session이 판정과 함께 commit합니다.
+3. `cr owner <program>`으로 담당 session 이름을 찾으십시오. `SendMessage`로 프로그램, CR ID, 제목, 파일 경로만 한 줄로 알리십시오. 상세 내용은 CR 파일에만 쓰십시오. 담당 session이나 `SendMessage` 도구가 없으면 알림을 생략하십시오.
+4. 자기 작업은 우회 방법으로 계속하십시오. 막힌 항목에는 CR ID를 기록하고 다음 항목으로 넘어가십시오. 회신을 기다리며 멈추지 마십시오.
+
+요청자 쪽에 같은 CR 항목이 있으면 `deferred/`로 보내고 `Outcome: moved <program> <ID>`를 적습니다. 담당 session은 받은 요청을 현재 작업이 끝나는 시점에 확인합니다. Phase 2 판정은 사용자와 합의한 뒤 `## Disposition`에 기록합니다. 처리가 끝나면 요청자 session에 결과(commit, version)를 `SendMessage`로 알립니다. 도구가 없으면 알림을 생략합니다.
 
 ## 위임 규칙
 
