@@ -116,9 +116,11 @@ def test_launch_records_attempt_before_exec_and_exit_keeps_dead_pane(tmp_path, t
     script = tmp_path / "launch.sh"
     command = ["tmux", "-S", meta["socket_path"], "show-options", "-w", "-v", "-t", meta["window_id"],
                "@agent_session_provider_launch_attempted"]
-    python_code = "import sys; line = sys.stdin.readline(); sys.exit(0 if line.strip() == '/exit' else 9)"
+    received = tmp_path / "received.txt"
+    python_code = ("import sys; line = sys.stdin.readline(); open(sys.argv[1], 'w').write(line); "
+                   "sys.exit(0 if line.strip() == '/exit' else 9)")
     script.write_text("#!/bin/bash\n" + shlex.join(command) + " > " + shlex.quote(str(observed)) + "\nexec "
-                      + shlex.join([sys.executable, "-u", "-c", python_code]) + "\n")
+                      + shlex.join([sys.executable, "-u", "-c", python_code, str(received)]) + "\n")
     launched = tmux.launch(meta["window_id"], tmp_path, script)
     assert wait_for(lambda: observed.exists())
     assert observed.read_text().strip() == "true"
@@ -132,18 +134,14 @@ def test_launch_records_attempt_before_exec_and_exit_keeps_dead_pane(tmp_path, t
         tmux.write_meta(meta["window_id"], {"provider_launch_attempted": False})
     tmux.send_exit(meta["pane_id"])
 
-    last_pane = {}
+    # tmux 3.4 may never record pane_dead_status (see the paste test); the CLI read /exit and the
+    # lifecycle stop evidence (dead pane, CLI not alive) hold without it.
+    def exited():
+        return (tmux.pane_info(meta["pane_id"])["pane_dead"]
+                and not alive(launched["cli_pid"], launched["cli_birth"]))
 
-    def exit_detail():
-        pane = tmux.pane_info(meta["pane_id"])
-        last_pane.update(pane)
-        return pane if pane["pane_dead"] and pane["pane_dead_status"] is not None else None
-
-    try:
-        stopped = wait_for(exit_detail)
-    except AssertionError:
-        raise AssertionError("The exit status was not recorded: " + json.dumps(last_pane)) from None
-    assert stopped["pane_dead_status"] == 0
+    assert wait_for(exited)
+    assert received.read_text() == "/exit\n"
     assert tmux.read_meta(meta["window_id"])["run_id"] == "run-one"
 
 
@@ -185,20 +183,35 @@ def test_missing_current_window_preserves_pointer_and_reports_missing_evidence(t
     assert tmux.command("list-windows", "-t", "demo", "-F", "#{window_id}").splitlines() == [survivor["window_id"]]
 
 
+def zombie_signal(pid):
+    """The terminating signal of an unreaped child, read from /proc (Linux).
+
+    tmux 3.4 can miss SIGCHLD while libutempter waits for its helper; the pane is then dead
+    but pane_dead_signal stays empty and the child remains a zombie with its wait status.
+    """
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    except (FileNotFoundError, IndexError):
+        return None                                  # reaped meanwhile: tmux records the signal
+    if fields[0] != "Z":
+        return None
+    signal = int(fields[-1]) & 0x7F
+    return str(signal) if signal else None
+
+
 def test_unlaunched_placeholder_stops_with_term_and_retains_runtime_evidence(tmp_path, tmux):
     meta = new_window(tmux, tmp_path)
     tmux.set_current("demo", "seat-0", meta)
     assert meta["placeholder_process_group"] == os.getpgid(meta["placeholder_pid"])
     assert tmux.request_placeholder_stop(meta["window_id"])["requested"] is True
 
-    def exit_detail():
+    def exit_signal():
         pane = tmux.pane_info(meta["pane_id"])
-        if (pane["pane_dead"] and not alive(meta["placeholder_pid"], meta["placeholder_birth"])
-                and pane["pane_dead_signal"] is not None):
-            return pane
-        return None
+        if not pane["pane_dead"] or alive(meta["placeholder_pid"], meta["placeholder_birth"]):
+            return None
+        return pane["pane_dead_signal"] or zombie_signal(meta["placeholder_pid"])
 
-    assert wait_for(exit_detail)["pane_dead_signal"] == "15"
+    assert wait_for(exit_signal) == "15"
     current = tmux.get_current("demo", "seat-0")
     assert current["run_id"] == meta["run_id"]
     assert current["provider_launch_attempted"] is False
@@ -236,7 +249,7 @@ def test_exit_waits_for_paste_sensitive_tui_to_submit_one_enter(tmp_path, tmux):
     script = tmp_path / "launch.sh"
     script.write_text("#!/bin/bash\nexec " + shlex.join([sys.executable, "-u", str(fixture),
                                                       str(ready), str(observation)]) + "\n")
-    tmux.launch(meta["window_id"], tmp_path, script)
+    launched = tmux.launch(meta["window_id"], tmp_path, script)
     wait_for(ready.exists)
     tmux.send_exit(meta["pane_id"])
     wait_for(observation.exists)
@@ -245,11 +258,13 @@ def test_exit_waits_for_paste_sensitive_tui_to_submit_one_enter(tmp_path, tmux):
         assert tmux.pane_info(meta["pane_id"])["pane_dead"] is False
     assert event == {"text": "/exit", "enter_suppressed": False, "enter_count": 1}
 
-    def exit_detail():
-        pane = tmux.pane_info(meta["pane_id"])
-        return pane if pane["pane_dead"] and pane["pane_dead_status"] is not None else None
+    # tmux 3.4 loses SIGCHLD when the TUI exits during libutempter's helper wait, so
+    # pane_dead_status can stay empty. Use the lifecycle stop evidence instead.
+    def exited():
+        return (tmux.pane_info(meta["pane_id"])["pane_dead"]
+                and not alive(launched["cli_pid"], launched["cli_birth"]))
 
-    assert wait_for(exit_detail)["pane_dead_status"] == 0
+    assert wait_for(exited)
 
 
 def test_pointer_is_cleared_only_for_the_named_run(tmp_path, tmux):
