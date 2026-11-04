@@ -140,26 +140,26 @@ def test_codex_env_uses_exact_keys_and_preserves_policy(codex):
     provider, rpc, context, prepared = codex
     rpc.config["shell_environment_policy"] = {"inherit": "core", "filters": {"KEPT": "exclude"}, "set": {"KEEP_VALUE": "keep"}}
     before = copy.deepcopy(rpc.config)
-    prepared["env"] = {"FC2_SESSION": "worker-name"}
-    prepared["unset_env"] = ["SOCSIM_USE_BALVIAN", "SOCSIM_RUNTIME_FLAVOR"]
+    prepared["env"] = {"EXAMPLE_SESSION": "worker-name"}
+    prepared["unset_env"] = ["EXAMPLE_FLAG", "EXAMPLE_MODE"]
     argv = provider.launch_spec(context, prepared)["argv"]
-    assert 'shell_environment_policy.set.FC2_SESSION="worker-name"' in argv
-    assert 'shell_environment_policy.filters."SOCSIM_USE_BALVIAN"="exclude"' in argv
-    assert 'shell_environment_policy.filters."SOCSIM_RUNTIME_FLAVOR"="exclude"' in argv
-    assert not any("SOCSIM_*" in value for value in argv)
+    assert 'shell_environment_policy.set.EXAMPLE_SESSION="worker-name"' in argv
+    assert 'shell_environment_policy.filters."EXAMPLE_FLAG"="exclude"' in argv
+    assert 'shell_environment_policy.filters."EXAMPLE_MODE"="exclude"' in argv
+    assert not any("EXAMPLE_*" in value for value in argv)
     assert rpc.config == before
 
 
 @pytest.mark.parametrize("policy", [
-    {"set": {"SOCSIM_USE_BALVIAN": "would-return"}},
+    {"set": {"EXAMPLE_FLAG": "would-return"}},
     {"include_only": ["OTHER"]},
     {"filters": {"OTHER": "include"}},
 ])
 def test_codex_refuses_env_policy_conflicts(codex, policy):
     provider, rpc, context, prepared = codex
     rpc.config["shell_environment_policy"] = policy
-    prepared["env"] = {"FC2_SESSION": "worker-name"}
-    prepared["unset_env"] = ["SOCSIM_USE_BALVIAN"]
+    prepared["env"] = {"EXAMPLE_SESSION": "worker-name"}
+    prepared["unset_env"] = ["EXAMPLE_FLAG"]
     with pytest.raises(SessionError) as caught:
         provider.launch_spec(context, prepared)
     assert caught.value.code == "env_policy_conflict"
@@ -167,7 +167,7 @@ def test_codex_refuses_env_policy_conflicts(codex, policy):
 
 def test_codex_rejects_wildcard_unset(codex):
     provider, _, context, prepared = codex
-    prepared["unset_env"] = ["SOCSIM_*"]
+    prepared["unset_env"] = ["EXAMPLE_*"]
     with pytest.raises(SessionError) as caught:
         provider.launch_spec(context, prepared)
     assert caught.value.code == "invalid_provider_input"

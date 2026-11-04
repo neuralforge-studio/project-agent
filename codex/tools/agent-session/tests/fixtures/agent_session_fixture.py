@@ -16,8 +16,12 @@ from agent_session.config import resolve_project
 from agent_session.lifecycle import Manager
 from agent_session.state import StateStore
 from agent_session.tmux import Tmux
-from agent_session.util import write_json
 from agent_session_fake_provider import FakeProvider
+
+PROJECT_ITEM = TOOL.parent / "project-item"
+sys.path.insert(0, str(PROJECT_ITEM))
+from project_item import store as item_store  # noqa: E402
+from project_item.kinds import CR  # noqa: E402
 
 
 def git(root, *args):
@@ -46,7 +50,7 @@ class Environment:
         git(self.seed, "config", "user.name", "Fixture")
         git(self.seed, "config", "user.email", "fixture@example.invalid")
         (self.seed / "server.py").write_text("VALUE = 1\n")
-        (self.seed / ".gitignore").write_text("/agent/\n/jobs/\n/handoff/\n/.fixture-domain.json\n/.fixture-controls.json\n")
+        (self.seed / ".gitignore").write_text("/agent/\n")
         git(self.seed, "add", ".")
         git(self.seed, "commit", "-m", "Seed fixture main")
         git(self.seed, "remote", "add", "origin", str(self.remote))
@@ -57,10 +61,10 @@ class Environment:
             git(target, "config", "user.email", "fixture@example.invalid")
         self.initial_hash = git(self.seed, "rev-parse", "HEAD")
         self.config.write_text(json.dumps({str(self.base): {"project": "fixture", "provider": "codex",
-                                                          "seats": [str(path) for path in self.seats]}}))
+                                                          "seats": [str(path) for path in self.seats],
+                                                          "path_cr": "agent/cr", "path_decide": "agent/decide"}}))
         (self.base / "agent").mkdir()
-        (self.base / "agent/adapter.py").write_text((Path(__file__).parent / "project_adapter.py").read_text())
-        (self.base / "jobs").mkdir()
+        self.cr_root = self.base / "agent" / "cr"
         subprocess.run(["tmux", "-L", self.socket_name, "-f", os.devnull,
                         "new-session", "-d", "-s", "harness", "sleep", "86400"], check=True, capture_output=True)
         self.project = resolve_project(self.base, self.config)
@@ -71,34 +75,40 @@ class Environment:
     def manager(self, timeout=15):
         return Manager(self.base, self.config, socket_name=self.socket_name, timeout=timeout)
 
-    def job(self, number=1, mode="write"):
-        job_id = f"J-20261103-{number:02}"
-        metadata = {"job_id": job_id, "created_at": "2026-11-03T10:00:00+09:00", "role": "server",
-                    "mode": mode, "cwd": ".", "task": "Refactor the temporary server fixture.",
-                    "scope": ["server.py"], "checks": ["python -m py_compile server.py"],
-                    "branch": f"job/{job_id}" if mode == "write" else None,
-                    "approved": True, "baseline": None, "submission": None, "review": None,
-                    "integration": None, "submodules": []}
-        path = self.base / "jobs" / (job_id + ".md")
-        path.write_text("# Fixture JOB\n\n```json\n" + json.dumps(metadata, indent=2)
-                        + "\n```\n\n## 사용자 승인 근거\n\nThe test operator approved this temporary fixture task.\n")
+    def cr(self, number=1, mode="write", cwd=None):
+        """Write an approved CR in todo/ and return its ID."""
+        cr_id = f"TOOL-{number:03}"
+        extra = f"- Mode: {mode}\n" + (f"- Cwd: {cwd}\n" if cwd else "")
+        path = self.cr_root / "todo" / f"{cr_id}-fixture.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {cr_id}: Refactor the temporary server fixture\n\n- Opened: 2026-11-04\n"
+                        f"- Scope: fixture\n- Severity: S3\n{extra}\n## Symptom\nThe fixture needs a change.\n\n"
+                        "## Evidence\n`server.py:1`\n\n## Contract\nThe fixture contract.\n\n"
+                        "## Disposition\n- 2026-11-04 user: approved the temporary fixture task.\n\n"
+                        "## Implementation\nChange server.py.\n\n## Verification\npython -m py_compile server.py\n",
+                        encoding="utf-8")
+        return cr_id
+
+    def cr_state(self, cr_id):
+        return item_store.find(CR, self.cr_root, cr_id)
+
+    def cr_header(self, cr_id, key):
+        state, path = self.cr_state(cr_id)
+        return CR.fmt.parse(path, state).headers.get(key)
+
+    def finish(self, cr_id, state="done", outcome="fixed", note="fixture review"):
+        """The Leader's move out of in-progress (with a Result for fixed)."""
+        current, path = self.cr_state(cr_id)
+        if outcome == "fixed":
+            path.write_text(path.read_text() + "\n## Result\nfixture commit and checks\n")
+        item_store.move(CR, self.cr_root, cr_id, state, outcome=outcome if state in ("done", "deferred") else None,
+                        by="leader", note=note)
+
+    def handoff(self, slot, text="fixture handoff"):
+        path = self.base / "agent" / "handoff" / f"{slot}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text + "\n", encoding="utf-8")
         return path
-
-    def read_job(self, path):
-        import re
-        return json.loads(re.search(r"```json\n(.*?)\n```", path.read_text(), re.S).group(1))
-
-    def domain(self):
-        path = self.base / ".fixture-domain.json"
-        return json.loads(path.read_text()) if path.exists() else {}
-
-    def fail_once(self, name):
-        write_json(self.base / ".fixture-controls.json", {name: True})
-
-    def accept(self, job_id, head):
-        domain = self.domain()
-        domain["accepted"][job_id] = head
-        write_json(self.base / ".fixture-domain.json", domain)
 
     def advance_remote(self):
         (self.seed / "upstream.txt").write_text("another owner changed main\n")
@@ -107,15 +117,18 @@ class Environment:
         git(self.seed, "push", "origin", "main")
         return git(self.seed, "rev-parse", "HEAD")
 
-    def publish_and_integrate(self, seat, job_id):
+    def publish(self, seat):
         branch = git(seat, "branch", "--show-current")
         git(seat, "push", "-u", "origin", branch)
-        submitted = git(seat, "rev-parse", "HEAD")
+        return git(seat, "rev-parse", "HEAD")
+
+    def publish_and_integrate(self, seat):
+        branch = git(seat, "branch", "--show-current")
+        submitted = self.publish(seat)
         git(self.base, "fetch", "origin", branch)
         git(self.base, "merge", "--ff-only", "origin/" + branch)
         git(self.base, "push", "origin", "main")
         assert git(self.remote, "rev-parse", "refs/heads/main") == submitted
-        self.accept(job_id, submitted)
         return submitted
 
 
@@ -123,6 +136,9 @@ class Environment:
 def session_env(tmp_path, monkeypatch):
     if not shutil.which("tmux") or not shutil.which("git"):
         pytest.skip("tmux and Git are required")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
     for name in ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "AGENT_SESSION_CONFIG", "AGENT_SESSION_SOCKET", "AGENT_SESSION_BASE", "TMUX", "TMUX_PANE"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")

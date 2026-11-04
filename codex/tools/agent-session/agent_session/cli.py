@@ -42,7 +42,7 @@ def _seat(value):
 
 def _target(parser):
     choices = parser.add_mutually_exclusive_group(required=True)
-    choices.add_argument("--job", type=_nonempty, metavar="LEADER_OR_JOB_ID")
+    choices.add_argument("--job", type=_nonempty, metavar="LEADER_OR_CR_ID")
     choices.add_argument("--seat", type=_seat, metavar="N")
 
 
@@ -55,7 +55,7 @@ def build_parser():
     commands = parser.add_subparsers(dest="command", required=True, parser_class=Parser)
 
     start = commands.add_parser("start", help="Start a Leader or assign a Worker to a free seat.")
-    start.add_argument("--job", required=True, type=_nonempty, metavar="LEADER_OR_PATH")
+    start.add_argument("--job", required=True, type=_nonempty, metavar="LEADER_OR_CR_ID")
     start.add_argument("--prompt-file", type=_nonempty, metavar="FILE")
     start.add_argument("--timeout", type=_seconds, default=600, metavar="SECONDS")
 

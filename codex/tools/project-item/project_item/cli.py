@@ -177,6 +177,9 @@ def cmd_move(args) -> int:
     project = _select(args)
     kind = kind_of_id(args.id)
     root = registry.item_root(project, kind.name)
+    if args.state == "in-progress" and project.seats:
+        raise ItemError("agent_session_only", "In a team project, `agent-session start --job <CR-ID>` "
+                        "moves a CR to in-progress with its seat assignment.")
     target = store.move(kind, root, args.id, args.state, outcome=args.outcome, by=args.by, note=args.note)
     print(f"moved {target}")
     if kind is DECIDE:

@@ -163,3 +163,38 @@ def test_invalid_item_paths_in_one_project(tmp_path, paths):
     with pytest.raises(SessionError) as error:
         load_registry(config)
     assert error.value.code == "registry_invalid"
+
+
+def test_launch_args_are_optional(tmp_path):
+    base = tmp_path / "demo.main"
+    base.mkdir()
+    plain = tmp_path / "plain.main"
+    plain.mkdir()
+    config = write_registry(tmp_path / "project.json", {
+        str(base): {**entry(), "launch": {"args": ["--dangerously-bypass-approvals-and-sandbox"]}},
+        str(plain): entry("plain"),
+    })
+    project = resolve_project(base, config)
+    assert project.launch_args == ("--dangerously-bypass-approvals-and-sandbox",)
+    assert resolve_project(plain, config).launch_args == ()
+    hash(project)
+
+
+@pytest.mark.parametrize("key, block", [
+    ("launch", {"args": ["-m", "x"], "env": {"A": "1"}}),
+    ("launch", {"submodules": ["lib"]}),
+    ("launch", {"args": "--flag"}),
+    ("launch", {"args": [""]}),
+    ("launch", {"args": ["--cd", "/x"]}),
+    ("launch", {"args": ["--session-id=abc"]}),
+    ("worker", {"args": []}),
+    ("leader", {"args": []}),
+    ("roles", {}),
+])
+def test_invalid_launch_declarations(tmp_path, key, block):
+    base = tmp_path / "demo.main"
+    base.mkdir()
+    config = write_registry(tmp_path / "project.json", {str(base): {**entry(), key: block}})
+    with pytest.raises(SessionError) as error:
+        load_registry(config)
+    assert error.value.code == "registry_invalid"

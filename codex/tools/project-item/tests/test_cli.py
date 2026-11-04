@@ -13,7 +13,7 @@ ENTRY = Path(__file__).resolve().parents[1] / "bin" / "project-item"
 
 BODY = """\
 ## Background
-Haroo에 결정 기능이 없습니다.
+결정 기능이 없습니다.
 
 ## Options
 | 선택지 | 내용 | 결과 |
@@ -24,7 +24,7 @@ Haroo에 결정 기능이 없습니다.
 - A를 추천합니다.
 
 ## Evidence
-`tool/haroo_ops.py:985`
+`tool/example.py:12`
 """
 
 
@@ -40,7 +40,7 @@ def test_decision_flow_renders_the_page(project, capsys, tmp_path):
     config = str(project["config"])
     code, out, _ = run(capsys, "new", "decide", "--config", config, "--project", "demo",
                        "--title", "결정 페이지를 <공용>으로 둘까요?", "--urgency", "high",
-                       "--blocks", "Haroo 이전", "--body-file", str(body))
+                       "--blocks", "API 이전", "--body-file", str(body))
     assert code == 0
     item = project["decide"] / "open" / f"{out.split()[1].rsplit('/', 1)[1]}"
     assert item.exists() and "format:" not in out
@@ -113,3 +113,18 @@ def test_entry_script_runs_the_package(project):
                             capture_output=True, text=True, env=env)
     assert result.returncode == 0, result.stderr
     assert "demo" in result.stdout and "other" in result.stdout
+
+
+def test_team_projects_move_into_in_progress_only_through_agent_session(project, capsys, tmp_path):
+    config = json.loads(project["config"].read_text())
+    config[str(project["base"])]["seats"] = ["../demo.seat0"]
+    project["config"].write_text(json.dumps(config))
+    todo = project["cr"] / "todo" / "TOOL-001-a.md"
+    todo.parent.mkdir(parents=True)
+    todo.write_text("# TOOL-001: a\n\n- Opened: 2026-11-04\n- Scope: demo\n- Severity: S2\n\n## Symptom\ns\n\n"
+                    "## Evidence\ne\n\n## Contract\nc\n\n## Disposition\n- d\n\n## Implementation\ni\n\n"
+                    "## Verification\nv\n")
+    code, _, err = run(capsys, "move", "--config", str(project["config"]), "--project", "demo",
+                       "TOOL-001", "in-progress", "--by", "leader", "--note", "n")
+    assert code == 2 and "agent_session_only" in err
+    assert todo.exists()

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import git, git_init
+from project_item_testing import git, git_init
 from project_item import store
 from project_item.kinds import CR, DECIDE
 from project_item.registry import ItemError
@@ -370,3 +370,63 @@ def test_rollback_that_cannot_finish_names_the_paths_left(tmp_path, monkeypatch)
     assert error.value.code == "move_partial"
     assert str(root / "done" / "TOOL-001-alpha.md") in error.value.message
     assert (root / "done" / "TOOL-001-alpha.md").exists()
+
+
+# ---------------------------------------------------------------- in-progress and assignment calls
+PLAN = "\n## Implementation\ni\n\n## Verification\nv\n"
+
+
+def todo_cr(root, item_id="TOOL-001", extra=""):
+    path = root / "todo" / f"{item_id}-t.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(cr_text(item_id, extra=extra) + "\n## Disposition\n- d\n" + PLAN)
+    return path
+
+
+def test_claim_moves_todo_to_in_progress_and_reads_the_job(tmp_path):
+    from project_item import assign
+    root = tmp_path / "cr"
+    todo_cr(root, extra="- Mode: read-only\n- Cwd: server\n")
+    job = assign.claim(root, "TOOL-001")
+    assert job["state"] == "in-progress" and (root / "in-progress" / "TOOL-001-t.md").exists()
+    assert (job["mode"], job["cwd"], job["base"]) == ("read-only", "server", None)
+    assert assign.claim(root, "TOOL-001")["state"] == "in-progress"
+    assign.set_base(root, "TOOL-001", {"base_hash": "a" * 40, "base_commit_time": "2026-11-04T10:00:00+09:00"})
+    assert assign.lookup(root, "TOOL-001")["base"] == {"base_hash": "a" * 40,
+                                                         "base_commit_time": "2026-11-04T10:00:00+09:00"}
+    assign.unclaim(root, "TOOL-001")
+    assert assign.lookup(root, "TOOL-001")["state"] == "todo"
+
+
+def test_claim_refuses_other_states(tmp_path):
+    from project_item import assign
+    root = tmp_path / "cr"
+    new_cr(root, "t")
+    with pytest.raises(ItemError) as error:
+        assign.claim(root, "TOOL-001")
+    assert error.value.code == "cr_not_assignable"
+
+
+def test_in_progress_transitions_and_format(tmp_path):
+    root = tmp_path / "cr"
+    todo_cr(root)
+    store.move(CR, root, "TOOL-001", "in-progress", by="leader", note="assign")
+    with pytest.raises(ItemError) as error:
+        store.move(CR, root, "TOOL-001", "done", outcome="fixed", by="leader", note="n")
+    assert error.value.code == "format_invalid" and "Result" in error.value.message
+    store.move(CR, root, "TOOL-001", "todo", by="leader", note="park")
+    store.move(CR, root, "TOOL-001", "in-progress", by="leader", note="resume")
+    path = root / "in-progress" / "TOOL-001-t.md"
+    path.write_text(path.read_text() + "\n## Result\ncommit abc\n")
+    done = store.move(CR, root, "TOOL-001", "done", outcome="fixed", by="leader", note="merged")
+    assert CR.fmt.check(CR.fmt.parse(done, "done")) == []
+
+
+@pytest.mark.parametrize("header, message", [
+    ("- Mode: draft\n", "Mode 'draft' is not write or read-only"),
+    ("- Cwd: ../x\n", "Cwd '../x' is not a relative path inside the seat"),
+    ("- Base: abc 2026\n", "Base 'abc 2026' is not '<40-hex commit> <ISO time>'"),
+])
+def test_job_headers_are_checked(tmp_path, header, message):
+    path = todo_cr(tmp_path / "cr", extra=header)
+    assert message in CR.fmt.check(CR.fmt.parse(path, "todo"))

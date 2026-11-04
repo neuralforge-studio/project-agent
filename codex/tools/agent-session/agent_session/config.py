@@ -17,6 +17,7 @@ class Project:
     config_path: Path
     path_cr: Path | None = None
     path_decide: Path | None = None
+    launch_args: tuple[str, ...] = ()      # provider CLI arguments of every session (launch.args)
 
     @property
     def state_path(self):
@@ -62,6 +63,11 @@ def registry_path(config_path=None):
 REQUIRED_KEYS = {"project", "provider", "seats"}
 # Optional item roots of the project-item skill. They never take part in project selection.
 ITEM_KEYS = ("path_cr", "path_decide")
+# Optional launch declaration: {"args": [...]} for the provider CLI of every session.
+LAUNCH_KEY = "launch"
+# Arguments that the common runtime sets for registration and the new conversation.
+RESERVED_ARGS = {"--remote", "--cd", "--session-id", "--settings", "--append-system-prompt-file",
+                 "-n", "--name", "--resume", "--continue"}
 
 
 def _text(value):
@@ -76,6 +82,20 @@ def _path(value, base):
 
 def _overlap(first, second):
     return first == second or first in second.parents or second in first.parents
+
+
+def _launch_args(value, base_key):
+    def bad(message):
+        raise SessionError("registry_invalid", f"launch: {message}", 2, {"base": base_key})
+
+    if not isinstance(value, dict) or set(value) != {"args"}:
+        bad("use an object with only args.")
+    args = value["args"]
+    if not isinstance(args, list) or not all(_text(arg) for arg in args):
+        bad("args must be nonempty strings.")
+    if any(arg.split("=", 1)[0] in RESERVED_ARGS for arg in args):
+        bad("args must not set the arguments that the common runtime owns.")
+    return tuple(args)
 
 
 def load_registry(config_path=None):
@@ -96,9 +116,9 @@ def load_registry(config_path=None):
         if not _text(base_key) or not (Path(base_key).is_absolute() or base_key.startswith("~/")):
             raise SessionError("registry_invalid", "Each base key must be an absolute path or start with ~/.", 2)
         if (not isinstance(entry, dict) or not REQUIRED_KEYS <= set(entry)
-                or set(entry) - REQUIRED_KEYS - set(ITEM_KEYS)):
+                or set(entry) - REQUIRED_KEYS - set(ITEM_KEYS) - {LAUNCH_KEY}):
             raise SessionError("registry_invalid", "Each project entry must contain project, provider, and seats, "
-                               "and may add only path_cr and path_decide.", 2, {"base": base_key})
+                               "and may add only path_cr, path_decide and launch.", 2, {"base": base_key})
         name, provider, seats = entry["project"], entry["provider"], entry["seats"]
         if not _text(name) or name in names:
             raise SessionError("registry_invalid", "Project names must be nonempty and unique.", 2)
@@ -126,8 +146,10 @@ def load_registry(config_path=None):
                                        {"path": str(items[key]), "other": str(other),
                                         "items": [f"{owner}.{other_key}", f"{name}.{key}"]})
             item_roots.append((items[key], name, key))
+        launch_args = _launch_args(entry[LAUNCH_KEY], base_key) if LAUNCH_KEY in entry else ()
         names.add(name)
-        projects.append(Project(base, base_key, name, provider, resolved_seats, path, **items))
+        projects.append(Project(base, base_key, name, provider, resolved_seats, path, **items,
+                                launch_args=launch_args))
     return tuple(projects)
 
 

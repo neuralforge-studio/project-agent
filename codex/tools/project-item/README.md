@@ -4,7 +4,7 @@
 project. Codex and Claude Code use the same copy.
 
 - Rules: `codex/skills/project-item/SKILL.md` (common skeleton, states, transitions,
-  commands). Kind rules: `codex/references/change-request.md` (CR) and
+  commands). Kind rules: `codex/skills/project-item/references/cr.md` (CR) and
   `codex/skills/project-item/references/decide.md` (decisions). This tool does not define
   rules.
 - Executable copies of the formats: `project_item/cr.py` and `project_item/decide.py`.

@@ -48,8 +48,8 @@ def test_cr_new_list_and_check_through_the_entry(tmp_path):
     assert checked.returncode == 0 and "1 checked, 0 with violations" in checked.stdout
 
 
-def test_new_module_is_the_former_module_plus_parse_text():
+def test_new_module_is_the_former_module_plus_new_names():
     tree = ast.parse((TOOLS / "project-item/project_item/cr.py").read_text())
     names = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
     names |= {t.id for n in tree.body if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)}
-    assert names == NAMES | {"parse_text"}
+    assert names == NAMES | {"parse_text", "MODES", "BASE_RE"}

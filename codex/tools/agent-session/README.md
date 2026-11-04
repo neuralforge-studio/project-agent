@@ -28,9 +28,10 @@ Launcher와 프로젝트 API는 같은 원본을 사용하며 상속한 PYTHONPA
 | macOS | 해당 환경에서 확인한 `python3` |
 
 Tmux·Git·provider CLI를 준비합니다.
-Base·seat는 신뢰한 정확한 실제 경로에 미리 준비합니다.
-프로젝트의 `agent/adapter.py`도 신뢰한 원본을 설치합니다.
-공통 start가 없는 seat를 임의로 clone하지 않습니다.
+Base는 신뢰한 정확한 실제 경로에 미리 준비합니다.
+배정할 seat 디렉토리가 없으면 start가 base의 origin을 clone합니다. 접속 인증은 사용자의 Git·SSH 설정을 따릅니다.
+공통 도구는 프로젝트 코드를 import하거나 실행하지 않습니다. CR 파일과 등록 선언만 읽습니다.
+CR 형식과 in-progress 이동은 같은 저장소의 `codex/tools/project-item`을 사용합니다.
 Tmux 제어 권한은 host 명령 실행 권한입니다.
 V1은 기존에 승인한 비sandbox 실행만 지원합니다.
 
@@ -42,25 +43,27 @@ V1은 기존에 승인한 비sandbox 실행만 지원합니다.
 형식은 [등록 예제](../../../docs/project-team/project-registry.example.json)를 따릅니다.
 등록한 base 또는 seat 안에서 명령을 실행하면 현재 경로로 프로젝트를 선택합니다.
 배정·대화 연결은 프로젝트별 `<base>/agent/state.json`에 저장합니다.
-모델·권한·실행 상태를 등록 파일에 추가하지 않습니다.
+JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자는 등록의 `launch.args`로 줍니다.
 
 | 명령 | 예 |
 | --- | --- |
-| start | `agent-session start --job leader` 또는 `agent-session start --job /absolute/path/JOB.md` |
-| send | `agent-session send --job leader "완료 보고와 공식 JOB 경로"` |
-| stop | `agent-session stop --job J-20261103-07` |
-| restart | `agent-session restart --job J-20261103-07` |
+| start | `agent-session start --job leader` 또는 `agent-session start --job TOOL-012` |
+| send | `agent-session send --job leader "제출 commit과 CR ID"` |
+| stop | `agent-session stop --job TOOL-012` |
+| restart | `agent-session restart --job TOOL-012` |
 
-Start는 Worker seat를 자동 배정합니다.
-다른 명령은 JOB ID 대신 `--seat N`으로 현재 배정 대상을 지정할 수 있습니다.
+Start는 todo의 CR을 in-progress로 옮기고 Worker seat를 자동 배정합니다.
+다른 명령은 CR ID 대신 `--seat N`으로 현재 배정 대상을 지정할 수 있습니다.
 옵션은 `agent-session --help`와 해당 하위 명령의 `--help`에서 확인합니다.
-Restart는 이전 대화를 보존하고 인계 문서로 새 대화에 작업을 넘깁니다.
-Seat·JOB·Git 기준·branch는 유지합니다.
+Restart 전에 해당 session이 `<base>/agent/handoff/<slot>.md`를 씁니다.
+Restart는 이전 대화를 보존하고 그 인계 파일로 새 대화에 작업을 넘깁니다.
+Seat·CR·Git 기준·branch는 유지합니다.
+Worker 반납은 CR이 in-progress를 떠나고 seat의 결과가 origin에 게시된 뒤에만 합니다.
 제어 예약이나 메시지 수락을 실제 종료·반납·작업 완료로 해석하지 않습니다.
 
-모델·effort·기존에 승인한 권한 인자는 adapter의 `provider_args`로 전달합니다.
+모델·effort·기존에 승인한 권한 인자는 등록의 `launch.args`로 전달합니다.
 Binary를 직접 실행하므로 shell function·alias가 붙이던 인자는 적용되지 않습니다.
-기존 비sandbox 승인 인자도 adapter에 명시하며 공통 도구가 새 bypass 기본값을 추가하지 않습니다.
+기존 비sandbox 승인 인자도 등록에 명시하며 공통 도구가 새 bypass 기본값을 추가하지 않습니다.
 Codex TUI는 공용 daemon에 연결할 때도 `--cd <배정한 실제 cwd>`를 명시합니다.
 Launcher의 cd만으로 remote daemon의 작업 경로를 추측하지 않습니다.
 
@@ -74,7 +77,7 @@ Launcher의 cd만으로 remote daemon의 작업 경로를 추측하지 않습니
 | `read_state(cwd, config_path=None)` | 선택한 프로젝트의 현재 state snapshot |
 | `check_binding(cwd, target, expected_session_id=None, config_path=None, socket=None)` | 현재 JOB·run·실제 session의 대조 결과와 ready·alive·종료 확인 |
 
-Target은 `leader` 또는 현재 배정된 JOB ID입니다.
+Target은 `leader` 또는 현재 배정된 CR ID입니다.
 두 함수는 업무·배정을 변경하지 않으며 제어 잠금을 획득하지 않습니다.
 실행 관찰 실패를 빈 배정이나 종료 완료로 바꾸지 않습니다.
 
@@ -84,4 +87,4 @@ Target은 `leader` 또는 현재 배정된 JOB ID입니다.
 "$PY" -m pytest -q codex/tools/agent-session/tests
 ```
 
-이 검사는 실제 provider 연결과 Haroo 서버 JOB의 인수 결과를 대신하지 않습니다.
+이 검사는 실제 provider 연결과 실제 project의 인수 결과를 대신하지 않습니다.

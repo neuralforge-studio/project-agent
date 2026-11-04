@@ -1,6 +1,7 @@
-"""CR file format: parse a CR file and check it against the format of change-request.md.
+"""CR file format: parse a CR file and check it against the format of the CR contract
+(codex/skills/project-item/references/cr.md).
 
-The format (change-request.md "파일 형식") is the single source. This module is its
+The format (references/cr.md "파일 형식") is the single source. This module is its
 only executable copy; keep the two in step. The legacy `cr` tool re-exports this module
 (codex/tools/cr/cr_tool/fmt.py).
 """
@@ -10,7 +11,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-STATES = ("open", "todo", "done", "deferred")
+STATES = ("open", "todo", "in-progress", "done", "deferred")
+MODES = ("write", "read-only")
 SEVERITIES = ("S1", "S2", "S3")
 
 ID_RE = r"[A-Z][A-Z0-9]*-\d{2,}"
@@ -19,6 +21,7 @@ HEADER_RE = re.compile(r"^-\s+([A-Z][A-Za-z ]*?):\s*(.*?)\s*$")
 SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\b")
 OUTCOME_RE = re.compile(rf"^(fixed|waived|merged\s+{ID_RE}|moved\s+\S+\s+\S+)$")
+BASE_RE = re.compile(r"^[0-9a-f]{40} \d{4}-\d{2}-\d{2}T\S+$")
 STATUS_LINE_RE = re.compile(r"^-\s+\**Status\**\s*:", re.I)
 
 REQUIRED_HEADERS = ("Opened", "Scope", "Severity")
@@ -112,8 +115,17 @@ def check(cr: Cr) -> list[str]:
         bad.append(f"Severity '{sev}' is not S1, S2 or S3")
     if cr.status_line:
         bad.append("status line in the body; the directory owns the state")
+    mode = cr.headers.get("Mode")
+    if mode is not None and mode not in MODES:
+        bad.append(f"Mode '{mode}' is not write or read-only")
+    cwd = cr.headers.get("Cwd")
+    if cwd is not None and (not cwd or cwd.startswith("/") or ".." in Path(cwd).parts):
+        bad.append(f"Cwd '{cwd}' is not a relative path inside the seat")
+    base = cr.headers.get("Base")
+    if base is not None and not BASE_RE.match(base):
+        bad.append(f"Base '{base}' is not '<40-hex commit> <ISO time>'")
     outcome = cr.headers.get("Outcome")
-    if cr.state in ("open", "todo") and outcome:
+    if cr.state in ("open", "todo", "in-progress") and outcome:
         bad.append(f"Outcome in {cr.state}/; only done/ and deferred/ have it")
     if cr.state in ("done", "deferred"):
         if not outcome:
@@ -129,9 +141,9 @@ def check(cr: Cr) -> list[str]:
         return bad                         # migrated history: only the header rules apply
     need: list[str] = []
     kind = (outcome or "").split()[0] if outcome else ""
-    if cr.state in ("open", "todo", "deferred") or kind == "fixed":
+    if cr.state in ("open", "todo", "in-progress", "deferred") or kind == "fixed":
         need += FINDING_SECTIONS
-    if cr.state == "todo" or kind == "fixed":
+    if cr.state in ("todo", "in-progress") or kind == "fixed":
         need += PLAN_SECTIONS
     if kind == "fixed":
         need.append("Result")

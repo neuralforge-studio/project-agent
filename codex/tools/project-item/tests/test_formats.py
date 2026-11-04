@@ -1,4 +1,4 @@
-"""Format rules of the two kinds, from the contracts (change-request.md, references/decide.md)."""
+"""Format rules of the two kinds, from the contracts (references/cr.md, references/decide.md)."""
 from pathlib import Path
 
 import pytest
@@ -10,7 +10,7 @@ DECISION = """\
 
 - Opened: 2026-11-04 10:30
 - Urgency: high
-- Blocks: Haroo 결정 이전
+- Blocks: API 이전
 
 ## Background
 배경입니다.
@@ -39,7 +39,7 @@ def test_valid_open_decision(tmp_path):
     path = write(tmp_path, "open", "D-20261104-01.md", DECISION)
     item = decide.parse(path, "open")
     assert item.item_id == "D-20261104-01"
-    assert item.headers["Blocks"] == "Haroo 결정 이전"
+    assert item.headers["Blocks"] == "API 이전"
     assert decide.check(item) == []
 
 
@@ -59,7 +59,7 @@ def test_done_decision_needs_outcome_and_disposition(tmp_path):
     (("- Blocks:", "- Outcome: decided A\n- Blocks:"), "Outcome in open/; only done/ has it"),
     (("## Evidence\n`path:1`\n", ""), "section '## Evidence' missing"),
     (("# D-20261104-01: ", "# D-20261104-01 "), "title is not '# D-YYYYMMDD-NN: <question>'"),
-    (("- Blocks: Haroo 결정 이전", "- Blocks: x\n- Status: open"),
+    (("- Blocks: API 이전", "- Blocks: x\n- Status: open"),
      "status line in the body; the directory owns the state"),
 ])
 def test_decision_violations(tmp_path, change, message):

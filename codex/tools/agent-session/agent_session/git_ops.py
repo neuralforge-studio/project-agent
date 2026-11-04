@@ -1,6 +1,5 @@
-"""Prepare a job once and preserve its recorded Git baseline on retry."""
+"""Git preparation of a CR assignment and its retries (see prepare)."""
 
-import datetime as dt
 import subprocess
 from pathlib import Path
 
@@ -37,59 +36,89 @@ def sync_main(root):
     git(root, "merge", "--ff-only", "--no-overwrite-ignore", "origin/main")
 
 
-def prepare(context, adapter, store):
+def _baseline(root):
+    return {"base_hash": git(root, "rev-parse", "HEAD"),
+            "base_commit_time": git(root, "show", "-s", "--format=%cI", "HEAD")}
+
+
+def _first(context, project, store, root):
+    """First preparation: latest main, Base, CR branch."""
+    from . import jobs
+    job = context["job"]
+    sync_main(root)
+    baseline = _baseline(root)
+    _save_hash(store, str(context["seat"]), job["job_id"], baseline["base_hash"])
+    jobs.set_base(project, job["job_id"], baseline)
+    if job["mode"] == "write":
+        git(root, "check-ref-format", "--branch", job["branch"])
+        git(root, "switch", "--no-overwrite-ignore", "-c", job["branch"], baseline["base_hash"])
+    return baseline
+
+
+def _resume_branch(root, job, base_hash, published_first):
+    """Switch to the CR branch: the published branch on a new assignment, else the local one, else
+    create it from Base when HEAD is still the clean Base."""
+    branch = job["branch"]
+    remote = None
+    if published_first:
+        try:
+            git(root, "fetch", "--quiet", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", timeout=600)
+            remote = git(root, "rev-parse", "--verify", f"refs/remotes/origin/{branch}")
+        except SessionError:
+            remote = None
+    if git(root, "branch", "--list", branch):
+        if remote and git(root, "rev-parse", branch) != remote:
+            raise SessionError("branch_mismatch", f"Local {branch} differs from origin/{branch}.")
+        git(root, "switch", "--no-overwrite-ignore", branch)
+    elif remote:
+        git(root, "switch", "--no-overwrite-ignore", "-c", branch, f"refs/remotes/origin/{branch}")
+    else:
+        if dirty(root):
+            raise SessionError("baseline_mismatch", "Cannot create the CR branch over local changes.")
+        git(root, "fetch", "--quiet", "origin", timeout=600)
+        git(root, "cat-file", "-e", f"{base_hash}^{{commit}}")
+        git(root, "switch", "--no-overwrite-ignore", "-c", branch, base_hash)
+    git(root, "merge-base", "--is-ancestor", base_hash, "HEAD")
+
+
+def prepare(context, project, store):
+    """Git preparation of a Worker seat. The CR Base header is the preparation record:
+
+    - no Base: first preparation (latest main, Base, branch)
+    - Base and the same assignment in state: retry; keep Base and branch, never sync main again
+    - Base and a new assignment (parked CR assigned again): write continues the published
+      cr/<ID> branch from Base; read-only prepares again from the latest main
+    """
+    from . import jobs
     root = Path(context["seat_root"])
     job = context["job"]
     seat = str(context["seat"])
-    baseline = job.get("baseline")
-    current_hash = store.read()[seat]["git_hash"]
     if not is_git(root):
-        if baseline or current_hash:
-            raise SessionError("baseline_mismatch", "A Git baseline exists for a non-Git seat.")
-        adapter.record_baseline(context, None)
-        return None
-    if baseline:
-        base_hash = baseline["base_hash"]
-        if current_hash not in (None, base_hash):
-            raise SessionError("baseline_mismatch", "JOB and state use different baselines.")
-        git(root, "cat-file", "-e", f"{base_hash}^{{commit}}")
+        raise SessionError("seat_unavailable", "A Worker seat must be a Git work tree.", 2)
+    state_hash = store.read()[seat]["git_hash"]
+    base = job.get("base")
+    if base is None and state_hash:
+        base = {"base_hash": state_hash, "base_commit_time": git(root, "show", "-s", "--format=%cI", state_hash)}
+        jobs.set_base(project, job["job_id"], base)       # the CR write was lost after the state write
+    if (base is not None and state_hash and state_hash != base["base_hash"] and job["mode"] == "read-only"
+            and git(root, "rev-parse", "HEAD") == state_hash):
+        # A read-only preparation wrote the new Base to the state and lost the CR write.
+        base = {"base_hash": state_hash, "base_commit_time": git(root, "show", "-s", "--format=%cI", state_hash)}
+        jobs.set_base(project, job["job_id"], base)
+    if base is None:
+        baseline = _first(context, project, store, root)
+    elif state_hash is None and job["mode"] == "read-only":
+        baseline = _first(context, project, store, root)
+    else:
+        if state_hash not in (None, base["base_hash"]):
+            raise SessionError("baseline_mismatch", "The CR Base differs from the seat's recorded baseline.")
         if job["mode"] == "write":
-            branch = job["branch"]
-            existing = git(root, "branch", "--list", branch)
-            head = git(root, "rev-parse", "HEAD")
-            if not existing:
-                if head != base_hash or dirty(root):
-                    raise SessionError("baseline_mismatch", "Cannot resume JOB branch creation.")
-                git(root, "switch", "--no-overwrite-ignore", "-c", branch, base_hash)
-            if git(root, "branch", "--show-current") != branch:
-                raise SessionError("branch_mismatch", "The seat is not on its JOB branch.")
-            git(root, "merge-base", "--is-ancestor", base_hash, "HEAD")
-        elif git(root, "rev-parse", "HEAD") != base_hash:
+            _resume_branch(root, job, base["base_hash"], published_first=state_hash is None)
+        elif git(root, "rev-parse", "HEAD") != base["base_hash"]:
             raise SessionError("baseline_mismatch", "The read-only baseline has moved.")
-        _save_hash(store, seat, job["job_id"], base_hash)
-        adapter.record_baseline(context, baseline)
-        return baseline
-
-    if current_hash:
-        raise SessionError("baseline_mismatch", "State has a baseline absent from its JOB.")
-    policy = adapter.prepare_workspace(context, "before_sync") or {}
-    if job["mode"] == "write" or policy.get("sync_main"):
-        sync_main(root)
-        adapter.prepare_workspace(context, "after_sync")
-    base_hash = git(root, "rev-parse", "HEAD")
-    baseline = {
-        "base_hash": base_hash,
-        "base_commit_time": git(root, "show", "-s", "--format=%cI", "HEAD"),
-        "synced_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "branch": job["branch"] if job["mode"] == "write" else None,
-    }
-    adapter.record_baseline(context, baseline)
-    _save_hash(store, seat, job["job_id"], base_hash)
-    if job["mode"] == "write":
-        git(root, "check-ref-format", "--branch", job["branch"])
-        git(root, "switch", "--no-overwrite-ignore", "-c", job["branch"], base_hash)
-        adapter.record_baseline(context, baseline)
-    job["baseline"] = baseline
+        _save_hash(store, seat, job["job_id"], base["base_hash"])
+        baseline = base
+    job["base"] = baseline
     return baseline
 
 

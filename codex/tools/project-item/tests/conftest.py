@@ -1,6 +1,5 @@
 """Shared fixtures: an isolated HOME (lock files), a registry file and item roots."""
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -42,14 +41,3 @@ def project(tmp_path, no_legacy):
         str(other): {"project": "other", "provider": "claude", "seats": []},
     }))
     return {"base": base, "other": other, "config": config, "cr": base / "cr", "decide": base / "decide"}
-
-
-def git(root, *args):
-    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=True).stdout
-
-
-def git_init(root):
-    root.mkdir(parents=True, exist_ok=True)
-    git(root, "init", "-q")
-    git(root, "config", "user.email", "t@example.com")
-    git(root, "config", "user.name", "t")

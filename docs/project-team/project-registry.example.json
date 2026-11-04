@@ -1,27 +1,24 @@
 {
-  "/home/swain/work/haroo/haroo.main": {
-    "project": "haroo",
+  "/home/user/work/example.main": {
+    "project": "example",
     "provider": "codex",
     "seats": [
-      "../haroo.seat0",
-      "../haroo.seat1",
-      "../haroo.seat2"
+      "../example.seat0",
+      "../example.seat1"
     ],
-    "path_cr": "cr",
-    "path_decide": "decide"
+    "path_cr": "agent/cr",
+    "path_decide": "agent/decide",
+    "launch": {
+      "args": [
+        "--dangerously-bypass-approvals-and-sandbox"
+      ]
+    }
   },
-  "/primehome/swain/Project/falcon2/git/git.clean": {
-    "project": "falcon2",
+  "/home/user/work/other.main": {
+    "project": "other",
     "provider": "claude",
     "seats": [
-      "../git.work0",
-      "../git.work1",
-      "../git.work2",
-      "../git.work3",
-      "../git.work4",
-      "../git.work5",
-      "../git.work6",
-      "../git.work7"
+      "../other.seat0"
     ]
   }
 }

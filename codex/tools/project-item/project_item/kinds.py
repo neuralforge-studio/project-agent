@@ -30,9 +30,10 @@ class Kind:
 
 CR = Kind(
     name="cr", fmt=cr, states=cr.STATES, terminal=("done", "deferred"),
-    listed=("open", "todo", "deferred"),
+    listed=("open", "todo", "in-progress", "deferred"),
     transitions={"open": frozenset({"todo", "done", "deferred"}),
-                 "todo": frozenset({"open", "done", "deferred"}),
+                 "todo": frozenset({"open", "done", "deferred", "in-progress"}),
+                 "in-progress": frozenset({"done", "todo", "open", "deferred"}),
                  "done": frozenset({"open"}), "deferred": frozenset({"open"})},
     id_re=re.compile(rf"^({cr.ID_RE})\b"), sections=cr.SECTION_ORDER,
     outcomes={"done": ("fixed", "waived", "merged"), "deferred": ("moved",)})

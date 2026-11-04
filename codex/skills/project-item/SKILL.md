@@ -10,11 +10,11 @@ description: "등록 project의 CR(변경 요청)과 사용자 결정 항목을 
 
 | 종류 | 뜻 | 종류별 절차 |
 | --- | --- | --- |
-| `cr` | 발견한 문제와 판정·수정 기록 | [CR 계약](../../references/change-request.md) |
+| `cr` | 발견한 문제와 판정·수정 기록 | [CR 계약](references/cr.md) |
 | `decide` | 사용자 결정을 기다리는 질문과 그 결정 | [결정 항목 절차](references/decide.md) |
 
-JOB은 항목이 아닙니다. JOB은 project-team이 seat에 배정하는 실행 단위입니다.
-진행 중인 실행은 JOB과 `<base>/agent/state.json`이 소유합니다.
+CR은 JOB을 겸합니다. project-team의 `agent-session start --job <CR-ID>`가 todo의 CR을 seat에 배정하고 in-progress로 옮깁니다.
+어느 seat·session이 맡았는지는 `<base>/agent/state.json`이 소유합니다.
 
 ## 위치
 
@@ -50,11 +50,12 @@ JOB은 항목이 아닙니다. JOB은 project-team이 seat에 배정하는 실�
 
 | 종류 | 상태 디렉토리 | 허용 전이 |
 | --- | --- | --- |
-| `cr` | `open`, `todo`, `done`, `deferred` | open→todo, open→done, open→deferred, todo→done, todo→deferred, todo→open, done→open, deferred→open |
+| `cr` | `open`, `todo`, `in-progress`, `done`, `deferred` | open→todo, open→done, open→deferred, todo→in-progress, todo→done, todo→deferred, todo→open, in-progress→done, in-progress→todo, in-progress→open, in-progress→deferred, done→open, deferred→open |
 | `decide` | `open`, `done` | open→done, done→open |
 
-- 상태를 늘리지 않습니다. In-progress 상태는 없습니다.
-- `cr`의 `Outcome: fixed`는 todo에서만 done으로 갈 수 있습니다.
+- 상태를 더 늘리지 않습니다.
+- `in-progress`는 CR이 seat에서 실행 중이라는 뜻입니다. 팀 project(seat가 있는 project)에서는 `agent-session start`만 CR을 in-progress로 옮깁니다. `project-item move`는 `agent_session_only`로 거절합니다. 팀이 없는 project는 담당자가 `project-item move`로 옮깁니다.
+- `cr`의 `Outcome: fixed`는 todo 또는 in-progress에서만 done으로 갈 수 있습니다.
 - Open으로 되돌리는 전이에는 `--by`와 `--note`가 필요합니다. 도구가 Disposition 항목을 쓰고 Outcome을 지웁니다.
 - 항목을 옮기는 주체는 담당 session입니다. 팀 project에서는 Leader입니다.
 - 다른 project의 요청자는 `new cr`로 그 project의 open에 만들기만 합니다.

@@ -8,8 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import git_ops, process
-from .adapter import load_adapter, read_job
+from . import git_ops, jobs, process, workspace
 from .api import _project, _unlaunched_observation
 from .errors import SessionError
 from .providers import get_provider
@@ -25,7 +24,6 @@ class Manager:
         self.end = time.monotonic() + timeout
         self.store = StateStore(self.project, timeout=timeout)
         self.tmux = Tmux(socket_name=socket_name, socket_path=socket_path)
-        self.adapter = load_adapter(self.project)
         self.provider = get_provider(self.project.provider)
 
     def remaining(self):
@@ -82,23 +80,32 @@ class Manager:
         seat = None if slot == "leader" else int(slot[5:])
         root = self.project.base if seat is None else self.project.seats[seat]
         cwd = root if job is None else (root / job["cwd"]).resolve()
-        if not cwd.is_relative_to(root) or not cwd.is_dir():
-            raise SessionError("cwd_unavailable", "The JOB directory must exist inside its seat.", 2)
+        if not cwd.is_relative_to(root):
+            raise SessionError("cwd_unavailable", "The JOB directory must be inside its seat.", 2)
         return {
             "base": str(self.project.base), "project_id": self.project.project_id,
             "provider": self.project.provider, "config_path": str(self.project.config_path),
             "target": slot, "seat": seat, "seat_root": str(root), "cwd": str(cwd),
             "job": job, "job_id": job["job_id"] if job else None,
-            "role": job["role"] if job else "leader", "run_id": run_id or uuid.uuid4().hex,
+            "role": "leader" if job is None else "worker", "run_id": run_id or uuid.uuid4().hex,
             "python": sys.executable, "library_path": str(Path(__file__).resolve().parents[1]),
             "timeout": self.remaining(), "allow_daemon_start": True,
         }
 
+    def _window_name(self, meta):
+        if meta["seat"] is None:
+            return f"{self.project.project_id}-leader"
+        return f"{self.project.project_id}-seat{meta['seat']}-{meta['job_id']}"
+
     def _new_window(self, context):
         context = self.provider.prepare_context(context)
-        name = (f"{self.project.project_id}-leader" if context["seat"] is None else
-                f"{self.project.project_id}-{context['role']}-{context['seat']}-{context['job_id']}")
-        context = self.tmux.create_window(self.project.project_id, name, context["cwd"], context)
+        name = self._window_name(context)
+        context["window_name"] = name
+        # The waiting pane starts in the seat root; the launch script enters the CR's Cwd after Git preparation.
+        cwd = context["cwd"]
+        context = self.tmux.create_window(self.project.project_id, name, context["seat_root"], context)
+        if context["cwd"] != cwd:
+            context = self.tmux.write_meta(context["window_id"], {"cwd": cwd})
         self.tmux.set_current(self.project.project_id, context["target"], context)
         if context["seat"] is None:
             self.tmux.command("select-window", "-t", self.project.project_id + ":" + context["window_id"])
@@ -184,7 +191,8 @@ class Manager:
         command = shlex.join([context["python"], "-c", code, context["library_path"],
                               context["run_id"], context["config_path"], context["socket_path"],
                               context.get("endpoint") or ""])
-        text = "$project-team을 사용하십시오. 현재 프로젝트의 " + context["role"] + " 역할입니다.\n"
+        role = "Leader" if context["seat"] is None else "Worker"
+        text = "$project-team을 사용하십시오. 현재 프로젝트의 " + role + " 역할입니다.\n"
         if self.project.provider == "codex":
             text += ("첫 도구 호출에서 다음 내부 등록을 실행하십시오. 작업 디렉토리는 " + context["cwd"]
                      + "입니다. 등록 성공 전에는 일반 작업을 시작하지 마십시오.\n\n" + command + "\n\n")
@@ -193,11 +201,22 @@ class Manager:
         if context.get("handoff_file"):
             path = Path(context["handoff_file"])
             text += "이전 대화는 보존됐습니다. 다음 인계로 같은 작업을 이어받으십시오.\n" + path.read_text(encoding="utf-8") + "\n"
-        if context.get("job"):
-            text += "공식 JOB:\n" + Path(context["job"]["path"]).read_text(encoding="utf-8") + "\n"
-        text += request or ("인계 문서와 프로젝트 지침을 읽고 승인된 미완료 작업을 계속하십시오." if context.get("handoff_file") else
-                           "현재 배정과 프로젝트 지침을 읽고 사용자 작업 지시를 기다리십시오." if context["job"] is None
-                           else "배정한 범위에서 작업·검증·제출을 진행하고 Leader에게 보고하십시오.")
+        job = context.get("job")
+        if job:
+            base = (job.get("base") or {}).get("base_hash") or "준비 중"
+            text += ("배정 CR: " + job["job_id"] + " (" + job["title"] + ")\n"
+                     + "CR 파일: " + job["path"] + "\n"
+                     + "Seat: " + context["seat_root"] + "\n"
+                     + "작업 디렉토리: " + context["cwd"] + "\n"
+                     + "Mode: " + job["mode"] + "\n"
+                     + "Branch: " + (job.get("branch") or "없음(read-only)") + "\n"
+                     + "Base: " + base + "\n\nCR 본문:\n" + job["text"] + "\n")
+        text += request or (
+            "인계 문서와 프로젝트 지침을 읽고 승인된 미완료 작업을 계속하십시오." if context.get("handoff_file") else
+            "프로젝트 지침과 `project-item ls`의 결정 대기·CR을 확인하고 사용자 작업 지시를 기다리십시오."
+            if job is None else
+            "CR의 범위에서 작업하고 검증하십시오. 제출 commit과 검증 결과를 CR 파일의 `## Result`에 쓰고 "
+            "`agent-session send --job leader`로 보고하십시오.")
         if len(text.encode("utf-8")) > 65536:
             raise SessionError("prompt_too_large", "Initial JOB and handoff exceed 65536 UTF-8 bytes.", 2)
         return text
@@ -207,7 +226,7 @@ class Manager:
         directory = self.project.runtime_path / "runs" / context["run_id"]
         directory.mkdir(parents=True, exist_ok=True)
         hooks = self.provider.registration_hooks(context)
-        prepared = self.adapter.prepare_session(context, hooks, self._write_prompt(context, request))
+        prepared = self._session_input(context, hooks, self._write_prompt(context, request))
         prepared.setdefault("env", {}).update({
             "AGENT_SESSION_CONFIG": context["config_path"],
             "AGENT_SESSION_SOCKET": context["socket_path"],
@@ -216,7 +235,53 @@ class Manager:
         launch = self.provider.launch_spec(context, prepared)
         return prepared, launch
 
+    def _session_input(self, context, hooks, prompt):
+        """Provider input from the common prompt and the project's launch.args."""
+        directory = self.project.runtime_path / "runs" / context["run_id"]
+        path = directory / "prompt.md"
+        path.write_text(prompt, encoding="utf-8")
+        prepared = {"prompt_file": str(path), "provider_args": list(self.project.launch_args),
+                    "env": {}, "unset_env": [], "settings_file": None}
+        if self.project.provider == "claude":
+            settings = {"crossSessionInbound": "accept", "hooks": hooks}
+            settings_path = directory / "settings.json"
+            write_json(settings_path, settings)
+            prepared.update(settings_file=str(settings_path), provider_name=context.get("window_name"))
+        return prepared
+
+    def _handoff_path(self, meta):
+        return self.project.runtime_path / "handoff" / f"{meta['target']}.md"
+
+    def _fresh_handoff(self, meta):
+        """The slot's handoff file when it changed after this run's launch, else None."""
+        path = self._handoff_path(meta)
+        launched = self.project.runtime_path / "runs" / meta["run_id"] / "launch.sh"
+        if path.is_file() and launched.is_file() and path.stat().st_mtime > launched.stat().st_mtime:
+            return str(path)
+        return None
+
+    def _require_handoff(self, meta):
+        handoff = self._fresh_handoff(meta)
+        if handoff is None:
+            raise SessionError("handoff_required", "Write the slot's handoff file during this run before restart.",
+                               3, {"path": str(self._handoff_path(meta)), "run_id": meta["run_id"]})
+        return handoff
+
+    def _discard_placeholder(self, meta):
+        """End the unlaunched waiting pane of a start that failed before its reservation held."""
+        try:
+            self.tmux.request_placeholder_stop(meta["window_id"])
+            current = self.tmux.get_current(self.project.project_id, meta["target"])
+            while not self._observe(current)["stopped"]:
+                time.sleep(min(0.1, self.remaining()))
+            self._retire_name(current)
+        except SessionError:
+            pass                                   # the original failure is the result
+
     def _launch(self, context, request=None):
+        if not Path(context["cwd"]).is_dir():
+            raise SessionError("cwd_unavailable", "The CR Cwd does not exist in the prepared seat.", 2,
+                               {"cwd": context["cwd"]})
         directory = self.project.runtime_path / "runs" / context["run_id"]
         prepared, launch = self._prepare_launch(context, request)
         self.tmux.write_meta(context["window_id"], {
@@ -260,11 +325,6 @@ class Manager:
                                 raise SessionError("target_changed", "The JOB changed before binding publication.")
                             value[key]["session"] = session
                     self.store.update(publish)
-                    try:
-                        self.adapter.record_ready(meta, session)
-                    except SessionError as error:
-                        self.tmux.write_meta(meta["window_id"], {"start_error": error.as_dict()})
-                        raise
                     meta = self.tmux.write_meta(meta["window_id"], {"ready": True, "start_error": None})
                 return self._result(meta, ready=True)
             if self.tmux.pane_info(meta["pane_id"])["pane_dead"]:
@@ -279,17 +339,8 @@ class Manager:
                 "session": self._session(meta) if meta.get("registered") else None, **extra}
 
     def _retire_name(self, meta):
-        name = (f"{self.project.project_id}-leader" if meta["seat"] is None else
-                f"{self.project.project_id}-{meta['role']}-{meta['seat']}-{meta['job_id']}")
-        self.tmux.command("rename-window", "-t", meta["window_id"], name + "-exited-" + meta["run_id"][:8])
-
-    def _prepare_leader(self, context):
-        policy = self.adapter.prepare_workspace(context, "before_sync") or {}
-        if policy.get("sync_main") and git_ops.is_git(context["seat_root"]):
-            if not git_ops.dirty(context["seat_root"]):
-                git_ops.sync_main(context["seat_root"])
-            else:
-                self.tmux.write_meta(context["window_id"], {"sync_skipped": "existing changes"})
+        self.tmux.command("rename-window", "-t", meta["window_id"],
+                          self._window_name(meta) + "-exited-" + meta["run_id"][:8])
 
     def _start_existing(self, meta, request=None):
         self._authorize("start", meta["target"])
@@ -301,9 +352,9 @@ class Manager:
                 if meta.get("stopping"):
                     raise SessionError("target_stopping", "This execution is stopping.")
                 return self._wait_ready(meta)
-            handoff = self.adapter.prepare_restart(meta)
+            handoff = self._fresh_handoff(meta)
             self._retire_name(meta)
-            context = self._context(meta["target"], read_job(self.adapter, self.adapter.job_file(meta["job_id"]))
+            context = self._context(meta["target"], jobs.lookup(self.project, meta["job_id"], ("in-progress",))
                                     if meta.get("job_id") else None)
             context["handoff_file"] = _handoff(handoff)
             context = self._new_window(context)
@@ -311,16 +362,14 @@ class Manager:
         if meta.get("provider_launch_attempted") is not False:
             return self._wait_ready(meta)
         if meta.get("job"):
-            meta["job"] = read_job(self.adapter, self.adapter.job_file(meta["job_id"]))
+            meta["job"] = jobs.lookup(self.project, meta["job_id"], ("in-progress",))
             self._prepare_launch(meta)
-            self.adapter.record_assignment(meta)
-            git_ops.prepare(meta, self.adapter, self.store)
+            git_ops.prepare(meta, self.project, self.store)
             self.tmux.write_meta(meta["window_id"], {"job": meta["job"]})
         else:
             self.store.update(lambda value: value)
             request = request if request is not None else meta.get("leader_request")
             self._prepare_launch(meta, request)
-            self._prepare_leader(meta)
         return self._launch(meta, request)
 
     def start(self, job, prompt_file=None):
@@ -343,25 +392,27 @@ class Manager:
                         raise SessionError("leader_exists", "The current Leader is alive or its exit is unconfirmed.")
                 context = self._context("leader")
                 context["leader_request"] = request
-                check = self.adapter.check_workspace(context)
-                if not check.get("allowed"):
-                    raise SessionError("workspace_rejected", "The Leader base failed project checks.", details=check)
                 context = self._new_window(context)
                 self.store.update(lambda value: value)
                 self._prepare_launch(context, request)
-                self._prepare_leader(context)
                 return self._launch(context, request)
-        item = read_job(self.adapter, job)
+        item = jobs.lookup(self.project, job)
         self._authorize("start", "worker")
         with locked(self.project.runtime_path / "allocation.lock", self.remaining()):
             state = self.store.read(missing_ok=True)
             assigned = [key for key, value in state.items() if key != "leader" and value["job_id"] == item["job_id"]]
+            item = jobs.lookup(self.project, job)
             if assigned:
+                if item["state"] != "in-progress":
+                    raise SessionError("assignment_mismatch", "A reserved CR must be in in-progress.", 3)
                 number = int(assigned[0])
                 slot = f"seat-{number}"
                 context = self.tmux.get_current(self.project.project_id, slot)
                 if not context or context.get("job_id") != item["job_id"]:
                     raise SessionError("execution_unknown", "The reserved JOB has no matching run evidence.", 4)
+            elif item["state"] != "todo":
+                raise SessionError("cr_not_assignable", "An unassigned CR must be in todo; "
+                                   f"{item['job_id']} is in {item['state']}.", 3)
             else:
                 number = None
                 guard = None
@@ -369,9 +420,6 @@ class Manager:
                 for index, root in enumerate(self.project.seats):
                     if state[str(index)]["job_id"] is not None:
                         reasons[str(index)] = ["JOB assigned"]
-                        continue
-                    if not root.is_dir():
-                        reasons[str(index)] = ["seat directory unavailable"]
                         continue
                     slot = f"seat-{index}"
                     candidate_guard = locked(self.project.runtime_path / "control" / f"{slot}.lock",
@@ -385,8 +433,8 @@ class Manager:
                         continue
                     selected_guard = False
                     try:
-                        candidate = self._context(slot, item)
-                        checked = self.adapter.check_workspace(candidate)
+                        workspace.ensure_seat(self.project, root)
+                        checked = workspace.check_seat(self.project, root, item)
                         if not checked.get("allowed"):
                             reasons[str(index)] = checked.get("reasons", [])
                             continue
@@ -400,12 +448,22 @@ class Manager:
                         if prior and not self._observe(prior)["stopped"]:
                             reasons[str(index)] = ["previous execution termination is unconfirmed"]
                             continue
-                        context = self._new_window(candidate)
-                        def reserve(value):
-                            if value[str(index)]["job_id"] is not None:
-                                raise SessionError("target_changed", "Another JOB reserved the seat.")
-                            value[str(index)] = {"job_id": item["job_id"], "git_hash": None, "session": None}
-                        self.store.update(reserve)
+                        candidate = self._context(slot, item)
+                        item = jobs.claim(self.project, item["job_id"])
+                        candidate["job"] = item
+                        context = None
+                        try:
+                            context = self._new_window(candidate)
+                            def reserve(value):
+                                if value[str(index)]["job_id"] is not None:
+                                    raise SessionError("target_changed", "Another JOB reserved the seat.")
+                                value[str(index)] = {"job_id": item["job_id"], "git_hash": None, "session": None}
+                            self.store.update(reserve)
+                        except BaseException:
+                            if context is not None:
+                                self._discard_placeholder(context)
+                            jobs.unclaim(self.project, item["job_id"])
+                            raise
                         number, guard, selected_guard = index, candidate_guard, True
                         break
                     finally:
@@ -422,8 +480,7 @@ class Manager:
                 return self._start_existing(current)
         try:
             self._prepare_launch(context)
-            self.adapter.record_assignment(context)
-            git_ops.prepare(context, self.adapter, self.store)
+            git_ops.prepare(context, self.project, self.store)
             self.tmux.write_meta(context["window_id"], {"job": context["job"]})
             return self._launch(context)
         finally:
@@ -486,7 +543,7 @@ class Manager:
             meta = self._same(selected)
             if meta.get("control_pending") and expected_run is None:
                 raise SessionError("control_busy", "This run has an accepted control request.", 4)
-            handoff = self.adapter.prepare_restart(meta) if operation == "restart" else None
+            handoff = self._require_handoff(meta) if operation == "restart" else None
             if not meta.get("registered") and meta.get("provider_launch_attempted") is False and operation == "stop":
                 self.tmux.request_placeholder_stop(meta["window_id"])
                 exit_sent = True
@@ -506,7 +563,7 @@ class Manager:
                 time.sleep(min(0.1, self.remaining()))
             self._retire_name(meta)
             if operation == "restart":
-                current_job = read_job(self.adapter, self.adapter.job_file(meta["job_id"])) if meta.get("job_id") else None
+                current_job = jobs.lookup(self.project, meta["job_id"], ("in-progress",)) if meta.get("job_id") else None
                 context = self._context(meta["target"], current_job)
                 context["handoff_file"] = _handoff(handoff)
                 context = self._new_window(context)
@@ -514,9 +571,9 @@ class Manager:
                 if result["session"]["session_id"] == meta["session_id"]:
                     raise SessionError("conversation_reused", "Restart must create a new conversation.")
                 return {**result, "previous_session": self._session(meta), "restarted": True}
-            check = self.adapter.check_release(meta)
+            check = workspace.check_release(self.project, meta, jobs.state_of(self.project, meta["job_id"])
+                                            if meta.get("job_id") else (None, None))
             if check.get("allowed"):
-                self.adapter.record_release(meta, check.get("evidence", check))
                 def release(value):
                     if meta["seat"] is None:
                         if value["leader"] and value["leader"]["session_id"] != meta["session_id"]:
@@ -546,6 +603,8 @@ class Manager:
                 if current.get("control_operation") != operation:
                     raise SessionError("control_busy", "A different control request is pending for this run.", 4)
                 return {"accepted": True, "completed": False, "result_file": str(result_file)}
+            if operation == "restart":
+                self._require_handoff(current)
             write_json(request_file, request)
             write_json(result_file, {"ok": True, "data": {"accepted": True, "completed": False}, "error": None})
             code = "import sys;sys.path.insert(0,sys.argv[1]);from agent_session.internal import run_controller;run_controller(sys.argv[2])"

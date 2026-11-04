@@ -157,15 +157,20 @@ def _header_end(lines: list[str]) -> int:
     return i
 
 
-def set_outcome(text: str, outcome: str | None) -> str:
-    """Write the Outcome header (None removes it)."""
+def set_header(text: str, key: str, value: str | None) -> str:
+    """Write the '- <key>: <value>' header at the end of the header block (None removes it)."""
     lines = text.splitlines()
     end = _header_end(lines)
-    kept = [n for n in range(1, end) if not re.match(r"^-\s+Outcome:", lines[n])]
+    kept = [n for n in range(1, end) if not re.match(rf"^-\s+{re.escape(key)}:", lines[n])]
     head = [lines[0]] + [lines[n] for n in kept]
-    if outcome is not None:
-        head.append(f"- Outcome: {outcome}")
+    if value is not None:
+        head.append(f"- {key}: {value}")
     return "\n".join(head + lines[end:]) + "\n"
+
+
+def set_outcome(text: str, outcome: str | None) -> str:
+    """Write the Outcome header (None removes it)."""
+    return set_header(text, "Outcome", outcome)
 
 
 def add_disposition(text: str, entry: str, order: tuple[str, ...]) -> str:
@@ -229,6 +234,13 @@ def move(kind: Kind, root: Path, item_id: str, state: str, outcome: str | None =
          by: str | None = None, note: str | None = None, today: dt.date | None = None) -> Path:
     """Check the transition and the destination format, then move the file. Nothing changes on
     a refusal. A tracked file moves with `git mv`; the tool never commits."""
+    with root_lock(root):
+        return move_locked(kind, root, item_id, state, outcome, by, note, today)
+
+
+def move_locked(kind: Kind, root: Path, item_id: str, state: str, outcome: str | None = None,
+                by: str | None = None, note: str | None = None, today: dt.date | None = None) -> Path:
+    """`move` for a caller that already holds root_lock(root). The lock is not reentrant."""
     if state not in kind.states:
         raise ItemError("invalid_state", f"{kind.name} states are {', '.join(kind.states)}.")
     if (outcome or note) and not by:
@@ -237,56 +249,64 @@ def move(kind: Kind, root: Path, item_id: str, state: str, outcome: str | None =
         raise ItemError("reason_missing", "A move back to open needs --by and --note for Disposition.")
     if state == "open" and outcome:
         raise ItemError("invalid_outcome", "open/ has no Outcome.")
-    with root_lock(root):
-        source_state, source = find(kind, root, item_id)
-        if state == source_state or state not in kind.transitions[source_state]:
-            raise ItemError("invalid_transition",
-                            f"{kind.name} {item_id}: {source_state} -> {state} is not allowed.")
-        text = source.read_text(encoding="utf-8")
-        current = kind.fmt.parse_text(text, source, source_state).headers.get("Outcome")
-        new_outcome = None if state == "open" else (outcome or current)
-        allowed = kind.outcomes.get(state)
-        if allowed is not None and _outcome_kind(new_outcome) not in allowed:
-            raise ItemError("invalid_outcome", f"{kind.name} {state}/ takes Outcome "
-                            + " | ".join(allowed) + f", not '{new_outcome}'.")
-        if kind is CR and _outcome_kind(new_outcome) == "fixed" and source_state != "todo":
-            raise ItemError("invalid_transition", "A fixed CR reaches done only from todo.")
-        if state == "open" or outcome:
-            text = set_outcome(text, new_outcome)
-        if by:
-            day = (today or dt.date.today()).isoformat()
-            verdict = f"{source_state} -> {state}" + (f", Outcome {outcome}" if outcome else "")
-            text = add_disposition(text, f"{day} {by}: {verdict}." + (f" {note}" if note else ""),
-                                   kind.sections)
-        target = root / state / source.relative_to(root / source_state)
-        bad = kind.fmt.check(kind.fmt.parse_text(text, target, state))
-        if bad:
-            raise ItemError("format_invalid", f"{item_id} does not meet {state}/: " + "; ".join(bad))
-        if target.exists():
-            raise ItemError("target_exists", f"{target} already exists.")
-        _pause("move")
-        tracked = in_git(root) and _in_index(root, source)
-        created = [d for d in [target.parent, *target.parent.parents] if not d.exists() and root in d.parents]
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as error:
-            raise ItemError("move_failed", f"Cannot create {target.parent}: {error}") from error
-        original = source.read_text(encoding="utf-8")
-        try:
-            source.write_text(text, encoding="utf-8")
-            if tracked:
-                result = _git(root, "mv", "--", str(source), str(target))
-                if result.returncode != 0:
-                    raise ItemError("git_mv_failed", result.stderr.strip())
-            else:
-                try:
-                    os.rename(source, target)
-                except OSError as error:
-                    raise ItemError("move_failed", str(error)) from error
-        except BaseException as failure:
-            left = _roll_back(root, source, target, original, created, tracked)
-            if left:
-                raise ItemError("move_partial", f"{item_id}: the move failed ({failure}) and could not "
-                                "be undone. Left: " + "; ".join(left)) from failure
-            raise
+    source_state, source = find(kind, root, item_id)
+    if state == source_state or state not in kind.transitions[source_state]:
+        raise ItemError("invalid_transition",
+                        f"{kind.name} {item_id}: {source_state} -> {state} is not allowed.")
+    text = source.read_text(encoding="utf-8")
+    current = kind.fmt.parse_text(text, source, source_state).headers.get("Outcome")
+    new_outcome = None if state in ("open", "todo", "in-progress") else (outcome or current)
+    if outcome and new_outcome is None:
+        raise ItemError("invalid_outcome", f"{state}/ has no Outcome.")
+    allowed = kind.outcomes.get(state)
+    if allowed is not None and _outcome_kind(new_outcome) not in allowed:
+        raise ItemError("invalid_outcome", f"{kind.name} {state}/ takes Outcome "
+                        + " | ".join(allowed) + f", not '{new_outcome}'.")
+    if kind is CR and _outcome_kind(new_outcome) == "fixed" and source_state not in ("todo", "in-progress"):
+        raise ItemError("invalid_transition", "A fixed CR reaches done only from todo or in-progress.")
+    if new_outcome != current:
+        text = set_header(text, "Outcome", new_outcome)
+    if by:
+        day = (today or dt.date.today()).isoformat()
+        verdict = f"{source_state} -> {state}" + (f", Outcome {outcome}" if outcome else "")
+        text = add_disposition(text, f"{day} {by}: {verdict}." + (f" {note}" if note else ""),
+                               kind.sections)
+    return _relocate(kind, root, item_id, source_state, source, state, text)
+
+
+def _relocate(kind: Kind, root: Path, item_id: str, source_state: str, source: Path, state: str,
+              text: str) -> Path:
+    """Write `text` and move the file to `state`, after the destination format check. On a
+    failure the text, path and index are restored, or move_partial names what is left."""
+    target = root / state / source.relative_to(root / source_state)
+    bad = kind.fmt.check(kind.fmt.parse_text(text, target, state))
+    if bad:
+        raise ItemError("format_invalid", f"{item_id} does not meet {state}/: " + "; ".join(bad))
+    if target.exists():
+        raise ItemError("target_exists", f"{target} already exists.")
+    _pause("move")
+    tracked = in_git(root) and _in_index(root, source)
+    created = [d for d in [target.parent, *target.parent.parents] if not d.exists() and root in d.parents]
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ItemError("move_failed", f"Cannot create {target.parent}: {error}") from error
+    original = source.read_text(encoding="utf-8")
+    try:
+        source.write_text(text, encoding="utf-8")
+        if tracked:
+            result = _git(root, "mv", "--", str(source), str(target))
+            if result.returncode != 0:
+                raise ItemError("git_mv_failed", result.stderr.strip())
+        else:
+            try:
+                os.rename(source, target)
+            except OSError as error:
+                raise ItemError("move_failed", str(error)) from error
+    except BaseException as failure:
+        left = _roll_back(root, source, target, original, created, tracked)
+        if left:
+            raise ItemError("move_partial", f"{item_id}: the move failed ({failure}) and could not "
+                            "be undone. Left: " + "; ".join(left)) from failure
+        raise
     return target
