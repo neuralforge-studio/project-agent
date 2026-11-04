@@ -72,9 +72,10 @@ Key가 없으면 그 종류의 항목을 쓰지 않는 project입니다. 도구�
 모든 project의 항목 루트는 서로 같거나 조상·자손 관계이면 안 됩니다.
 항목 루트는 project 선택에 사용하지 않습니다.
 
-선택 key `launch`는 `{"args": [...]}` 하나만 받습니다. 모든 session의 provider CLI 인자입니다.
-공통 코드가 쓰는 인자(`--remote`, `--cd`, `--session-id`, `--settings`, `--append-system-prompt-file`, `-n`, `--name`, `--resume`, `--continue`)는 registry_invalid입니다.
-환경 변수·역할별 인자 같은 다른 선언은 두지 않습니다. 역할 지침은 CR 본문에서 문서 link로 줍니다.
+선택 key `launch`는 provider CLI 인자 배열 `args`·`leader_args`·`worker_args`만 받으며 하나 이상 있어야 합니다.
+`args`는 모든 session, `leader_args`는 Leader, `worker_args`는 모든 Worker의 인자입니다. Session의 인자는 `args` 뒤에 그 역할의 인자를 붙인 것입니다.
+공통 코드가 쓰는 인자(`--remote`, `--cd`, `--session-id`, `--settings`, `--append-system-prompt-file`, `-n`, `--name`, `--resume`, `--continue`)는 세 배열 어디에 있어도 registry_invalid입니다.
+환경 변수·seat별 인자 같은 다른 선언은 두지 않습니다. 역할 지침은 CR 본문에서 문서 link로 줍니다.
 
 등록 외의 JOB·실행 상태를 이 파일에 추가하지 않습니다.
 
@@ -273,7 +274,7 @@ Leader는 사용자 합의를 CR의 Disposition에 기록한 뒤 todo로 옮깁�
 3. 공통 workspace 검사를 통과한 seat에서 CR을 todo→in-progress로 옮깁니다.
 4. 새 run·대기 tmux 창·현재 실행 포인터와 state 예약을 기록합니다. 예약이 실패하면 이번 시작이 만든 대기 pane을 종료 확인하고 CR을 todo로 되돌립니다.
 5. Git 준비를 수행합니다.
-6. 공통 prompt와 등록의 `launch.args`로 실행 입력을 만듭니다(8절).
+6. 공통 prompt와 등록의 `launch` Worker 인자로 실행 입력을 만듭니다(8절).
 7. 대화형 CLI를 시작하고 자기 window의 native binding을 확인합니다. 시작 controller가 state에 게시한 뒤 시작 완료를 표시합니다.
 8. Seat·CR·연결 결과를 반환합니다.
 
@@ -468,7 +469,7 @@ V1은 기존에 승인한 비sandbox 실행만 지원합니다.
 Sandbox가 적용된 profile은 시작 전에 unsupported_sandbox로 거절합니다.
 지원 판정은 실제 적용할 argv와 profile·config를 합친 설정을 기준으로 합니다.
 Binary를 직접 실행하므로 shell function·alias가 붙이던 인자는 상속하지 않습니다.
-기존에 승인한 비sandbox 실행 인자는 등록의 `launch.args`에 명시합니다.
+기존에 승인한 비sandbox 실행 인자는 등록의 `launch`에 명시합니다.
 공통 tool이 권한 우회 옵션을 추가하거나 사용자 설정을 자동 변경하지 않습니다.
 현재 파일 쓰기 권한이나 tmux 접근이 없으면 needs_user_action입니다.
 프로젝트 mode read-only는 업무 수정 금지이며 OS sandbox나 승인 prompt 정책과 구분합니다.
@@ -771,9 +772,9 @@ Start와 restart는 다음 실행 입력을 만듭니다.
 | provider_name | Claude만. Tmux window 이름 |
 | env | 공통 `AGENT_SESSION_*` |
 | unset_env | 없음 |
-| provider_args | `launch.args`. Provider가 실제 지원 인자인지 검사 |
+| provider_args | `launch.args` 뒤에 역할의 `leader_args` 또는 `worker_args`. Provider가 실제 지원 인자인지 검사 |
 
-공통 코드의 내부 등록·endpoint·새 대화 지정 인자는 `launch.args`가 덮어쓸 수 없습니다.
+공통 코드의 내부 등록·endpoint·새 대화 지정 인자는 `launch`의 인자가 덮어쓸 수 없습니다.
 Provider-args는 모델·effort·기존 승인 권한·profile 같은 실제 지원 인자만 전달합니다.
 공통 코드는 새 모델·effort·권한 우회 기본값을 정하지 않습니다.
 Codex exec 전용 인자와 기존 thread 재개 인자는 거절합니다.

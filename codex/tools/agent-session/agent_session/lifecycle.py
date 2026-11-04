@@ -236,11 +236,12 @@ class Manager:
         return prepared, launch
 
     def _session_input(self, context, hooks, prompt):
-        """Provider input from the common prompt and the project's launch.args."""
+        """Provider input from the common prompt and the project's launch args for this role."""
         directory = self.project.runtime_path / "runs" / context["run_id"]
         path = directory / "prompt.md"
         path.write_text(prompt, encoding="utf-8")
-        prepared = {"prompt_file": str(path), "provider_args": list(self.project.launch_args),
+        role = "leader" if context["target"] == "leader" else "worker"
+        prepared = {"prompt_file": str(path), "provider_args": list(self.project.args_for(role)),
                     "env": {}, "unset_env": [], "settings_file": None}
         if self.project.provider == "claude":
             settings = {"crossSessionInbound": "accept", "hooks": hooks}

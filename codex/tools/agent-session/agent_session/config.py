@@ -18,6 +18,12 @@ class Project:
     path_cr: Path | None = None
     path_decide: Path | None = None
     launch_args: tuple[str, ...] = ()      # provider CLI arguments of every session (launch.args)
+    leader_args: tuple[str, ...] = ()      # appended for the Leader (launch.leader_args)
+    worker_args: tuple[str, ...] = ()      # appended for every Worker (launch.worker_args)
+
+    def args_for(self, role):
+        """Provider CLI arguments of a leader or worker session: the common args, then the role's."""
+        return self.launch_args + (self.leader_args if role == "leader" else self.worker_args)
 
     @property
     def state_path(self):
@@ -63,8 +69,10 @@ def registry_path(config_path=None):
 REQUIRED_KEYS = {"project", "provider", "seats"}
 # Optional item roots of the project-item skill. They never take part in project selection.
 ITEM_KEYS = ("path_cr", "path_decide")
-# Optional launch declaration: {"args": [...]} for the provider CLI of every session.
+# Optional launch declaration for the provider CLI: args for every session, then
+# leader_args or worker_args for that role. At least one of the three is present.
 LAUNCH_KEY = "launch"
+LAUNCH_ARG_KEYS = ("args", "leader_args", "worker_args")
 # Arguments that the common runtime sets for registration and the new conversation.
 RESERVED_ARGS = {"--remote", "--cd", "--session-id", "--settings", "--append-system-prompt-file",
                  "-n", "--name", "--resume", "--continue"}
@@ -88,14 +96,17 @@ def _launch_args(value, base_key):
     def bad(message):
         raise SessionError("registry_invalid", f"launch: {message}", 2, {"base": base_key})
 
-    if not isinstance(value, dict) or set(value) != {"args"}:
-        bad("use an object with only args.")
-    args = value["args"]
-    if not isinstance(args, list) or not all(_text(arg) for arg in args):
-        bad("args must be nonempty strings.")
-    if any(arg.split("=", 1)[0] in RESERVED_ARGS for arg in args):
-        bad("args must not set the arguments that the common runtime owns.")
-    return tuple(args)
+    if not isinstance(value, dict) or not value or set(value) - set(LAUNCH_ARG_KEYS):
+        bad("use an object with only args, leader_args and worker_args.")
+    result = {}
+    for key in LAUNCH_ARG_KEYS:
+        args = value.get(key, [])
+        if not isinstance(args, list) or not all(_text(arg) for arg in args):
+            bad(f"{key} must be nonempty strings.")
+        if any(arg.split("=", 1)[0] in RESERVED_ARGS for arg in args):
+            bad(f"{key} must not set the arguments that the common runtime owns.")
+        result[key] = tuple(args)
+    return result
 
 
 def load_registry(config_path=None):
@@ -146,10 +157,11 @@ def load_registry(config_path=None):
                                        {"path": str(items[key]), "other": str(other),
                                         "items": [f"{owner}.{other_key}", f"{name}.{key}"]})
             item_roots.append((items[key], name, key))
-        launch_args = _launch_args(entry[LAUNCH_KEY], base_key) if LAUNCH_KEY in entry else ()
+        launch = _launch_args(entry[LAUNCH_KEY], base_key) if LAUNCH_KEY in entry else {}
         names.add(name)
         projects.append(Project(base, base_key, name, provider, resolved_seats, path, **items,
-                                launch_args=launch_args))
+                                launch_args=launch.get("args", ()), leader_args=launch.get("leader_args", ()),
+                                worker_args=launch.get("worker_args", ())))
     return tuple(projects)
 
 

@@ -19,6 +19,16 @@
     "provider": "claude",
     "seats": [
       "../other.seat0"
-    ]
+    ],
+    "launch": {
+      "args": [
+        "--permission-mode",
+        "bypassPermissions"
+      ],
+      "worker_args": [
+        "--model",
+        "claude-sonnet-5-5"
+      ]
+    }
   }
 }

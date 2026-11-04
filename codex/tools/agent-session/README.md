@@ -43,7 +43,7 @@ V1은 기존에 승인한 비sandbox 실행만 지원합니다.
 형식은 [등록 예제](../../../docs/project-team/project-registry.example.json)를 따릅니다.
 등록한 base 또는 seat 안에서 명령을 실행하면 현재 경로로 프로젝트를 선택합니다.
 배정·대화 연결은 프로젝트별 `<base>/agent/state.json`에 저장합니다.
-JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자는 등록의 `launch.args`로 줍니다.
+JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자는 등록의 `launch`로 줍니다.
 
 | 명령 | 예 |
 | --- | --- |
@@ -61,7 +61,8 @@ Seat·CR·Git 기준·branch는 유지합니다.
 Worker 반납은 CR이 in-progress를 떠나고 seat의 결과가 origin에 게시된 뒤에만 합니다.
 제어 예약이나 메시지 수락을 실제 종료·반납·작업 완료로 해석하지 않습니다.
 
-모델·effort·기존에 승인한 권한 인자는 등록의 `launch.args`로 전달합니다.
+모델·effort·기존에 승인한 권한 인자는 등록의 `launch`로 전달합니다.
+`args`는 모든 session, `leader_args`·`worker_args`는 해당 역할에만 `args` 뒤에 붙습니다.
 Binary를 직접 실행하므로 shell function·alias가 붙이던 인자는 적용되지 않습니다.
 기존 비sandbox 승인 인자도 등록에 명시하며 공통 도구가 새 bypass 기본값을 추가하지 않습니다.
 Codex TUI는 공용 daemon에 연결할 때도 `--cd <배정한 실제 cwd>`를 명시합니다.

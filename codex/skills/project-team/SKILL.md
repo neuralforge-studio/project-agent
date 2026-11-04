@@ -13,7 +13,7 @@ JOB은 CR 파일입니다. CR 형식과 상태는 [project-item skill](../projec
 ## 프로젝트와 역할
 
 - 등록 base 또는 seat 안에서 명령을 실행합니다. 현재 경로로 프로젝트를 선택합니다.
-- Provider, seat 경로, CR 위치(`path_cr`), `launch.args`는 등록 파일에서 읽습니다. 실행할 때 다시 지정하지 않습니다.
+- Provider, seat 경로, CR 위치(`path_cr`), 실행 인자(`launch`)는 등록 파일에서 읽습니다. 실행할 때 다시 지정하지 않습니다.
 - 실제 배정은 `<base>/agent/state.json`에서 확인합니다.
 - 상태 JSON, tmux 소유 정보, CR의 `- Base:` header를 직접 편집하여 배정을 변경하지 않습니다.
 

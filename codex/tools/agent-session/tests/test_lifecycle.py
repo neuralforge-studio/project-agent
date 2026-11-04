@@ -404,6 +404,29 @@ def test_launch_args_reach_the_provider_input(session_env, monkeypatch):
     assert prepared["unset_env"] == []
 
 
+def test_role_launch_args_reach_only_their_role(session_env, monkeypatch):
+    env = session_env
+    config = json.loads(env.config.read_text())
+    config[str(env.base)]["launch"] = {"args": ["--dangerously-bypass-approvals-and-sandbox"],
+                                       "leader_args": ["--model", "leader-model"],
+                                       "worker_args": ["--model", "worker-model"]}
+    env.config.write_text(json.dumps(config))
+    captured = {}
+    import agent_session.lifecycle as lifecycle
+    provider = lifecycle.get_provider("codex")
+    original = provider.launch_spec
+    monkeypatch.setattr(lifecycle, "get_provider", lambda name: provider)
+    monkeypatch.setattr(provider, "launch_spec",
+                        lambda context, prepared: captured.setdefault(context["target"], prepared)
+                        and original(context, prepared))
+    env.manager().start("leader")
+    env.manager().start(env.cr())
+    assert captured["leader"]["provider_args"] == ["--dangerously-bypass-approvals-and-sandbox",
+                                                   "--model", "leader-model"]
+    assert captured["seat-0"]["provider_args"] == ["--dangerously-bypass-approvals-and-sandbox",
+                                                   "--model", "worker-model"]
+
+
 # ---------------------------------------------------------------- V3 review regressions
 def test_failed_reservation_frees_the_seat_for_the_next_start(session_env, monkeypatch):
     """B1: the placeholder of a failed reservation must not block the same seat."""

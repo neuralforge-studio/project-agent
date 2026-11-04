@@ -180,13 +180,38 @@ def test_launch_args_are_optional(tmp_path):
     hash(project)
 
 
+def test_role_launch_args_follow_the_common_args(tmp_path):
+    base = tmp_path / "demo.main"
+    base.mkdir()
+    only_worker = tmp_path / "worker.main"
+    only_worker.mkdir()
+    config = write_registry(tmp_path / "project.json", {
+        str(base): {**entry(), "launch": {"args": ["--permission-mode", "bypassPermissions"],
+                                         "leader_args": ["--model", "opus"],
+                                         "worker_args": ["--model", "sonnet"]}},
+        str(only_worker): {**entry("worker"), "launch": {"worker_args": ["--model", "sonnet"]}},
+    })
+    project = resolve_project(base, config)
+    assert project.args_for("leader") == ("--permission-mode", "bypassPermissions", "--model", "opus")
+    assert project.args_for("worker") == ("--permission-mode", "bypassPermissions", "--model", "sonnet")
+    other = resolve_project(only_worker, config)
+    assert other.args_for("leader") == ()
+    assert other.args_for("worker") == ("--model", "sonnet")
+    hash(project)
+
+
 @pytest.mark.parametrize("key, block", [
     ("launch", {"args": ["-m", "x"], "env": {"A": "1"}}),
     ("launch", {"submodules": ["lib"]}),
+    ("launch", {}),
     ("launch", {"args": "--flag"}),
     ("launch", {"args": [""]}),
     ("launch", {"args": ["--cd", "/x"]}),
     ("launch", {"args": ["--session-id=abc"]}),
+    ("launch", {"worker_args": "--flag"}),
+    ("launch", {"worker_args": ["--settings", "x.json"]}),
+    ("launch", {"leader_args": ["--resume"]}),
+    ("launch", {"reviewer_args": ["--model", "x"]}),
     ("worker", {"args": []}),
     ("leader", {"args": []}),
     ("roles", {}),
