@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+agent_session_platform=$(uname -s)
+if [[ "$agent_session_platform" == Darwin ]]; then
+    agent_session_python=$(command -v python3 || true)
+elif [[ -n "${WSL_DISTRO_NAME:-}" || -n "${WSL_INTEROP:-}" || "$(uname -r)" == *[Mm]icrosoft* ]]; then
+    agent_session_python="$HOME/python/.venv/bin/python"
+else
+    agent_session_python=/primehome/tools/Inhouse/Python3/latest/bin/python3
+    export LD_LIBRARY_PATH="/primehome/tools/Inhouse/Python3/latest/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
+if [[ -z "$agent_session_python" || ! -x "$agent_session_python" ]]; then
+    printf '%s\n' '{"ok":false,"data":null,"error":{"code":"python_unavailable","message":"The configured Python interpreter is unavailable.","details":{}}}'
+    exit 5
+fi
+
+exec "$agent_session_python" -c '
+import json
+from pathlib import Path
+import runpy
+import sys
+
+if sys.version_info < (3, 10):
+    print(json.dumps({"ok": False, "data": None, "error": {"code": "python_version", "message": "Python 3.10 or later is required.", "details": {}}}))
+    raise SystemExit(5)
+try:
+    entry = Path(sys.argv.pop(1)).resolve().parents[1] / "agent_session.py"
+    sys.argv[0] = str(entry)
+    runpy.run_path(str(entry), run_name="__main__")
+except Exception:
+    print(json.dumps({"ok": False, "data": None, "error": {"code": "entry_unavailable", "message": "The agent-session source entry is unavailable.", "details": {}}}))
+    raise SystemExit(5)
+' "${BASH_SOURCE[0]}" "$@"

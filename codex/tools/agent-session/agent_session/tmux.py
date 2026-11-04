@@ -1,0 +1,378 @@
+"""Control only windows with an exact project, run, and process identity."""
+
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import signal
+import stat
+import subprocess
+import time
+
+from .errors import SessionError
+from . import process
+
+
+_PREFIX = "@agent_session_"
+_IDENTITY = ("base", "target", "job_id", "run_id", "project_id", "window_id", "pane_id",
+             "server_pid", "server_started", "server_birth", "socket_path")
+
+
+def _safe_text(value, what):
+    if not isinstance(value, str) or not value or any(char in value for char in "\x00\n\r\t"):
+        raise SessionError("tmux_input", f"A nonempty {what} without control characters is required.", 2)
+    return value
+
+
+def _session(value):
+    value = _safe_text(value, "tmux session name")
+    if any(char in value for char in ":."):
+        raise SessionError("tmux_input", "Tmux session names must not contain ':' or '.'.", 2)
+    return value
+
+
+def _json_value(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    return value
+
+
+def _absent(stderr):
+    return any(text in stderr for text in ("no server running", "No such file or directory", "can't find session"))
+
+
+class Tmux:
+    def __init__(self, socket_name=None, socket_path=None):
+        if socket_name is not None and socket_path is not None:
+            raise SessionError("tmux_input", "Choose a socket name or a socket path, not both.", 2)
+        self.socket_name = None if socket_name is None else _safe_text(str(socket_name), "socket name")
+        if self.socket_name is not None and ("/" in self.socket_name or self.socket_name in (".", "..")):
+            raise SessionError("tmux_input", "A socket name must be one path component.", 2)
+        self.socket_path = None
+        if socket_path is not None:
+            path = Path(_safe_text(str(socket_path), "socket path")).expanduser()
+            if not path.is_absolute():
+                raise SessionError("tmux_input", "A tmux socket path must be absolute.", 2)
+            self.socket_path = str(path.resolve())
+
+    def _argv(self, arguments):
+        prefix = ["tmux"]
+        if self.socket_path is not None:
+            prefix.extend(["-S", self.socket_path])
+        elif self.socket_name is not None:
+            prefix.extend(["-L", self.socket_name])
+        return prefix + list(map(str, arguments))
+
+    def _run(self, *arguments, allow_missing=False):
+        try:
+            result = subprocess.run(self._argv(arguments), capture_output=True, text=True, timeout=10)
+        except FileNotFoundError as exc:
+            raise SessionError("tmux_unavailable", "The tmux executable is unavailable.", 5) from exc
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SessionError("tmux_unknown", "Cannot confirm the tmux operation.", 4) from exc
+        if result.returncode:
+            if allow_missing and _absent(result.stderr):
+                return None
+            raise SessionError("tmux_command_failed", "Tmux rejected the operation.", 5,
+                               {"command": str(arguments[0]) if arguments else "", "reason": result.stderr.strip()})
+        return result.stdout.rstrip("\n")
+
+    def command(self, *arguments):
+        return self._run(*arguments)
+
+    def effective_socket(self):
+        value = self._run("display-message", "-p", "#{socket_path}", allow_missing=True)
+        if value:
+            return str(Path(value).resolve())
+        if self.socket_path is not None:
+            return self.socket_path
+        if self.socket_name is None and os.environ.get("TMUX"):
+            return str(Path(os.environ["TMUX"].split(",", 1)[0]).resolve())
+        directory = Path(os.environ.get("TMUX_TMPDIR", "/tmp")) / f"tmux-{os.getuid()}"
+        return str((directory / (self.socket_name or "default")).resolve())
+
+    def server_identity(self):
+        raw = self._run("display-message", "-p", "#{pid}\t#{start_time}\t#{socket_path}")
+        parts = raw.split("\t")
+        if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit() or not parts[2]:
+            raise SessionError("tmux_unknown", "Tmux did not return a complete server identity.", 4)
+        pid = int(parts[0])
+        fingerprint = process.birth(pid)
+        if fingerprint is None:
+            raise SessionError("tmux_unknown", "The tmux server process identity is unavailable.", 4)
+        socket_path = Path(parts[2]).resolve()
+        try:
+            info = socket_path.stat()
+        except OSError as exc:
+            raise SessionError("tmux_unknown", "The selected tmux socket is unavailable.", 4) from exc
+        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+            raise SessionError("tmux_owner_mismatch", "The selected tmux socket is not owned by the current user.")
+        return {"server_pid": pid, "server_started": parts[1], "server_birth": fingerprint,
+                "socket_path": str(socket_path)}
+
+    def has_session(self, project_id):
+        name = _session(project_id)
+        return self._session_target(name, missing_ok=True) is not None
+
+    def _session_target(self, project_id, missing_ok=False):
+        raw = self._run("list-sessions", "-F", "#{session_name}\t#{session_id}", allow_missing=True)
+        for line in (raw or "").splitlines():
+            name, separator, handle = line.partition("\t")
+            if separator and name == project_id:
+                return handle
+        if missing_ok:
+            return None
+        raise SessionError("tmux_session_not_found", "The exact tmux session is unavailable.", 3,
+                           {"project": project_id})
+
+    def _session_owner(self, project_id):
+        raw = self._run("show-options", "-qv", "-t", self._session_target(project_id), _PREFIX + "owner")
+        if not raw:
+            raise SessionError("tmux_owner_mismatch", "The named tmux session is not managed by agent-session.")
+        try:
+            owner = json.loads(raw)
+        except ValueError as exc:
+            raise SessionError("tmux_owner_mismatch", "The managed tmux session has an invalid owner marker.") from exc
+        if not isinstance(owner, dict) or owner.get("project_id") != project_id:
+            raise SessionError("tmux_owner_mismatch", "The managed tmux session belongs to another project.")
+        actual = self.server_identity()
+        if any(owner.get(key) != value for key, value in actual.items()):
+            raise SessionError("tmux_owner_mismatch", "The tmux session was restored or its server identity changed.")
+        return owner
+
+    def create_window(self, project_id, window_name, cwd, metadata):
+        """Create a waiting pane. The caller records its current pointer next."""
+        name = _session(project_id)
+        window_name = _safe_text(window_name, "window name")
+        cwd = Path(cwd).expanduser().resolve()
+        if not cwd.is_dir():
+            raise SessionError("cwd_unavailable", "The tmux working directory is unavailable.", 3)
+        values = _json_value(dict(metadata))
+        for key in ("base", "run_id", "target"):
+            _safe_text(values.get(key), "managed " + key)
+        if values["target"] != "leader" and re.fullmatch(r"seat-[0-9]", values["target"]) is None:
+            raise SessionError("tmux_input", "The managed target must be leader or seat-N.", 2)
+        base = str(Path(values["base"]).resolve())
+        if self.has_session(name):
+            owner = self._session_owner(name)
+            if owner.get("base") != base:
+                raise SessionError("tmux_owner_mismatch", "The tmux session belongs to another project base.")
+            raw = self._run("new-window", "-d", "-P", "-F", "#{window_id}\t#{pane_id}",
+                            "-t", self._session_target(name) + ":", "-n", window_name, "-c", cwd, "sleep", "86400")
+        else:
+            raw = self._run("new-session", "-d", "-P", "-F", "#{window_id}\t#{pane_id}",
+                            "-s", name, "-n", window_name, "-c", cwd, "sleep", "86400")
+            owner = {"base": base, "project_id": name, **self.server_identity()}
+            self._run("set-option", "-t", self._session_target(name), _PREFIX + "owner", json.dumps(owner))
+        identifiers = raw.split("\t")
+        if len(identifiers) != 2 or not identifiers[0].startswith("@") or not identifiers[1].startswith("%"):
+            raise SessionError("tmux_unknown", "Tmux did not return exact window and pane handles.", 4)
+        window_id, pane_id = identifiers
+        self._run("set-option", "-w", "-t", window_id, "remain-on-exit", "on")
+        pane = self.pane_info(pane_id)
+        try:
+            placeholder_group = os.getpgid(pane["pane_pid"])
+        except OSError as exc:
+            raise SessionError("execution_unknown", "The waiting process group is unavailable.", 4) from exc
+        values.update({"base": base, "project_id": name, "window_id": window_id, "pane_id": pane_id,
+                       "cwd": str(cwd), **self.server_identity(), "provider_launch_attempted": False,
+                       "registered": False, "ready": False, "stopping": False,
+                       "placeholder_pid": pane["pane_pid"], "placeholder_birth": process.birth(pane["pane_pid"]),
+                       "placeholder_process_group": placeholder_group})
+        self.write_meta(window_id, values)
+        return self.read_meta(window_id)
+
+    def read_meta(self, window_id):
+        raw = self._run("show-options", "-w", "-t", _safe_text(window_id, "window handle"))
+        values = {}
+        for line in raw.splitlines():
+            if not line.startswith(_PREFIX):
+                continue
+            try:
+                parts = shlex.split(line)
+                if len(parts) != 2:
+                    raise ValueError("Incomplete tmux option")
+                values[parts[0][len(_PREFIX):]] = json.loads(parts[1])
+            except (ValueError, IndexError) as exc:
+                raise SessionError("tmux_metadata_invalid", "The managed window has invalid runtime metadata.") from exc
+        return values
+
+    def write_meta(self, window_id, updates):
+        """Keep mutable fields in separate options so concurrent updates merge."""
+        current = self.read_meta(window_id)
+        updates = _json_value(dict(updates))
+        for key, value in updates.items():
+            if re.fullmatch(r"[a-z][a-z0-9_]*", key) is None:
+                raise SessionError("tmux_metadata_invalid", "A runtime metadata key is invalid.", 2)
+            if key in _IDENTITY and key in current and current[key] != value:
+                raise SessionError("target_changed", "An immutable runtime identity cannot be replaced in place.",
+                                   details={"field": key})
+            if key == "provider_launch_attempted" and current.get(key) is True and value is not True:
+                raise SessionError("target_changed", "A provider launch attempt cannot be cleared in the same run.")
+        for key, value in updates.items():
+            self._run("set-option", "-w", "-t", window_id, _PREFIX + key,
+                      json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+        return self.read_meta(window_id)
+
+    def _current_option(self, target):
+        if target != "leader" and re.fullmatch(r"seat-[0-9]", target or "") is None:
+            raise SessionError("tmux_input", "The managed target must be leader or seat-N.", 2)
+        return _PREFIX + "current_" + target.replace("-", "_")
+
+    def set_current(self, project_id, target, metadata):
+        owner = self._session_owner(_session(project_id))
+        actual = self.read_meta(metadata["window_id"])
+        if (actual.get("project_id") != project_id or actual.get("target") != target
+                or actual.get("base") != owner.get("base") or actual.get("run_id") != metadata.get("run_id")):
+            raise SessionError("target_changed", "The current pointer does not match this managed window.")
+        pointer = {key: actual.get(key) for key in _IDENTITY}
+        self._run("set-option", "-t", self._session_target(project_id), self._current_option(target),
+                  json.dumps(pointer, ensure_ascii=False, separators=(",", ":")))
+        return actual
+
+    def get_current(self, project_id, target):
+        name = _session(project_id)
+        if not self.has_session(name):
+            return None
+        self._session_owner(name)
+        raw = self._run("show-options", "-qv", "-t", self._session_target(name), self._current_option(target))
+        if not raw:
+            return None
+        try:
+            pointer = json.loads(raw)
+        except ValueError as exc:
+            raise SessionError("tmux_metadata_invalid", "The current execution pointer is invalid.") from exc
+        if not isinstance(pointer, dict) or not pointer.get("window_id"):
+            raise SessionError("tmux_metadata_invalid", "The current execution pointer is incomplete.")
+        try:
+            actual = self.read_meta(pointer["window_id"])
+        except SessionError as error:
+            reason = error.details.get("reason", "")
+            if (error.code == "tmux_command_failed" and isinstance(reason, str)
+                    and re.fullmatch(r"(?:no such window|can't find window): .+", reason)):
+                raise SessionError("execution_evidence_missing", "The current execution window is unavailable.", 4,
+                                   {"target": target, "window_id": pointer["window_id"],
+                                    "run_id": pointer.get("run_id")}) from error
+            raise
+        if any(actual.get(key) != pointer.get(key) for key in _IDENTITY):
+            raise SessionError("target_changed", "The runtime identity no longer matches the current pointer.")
+        if actual.get("target") != target or actual.get("project_id") != name:
+            raise SessionError("target_changed", "The current execution points to another target.")
+        return actual
+
+    def pane_info(self, pane_id):
+        fields = ("window_id", "pane_id", "pane_pid", "pane_current_path", "pane_current_command",
+                  "pane_dead", "pane_dead_status", "pane_dead_signal")
+        raw = self._run("display-message", "-p", "-t", _safe_text(pane_id, "pane handle"),
+                        "\t".join("#{" + field + "}" for field in fields))
+        parts = raw.split("\t")
+        if len(parts) != len(fields) or not parts[2].isdigit() or parts[5] not in ("0", "1"):
+            raise SessionError("tmux_unknown", "The managed pane observation is incomplete.", 4)
+        row = dict(zip(fields, parts))
+        row["pane_pid"] = int(row["pane_pid"])
+        row["pane_dead"] = row["pane_dead"] == "1"
+        row["pane_dead_status"] = int(row["pane_dead_status"]) if row["pane_dead_status"].isdigit() else None
+        row["pane_dead_signal"] = row["pane_dead_signal"] or None
+        return row
+
+    def launch(self, window_id, cwd, script_path):
+        """Replace only this run's still-owned waiting process."""
+        meta = self.read_meta(window_id)
+        if not meta.get("project_id") or not meta.get("target"):
+            raise SessionError("tmux_owner_mismatch", "The window has no managed runtime identity.")
+        current = self.get_current(meta["project_id"], meta["target"])
+        if current is None or current.get("run_id") != meta.get("run_id") or current.get("window_id") != window_id:
+            raise SessionError("target_changed", "This window is no longer the current execution.")
+        if meta.get("provider_launch_attempted") is not False:
+            raise SessionError("launch_already_attempted", "The provider launch was already attempted or is unknown.")
+        pane = self.pane_info(meta["pane_id"])
+        if (pane["pane_dead"] or pane["pane_pid"] != meta.get("placeholder_pid")
+                or not process.alive(pane["pane_pid"], meta.get("placeholder_birth"))):
+            raise SessionError("target_changed", "The waiting pane process no longer matches this run.")
+        cwd = Path(cwd).expanduser().resolve()
+        script = Path(script_path).expanduser().resolve()
+        if str(cwd) != meta.get("cwd") or not script.is_file():
+            raise SessionError("tmux_input", "The launch script or working directory does not match this run.", 2)
+        self.write_meta(window_id, {"provider_launch_attempted": True})
+        self._run("respawn-pane", "-k", "-t", meta["pane_id"], "-c", cwd, "/bin/bash", script)
+        pane = self.pane_info(meta["pane_id"])
+        pid = pane["pane_pid"]
+        try:
+            group = os.getpgid(pid)
+        except ProcessLookupError:
+            group = None
+        return self.write_meta(window_id, {"cli_pid": pid, "cli_birth": process.birth(pid), "process_group": group})
+
+    def send_exit(self, pane_id):
+        pane = self.pane_info(pane_id)
+        meta = self.read_meta(pane["window_id"])
+        current = self.get_current(meta.get("project_id", ""), meta.get("target"))
+        if current is None or current.get("run_id") != meta.get("run_id") or current.get("pane_id") != pane_id:
+            raise SessionError("target_changed", "The pane is no longer the current execution.")
+        if pane["pane_dead"]:
+            return
+        if (not meta.get("cli_birth") or not process.alive(pane["pane_pid"], meta["cli_birth"])
+                or pane["pane_pid"] != meta.get("cli_pid")):
+            raise SessionError("target_changed", "The provider pane process identity changed.")
+        self._run("send-keys", "-t", pane_id, "-l", "/exit")
+        # Codex 0.166 treats Enter within its 120 ms paste window as input text.
+        time.sleep(0.25)
+        self._run("send-keys", "-t", pane_id, "Enter")
+
+    def request_placeholder_stop(self, window_id):
+        """Request TERM only for the current run's unlaunched waiting process."""
+        meta = self.read_meta(window_id)
+        current = self.get_current(meta.get("project_id", ""), meta.get("target"))
+        if (current is None or current.get("run_id") != meta.get("run_id")
+                or current.get("window_id") != window_id):
+            raise SessionError("target_changed", "The waiting pane is no longer the current execution.")
+        if meta.get("provider_launch_attempted") is not False or meta.get("registered") is not False:
+            raise SessionError("launch_already_attempted", "This pane is not a confirmed unlaunched process.")
+        pane = self.pane_info(meta["pane_id"])
+        if pane["pane_dead"]:
+            return {"requested": False, "pane_dead": True}
+        pid = pane["pane_pid"]
+        if (pid != meta.get("placeholder_pid") or not meta.get("placeholder_birth")
+                or not process.alive(pid, meta["placeholder_birth"])):
+            raise SessionError("target_changed", "The waiting pane process identity changed.")
+        try:
+            if os.getpgid(pid) != meta.get("placeholder_process_group"):
+                raise SessionError("target_changed", "The waiting process group changed.")
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return {"requested": False, "pane_dead": self.pane_info(meta["pane_id"])["pane_dead"]}
+        except OSError as exc:
+            raise SessionError("execution_unknown", "Cannot confirm the waiting process termination request.", 4) from exc
+        return {"requested": True, "pane_dead": self.pane_info(meta["pane_id"])["pane_dead"]}
+
+    def run_controller(self, script_path, cwd):
+        """Ask the selected tmux server to run a fixed controller script."""
+        script = Path(script_path).expanduser().resolve()
+        cwd = Path(cwd).expanduser().resolve()
+        if not script.is_file() or not cwd.is_dir():
+            raise SessionError("tmux_input", "The controller script or working directory is unavailable.", 2)
+        command = "cd " + shlex.quote(str(cwd)) + " && exec " + shlex.join(["/bin/bash", str(script)])
+        self._run("run-shell", "-b", command)
+        return {"submitted": True, "script": str(script), "cwd": str(cwd),
+                "socket_path": self.effective_socket()}
+
+    def find_by_session(self, project, session_id):
+        if not self.has_session(project.project_id):
+            return None
+        owner = self._session_owner(project.project_id)
+        if owner.get("base") != str(project.base):
+            raise SessionError("tmux_owner_mismatch", "The tmux session belongs to another project base.")
+        windows = self._run("list-windows", "-t", self._session_target(project.project_id), "-F", "#{window_id}").splitlines()
+        found = []
+        for window_id in dict.fromkeys(windows):
+            meta = self.read_meta(window_id)
+            if meta.get("base") == str(project.base) and meta.get("session_id") == session_id:
+                found.append(meta)
+        if len(found) > 1:
+            raise SessionError("tmux_owner_mismatch", "The provider session matches more than one managed window.")
+        return found[0] if found else None

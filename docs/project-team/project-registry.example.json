@@ -1,0 +1,25 @@
+{
+  "/home/swain/work/haroo/haroo.main": {
+    "project": "haroo",
+    "provider": "codex",
+    "seats": [
+      "../haroo.seat0",
+      "../haroo.seat1",
+      "../haroo.seat2"
+    ]
+  },
+  "/primehome/swain/Project/falcon2/git/git.clean": {
+    "project": "falcon2",
+    "provider": "claude",
+    "seats": [
+      "../git.work0",
+      "../git.work1",
+      "../git.work2",
+      "../git.work3",
+      "../git.work4",
+      "../git.work5",
+      "../git.work6",
+      "../git.work7"
+    ]
+  }
+}

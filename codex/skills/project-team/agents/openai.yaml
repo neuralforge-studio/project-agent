@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Team"
+  short_description: "등록 프로젝트의 tmux Leader·Worker를 배정·인계·종료"
+  default_prompt: "$project-team으로 현재 프로젝트의 공식 JOB과 배정을 확인하고 Leader·Worker 작업을 진행해 주세요."

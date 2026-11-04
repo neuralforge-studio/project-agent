@@ -1,0 +1,130 @@
+"""Read-only integration for project task, verification, and CR code."""
+
+import os
+from pathlib import Path
+
+from .config import resolve_project
+from .errors import SessionError
+from .state import StateStore
+
+
+def _project(cwd=None, config_path=None):
+    return resolve_project(cwd, config_path or os.environ.get("AGENT_SESSION_CONFIG"))
+
+
+def _tmux(socket=None):
+    from .tmux import Tmux
+
+    socket = socket or os.environ.get("AGENT_SESSION_SOCKET")
+    if isinstance(socket, dict):
+        return Tmux(**socket)
+    return Tmux(socket_path=str(socket)) if socket else Tmux()
+
+
+def read_state(cwd=None, config_path=None):
+    """Read an existing atomic snapshot without acquiring a control lock."""
+    return StateStore(_project(cwd, config_path)).read()
+
+
+def _select(state, target):
+    if target == "leader":
+        return None, state["leader"]
+    matches = [int(key) for key, item in state.items()
+               if key != "leader" and item["job_id"] == target]
+    if len(matches) != 1:
+        raise SessionError("job_not_assigned", "JOB has no unique current seat.")
+    seat = matches[0]
+    return seat, state[str(seat)]["session"]
+
+
+def _unlaunched_observation(meta, pane):
+    from . import process
+
+    if meta.get("provider_launch_attempted") is not False or meta.get("registered") is not False:
+        raise SessionError("session_unbound", "The target has no verified native conversation.", 4)
+    pid, fingerprint = meta.get("placeholder_pid"), meta.get("placeholder_birth")
+    group = meta.get("placeholder_process_group")
+    if not pid or not fingerprint or not group:
+        raise SessionError("execution_unknown", "The waiting pane process identity is incomplete.", 4)
+    alive = process.alive(int(pid), fingerprint)
+    stopped = bool(pane["pane_dead"] and not alive and not process.group_alive(int(group)))
+    return {"known": True, "terminal": True, "active_turn": False, "pending": [],
+            "background": [], "idle": True, "cli_alive": False, "stopped": stopped, "pane": pane}
+
+
+def check_binding(cwd, target, expected_session_id=None, config_path=None, socket=None):
+    """Observe a binding, then reject concurrent changes to its identity."""
+    from . import process
+    from .providers import get_provider
+
+    project = _project(cwd, config_path)
+    store = StateStore(project)
+    before = store.read()
+    seat, session = _select(before, target)
+    if expected_session_id and (not session or session["session_id"] != expected_session_id):
+        raise SessionError("owner_mismatch", "The conversation is not the current owner.")
+    control = _tmux(socket)
+    slot = "leader" if seat is None else f"seat-{seat}"
+    pointer = control.get_current(project.project_id, slot)
+    if not pointer:
+        raise SessionError("execution_unknown", "The current tmux execution is unavailable.", 4)
+    meta = control.read_meta(pointer["window_id"])
+    for field in ("run_id", "window_id", "pane_id"):
+        if pointer.get(field) != meta.get(field):
+            raise SessionError("owner_mismatch", "The tmux execution has changed.")
+    if Path(meta.get("base", "")).resolve() != project.base:
+        raise SessionError("owner_mismatch", "The tmux window belongs to another project.")
+    if meta.get("target") != slot or (session and meta.get("session_id") != session["session_id"]):
+        raise SessionError("owner_mismatch", "The native conversation does not match this slot.")
+    info = control.pane_info(meta["pane_id"])
+    pid = meta.get("cli_pid", info.get("pane_pid"))
+    expected_birth = meta.get("cli_birth")
+    cli_alive = bool(pid and process.alive(int(pid), expected_birth))
+    context = {
+        "base": str(project.base), "project_id": project.project_id,
+        "provider": project.provider, "target": slot, "seat": seat,
+        "seat_root": str(project.base if seat is None else project.seats[seat]),
+        "cwd": meta.get("cwd", str(project.base if seat is None else project.seats[seat])),
+        "job_id": None if seat is None else target, "run_id": meta["run_id"],
+        "config_path": str(project.config_path), "socket_path": meta.get("socket_path"),
+        "window_id": meta["window_id"], "pane_id": meta["pane_id"],
+        "endpoint": (session or {}).get("endpoint", meta.get("endpoint")),
+    }
+    meta = {**meta, "pane_dead": info["pane_dead"]}
+    if session:
+        provider = get_provider(project.provider)
+        if not info["pane_dead"]:
+            provider.verify_binding(session, context, meta, timeout=15)
+        elif not meta.get("registered"):
+            raise SessionError("execution_unknown", "The dead pane never established its conversation.", 4)
+        observation = provider.observe(session, context, meta, timeout=15)
+    else:
+        observation = _unlaunched_observation(meta, info)
+        cli_alive = False
+    group = meta.get("process_group")
+    group_alive = bool(group and process.group_alive(int(group)))
+    backgrounds = meta.get("background_pids", [])
+    background_alive = any(process.alive(int(item["pid"]), item.get("birth"))
+                           for item in backgrounds)
+    terminated = observation.get("stopped") if session is None else bool(info["pane_dead"] and not cli_alive and not group_alive
+                      and not background_alive and observation.get("known")
+                      and observation.get("terminal")
+                      and not observation.get("active_turn")
+                      and not observation.get("pending")
+                      and not observation.get("background"))
+    after = store.read()
+    after_pointer = control.get_current(project.project_id, slot)
+    try:
+        same_assignment = _select(after, target) == (seat, session)
+    except SessionError:
+        same_assignment = False
+    identity = ("run_id", "window_id", "pane_id", "server_pid", "server_started", "session_id")
+    same_run = after_pointer and all(after_pointer.get(key) == pointer.get(key) for key in identity)
+    if not same_assignment or not same_run:
+        raise SessionError("target_changed", "The target changed during observation.")
+    return {
+        **context, "session": session, "ready": bool(meta.get("ready")),
+        "alive": bool(cli_alive and not info["pane_dead"]),
+        "termination_confirmed": terminated, "metadata": meta,
+        "observation": observation,
+    }
