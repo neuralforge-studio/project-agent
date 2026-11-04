@@ -36,6 +36,9 @@ agent-session send --job J-20261103-07 --file FEEDBACK.md
 agent-session stop --job J-20261103-07
 ```
 
+사용자 결정이 필요한 질문은 `project-item` skill의 결정 항목으로 남깁니다.
+새 대화로 교체된 Leader는 `project-item ls decide`로 결정 대기 항목을 이어받습니다.
+
 제출 hash가 바뀌면 새 hash를 다시 검토합니다.
 완료 보고만으로 JOB을 인수하거나 seat를 비우지 않습니다.
 `released: false`이면 배정을 보존하고 반환한 이유를 처리합니다.

@@ -97,3 +97,69 @@ def test_duplicate_json_key_is_not_silently_replaced(tmp_path):
     with pytest.raises(SessionError) as error:
         load_registry(config)
     assert error.value.code == "registry_invalid"
+
+
+def test_item_paths_are_optional_and_resolved_like_seats(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    base = tmp_path / "demo.main"
+    base.mkdir()
+    plain = tmp_path / "plain.main"
+    plain.mkdir()
+    config = write_registry(tmp_path / "project.json", {
+        str(base): {**entry(), "path_cr": "cr", "path_decide": "~/ops/decide"},
+        str(plain): entry("plain"),
+    })
+    project = resolve_project(base, config)
+    assert project.path_cr == base / "cr"
+    assert project.path_decide == tmp_path / "home/ops/decide"
+    assert not project.path_cr.exists()
+    other = resolve_project(plain, config)
+    assert (other.path_cr, other.path_decide) == (None, None)
+    assert other == load_registry(config)[1]
+    assert hash(project) != hash(other)
+
+
+def test_item_paths_do_not_select_projects(tmp_path):
+    base = tmp_path / "demo.main"
+    base.mkdir()
+    items = tmp_path / "items"
+    (items / "cr").mkdir(parents=True)
+    config = write_registry(tmp_path / "project.json", {str(base): {**entry(), "path_cr": str(items / "cr")}})
+    with pytest.raises(SessionError) as error:
+        resolve_project(items / "cr", config)
+    assert error.value.code == "project_not_found"
+
+
+@pytest.mark.parametrize("first, second", [
+    ({"path_cr": "items"}, {"path_cr": "/x/items"}),
+    ({"path_cr": "items"}, {"path_decide": "/x/items/decide"}),
+    ({"path_decide": "/x/items/decide"}, {"path_cr": "/x/items"}),
+])
+def test_item_paths_must_not_be_equal_or_nested_across_projects(tmp_path, first, second):
+    one = tmp_path / "x"
+    two = tmp_path / "y"
+    one.mkdir()
+    two.mkdir()
+    def local(paths):
+        return {key: value.replace("/x", str(one)) for key, value in paths.items()}
+    config = write_registry(tmp_path / "project.json", {
+        str(one): {**entry("one"), **local(first)}, str(two): {**entry("two"), **local(second)}})
+    with pytest.raises(SessionError) as error:
+        load_registry(config)
+    assert error.value.code == "registry_invalid"
+
+
+@pytest.mark.parametrize("paths", [
+    {"path_cr": "items", "path_decide": "items"},
+    {"path_cr": "items", "path_decide": "items/open/decide"},
+    {"path_cr": "", "path_decide": "decide"},
+    {"path_cr": ["cr"]},
+    {"path_cr": "cr", "path_report": "report"},
+])
+def test_invalid_item_paths_in_one_project(tmp_path, paths):
+    base = tmp_path / "demo.main"
+    base.mkdir()
+    config = write_registry(tmp_path / "project.json", {str(base): {**entry(), **paths}})
+    with pytest.raises(SessionError) as error:
+        load_registry(config)
+    assert error.value.code == "registry_invalid"

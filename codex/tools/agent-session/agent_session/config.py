@@ -15,6 +15,8 @@ class Project:
     provider: str
     seats: tuple[Path, ...]
     config_path: Path
+    path_cr: Path | None = None
+    path_decide: Path | None = None
 
     @property
     def state_path(self):
@@ -57,8 +59,23 @@ def registry_path(config_path=None):
     return existing[0].resolve()
 
 
+REQUIRED_KEYS = {"project", "provider", "seats"}
+# Optional item roots of the project-item skill. They never take part in project selection.
+ITEM_KEYS = ("path_cr", "path_decide")
+
+
 def _text(value):
     return isinstance(value, str) and bool(value.strip()) and not any(c in value for c in "\x00\n\r")
+
+
+def _path(value, base):
+    """Resolve a registered path: absolute, ~/, or relative to the base."""
+    path = Path(value).expanduser()
+    return (path if path.is_absolute() else base / path).resolve()
+
+
+def _overlap(first, second):
+    return first == second or first in second.parents or second in first.parents
 
 
 def load_registry(config_path=None):
@@ -74,12 +91,14 @@ def load_registry(config_path=None):
     projects = []
     names = set()
     roots = {}
+    item_roots = []
     for base_key, entry in raw.items():
         if not _text(base_key) or not (Path(base_key).is_absolute() or base_key.startswith("~/")):
             raise SessionError("registry_invalid", "Each base key must be an absolute path or start with ~/.", 2)
-        if not isinstance(entry, dict) or set(entry) != {"project", "provider", "seats"}:
-            raise SessionError("registry_invalid", "Each project entry must contain only project, provider, and seats.", 2,
-                               {"base": base_key})
+        if (not isinstance(entry, dict) or not REQUIRED_KEYS <= set(entry)
+                or set(entry) - REQUIRED_KEYS - set(ITEM_KEYS)):
+            raise SessionError("registry_invalid", "Each project entry must contain project, provider, and seats, "
+                               "and may add only path_cr and path_decide.", 2, {"base": base_key})
         name, provider, seats = entry["project"], entry["provider"], entry["seats"]
         if not _text(name) or name in names:
             raise SessionError("registry_invalid", "Project names must be nonempty and unique.", 2)
@@ -88,15 +107,27 @@ def load_registry(config_path=None):
         if not isinstance(seats, list) or len(seats) > 10 or not all(_text(seat) for seat in seats):
             raise SessionError("registry_invalid", "Seats must be an array of at most ten nonempty paths.", 2)
         base = Path(base_key).expanduser().resolve()
-        resolved_seats = tuple((Path(seat).expanduser() if Path(seat).expanduser().is_absolute()
-                                else base / seat).resolve() for seat in seats)
+        resolved_seats = tuple(_path(seat, base) for seat in seats)
         for root in (base,) + resolved_seats:
             if root in roots:
                 raise SessionError("project_ambiguous", "A base or seat path is registered more than once.", 2,
                                    {"path": str(root), "projects": [roots[root], name]})
             roots[root] = name
+        items = {}
+        for key in ITEM_KEYS:
+            if key not in entry:
+                continue
+            if not _text(entry[key]):
+                raise SessionError("registry_invalid", f"{key} must be a nonempty path.", 2, {"base": base_key})
+            items[key] = _path(entry[key], base)
+            for other, owner, other_key in item_roots:
+                if _overlap(items[key], other):
+                    raise SessionError("registry_invalid", "Item paths must not be equal or nested.", 2,
+                                       {"path": str(items[key]), "other": str(other),
+                                        "items": [f"{owner}.{other_key}", f"{name}.{key}"]})
+            item_roots.append((items[key], name, key))
         names.add(name)
-        projects.append(Project(base, base_key, name, provider, resolved_seats, path))
+        projects.append(Project(base, base_key, name, provider, resolved_seats, path, **items))
     return tuple(projects)
 
 

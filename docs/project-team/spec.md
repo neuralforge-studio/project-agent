@@ -62,11 +62,16 @@ Skill은 JOB·검증·review·commit message 작성 절차를 안내합니다.
 ## 2. 등록과 프로젝트 선택
 
 등록 파일은 `~/.codex/project.json` 또는 `~/.claude/project.json`입니다.
-[등록 예제](project-registry.example.json)는 base key와 project·provider·seats를 보여 줍니다.
+[등록 예제](project-registry.example.json)는 base key와 project·provider·seats·항목 경로를 보여 줍니다.
 Project는 유일한 문자열, provider는 claude 또는 codex, seats는 경로 문자열 배열입니다.
 Project·경로는 비어 있지 않아야 합니다.
 Base key는 절대 경로 또는 ~/로 시작하는 경로입니다.
 Seats는 0~10개이며 같은 실제 base·seat 경로를 중복 등록하지 않습니다.
+선택 key `path_cr`·`path_decide`는 project-item skill의 항목 루트입니다.
+두 key의 값은 seats와 같이 절대 경로, `~/` 경로, 또는 base 기준 상대 경로입니다.
+Key가 없으면 그 종류의 항목을 쓰지 않는 project입니다. 도구는 기본 위치를 만들지 않습니다.
+모든 project의 항목 루트는 서로 같거나 조상·자손 관계이면 안 됩니다.
+항목 루트는 project 선택에 사용하지 않습니다.
 등록 외의 모델·권한·JOB·실행 상태를 이 파일에 추가하지 않습니다.
 
 공통 옵션은 하위 명령 앞에 지정합니다.

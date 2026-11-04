@@ -6,7 +6,9 @@
       "../haroo.seat0",
       "../haroo.seat1",
       "../haroo.seat2"
-    ]
+    ],
+    "path_cr": "cr",
+    "path_decide": "decide"
   },
   "/primehome/swain/Project/falcon2/git/git.clean": {
     "project": "falcon2",

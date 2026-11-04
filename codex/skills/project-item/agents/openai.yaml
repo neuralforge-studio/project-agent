@@ -1,0 +1,6 @@
+interface:
+  display_name: "Project Item"
+  short_description: "등록 project의 CR과 사용자 결정 항목을 관리합니다"
+  default_prompt: "$project-item으로 현재 project의 결정 대기 항목과 미결 CR을 확인해 주세요."
+policy:
+  allow_implicit_invocation: true
