@@ -176,6 +176,8 @@ class Tmux:
         self._run("set-option", "-w", "-t", window_id, "remain-on-exit", "on")
         pane = self.pane_info(pane_id)
         try:
+            if pane["pane_pid"] is None:
+                raise ProcessLookupError(pane_id)
             placeholder_group = os.getpgid(pane["pane_pid"])
         except OSError as exc:
             raise SessionError("execution_unknown", "The waiting process group is unavailable.", 4) from exc
@@ -321,15 +323,17 @@ class Tmux:
         return True
 
     def pane_info(self, pane_id):
+        """The pane's fields. A dead pane may have no pane_pid (tmux 3.8 clears it); it is None then."""
         fields = ("window_id", "pane_id", "pane_pid", "pane_current_path", "pane_current_command",
                   "pane_dead", "pane_dead_status", "pane_dead_signal")
         raw = self._run("display-message", "-p", "-t", _safe_text(pane_id, "pane handle"),
                         "\t".join("#{" + field + "}" for field in fields))
         parts = raw.split("\t")
-        if len(parts) != len(fields) or not parts[2].isdigit() or parts[5] not in ("0", "1"):
+        if (len(parts) != len(fields) or parts[5] not in ("0", "1")
+                or not (parts[2].isdigit() or (parts[2] == "" and parts[5] == "1"))):
             raise SessionError("tmux_unknown", "The managed pane observation is incomplete.", 4)
         row = dict(zip(fields, parts))
-        row["pane_pid"] = int(row["pane_pid"])
+        row["pane_pid"] = int(row["pane_pid"]) if row["pane_pid"] else None
         row["pane_dead"] = row["pane_dead"] == "1"
         row["pane_dead_status"] = int(row["pane_dead_status"]) if row["pane_dead_status"].isdigit() else None
         row["pane_dead_signal"] = row["pane_dead_signal"] or None
@@ -357,6 +361,8 @@ class Tmux:
         self._run("respawn-pane", "-k", "-t", meta["pane_id"], "-c", cwd, "/bin/bash", script)
         pane = self.pane_info(meta["pane_id"])
         pid = pane["pane_pid"]
+        if pid is None:                    # the CLI already exited; keep what its launch recorded
+            return self.read_meta(window_id)
         try:
             group = os.getpgid(pid)
         except ProcessLookupError:

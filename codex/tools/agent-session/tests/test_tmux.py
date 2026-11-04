@@ -44,6 +44,24 @@ def wait_for(predicate):
     raise AssertionError("The managed pane did not reach the expected condition")
 
 
+def fixed_pane(pid, dead):
+    instance = Tmux(socket_name="unused")
+    instance._run = lambda *arguments, **options: "\t".join(["@1", "%1", pid, "", "bash", dead, "", ""])
+    return instance
+
+
+@pytest.mark.parametrize(("pid", "dead", "expected"), [("", "1", None), ("4242", "1", 4242), ("4242", "0", 4242)])
+def test_dead_pane_may_have_no_pid(pid, dead, expected):
+    # tmux 3.8 clears pane_pid once the pane process exits; tmux 3.6a keeps it.
+    assert fixed_pane(pid, dead).pane_info("%1")["pane_pid"] == expected
+
+
+def test_live_pane_without_pid_is_incomplete():
+    with pytest.raises(SessionError) as error:
+        fixed_pane("", "0").pane_info("%1")
+    assert error.value.code == "tmux_unknown"
+
+
 def test_window_and_server_identity_are_exact_and_current(tmp_path, tmux):
     meta = new_window(tmux, tmp_path)
     assert meta["window_id"].startswith("@") and meta["pane_id"].startswith("%")
