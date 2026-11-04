@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_session.config import Project
 from agent_session.errors import SessionError
-from agent_session.state import StateStore, empty_state, locked
+from agent_session.state import StateStore, binding_identity, empty_state, locked
 
 
 def project(tmp_path, provider="codex", count=2):
@@ -74,6 +74,52 @@ def test_conflicting_jobs_and_unassigned_data_are_rejected(tmp_path):
         store.update(lambda state: state["1"].update(git_hash="f" * 40))
     assert store.read()["1"] == {"job_id": None, "git_hash": None, "session": None}
 
+
+
+CONNECTION = {"session_id": "native-id", "endpoint": "unix:///tmp/test.sock"}
+
+
+def test_connection_time_is_optional_but_exact(tmp_path):
+    store = StateStore(project(tmp_path))
+    legacy = store.update(lambda state: state.update(leader=dict(CONNECTION)))
+    assert legacy["leader"] == CONNECTION
+    timed = {**CONNECTION, "connected_at": "2026-11-04T09:12:30Z"}
+    assert store.update(lambda state: state.update(leader=timed))["leader"] == timed
+    for bad in ("2026-11-04 09:12:30", "2026-11-04T09:12:30+09:00", "2026-13-04T09:12:30Z", 1793785072):
+        with pytest.raises(SessionError) as error:
+            store.update(lambda state: state.update(leader={**CONNECTION, "connected_at": bad}))
+        assert error.value.code == "state_invalid"
+    assert store.read()["leader"] == timed
+
+
+def test_review_mark_is_leader_only_and_names_an_assigned_job(tmp_path):
+    store = StateStore(project(tmp_path))
+    store.update(lambda state: state["0"].update(job_id="TOOL-013", session=dict(CONNECTION, session_id="worker")))
+    marked = store.update(lambda state: state.update(leader={**CONNECTION, "reviewing": "TOOL-013"}))
+    assert marked["leader"]["reviewing"] == "TOOL-013"
+    rejected = [
+        lambda state: state["leader"].update(reviewing="TOOL-099"),
+        lambda state: state["leader"].update(reviewing="leader"),
+        lambda state: state["leader"].update(reviewing=""),
+        lambda state: state["0"].update(job_id=None, session=None),
+        lambda state: state["0"]["session"].update(reviewing="TOOL-013"),
+    ]
+    for mutation in rejected:
+        with pytest.raises(SessionError) as error:
+            store.update(mutation)
+        assert error.value.code == "state_invalid"
+    assert store.read() == marked
+    store.update(lambda state: state["0"].update(session=None))
+    assert store.read()["leader"]["reviewing"] == "TOOL-013"
+
+
+def test_connection_identity_ignores_review_and_time_but_not_the_address():
+    codex = {**CONNECTION, "connected_at": "2026-11-04T09:12:30Z", "reviewing": "TOOL-013"}
+    assert binding_identity(codex, "codex") == binding_identity(CONNECTION, "codex")
+    assert binding_identity(dict(CONNECTION, endpoint="unix:///other"), "codex") != binding_identity(CONNECTION, "codex")
+    claude = {"session_id": "uuid", "message_to": "worker [123abc]"}
+    assert binding_identity(dict(claude, message_to="worker [456def]"), "claude") == binding_identity(claude, "claude")
+    assert binding_identity(None, "codex") is None
 
 def test_process_updates_merge_instead_of_losing_seats(tmp_path):
     value = project(tmp_path, count=4)

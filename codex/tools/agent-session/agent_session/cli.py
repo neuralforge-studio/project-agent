@@ -72,6 +72,12 @@ def build_parser():
         _target(command)
         command.add_argument("--timeout", type=_seconds, default=600, metavar="SECONDS")
 
+    review = commands.add_parser("review", help="Mark the Worker JOB the Leader reviews now, or clear the mark.")
+    marks = review.add_mutually_exclusive_group(required=True)
+    marks.add_argument("--job", type=_nonempty, metavar="CR_ID")
+    marks.add_argument("--clear", action="store_true")
+    review.add_argument("--timeout", type=_seconds, default=30, metavar="SECONDS")
+
     return parser
 
 
@@ -112,6 +118,8 @@ def main(argv=None, manager_factory=None):
             elif operation == "send":
                 result = manager.send(job=arguments.job, seat=arguments.seat,
                                       message=arguments.message, file=arguments.file)
+            elif operation == "review":
+                result = manager.review(job=arguments.job, clear=arguments.clear)
             else:
                 result = manager.control(operation, job=arguments.job, seat=arguments.seat)
         if not isinstance(result, dict):

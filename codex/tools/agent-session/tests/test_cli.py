@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -25,6 +26,9 @@ class FakeManager:
     def control(self, operation, **arguments):
         return {"command": operation, "options": self.options, **arguments}
 
+    def review(self, **arguments):
+        return {"command": "review", "options": self.options, **arguments}
+
 
 @pytest.mark.parametrize("argv, expected", [
     (["start", "--job", "leader"], {"command": "start", "job": "leader", "prompt_file": None}),
@@ -39,6 +43,8 @@ class FakeManager:
      {"command": "send", "job": "J-20261103-07", "seat": None, "message": "--literal-message", "file": None}),
     (["stop", "--seat", "9"], {"command": "stop", "job": None, "seat": 9}),
     (["restart", "--job", "leader"], {"command": "restart", "job": "leader", "seat": None}),
+    (["review", "--job", "TOOL-013"], {"command": "review", "job": "TOOL-013", "clear": False}),
+    (["review", "--clear"], {"command": "review", "job": None, "clear": True}),
 ])
 def test_dispatch_keeps_input_meaning_and_emits_one_result(argv, expected, capsys):
     assert cli.main(argv, manager_factory=FakeManager) == 0
@@ -50,7 +56,7 @@ def test_dispatch_keeps_input_meaning_and_emits_one_result(argv, expected, capsy
     options = result["data"].pop("options")
     assert result["data"] == expected
     assert options == {"cwd": None, "config_path": None, "socket_name": None, "socket_path": None,
-                       "timeout": 30 if expected["command"] == "send" else 600}
+                       "timeout": 30 if expected["command"] in ("send", "review") else 600}
 
 
 def test_global_source_and_socket_precede_the_command(capsys):
@@ -73,6 +79,7 @@ def test_global_source_and_socket_precede_the_command(capsys):
     ["send", "--job", "leader", ""], ["send", "--job", "leader", "   "],
     ["stop", "--seat", "-1"], ["stop", "--seat", "10"],
     ["restart", "--job", "leader", "--seat", "0"],
+    ["review"], ["review", "--job", "TOOL-013", "--clear"], ["review", "--seat", "0"], ["review", "--job", ""],
     ["view"], ["view", "--help"], ["view", "--job", "leader"],
     ["view", "--seat", "0"], ["view", "--job", "leader", "--into", "my-session"],
     ["start", "--job", "leader", "--timeout", "0"],
@@ -99,8 +106,8 @@ def test_help_lists_only_current_commands(capsys):
     assert cli.main(["--help"]) == 0
     output = capsys.readouterr()
     assert not output.err
-    assert "{start,send,stop,restart}" in output.out
-    assert "view" not in output.out
+    assert "{start,send,stop,restart,review}" in output.out
+    assert re.search(r"\bview\b", output.out) is None
 
 
 def test_known_failure_keeps_partial_work_facts(capsys):

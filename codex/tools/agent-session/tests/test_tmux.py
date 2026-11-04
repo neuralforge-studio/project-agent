@@ -250,3 +250,38 @@ def test_exit_waits_for_paste_sensitive_tui_to_submit_one_enter(tmp_path, tmux):
         return pane if pane["pane_dead"] and pane["pane_dead_status"] is not None else None
 
     assert wait_for(exit_detail)["pane_dead_status"] == 0
+
+
+def test_pointer_is_cleared_only_for_the_named_run(tmp_path, tmux):
+    meta = new_window(tmux, tmp_path)
+    tmux.set_current("demo", "seat-0", meta)
+    assert tmux.clear_current("demo", "seat-0", "other-run") is False
+    assert tmux.get_current("demo", "seat-0")["run_id"] == "run-one"
+    assert tmux.clear_current("demo", "seat-0", "run-one") is True
+    assert tmux.get_current("demo", "seat-0") is None
+    assert tmux.clear_current("demo", "seat-0", "run-one") is False
+    assert tmux.read_meta(meta["window_id"])["run_id"] == "run-one"
+
+
+def test_retired_window_closes_only_with_one_dead_managed_pane(tmp_path, tmux):
+    survivor = new_window(tmux, tmp_path, run="leader-run", target="leader", job=None)
+    retired = new_window(tmux, tmp_path)
+    other = new_window(tmux, tmp_path, run="run-two", target="seat-1", job="J-20261103-02")
+    assert tmux.managed_windows("demo", "seat-0") == [retired["window_id"]]
+    with pytest.raises(SessionError) as error:
+        tmux.close_window(retired["window_id"], retired)
+    assert error.value.code == "target_running"
+    os.kill(retired["placeholder_pid"], 15)
+    assert wait_for(lambda: tmux.pane_info(retired["pane_id"])["pane_dead"])
+    extra = tmux.command("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", retired["window_id"], "sleep", "86400")
+    with pytest.raises(SessionError) as error:
+        tmux.close_window(retired["window_id"], retired)
+    assert error.value.code == "window_shared"
+    tmux.command("kill-pane", "-t", extra)
+    with pytest.raises(SessionError) as error:
+        tmux.close_window(retired["window_id"], {**retired, "run_id": "another-run"})
+    assert error.value.code == "target_changed"
+    assert tmux.close_window(retired["window_id"], retired) is True
+    windows = tmux.command("list-windows", "-t", "demo", "-F", "#{window_id}").splitlines()
+    assert windows == [survivor["window_id"], other["window_id"]]
+    assert tmux.managed_windows("demo", "seat-0") == []

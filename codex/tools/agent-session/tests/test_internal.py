@@ -150,3 +150,33 @@ def test_read_only_binding_api_does_not_take_the_project_domain_lock(native_slot
     assert observed["termination_confirmed"] is False
     assert fixture["project"].state_path.read_bytes() == before
     assert fixture["project"].state_path.stat().st_mtime_ns == stamp
+
+
+@pytest.mark.parametrize("change, changed", [
+    (lambda state, endpoint: state.update(leader={"session_id": "leader-native", "endpoint": endpoint,
+                                                  "connected_at": "2026-11-04T09:12:30Z",
+                                                  "reviewing": "J-20261103-01"}), False),
+    (lambda state, endpoint: state["0"]["session"].update(connected_at="2026-11-04T09:12:30Z"), False),
+    (lambda state, endpoint: state["0"]["session"].update(endpoint="unix:///tmp/another-endpoint.sock"), True),
+    (lambda state, endpoint: state["0"]["session"].update(session_id=str(uuid.uuid4())), True),
+])
+def test_binding_check_ignores_review_marks_but_not_connection_changes(native_slot, monkeypatch, change, changed):
+    fixture = native_slot
+
+    class Provider:
+        def verify_binding(self, session, context, metadata, timeout=20):
+            return session
+
+        def observe(self, session, context, metadata, timeout=20):
+            fixture["store"].update(lambda state: change(state, fixture["endpoint"]))
+            return {"known": True, "terminal": True, "active_turn": False,
+                    "pending": [], "background": [], "idle": True}
+    monkeypatch.setattr(providers, "get_provider", lambda name: Provider())
+    call = lambda: api.check_binding(fixture["seat"], "J-20261103-01", config_path=fixture["config"],
+                                     socket=fixture["previous"]["socket_path"])
+    if changed:
+        with pytest.raises(SessionError) as error:
+            call()
+        assert error.value.code == "target_changed"
+    else:
+        assert call()["alive"] is True

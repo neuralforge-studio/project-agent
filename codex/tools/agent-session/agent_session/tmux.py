@@ -265,6 +265,61 @@ class Tmux:
             raise SessionError("target_changed", "The current execution points to another target.")
         return actual
 
+    def clear_current(self, project_id, target, run_id):
+        """Remove the slot pointer only while it still names this run."""
+        name = _session(project_id)
+        if not self.has_session(name):
+            return False
+        self._session_owner(name)
+        option = self._current_option(target)
+        handle = self._session_target(name)
+        raw = self._run("show-options", "-qv", "-t", handle, option)
+        if not raw:
+            return False
+        try:
+            pointer = json.loads(raw)
+        except ValueError as exc:
+            raise SessionError("tmux_metadata_invalid", "The current execution pointer is invalid.") from exc
+        if not isinstance(pointer, dict) or pointer.get("run_id") != run_id:
+            return False
+        self._run("set-option", "-u", "-t", handle, option)
+        return True
+
+    def managed_windows(self, project_id, target):
+        """Window handles of one slot's managed runs in the project session, current or retired."""
+        name = _session(project_id)
+        if not self.has_session(name):
+            return []
+        self._session_owner(name)
+        raw = self._run("list-windows", "-t", self._session_target(name), "-F", "#{window_id}")
+        handles = []
+        for window_id in (raw or "").splitlines():
+            try:
+                meta = self.read_meta(window_id)
+            except SessionError:
+                continue
+            if meta.get("project_id") == name and meta.get("target") == target:
+                handles.append(window_id)
+        return handles
+
+    def close_window(self, window_id, expected):
+        """Close a retired window whose only pane is its dead managed pane."""
+        meta = self.read_meta(_safe_text(window_id, "window handle"))
+        keys = ("base", "target", "run_id", "project_id", "window_id", "pane_id")
+        if not meta.get("run_id") or any(meta.get(key) != expected.get(key) for key in keys):
+            raise SessionError("target_changed", "The window no longer holds the expected run.")
+        server = self.server_identity()
+        if any(meta.get(key) != value for key, value in server.items()):
+            raise SessionError("tmux_owner_mismatch", "The window was restored or belongs to another server.")
+        panes = self._run("list-panes", "-t", window_id, "-F", "#{pane_id}").splitlines()
+        if panes != [meta["pane_id"]]:
+            raise SessionError("window_shared", "The window has panes that agent-session does not manage.",
+                               details={"panes": panes})
+        if not self.pane_info(meta["pane_id"])["pane_dead"]:
+            raise SessionError("target_running", "The managed pane is still running.")
+        self._run("kill-window", "-t", window_id)
+        return True
+
     def pane_info(self, pane_id):
         fields = ("window_id", "pane_id", "pane_pid", "pane_current_path", "pane_current_command",
                   "pane_dead", "pane_dead_status", "pane_dead_signal")

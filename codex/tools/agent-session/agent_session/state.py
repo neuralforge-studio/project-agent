@@ -54,17 +54,55 @@ def empty_state(project):
                                for n in range(len(project.seats))}}
 
 
-def _session(value, provider):
+_CONNECTED_AT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+
+
+def utc_now():
+    """The connection time format: UTC, whole seconds."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def binding_identity(session, provider):
+    """The fields that name one native connection; other session fields may change in place."""
+    if session is None:
+        return None
+    if provider == "claude":
+        return (session["session_id"],)
+    return (session["session_id"], session["endpoint"])
+
+
+def _connected_at(value):
+    if not isinstance(value, str) or _CONNECTED_AT.fullmatch(value) is None:
+        return False
+    try:
+        time.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return True
+
+
+def _session(value, provider, leader=False):
+    """A connection has exact transport fields; connected_at and the Leader's reviewing are optional."""
     if value is None:
         return True
+    if not isinstance(value, dict):
+        return False
     fields = {"session_id", "message_to" if provider == "claude" else "endpoint"}
-    return (isinstance(value, dict) and set(value) == fields
-            and all(isinstance(item, str) and bool(item.strip()) for item in value.values()))
+    optional = {"connected_at", "reviewing"} if leader else {"connected_at"}
+    if not fields <= set(value) or not set(value) <= fields | optional:
+        return False
+    if not all(isinstance(value[key], str) and bool(value[key].strip()) for key in fields):
+        return False
+    if "connected_at" in value and not _connected_at(value["connected_at"]):
+        return False
+    reviewing = value.get("reviewing")
+    return reviewing is None or (isinstance(reviewing, str) and bool(reviewing.strip()) and reviewing != "leader")
 
 
 def validate_state(project, value):
     expected = {"leader", *(str(n) for n in range(len(project.seats)))}
-    if not isinstance(value, dict) or set(value) != expected or not _session(value.get("leader"), project.provider):
+    if (not isinstance(value, dict) or set(value) != expected
+            or not _session(value.get("leader"), project.provider, leader=True)):
         raise SessionError("state_invalid", "The state root or leader connection does not match the registry.")
     jobs = set()
     for n in range(len(project.seats)):
@@ -86,6 +124,10 @@ def validate_state(project, value):
             if job in jobs:
                 raise SessionError("state_invalid", "A JOB is assigned to more than one seat.", details={"job_id": job})
             jobs.add(job)
+    reviewing = (value["leader"] or {}).get("reviewing")
+    if reviewing is not None and reviewing not in jobs:
+        raise SessionError("state_invalid", "The Leader reviews a JOB that no seat holds.",
+                           details={"job_id": reviewing})
     return value
 
 

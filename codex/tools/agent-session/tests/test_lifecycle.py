@@ -3,7 +3,11 @@
 import json
 import os
 from pathlib import Path
+import re
+import shlex
+import subprocess
 import sys
+import time
 import uuid
 
 import pytest
@@ -15,6 +19,18 @@ from agent_session.state import locked
 
 
 EMPTY = {"job_id": None, "git_hash": None, "session": None}
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def ident(session):
+    """The connection fields that a command result reports."""
+    return {key: session[key] for key in ("session_id", "endpoint")}
+
+
+def windows(env):
+    if not env.tmux.has_session("fixture"):
+        return []
+    return env.tmux.command("list-windows", "-t", "fixture", "-F", "#{window_id}").splitlines()
 
 
 def fail_once(monkeypatch, module, name, code="fixture_failure"):
@@ -40,9 +56,9 @@ def test_worker_assignment_moves_the_cr_and_release_follows_integration(session_
     assert worker["seat"] == 0 and worker["cwd"] == str(env.seats[0])
     assert uuid.UUID(worker["session"]["session_id"])
     state = env.store.read()
-    assert state["leader"] == leader["session"]
+    assert ident(state["leader"]) == leader["session"]
     assert state["0"]["job_id"] == cr and state["0"]["git_hash"] == env.initial_hash
-    assert state["0"]["session"] == worker["session"]
+    assert ident(state["0"]["session"]) == worker["session"]
     assert state["1"] == EMPTY
     assert env.cr_state(cr)[0] == "in-progress"
     commit_time = git(env.seats[0], "show", "-s", "--format=%cI", "HEAD")
@@ -61,7 +77,8 @@ def test_worker_assignment_moves_the_cr_and_release_follows_integration(session_
     stopped = env.manager().control("stop", job=cr)
     assert stopped["released"] is True
     assert env.store.read()["0"] == EMPTY
-    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"]
+    assert stopped["cleanup"]["closed"] == [worker["window_id"]]
+    assert worker["window_id"] not in windows(env) and env.tmux.get_current("fixture", "seat-0") is None
     assert env.manager().control("stop", job="leader")["released"] is True
     assert env.store.read()["leader"] is None
 
@@ -362,7 +379,7 @@ def test_rejected_stop_request_does_not_mark_a_ready_session_stopping(session_en
     current = env.tmux.get_current("fixture", "seat-0")
     assert current["stopping"] is False and current["ready"] is True
     assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
-    assert env.store.read()["0"]["session"] == worker["session"]
+    assert ident(env.store.read()["0"]["session"]) == worker["session"]
 
 
 @pytest.mark.parametrize("attempted", [True, None])
@@ -477,3 +494,327 @@ def test_publication_counts_only_on_origin(session_env):
     git(env.seats[0], "fetch", "backup")
     worker = env.manager().start(env.cr())
     assert worker["seat"] == 1
+
+
+TIME = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+
+
+def test_republished_connection_keeps_its_time_and_review(session_env, monkeypatch):
+    from agent_session.tmux import Tmux
+
+    env = session_env
+    original = Tmux.write_meta
+
+    def lose_ready(self, window_id, updates):
+        if updates.get("ready") is True:
+            raise SessionError("tmux_command_failed", "The fixture lost the ready flag.", 5)
+        return original(self, window_id, updates)
+
+    with monkeypatch.context() as broken:
+        broken.setattr(Tmux, "write_meta", lose_ready)
+        with pytest.raises(SessionError) as error:
+            env.manager().start("leader")
+        assert error.value.code == "tmux_command_failed"
+    published = env.store.read()["leader"]
+    assert re.fullmatch(TIME, published["connected_at"]) and published["reviewing"] is None
+    cr = env.cr()
+    env.manager().start(cr)
+    assert re.fullmatch(TIME, env.store.read()["0"]["session"]["connected_at"])
+    env.manager().review(job=cr)
+    before = env.store.read()
+    time.sleep(1.1)
+    retried = env.manager().start("leader")
+    assert retried["ready"] is True and retried["session"]["session_id"] == published["session_id"]
+    assert env.store.read() == before
+
+
+def test_review_mark_needs_the_leader_and_an_assigned_connected_job(session_env, monkeypatch):
+    env = session_env
+    with pytest.raises(SessionError) as error:
+        env.manager().review(job="TOOL-001")
+    assert error.value.code == "session_unbound"
+    leader = env.manager().start("leader")
+    first, second = env.cr(1), env.cr(2)
+    worker = env.manager().start(first)
+    env.manager().start(second)
+    with monkeypatch.context() as actor:
+        actor.setenv("CODEX_THREAD_ID", worker["session"]["session_id"])
+        with pytest.raises(SessionError) as error:
+            env.manager().review(job=first)
+        assert error.value.code == "role_denied"
+    with monkeypatch.context() as actor:
+        actor.setenv("CODEX_THREAD_ID", leader["session"]["session_id"])
+        assert env.manager().review(job=first) == {"project": "fixture", "reviewing": first}
+        assert env.manager().review(job=second)["reviewing"] == second
+        for job, code in (("TOOL-099", "job_not_assigned"), ("leader", "invalid_input")):
+            with pytest.raises(SessionError) as error:
+                env.manager().review(job=job)
+            assert error.value.code == code
+        for arguments in ({}, {"job": first, "clear": True}):
+            with pytest.raises(SessionError) as error:
+                env.manager().review(**arguments)
+            assert error.value.code == "invalid_input"
+        assert env.store.read()["leader"]["reviewing"] == second
+        env.store.update(lambda state: state["0"].update(session=None))
+        with pytest.raises(SessionError) as error:
+            env.manager().review(job=first)
+        assert error.value.code == "session_unbound"
+        assert env.manager().review(clear=True)["reviewing"] is None
+
+
+def test_review_mark_clears_on_leader_feedback_stop_and_a_new_leader(session_env, monkeypatch):
+    env = session_env
+    leader = env.manager().start("leader")
+    cr = env.cr()
+    env.manager().start(cr)
+
+    def reviewing():
+        current = env.store.read()["leader"]
+        return current and current["reviewing"]
+
+    env.manager().review(job=cr)
+    assert env.manager().send(job=cr, message="An operator note.")["disposition"] == "accepted"
+    assert reviewing() == cr
+    env.manager()._clear_review(cr, leader_session_id="an-earlier-leader")
+    assert reviewing() == cr
+    with monkeypatch.context() as actor:
+        actor.setenv("CODEX_THREAD_ID", leader["session"]["session_id"])
+        env.manager().send(job=cr, message="Correct the result.")
+    assert reviewing() is None
+    env.manager().review(job=cr)
+    held = env.manager().control("stop", job=cr)
+    assert held["released"] is False and reviewing() is None and env.store.read()["0"]["job_id"] == cr
+    env.manager().review(job=cr)
+    env.handoff("leader", "Continue the review.")
+    restarted = env.manager().control("restart", job="leader")
+    assert env.store.read()["leader"]["session_id"] == restarted["session"]["session_id"]
+    assert reviewing() is None
+    env.manager().review(job=cr)
+    env.finish(cr, state="done", outcome="waived", note="no change needed")
+    released = env.manager().control("stop", job=cr)
+    assert released["released"] is True and env.store.read()["0"] == EMPTY and reviewing() is None
+
+
+def test_restart_and_a_later_start_close_retired_windows(session_env):
+    from agent_session import internal
+
+    env = session_env
+    cr = env.cr()
+    original = env.manager().start(cr)
+    env.handoff("seat-0", "Continue the fixture change.")
+    restarted = env.manager().control("restart", job=cr)
+    assert restarted["cleanup"] == {"closed": [original["window_id"]], "kept": []}
+    assert windows(env) == [restarted["window_id"]]
+    held = env.manager().control("stop", job=cr)
+    assert held["released"] is False and held["cleanup"] == {"closed": [], "kept": []}
+    assert windows(env) == [restarted["window_id"]]
+    assert env.tmux.get_current("fixture", "seat-0")["run_id"] == restarted["run_id"]
+    continued = env.manager().start(cr)
+    assert continued["cleanup"] == {"closed": [restarted["window_id"]], "kept": []}
+    assert windows(env) == [continued["window_id"]]
+    with pytest.raises(SessionError) as error:
+        internal._run(original["run_id"], str(env.config), env.tmux.effective_socket(), cwd=str(env.base))
+    assert error.value.code == "target_changed"
+
+
+def test_sweep_keeps_pending_controlled_shared_or_unconfirmed_windows(session_env, monkeypatch):
+    import agent_session.lifecycle as lifecycle
+    from agent_session.process import birth
+
+    env = session_env
+    cr = env.cr()
+    runs = [env.manager().start(cr)]
+    with monkeypatch.context() as quiet:
+        quiet.setattr(lifecycle.Manager, "_sweep", lambda self, target, owner=None: {"closed": [], "kept": []})
+        for _ in range(5):
+            env.handoff("seat-0", "Continue the fixture change.")
+            runs.append(env.manager().control("restart", job=cr))
+    assert windows(env) == [run["window_id"] for run in runs]
+    pending, controlled, shared, unconfirmed, ended = runs[:5]
+    env.tmux.write_meta(pending["window_id"], {"control_pending": True})
+    me = {"pid": os.getpid(), "birth": birth(os.getpid())}
+    env.tmux.write_meta(controlled["window_id"], {"controller_pid": me["pid"], "controller_birth": me["birth"]})
+    env.tmux.command("split-window", "-d", "-t", shared["window_id"], "sleep", "86400")
+    manager = env.manager()
+    observe = manager.provider.observe
+
+    def partly_unknown(session, context, meta=None, timeout=30):
+        if session["session_id"] == unconfirmed["session"]["session_id"]:
+            return {"known": False}
+        return observe(session, context, meta, timeout)
+
+    manager.provider.observe = partly_unknown
+    swept = manager._sweep("seat-0")
+    assert swept["closed"] == [ended["window_id"]]
+    assert {item["window_id"]: item["reason"] for item in swept["kept"]} == {
+        pending["window_id"]: "control_pending", controlled["window_id"]: "controller_running",
+        shared["window_id"]: "window_shared", unconfirmed["window_id"]: "termination_unconfirmed"}
+    result_file = env.base / "agent/runs" / controlled["run_id"] / "control-result.json"
+    owner = {"run_id": controlled["run_id"], **me, "result_file": str(result_file)}
+    for payload, other in (({"accepted": True, "completed": False}, {}), ({"completed": True}, {"pid": 1}),
+                           ({"completed": True}, {"run_id": pending["run_id"]})):
+        result_file.write_text(json.dumps({"ok": True, "data": payload, "error": None}))
+        assert controlled["window_id"] not in manager._sweep("seat-0", owner={**owner, **other})["closed"]
+    assert manager._sweep("seat-0", owner=owner)["closed"] == [controlled["window_id"]]
+    assert windows(env) == [pending["window_id"], shared["window_id"], unconfirmed["window_id"], runs[5]["window_id"]]
+
+
+SELF_CONTROL = r'''
+import json, shlex, sys
+library, fixtures, base, config, socket_name, operation, job = sys.argv[1:8]
+sys.path[:0] = [library, fixtures]
+from agent_session.lifecycle import Manager
+from agent_session.tmux import Tmux
+
+original = Tmux.run_controller
+
+
+def run_fixture_controller(self, script, cwd):
+    """Run the real deferred controller in tmux with the fixture provider."""
+    code = ("import sys;sys.path[:0]=[sys.argv[1],sys.argv[2]];import agent_session_fake_provider as f;"
+            "import agent_session.providers as p;import agent_session.lifecycle as l;"
+            "p.get_provider=l.get_provider=lambda name:f.FakeProvider();"
+            "from agent_session.internal import run_controller;run_controller(sys.argv[3])")
+    command = shlex.join([sys.executable, "-c", code, library, fixtures,
+                          str(script.with_name("control-request.json"))])
+    script.write_text("#!/bin/bash\nset -e\nunset CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID TMUX TMUX_PANE\nexec "
+                      + command + "\n", encoding="utf-8")
+    return original(self, script, cwd)
+
+
+Tmux.run_controller = run_fixture_controller
+print(json.dumps(Manager(base, config, socket_name=socket_name, timeout=60).control(operation, job=job)))
+'''
+
+
+def self_control(env, operation, job, session_id):
+    """Request control from the managed conversation itself and wait for the controller result."""
+    done = subprocess.run([sys.executable, "-c", SELF_CONTROL, str(Path(__file__).resolve().parents[1]),
+                           str(FIXTURES), str(env.base), str(env.config), env.socket_name, operation, job],
+                          env={**os.environ, "CODEX_THREAD_ID": session_id},
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    accepted = json.loads(done.stdout.splitlines()[-1])
+    assert accepted["accepted"] is True and accepted["completed"] is False
+    path = Path(accepted["result_file"])
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        result = json.loads(path.read_text(encoding="utf-8"))
+        if result["data"].get("completed"):
+            return result
+        time.sleep(0.1)
+    raise AssertionError("The controller did not finish: " + path.read_text(encoding="utf-8"))
+
+
+def wait_until(predicate, limit=15):
+    deadline = time.monotonic() + limit
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.1)
+    raise AssertionError("The expected condition was not reached.")
+
+
+def test_self_stop_saves_its_result_before_closing_the_servers_last_window(session_env):
+    env = session_env
+    cr = env.cr()
+    worker = env.manager().start(cr)
+    env.finish(cr, state="done", outcome="waived", note="the fixture needs no change")
+    env.tmux.command("kill-session", "-t", "harness")
+    assert windows(env) == [worker["window_id"]]
+    result = self_control(env, "stop", cr, worker["session"]["session_id"])
+    assert result["ok"] is True and result["data"]["released"] is True
+    assert "deferred_cleanup" not in result["data"]
+    assert env.store.read()["0"] == EMPTY
+    wait_until(lambda: not env.tmux.has_session("fixture"))
+    saved = env.base / "agent/runs" / worker["run_id"] / "control-result.json"
+    assert json.loads(saved.read_text(encoding="utf-8")) == result
+
+
+def test_self_restart_keeps_the_old_window_until_its_result_is_saved(session_env):
+    env = session_env
+    cr = env.cr()
+    worker = env.manager().start(cr)
+    env.handoff("seat-0", "Continue the fixture change.")
+    result = self_control(env, "restart", cr, worker["session"]["session_id"])
+    data = result["data"]
+    assert result["ok"] is True and data["restarted"] is True and data["run_id"] != worker["run_id"]
+    assert {"window_id": worker["window_id"], "reason": "control_pending"} in data["cleanup"]["kept"]
+    wait_until(lambda: worker["window_id"] not in windows(env))
+    assert windows(env) == [data["window_id"]]
+
+
+def test_accepted_feedback_reports_a_failed_review_clear_without_failing(session_env, monkeypatch):
+    import agent_session.lifecycle as lifecycle
+
+    env = session_env
+    leader = env.manager().start("leader")
+    cr = env.cr()
+    env.manager().start(cr)
+    env.manager().review(job=cr)
+    monkeypatch.setattr(lifecycle.Manager, "_clear_review", lambda self, job_id, leader_session_id=None: (
+        _ for _ in ()).throw(SessionError("state_write_failed", "The fixture state write failed.", 5)))
+    with monkeypatch.context() as actor:
+        actor.setenv("CODEX_THREAD_ID", leader["session"]["session_id"])
+        sent = env.manager().send(job=cr, message="Correct the result.")
+    assert sent["disposition"] == "accepted"
+    assert sent["review_clear_error"]["code"] == "state_write_failed"
+    assert env.store.read()["leader"]["reviewing"] == cr
+
+
+def test_controller_cleanup_needs_the_slot_lock_and_keeps_the_current_run(session_env, monkeypatch):
+    import agent_session.lifecycle as lifecycle
+
+    env = session_env
+    cr = env.cr()
+    first = env.manager().start(cr)
+    with monkeypatch.context() as quiet:
+        quiet.setattr(lifecycle.Manager, "_sweep", lambda self, target, owner=None: {"closed": [], "kept": []})
+        env.handoff("seat-0", "Continue the fixture change.")
+        current = env.manager().control("restart", job=cr)
+        held = env.manager().control("stop", job=cr)
+    assert held["released"] is False
+    manager = env.manager()
+    with locked(env.base / "agent/control/seat-0.lock"):
+        busy = manager.sweep_after_result("seat-0", None)
+    assert busy == {"closed": [], "kept": [{"window_id": None, "reason": "control_busy"}]}
+    assert windows(env) == [first["window_id"], current["window_id"]]
+    assert manager.sweep_after_result("seat-0", None) == {"closed": [first["window_id"]], "kept": []}
+    assert windows(env) == [current["window_id"]]
+    assert env.tmux.get_current("fixture", "seat-0")["run_id"] == current["run_id"]
+
+
+def test_release_reports_a_pointer_it_could_not_clear(session_env, monkeypatch):
+    from agent_session.tmux import Tmux
+
+    env = session_env
+    cr = env.cr()
+    worker = env.manager().start(cr)
+    env.finish(cr, state="done", outcome="waived", note="no change needed")
+
+    def refuse(self, project_id, target, run_id):
+        raise SessionError("tmux_command_failed", "The fixture refused the pointer change.", 5)
+
+    monkeypatch.setattr(Tmux, "clear_current", refuse)
+    stopped = env.manager().control("stop", job=cr)
+    assert stopped["released"] is True and env.store.read()["0"] == EMPTY
+    assert stopped["cleanup"] == {"closed": [], "kept": [{"window_id": worker["window_id"],
+                                                          "reason": "tmux_command_failed"}]}
+    assert worker["window_id"] in windows(env)
+    assert env.tmux.get_current("fixture", "seat-0")["run_id"] == worker["run_id"]
+
+
+def test_cleanup_budget_leaves_the_rest_for_a_later_sweep(session_env, monkeypatch):
+    import agent_session.lifecycle as lifecycle
+
+    env = session_env
+    cr = env.cr()
+    first = env.manager().start(cr)
+    monkeypatch.setattr(lifecycle, "SWEEP_SECONDS", 0)
+    env.handoff("seat-0", "Continue the fixture change.")
+    restarted = env.manager().control("restart", job=cr)
+    assert restarted["cleanup"] == {"closed": [], "kept": [{"window_id": first["window_id"],
+                                                            "reason": "cleanup_budget"}]}
+    monkeypatch.setattr(lifecycle, "SWEEP_SECONDS", 30)
+    assert env.manager().control("stop", job=cr)["cleanup"] == {"closed": [first["window_id"]], "kept": []}
+    assert windows(env) == [restarted["window_id"]]

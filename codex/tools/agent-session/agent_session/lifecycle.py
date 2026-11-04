@@ -12,9 +12,28 @@ from . import git_ops, jobs, process, workspace
 from .api import _project, _unlaunched_observation
 from .errors import SessionError
 from .providers import get_provider
-from .state import StateStore, locked
+from .state import StateStore, locked, utc_now
 from .tmux import Tmux
 from .util import write_json
+
+SWEEP_SECONDS = 30                                 # after this, a cleanup leaves later windows to the next sweep
+
+
+def _bound(previous, session, leader=False):
+    """A republished conversation keeps its connection time and review; a new one starts both."""
+    if previous and previous.get("session_id") == session["session_id"]:
+        return {**previous, **session}
+    fresh = {**session, "connected_at": utc_now()}
+    if leader:
+        fresh["reviewing"] = None
+    return fresh
+
+
+def _completed(result_file):
+    try:
+        return json.loads(Path(result_file).read_text(encoding="utf-8"))["data"]["completed"] is True
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 class Manager:
@@ -305,7 +324,75 @@ class Manager:
         script = directory / "launch.sh"
         script.write_text("\n".join(lines) + "\n", encoding="utf-8")
         context = self.tmux.launch(context["window_id"], context["cwd"], script)
-        return self._wait_ready(context)
+        result = self._wait_ready(context)
+        return {**result, "cleanup": self._sweep(context["target"])}
+
+    def _pointer_run(self, target):
+        try:
+            current = self.tmux.get_current(self.project.project_id, target)
+        except SessionError as error:
+            if error.code == "execution_evidence_missing":
+                return error.details.get("run_id")
+            raise
+        return current.get("run_id") if current else None
+
+    def _retained(self, meta, owner=None):
+        """Why a retired window must stay, or None when its run ended without pending control."""
+        if not meta.get("base") or Path(meta["base"]).resolve() != self.project.base or not meta.get("pane_id"):
+            return "foreign_window"
+        if meta.get("control_pending"):
+            return "control_pending"
+        pid, birth = meta.get("controller_pid"), meta.get("controller_birth")
+        if pid and process.alive(int(pid), birth):
+            # The finishing self-controller may close its own run after it saved the completed result.
+            own = (owner is not None and owner["run_id"] == meta.get("run_id")
+                   and owner["pid"] == int(pid) and owner["birth"] == birth
+                   and _completed(owner["result_file"]))
+            if not own:
+                return "controller_running"
+        if not self._observe(meta)["stopped"]:
+            return "termination_unconfirmed"
+        return None
+
+    def _sweep(self, target, owner=None):
+        """Close the slot's retired windows; the current pointer's run and unsure windows stay.
+
+        The caller holds the slot's control lock, so the current pointer cannot change meanwhile.
+        """
+        closed, kept = [], []
+        deadline = time.monotonic() + SWEEP_SECONDS
+        try:
+            current = self._pointer_run(target)
+            handles = self.tmux.managed_windows(self.project.project_id, target)
+        except SessionError as error:
+            return {"closed": closed, "kept": [{"window_id": None, "reason": error.code}]}
+        for window_id in handles:
+            try:
+                meta = self.tmux.read_meta(window_id)
+                if meta.get("run_id") == current:
+                    continue
+                if time.monotonic() >= deadline:
+                    reason = "cleanup_budget"
+                else:
+                    reason = self._retained(meta, owner)
+                    if reason is None:
+                        self.tmux.close_window(window_id, meta)
+                        closed.append(window_id)
+                        continue
+            except SessionError as error:
+                reason = error.code
+            kept.append({"window_id": window_id, "reason": reason})
+        return {"closed": closed, "kept": kept}
+
+    def sweep_after_result(self, target, owner):
+        """The self-controller's last cleanup, serialized with the slot's other commands."""
+        try:
+            with locked(self.project.runtime_path / "control" / f"{target}.lock", self.remaining(),
+                        blocking=False):
+                return self._sweep(target, owner=owner)
+        except SessionError as error:
+            # A busy slot's command sweeps when it finishes; nothing is closed without the lock.
+            return {"closed": [], "kept": [{"window_id": None, "reason": error.code}]}
 
     def _wait_ready(self, context):
         while True:
@@ -319,12 +406,12 @@ class Manager:
                     self._same(meta)
                     def publish(value):
                         if meta["seat"] is None:
-                            value["leader"] = session
+                            value["leader"] = _bound(value["leader"], session, leader=True)
                         else:
                             key = str(meta["seat"])
                             if value[key]["job_id"] != meta["job_id"]:
                                 raise SessionError("target_changed", "The JOB changed before binding publication.")
-                            value[key]["session"] = session
+                            value[key]["session"] = _bound(value[key]["session"], session)
                     self.store.update(publish)
                     meta = self.tmux.write_meta(meta["window_id"], {"ready": True, "start_error": None})
                 return self._result(meta, ready=True)
@@ -529,9 +616,57 @@ class Manager:
                     entry.update(refreshed)
                 self.store.update(update)
                 self.tmux.write_meta(meta["window_id"], {"message_to": refreshed.get("message_to")})
-            return {**self._result(meta), **result}
+            outcome = {**self._result(meta), **result}
+            if actor == "leader" and meta.get("job_id"):
+                # Feedback returns the JOB to its Worker; a later Leader's review stays.
+                try:
+                    self._clear_review(meta["job_id"], leader_session_id=identity)
+                except SessionError as error:
+                    # The message was accepted; reporting a failure here would invite a duplicate send.
+                    outcome["review_clear_error"] = error.as_dict()
+            return outcome
 
-    def control(self, operation, job=None, seat=None, expected_run=None, allow_self=True):
+    def _clear_review(self, job_id, leader_session_id=None):
+        def clear(value):
+            leader = value["leader"]
+            if (leader and leader.get("reviewing") == job_id
+                    and (leader_session_id is None or leader["session_id"] == leader_session_id)):
+                leader["reviewing"] = None
+        if (self.store.read()["leader"] or {}).get("reviewing") == job_id:
+            self.store.update(clear)
+
+    def review(self, job=None, clear=False):
+        """Mark the JOB the Leader is reviewing now, or clear the mark."""
+        if (job is None) == (not clear):
+            raise SessionError("invalid_input", "Specify --job or --clear.", 2)
+        if job == "leader":
+            raise SessionError("invalid_input", "The Leader reviews a Worker JOB.", 2)
+        actor, identity = self._authorize("review", "leader")
+        leader = self.store.read(missing_ok=True)["leader"]
+        if not leader:
+            raise SessionError("session_unbound", "The project has no bound Leader conversation.", 4)
+        expected = leader["session_id"]
+        if actor == "leader" and identity != expected:
+            raise SessionError("caller_changed", "The calling Leader was replaced.")
+
+        def mark(value):
+            current = value["leader"]
+            if not current or current["session_id"] != expected:
+                raise SessionError("target_changed", "The Leader changed before the review mark.")
+            if clear:
+                current["reviewing"] = None
+                return
+            seats = [key for key, entry in value.items() if key != "leader" and entry["job_id"] == job]
+            if len(seats) != 1:
+                raise SessionError("job_not_assigned", "The JOB has no unique current seat.")
+            if value[seats[0]]["session"] is None:
+                raise SessionError("session_unbound", "The JOB's Worker has no bound conversation.", 4)
+            current["reviewing"] = job
+        state = self.store.update(mark)
+        return {"project": self.project.project_id, "reviewing": state["leader"]["reviewing"]}
+
+    def control(self, operation, job=None, seat=None, expected_run=None, allow_self=True, defer_cleanup=False):
+        """Stop or restart one run. A self-controller defers window cleanup until it saved its result."""
         if operation not in ("stop", "restart"):
             raise SessionError("invalid_input", "Use stop or restart.", 2)
         selected = self._target(job, seat)
@@ -571,9 +706,13 @@ class Manager:
                 result = self._launch(context)
                 if result["session"]["session_id"] == meta["session_id"]:
                     raise SessionError("conversation_reused", "Restart must create a new conversation.")
-                return {**result, "previous_session": self._session(meta), "restarted": True}
+                result = {**result, "previous_session": self._session(meta), "restarted": True}
+                # _launch already swept once the new run became current; a self-controller sweeps again
+                # after it saved its result, when its own pending window may close.
+                return {**result, "deferred_cleanup": meta["target"]} if defer_cleanup else result
             check = workspace.check_release(self.project, meta, jobs.state_of(self.project, meta["job_id"])
                                             if meta.get("job_id") else (None, None))
+            pointer_kept = []
             if check.get("allowed"):
                 def release(value):
                     if meta["seat"] is None:
@@ -585,8 +724,27 @@ class Manager:
                         if value[key]["job_id"] != meta["job_id"]:
                             raise SessionError("target_changed", "The JOB changed before release.")
                         value[key] = {"job_id": None, "git_hash": None, "session": None}
+                        if value["leader"] and value["leader"].get("reviewing") == meta["job_id"]:
+                            value["leader"]["reviewing"] = None
                 self.store.update(release)
-            return self._result(meta, stopped=True, released=bool(check.get("allowed")), reasons=check.get("reasons", []))
+                # The released run is no longer current; its window becomes a retired window.
+                try:
+                    self.tmux.clear_current(self.project.project_id, meta["target"], meta["run_id"])
+                except SessionError as error:
+                    # Release stands; the pointer and its window stay and the result names them.
+                    pointer_kept.append({"window_id": meta["window_id"], "reason": error.code})
+            elif meta.get("job_id"):
+                self._clear_review(meta["job_id"])
+            result = self._result(meta, stopped=True, released=bool(check.get("allowed")),
+                                  reasons=check.get("reasons", []))
+            return self._finish_control(result, meta, defer_cleanup, pointer_kept)
+
+    def _finish_control(self, result, meta, defer_cleanup, kept=()):
+        if defer_cleanup:
+            extra = {"cleanup": {"closed": [], "kept": list(kept)}} if kept else {}
+            return {**result, **extra, "deferred_cleanup": meta["target"]}
+        cleanup = self._sweep(meta["target"])
+        return {**result, "cleanup": {"closed": cleanup["closed"], "kept": list(kept) + cleanup["kept"]}}
 
     def _self_control(self, operation, meta, job, seat):
         directory = self.project.runtime_path / "runs" / meta["run_id"]

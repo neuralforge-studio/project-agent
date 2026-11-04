@@ -51,6 +51,7 @@ JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자�
 | send | `agent-session send --job leader "제출 commit과 CR ID"` |
 | stop | `agent-session stop --job TOOL-012` |
 | restart | `agent-session restart --job TOOL-012` |
+| review | `agent-session review --job TOOL-012` 또는 `agent-session review --clear` |
 
 Start는 todo의 CR을 in-progress로 옮기고 Worker seat를 자동 배정합니다.
 다른 명령은 CR ID 대신 `--seat N`으로 현재 배정 대상을 지정할 수 있습니다.
@@ -59,6 +60,8 @@ Restart 전에 해당 session이 `<base>/agent/handoff/<slot>.md`를 씁니다.
 Restart는 이전 대화를 보존하고 그 인계 파일로 새 대화에 작업을 넘깁니다.
 Seat·CR·Git 기준·branch는 유지합니다.
 Worker 반납은 CR이 in-progress를 떠나고 seat의 결과가 origin에 게시된 뒤에만 합니다.
+반납과 새 실행 뒤에는 종료가 확인된 옛 tmux window를 닫습니다. 반납 보류·pending·종료 미확인 window는 남깁니다.
+Review는 Leader가 지금 review 중인 JOB을 state에 표시합니다. Feedback 전송·stop·Leader 교체 때 자동으로 지워집니다.
 제어 예약이나 메시지 수락을 실제 종료·반납·작업 완료로 해석하지 않습니다.
 
 모델·effort·기존에 승인한 권한 인자는 등록의 `launch`로 전달합니다.

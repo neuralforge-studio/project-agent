@@ -159,6 +159,7 @@ def run_controller(request_file):
     end = time.monotonic() + request["timeout"]
     control = _tmux(request["socket_path"])
     own_window = request["window_id"]
+    cleanup = None
     try:
         metadata = control.read_meta(own_window)
         if metadata.get("run_id") != request["run_id"]:
@@ -172,7 +173,8 @@ def run_controller(request_file):
                           socket_path=request["socket_path"], timeout=max(0.001, end - time.monotonic()))
         result = manager.control(request["operation"], job=request.get("job"),
                                  seat=request.get("seat"), expected_run=request["run_id"],
-                                 allow_self=False)
+                                 allow_self=False, defer_cleanup=True)
+        cleanup = result.pop("deferred_cleanup", None)
         output = {"ok": True, "data": {**result, "completed": True}, "error": None}
     except SessionError as exc:
         output = {"ok": False, "data": {"completed": True}, "error": exc.as_dict()}
@@ -187,3 +189,11 @@ def run_controller(request_file):
     except SessionError:
         # A removed window does not invalidate the persisted controller result.
         pass
+    if cleanup is not None:
+        # Close windows only now: closing the server's last window also ends this tmux job.
+        owner = {"run_id": request["run_id"], "pid": os.getpid(), "birth": process.birth(os.getpid()),
+                 "result_file": str(result_file)}
+        try:
+            manager.sweep_after_result(cleanup, owner)
+        except Exception:
+            pass                                   # retained windows are closed by a later sweep

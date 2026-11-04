@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .config import resolve_project
 from .errors import SessionError
-from .state import StateStore
+from .state import StateStore, binding_identity
 
 
 def _project(cwd=None, config_path=None):
@@ -115,7 +115,10 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
     after = store.read()
     after_pointer = control.get_current(project.project_id, slot)
     try:
-        same_assignment = _select(after, target) == (seat, session)
+        after_seat, after_session = _select(after, target)
+        # Review marks and connection times may change during observation; the connection may not.
+        same_assignment = (after_seat == seat and binding_identity(after_session, project.provider)
+                           == binding_identity(session, project.provider))
     except SessionError:
         same_assignment = False
     identity = ("run_id", "window_id", "pane_id", "server_pid", "server_started", "session_id")

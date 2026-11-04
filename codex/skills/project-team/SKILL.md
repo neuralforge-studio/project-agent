@@ -26,13 +26,14 @@ Worker seat는 start가 자동으로 선택합니다. Seat 디렉토리가 없�
 2. `project-item new cr`로 CR을 만들고 Implementation·Verification을 채웁니다. 역할 지침과 읽을 문서는 CR 본문에 link로 적습니다.
 3. 사용자 합의를 Disposition에 기록하고 CR을 todo로 옮깁니다. Todo에 있다는 사실이 승인입니다.
 4. `agent-session start --job <CR-ID>`로 Worker를 시작합니다. CR은 in-progress로 옮겨집니다.
-5. Worker가 CR의 `## Result`에 쓴 제출 hash와 실제 검증 결과를 review합니다. 수정이 필요하면 Disposition에 기록하고 같은 CR에 feedback을 보냅니다.
+5. Review를 시작할 때 `agent-session review --job <CR-ID>`를 실행합니다. Worker가 CR의 `## Result`에 쓴 제출 hash와 실제 검증 결과를 review합니다. 수정이 필요하면 Disposition에 기록하고 같은 CR에 feedback을 보냅니다. Feedback을 보내면 review 표시는 자동으로 지워집니다. Review를 멈추고 다른 일을 하면 `agent-session review --clear`를 실행합니다.
 6. Write CR은 검토한 hash를 통합하고 원격 반영을 확인한 뒤 done(Outcome fixed)으로 옮깁니다. Read-only CR은 결과에 따라 todo(고치기로 함)·open(판정 필요)·done(Outcome waived, 문제 없음)으로 옮깁니다. 보류는 todo, 재판정은 open입니다.
 7. Worker의 정리 완료를 확인한 뒤 stop으로 실제 종료와 반납을 확인합니다.
 
 ```sh
 agent-session start --job leader
 agent-session start --job TOOL-012
+agent-session review --job TOOL-012
 agent-session send --job TOOL-012 --file FEEDBACK.md
 agent-session stop --job TOOL-012
 ```

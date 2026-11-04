@@ -1,7 +1,7 @@
 # Agent Session 동작 명세 v1
 
 공개 CLI는 `agent-session` 하나입니다.
-공개 명령은 start·send·stop·restart입니다.
+공개 명령은 start·send·stop·restart·review입니다.
 공통 도구는 프로젝트 코드를 import하거나 실행하지 않습니다.
 프로젝트별 차이는 등록(2절)과 프로젝트 문서·CR 본문으로만 표현합니다.
 
@@ -14,9 +14,12 @@ agent-session send --job leader "작업 결과를 보고합니다."
 agent-session send --job TOOL-012 --file FEEDBACK.md
 agent-session stop --seat 1
 agent-session restart --job leader
+agent-session review --job TOOL-012
+agent-session review --clear
 ```
 
 Start는 --job 하나가 필수입니다.
+Review는 --job과 --clear 중 정확히 하나가 필수입니다(7절 Review).
 나머지 대상 지정 명령은 --job과 --seat 중 정확히 하나가 필수입니다.
 둘 다 입력하면 같은 대상을 가리켜도 오류입니다.
 Leader는 등록 base에서 시작합니다.
@@ -126,7 +129,9 @@ Leader는 필요할 때 state.json과 JOB 문서를 직접 읽어 배정을 확�
 {
   "leader": {
     "session_id": "11111111-1111-4111-8111-111111111111",
-    "endpoint": "unix:///tmp/project-team-example/codex.sock"
+    "endpoint": "unix:///tmp/project-team-example/codex.sock",
+    "connected_at": "2026-11-04T09:12:30Z",
+    "reviewing": "TOOL-012"
   },
   "0": {"job_id": null, "git_hash": null, "session": null},
   "1": {
@@ -134,7 +139,8 @@ Leader는 필요할 때 state.json과 JOB 문서를 직접 읽어 배정을 확�
     "git_hash": "1111111111111111111111111111111111111111",
     "session": {
       "session_id": "22222222-2222-4222-8222-222222222222",
-      "endpoint": "unix:///tmp/project-team-example/codex.sock"
+      "endpoint": "unix:///tmp/project-team-example/codex.sock",
+      "connected_at": "2026-11-04T04:20:02Z"
     }
   },
   "2": {"job_id": "TOOL-013", "git_hash": null, "session": null}
@@ -148,9 +154,11 @@ Worker seat가 없으면 `{"leader": null}`입니다.
 | 항목 | 의미 |
 | --- | --- |
 | leader | Leader의 session. 연결 전·반납 완료 후에는 null |
+| leader.reviewing | Leader가 지금 review 중인 JOB. 없으면 null(7절 Review) |
 | N.job_id | Leader가 배정한 JOB. 미배정은 null |
 | N.git_hash | 최초 pull 직후 hash. 미준비·비Git은 null |
 | N.session | Worker의 session. 연결 전·반납 후에는 null |
+| session.connected_at | 그 대화를 처음 게시한 UTC 시각(`YYYY-MM-DDTHH:MM:SSZ`) |
 
 Session의 값은 provider에 따라 다릅니다.
 
@@ -159,7 +167,15 @@ Session의 값은 provider에 따라 다릅니다.
 | Claude | session_id·message_to | 실제 대화 UUID와 ListAgents에서 확인한 SendMessage 대상 |
 | Codex | session_id·endpoint | 실제 thread ID와 app-server 주소 |
 
-Session의 각 값은 비어 있지 않은 문자열입니다.
+Session의 각 필수 값은 비어 있지 않은 문자열입니다.
+`connected_at`과 Leader의 `reviewing`은 선택 key입니다. 이 key가 없는 기존 state도 읽습니다.
+시작 controller는 session을 게시할 때 같은 slot의 기존 session과 session_id를 대조합니다.
+같으면 같은 대화의 재게시이므로 `connected_at`·`reviewing`을 보존하고 연결 주소만 갱신합니다.
+다르거나 없으면 새 대화이므로 현재 시각을 쓰고 Leader의 `reviewing`을 null로 씁니다.
+`connected_at`이 없는 기존 대화의 재게시는 시각을 추정해 채우지 않습니다.
+저장한 `reviewing`은 null 또는 현재 어떤 seat의 job_id입니다. 다른 값은 state_invalid입니다.
+연결을 대조하는 식별값은 Claude가 session_id, Codex가 session_id·endpoint입니다.
+`connected_at`·`reviewing`·Claude의 message_to 변경은 연결 교체로 보지 않습니다.
 Provider는 등록에서 읽으므로 state에 중복 저장하지 않습니다.
 Claude UUID를 SendMessage.to로 가정하지 않습니다.
 Claude 이름·ref는 전송 시 현재 목록과 실제 대화에 대조합니다.
@@ -234,6 +250,32 @@ Hook은 대상 제어 잠금을 다시 획득하지 않습니다.
 Hook은 canonical state를 쓰지 않고 자기 window의 binding·관찰값만 갱신합니다.
 시작 controller는 게시 직전에 현재 run·JOB·window·실제 연결을 다시 대조합니다.
 늦은 hook이 옛 window를 갱신해도 새 실행의 state session을 덮어쓸 수 없습니다.
+
+### 종료한 window 정리
+
+관리 window는 CLI가 끝난 뒤에도 남습니다(remain-on-exit). 종료 확인과 반납 보류의 근거이기 때문입니다.
+공통 코드는 다음 시점에 같은 target의 종료한 window를 정리합니다.
+
+1. 반납 성공: stop은 state를 반납한 뒤 대상 제어 잠금 안에서 현재 실행 포인터가 이 run을 가리키는지 대조하고 포인터를 지웁니다. 그 뒤 정리합니다.
+2. 새 실행: start·restart는 새 run의 시작 완료 뒤 정리합니다.
+3. 반납 보류(`released: false`): 현재 실행 포인터와 그 window를 유지합니다.
+
+정리는 현재 실행 포인터의 run을 제외한 같은 base·target의 관리 window 가운데 다음을 모두 만족하는 것만 닫습니다.
+
+- 관리 정보의 base·target·run_id·window_id·pane_id와 server PID·시작 시각·생성 정보가 일치합니다. 관리 정보가 없거나 복원한 window는 채택하지 않습니다.
+- Window의 pane이 관리 pane 하나뿐이고 그 pane이 종료했습니다. 사용자가 pane을 추가한 window는 보존합니다.
+- 그 run의 실제 종료를 stop과 같은 기준으로 확인했습니다. 확인하지 못하면 보존합니다.
+- control_pending이 false이고 살아 있는 controller가 없습니다. 자기 controller의 예외는 7절 자기 종료·자기 재시작에 따릅니다.
+
+정리는 그 target의 대상 제어 잠금 안에서 현재 실행 포인터를 읽고 후보 검사와 닫기를 마칩니다.
+자기 controller의 마지막 정리는 이 잠금을 기다리지 않고 시도합니다. 잠금이 사용 중이면 닫지 않고, 잠금을 가진 명령의 정리가 대신합니다.
+한 번의 정리는 시작 뒤 30초가 지나면 다음 window를 검사하지 않고 `cleanup_budget` 이유로 남깁니다.
+이미 시작한 provider 종료 조회는 명령의 timeout을 따릅니다.
+정리 실패와 보존은 명령의 종료·반납 판정을 바꾸지 않습니다.
+반납 뒤 포인터 삭제에 실패하면 반납은 유지하고 그 window와 오류 이유를 `kept`에 보고합니다.
+직접 실행한 명령은 결과의 `cleanup`에 닫은 window(`closed`)와 남긴 window·이유(`kept`)를 보고합니다.
+남긴 window는 같은 target의 다음 정리가 다시 검사합니다.
+`agent/runs/<run_id>/`의 실행 산출물은 정리하지 않습니다.
 
 ## 4. start
 
@@ -529,7 +571,7 @@ Endpoint와 hook·API 기준은 [공식 app-server 문서](https://learn.chatgpt
 통신 주소는 state에서 읽습니다.
 Tmux의 base·run·seat·JOB·provider 대화·PID 생성 정보로 실제 실행을 대조합니다.
 이름·pane 숫자·복사된 option만으로 복원 창을 채택하지 않습니다.
-CLI 전에 관리 창에 remain-on-exit를 설정합니다.
+CLI 전에 관리 창에 remain-on-exit를 설정합니다. 종료한 창은 3절 종료한 window 정리로만 닫습니다.
 다른 창과 사용자 전역 tmux 설정은 변경하지 않습니다.
 Tmux session 이름은 등록의 project를 사용합니다.
 Leader window는 `<project>-leader`, Worker window는 `<project>-<role>-<seat>-<JOB-ID>`로 표시합니다.
@@ -566,6 +608,7 @@ agent-session send --seat 1 --file FEEDBACK.md
 Native provider가 더 작은 한도를 알리면 전송 전에 그 한도를 적용합니다.
 크기 초과는 message_too_large·exit 2이며 자르기·분할·파일 경로 대체를 하지 않습니다.
 Worker가 Leader에게 보고할 때는 `send --job leader`를 사용합니다.
+Leader가 보낸 send가 accepted되고 그 JOB이 `leader.reviewing`이면 reviewing을 null로 만듭니다(7절 Review 표시).
 
 같은 JOB의 문서나 feedback을 다시 보내도 JOB ID·Git 기준·branch를 초기화하지 않습니다.
 Send의 파일 입력은 메시지 전달이며 새 JOB 배정을 자동으로 수행하지 않습니다.
@@ -624,7 +667,10 @@ Worker는 아래 반납 검사를 추가로 확인합니다.
 - 그 밖이면 seat HEAD가 origin의 어떤 ref에 포함됩니다. 보류한 작업 branch가 게시돼 있어야 합니다.
 
 반납 조건도 맞으면 job_id·git_hash·session을 null로 만듭니다.
+같은 저장에서 `leader.reviewing`이 이 JOB이면 null로 만듭니다.
+그 뒤 현재 실행 포인터를 지우고 종료한 window를 정리합니다(3절).
 조건이 안 맞으면 종료만 수행하고 JOB·hash·대화 기록을 보존합니다.
+이때 `leader.reviewing`이 이 JOB이면 null로 만들고 현재 실행 포인터와 window는 유지합니다.
 이 경우 `stopped: true, released: false`와 이유를 반환합니다.
 종료 성공·반납 보류는 exit 0입니다. 실제 종료 미확인은 exit 4입니다.
 보존한 session은 종료한 대화의 이력이며 송신 가능을 뜻하지 않습니다.
@@ -653,6 +699,7 @@ Restart는 다음 순서로 새 대화로 교체합니다.
 4. 최신 프로젝트 지침으로 prompt·settings·환경을 다시 생성합니다.
 5. 인계 파일과 현재 CR 본문을 최초 prompt에 넣고 새 대화를 시작합니다.
 6. 시작 controller가 새 window의 실제 binding을 검증해 state에 게시한 뒤 시작 완료를 표시합니다.
+7. 같은 target의 종료한 window를 정리합니다(3절).
 
 이전 provider session_id와 새 session_id는 달라야 합니다.
 종료 전에는 새 대화를 시작하지 않습니다.
@@ -672,6 +719,7 @@ Stop은 session_unbound를 반환하고 배정·Git 기준·기존 runtime 근�
 등록한 CLI도 직접 /exit·crash·외부 종료 뒤 unload되면 마지막 background 근거가 없을 수 있습니다.
 이 경우의 종료 판정도 unknown이며 같은 수동 확인 절차를 적용합니다.
 이 경우 v1은 자동 복구를 지원하지 않습니다.
+종료한 window 정리(3절)는 control_pending이 남았거나 종료를 확인하지 못한 window를 닫지 않습니다. 이 절의 수동 확인 근거는 보존됩니다.
 담당 Agent는 오류와 run 경로를 보고합니다. 운영자가 다음 절차를 수행합니다.
 
 1. 해당 대상의 제어 잠금을 확보하고 state·CR 파일·run 파일을 보존하십시오.
@@ -721,6 +769,11 @@ Controller는 호출 반환 후 같은 대상 제어 잠금으로 실제 제어�
 후임 Leader나 다른 호출자가 이 파일과 현재 state를 대조합니다.
 이 파일은 명령 결과 산출물이며 state.json의 대체 원본이 아닙니다.
 Controller PID·생성 시각을 기록하여 provider의 미종료 업무 process로 오판하지 않습니다.
+Controller는 결과를 기록하고 control_pending을 false로 바꾼 뒤 마지막으로 종료한 window를 정리합니다(3절).
+마지막 window를 닫아 tmux server가 끝나도 결과는 이미 저장되어 있습니다.
+Controller가 살아 있어도 다음을 모두 만족하면 자기 run의 window를 닫을 수 있습니다.
+결과 파일이 completed=true이고, 그 window의 control_pending이 false이고, 정리하는 process가 그 window에 기록된 controller PID·생성 시각과 같습니다.
+다른 controller, 결과가 없거나 미완료인 controller, pending이 남은 window는 보존합니다.
 다른 대상 제어는 기본적으로 최종 결과까지 기다리고 반환합니다.
 
 Claude 종료는 pane dead·CLI·추적한 자식과 background 종료를 확인합니다.
@@ -732,6 +785,38 @@ PID 관찰의 Linux·macOS 차이는 provider module이 처리합니다.
 실제 종료 확인은 판정 시점의 관찰입니다.
 외부 주체가 옛 Codex thread로 새 입력을 보내도 seat를 자동 재점유하지 않습니다.
 그 활동은 소유자 없는 활동으로 오류·진단에 표시합니다.
+
+### Review 표시
+
+```sh
+agent-session review --job TOOL-012
+agent-session review --clear
+```
+
+Leader는 Worker의 제출을 실제로 review하기 시작할 때 `review --job`으로 `leader.reviewing`을 씁니다.
+관찰 도구는 이 값으로 Leader가 지금 review 중인 seat를 표시합니다.
+
+| 입력 | 필수·기본값 | 처리 |
+| --- | --- | --- |
+| --job JOB_ID | clear와 택일 | 현재 seat에 배정되고 session이 있는 JOB으로 설정. 다른 JOB이면 교체 |
+| --clear | job과 택일 | null로 해제. 이미 null이어도 성공 |
+| --timeout SECONDS | 선택. 30초 | 전체 대기 제한 |
+
+호출자는 Leader 또는 operator입니다. Worker는 role_denied, 비관리 agent는 caller_unbound입니다.
+Leader가 없으면 session_unbound입니다.
+같은 state 저장 안에서 Leader session_id·대상 배정·Worker session 존재를 다시 대조합니다.
+그 사이 Leader가 바뀌면 target_changed입니다.
+Seat session이 있어야 한다는 조건은 설정할 때만 검사합니다.
+
+다음 경우 `reviewing`이 그 JOB을 가리킬 때만 null로 만듭니다.
+
+| 시점 | 처리 |
+| --- | --- |
+| Leader가 그 JOB에 send하고 accepted | 발신 Leader가 현재 state의 Leader일 때만 해제 |
+| 그 JOB의 Worker stop | 반납이면 반납 저장에서, 반납 보류면 별도 저장에서 해제 |
+| Leader restart·stop | 새 Leader 게시 또는 반납으로 해제 |
+
+Worker restart는 `reviewing`을 바꾸지 않습니다.
 
 ## 8. CR과 실행 입력
 
