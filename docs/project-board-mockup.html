@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project Board 시안</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans+KR:wght@400;500;600;700&amp;display=swap">
+<style>
+:root {
+    --ground: #F3F4F6;
+    --surface: #FFFFFF;
+    --floor: #F8F9FB;
+    --wall: #CFD5DD;
+    --line: #B8BFC9;
+    --line-soft: #D5DAE1;
+    --line-faint: #E3E6EA;
+    --ink: #1D2330;
+    --muted: #5B6472;
+    --work: #2563EB;
+    --work-line: #BFD0F5;
+    --select-bg: #EAF1FE;
+    --select-line: #A9C2F5;
+    --hover-bg: #F0F4FC;
+    --decide: #B4410E;
+    --decide-bg: #FFF3EB;
+    --decide-line: #F1C3A5;
+    --ghost: #AEB5C0;
+    --mono: 'IBM Plex Mono', ui-monospace, monospace;
+    --sans: 'IBM Plex Sans KR', system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--sans); }
+button, textarea, input { font: inherit; color: inherit; }
+.page { max-width: 1180px; margin: 0 auto; padding: 40px 16px 80px; display: flex; flex-direction: column; gap: 56px; }
+.mono { font-family: var(--mono); }
+.muted { color: var(--muted); }
+h1, h2, h3, p { margin: 0; }
+
+/* ---------- motion: 작업 중일 때만 작게 움직입니다 ---------- */
+@keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+@keyframes type { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
+@keyframes sway { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(2px); } }
+
+/* ---------- top bar ---------- */
+.topbar { display: flex; flex-direction: column; gap: 6px; }
+.topbar h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
+.tag { font-size: 12px; color: var(--muted); border: 1px solid var(--line-soft); border-radius: 999px; padding: 2px 8px; }
+.section-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 20px; }
+.section-head h2 { font-size: 20px; font-weight: 700; }
+.section-head p { font-size: 14px; color: var(--muted); }
+.legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+.legend li { display: flex; align-items: center; gap: 6px; }
+.dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+
+/* ---------- room ---------- */
+.rooms { display: flex; flex-direction: column; gap: 20px; }
+.room { background: var(--surface); border: 1px solid #DCE0E5; border-radius: 14px; }
+.room-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 16px 20px; }
+.room-head h3 { font-size: 17px; font-weight: 600; }
+.room-head .path { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.room-head .provider { font-family: var(--mono); font-size: 11px; background: #EEF0F3; border-radius: 999px; padding: 2px 8px; }
+.room-head .status { margin-left: auto; font-size: 13px; color: var(--muted); }
+.floor-scroll { overflow-x: auto; padding: 0 20px 20px; }
+.floor { position: relative; min-width: 760px; height: 176px; border: 1.5px solid var(--wall); border-radius: 10px; background: var(--floor); }
+
+/* whiteboard: Leader 뒤 벽 */
+.whiteboard { position: absolute; left: 12px; top: 12px; width: 120px; height: 148px; display: flex; flex-direction: column; gap: 6px; }
+.wb-decide, .wb-cr { border: 1px solid var(--line-soft); background: var(--surface); border-radius: 8px; color: var(--muted); cursor: pointer; text-align: left; }
+.wb-decide { height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-size: 13px; font-weight: 600; }
+.wb-decide .n { font-family: var(--mono); font-size: 18px; font-weight: 500; color: var(--ink); }
+.wb-decide.attn { border-color: var(--decide-line); background: var(--decide-bg); color: var(--decide); }
+.wb-decide.attn .n { color: var(--decide); }
+.wb-cr { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 6px 12px; font-size: 12px; }
+.wb-cr span { display: flex; justify-content: space-between; width: 100%; }
+.wb-cr b { font-family: var(--mono); font-weight: 400; color: var(--ink); }
+.wb-decide[aria-expanded="true"], .wb-cr[aria-expanded="true"] { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+/* station: desk + worker를 묶은 선택 영역 */
+.station { position: absolute; width: 92px; height: 92px; padding: 0; border: 1.5px solid transparent; border-radius: 10px; background: transparent; cursor: pointer; }
+.station:hover { background: var(--hover-bg); }
+.station[aria-expanded="true"], .station.selected { background: var(--select-bg); border-color: var(--select-line); }
+.station:focus-visible { outline: 2px solid var(--work); outline-offset: 2px; }
+
+/* desk */
+.desk, .worker, .leader { pointer-events: none; }
+.desk { position: absolute; width: 72px; height: 44px; border: 1.5px solid var(--line); border-radius: 6px; background: var(--surface); }
+.desk::before { content: ""; position: absolute; left: 21px; top: 5px; width: 28px; height: 4px; border-radius: 2px; background: var(--wall); }
+.desk.empty { border-color: var(--line-soft); }
+.desk.empty::before { background: var(--line-faint); }
+.desk .id { position: absolute; left: 0; right: 0; top: 11px; text-align: center; font-family: var(--mono); font-size: 10.5px; }
+.desk .time { position: absolute; left: 0; right: 0; top: 26px; text-align: center; font-family: var(--mono); font-size: 9.5px; color: var(--muted); }
+.desk.on::before { background: #D6E2FB; }
+.desk .typing { position: absolute; left: 26.5px; top: 5.5px; display: flex; gap: 3.5px; }
+.desk .typing i { width: 3px; height: 3px; border-radius: 50%; background: var(--work); animation: type 1.2s ease-in-out infinite; }
+.desk .typing i:nth-child(2) { animation-delay: .2s; }
+.desk .typing i:nth-child(3) { animation-delay: .4s; }
+.desk.lead { width: 48px; height: 64px; }
+.desk.lead::before { left: auto; right: 5px; top: 18px; width: 4px; height: 24px; }
+.desk.lead .time { top: 0; bottom: 0; right: 10px; display: flex; flex-direction: column; justify-content: center; align-items: center; line-height: 1.3; }
+
+/* worker */
+.worker { position: absolute; width: 24px; height: 24px; border-radius: 50%; }
+.worker.working { background: var(--work); animation: bob 1.6s ease-in-out infinite; }
+.worker.review { border: 2.5px solid var(--work); background: var(--surface); }
+.worker.pending { border: 1.5px dashed var(--ghost); }
+
+/* leader: 동심원 */
+.leader { position: absolute; width: 28px; height: 28px; border: 2px solid var(--ink); border-radius: 50%; background: var(--surface); }
+.leader::after { content: ""; position: absolute; left: 6px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--ink); }
+.leader.working { animation: sway 2.6s ease-in-out infinite; }
+.leader.absent { border: 1.5px dashed var(--ghost); background: transparent; }
+.leader.absent::after { display: none; }
+
+.label { position: absolute; width: 112px; text-align: center; font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+/* drawer: 펼치면 아래 project가 밀려납니다 */
+.drawer-wrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .28s ease; }
+.room.is-open .drawer-wrap { grid-template-rows: 1fr; }
+.drawer { overflow: hidden; min-height: 0; }
+.drawer-inner { border-top: 1px solid #E5E8EC; padding: 20px; background: #FAFBFC; border-radius: 0 0 14px 14px; display: flex; flex-direction: column; gap: 12px; }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.drawer-head h4 { margin: 0; font-size: 14px; font-weight: 600; }
+.btn { min-height: 44px; padding: 0 14px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface); font-size: 13px; cursor: pointer; }
+.btn.primary { border: 0; background: var(--ink); color: #FFFFFF; font-size: 14px; font-weight: 600; padding: 0 18px; }
+.card { background: var(--surface); border: 1px solid #E1E5EA; border-radius: 8px; padding: 10px 12px; }
+.card .id { display: block; font-family: var(--mono); font-size: 12px; }
+.card .t { font-size: 13px; color: var(--muted); }
+.card.active { border-color: var(--work-line); }
+.decide-card { background: var(--surface); border: 1px solid var(--decide-line); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+.decide-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 12px; color: var(--muted); }
+.pill-attn { color: var(--decide); background: var(--decide-bg); border-radius: 999px; padding: 2px 8px; }
+.decide-card label { font-size: 12px; font-weight: 600; margin-top: 4px; }
+.decide-card textarea { font-size: 14px; padding: 10px 12px; border: 1px solid #C9CFD8; border-radius: 8px; resize: vertical; }
+.send-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.send-status { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.send-status.done { font-family: var(--sans); font-size: 13px; color: #1D4ED8; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.col-title { font-size: 12px; font-weight: 600; color: var(--muted); }
+.kv { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; font-size: 13px; }
+.kv dt { font-size: 11.5px; color: var(--muted); }
+.kv dd { margin: 2px 0 0; }
+.excerpt { font-size: 13.5px; line-height: 1.6; color: var(--muted); }
+.excerpt strong { color: var(--ink); }
+
+/* ---------- elements sheet ---------- */
+.sheet { display: flex; flex-direction: column; gap: 28px; }
+.spec { list-style: none; margin: 0 0 24px; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; font-family: var(--mono); font-size: 12px; }
+.spec li { background: var(--surface); border: 1px solid #DCE0E5; border-radius: 999px; padding: 4px 10px; }
+.sheet-row { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 24px; }
+.sheet-row .row-name { padding-top: 8px; }
+.sheet-row .row-name p:first-child { font-size: 16px; font-weight: 600; }
+.sheet-row .row-name p + p { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.cells { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; }
+figure { margin: 0; }
+.stage { height: 150px; border: 1.5px solid var(--wall); border-radius: 10px; background: var(--floor); display: flex; justify-content: center; }
+.scene { position: relative; width: 320px; height: 100%; }
+figcaption { display: flex; flex-direction: column; gap: 3px; margin-top: 10px; }
+figcaption b { font-size: 14px; font-weight: 600; }
+figcaption span { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.mini-board { position: absolute; width: 40px; height: 102px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--surface); display: flex; flex-direction: column; gap: 5px; padding: 6px; }
+.mini-board i { height: 3px; border-radius: 2px; background: var(--line-faint); }
+.mini-board i:first-child { height: 18px; border-radius: 3px; background: #EEF0F3; }
+.expand-demo { position: absolute; left: 40px; width: 220px; border-radius: 6px; background: var(--surface); }
+
+@media (max-width: 640px) {
+    .sheet-row { grid-template-columns: 1fr; gap: 8px; }
+    .room-head .status { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .worker.working, .leader.working, .desk .typing i { animation: none; }
+    .drawer-wrap { transition: none; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="topbar">
+    <div style="display: flex; align-items: center; gap: 10px">
+        <h1>Project Board 시안</h1>
+        <span class="tag">예시 데이터</span>
+    </div>
+    <p class="muted" style="font-size: 14px">위에서 내려다본 사무실 평면도입니다. 자리는 직사각형, 사람은 원입니다.</p>
+</header>
+
+<!-- ===================== 1. Board ===================== -->
+<section aria-labelledby="s-board">
+    <div class="section-head" style="flex-direction: row; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px">
+        <div style="display: flex; flex-direction: column; gap: 6px">
+            <h2 id="s-board">1. Board 화면</h2>
+            <p>화이트보드의 숫자나 배정된 자리(desk + Worker)를 누르면 해당 project 아래가 펼쳐집니다.</p>
+        </div>
+        <ul class="legend">
+            <li><span class="dot" style="background: var(--work)"></span>작업 중</li>
+            <li><span class="dot" style="border: 2px solid var(--work); background: #FFFFFF"></span>Review 대기</li>
+            <li><span class="dot" style="border-radius: 3px; background: var(--select-bg); border: 1px solid var(--select-line)"></span>선택</li>
+            <li><span class="dot" style="border-radius: 3px; background: var(--decide-bg); border: 1px solid #E8A77E"></span>결정 대기</li>
+        </ul>
+    </div>
+
+    <div class="rooms">
+
+        <!-- haroo -->
+        <article class="room" data-open="decide" aria-label="haroo">
+            <div class="room-head">
+                <h3>haroo</h3>
+                <span class="path">~/work/haroo/haroo.main</span>
+                <span class="provider">codex</span>
+                <span class="status">Leader 연결됨 · seat 3</span>
+            </div>
+            <div class="floor-scroll">
+                <div class="floor">
+                    <div class="whiteboard">
+                        <button type="button" class="wb-decide attn" data-open-key="decide" aria-expanded="false"><span>결정</span><span class="n">1</span></button>
+                        <button type="button" class="wb-cr" data-open-key="cr" aria-expanded="false">
+                            <span>open<b>2</b></span><span>todo<b>1</b></span><span>진행<b>3</b></span>
+                        </button>
+                    </div>
+
+                    <div class="desk lead" style="left: 176px; top: 56px" aria-hidden="true"><span class="time"><span>3d</span><span>6h</span><span>20m</span></span></div>
+                    <span class="leader absent" style="left: 142px; top: 74px" aria-hidden="true"></span>
+                    <span class="label" style="left: 132px; top: 128px">leader → seat1</span>
+
+                    <button type="button" class="station" style="left: 290px; top: 26px" data-open-key="w0" aria-expanded="false" aria-label="seat0, TOOL-012 작업 중, session 2h 14m"></button>
+                    <div class="desk on" style="left: 300px; top: 36px" aria-hidden="true"><span class="id">TOOL-012</span><span class="time">2h 14m</span><span class="typing"><i></i><i></i><i></i></span></div>
+                    <span class="worker working" style="left: 324px; top: 84px" aria-hidden="true"></span>
+                    <span class="label" style="left: 280px; top: 122px">seat0</span>
+
+                    <button type="button" class="station" style="left: 422px; top: 26px" data-open-key="w1" aria-expanded="false" aria-label="seat1, TOOL-013 Leader review 중, session 5h 40m"></button>
+                    <div class="desk" style="left: 432px; top: 36px" aria-hidden="true"><span class="id">TOOL-013</span><span class="time">5h 40m</span></div>
+                    <span class="worker review" style="left: 456px; top: 84px" aria-hidden="true"></span>
+                    <span class="leader working" style="left: 486px; top: 82px" aria-hidden="true"></span>
+                    <span class="label" style="left: 412px; top: 122px">seat1 · review 중</span>
+
+                    <button type="button" class="station" style="left: 554px; top: 26px" data-open-key="w2" aria-expanded="false" aria-label="seat2, TOOL-017 review 대기, session 1d 2h 5m"></button>
+                    <div class="desk" style="left: 564px; top: 36px" aria-hidden="true"><span class="id">TOOL-017</span><span class="time">1d 2h 5m</span></div>
+                    <span class="worker review" style="left: 588px; top: 84px" aria-hidden="true"></span>
+                    <span class="label" style="left: 544px; top: 122px">seat2 · review 대기</span>
+                </div>
+            </div>
+
+            <div class="drawer-wrap">
+                <div class="drawer">
+                    <div class="drawer-inner">
+
+                        <div data-panel="decide" hidden>
+                            <div class="drawer-head" style="margin-bottom: 12px">
+                                <h4>결정 대기 · 1</h4>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                            <div class="decide-card">
+                                <div class="decide-meta">
+                                    <span class="mono" style="font-size: 12.5px; color: var(--ink)">D-20261104-01</span>
+                                    <span class="pill-attn">urgency high</span>
+                                    <span>blocks TOOL-013</span>
+                                </div>
+                                <p style="font-size: 15px; font-weight: 600">[결정이 필요한 질문 한 줄]</p>
+                                <p class="muted" style="font-size: 13.5px; line-height: 1.6">[배경과 선택지 — 결정 항목 본문]</p>
+                                <label for="ans-haroo">답변</label>
+                                <textarea id="ans-haroo" rows="3" placeholder="예: A로 진행합니다."></textarea>
+                                <div class="send-row">
+                                    <button type="button" class="btn primary" data-send>haroo Leader에게 보내기</button>
+                                    <span class="send-status" role="status">agent-session send --job leader</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div data-panel="cr" hidden>
+                            <div class="drawer-head" style="margin-bottom: 12px">
+                                <h4>CR · 6</h4>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                            <div class="cols">
+                                <div class="col"><p class="col-title">open · 2</p>
+                                    <div class="card"><span class="id">TOOL-015</span><span class="t">[CR 제목]</span></div>
+                                    <div class="card"><span class="id">TOOL-016</span><span class="t">[CR 제목]</span></div>
+                                </div>
+                                <div class="col"><p class="col-title">todo · 1</p>
+                                    <div class="card"><span class="id">TOOL-014</span><span class="t">[CR 제목]</span></div>
+                                </div>
+                                <div class="col"><p class="col-title">in-progress · 3</p>
+                                    <div class="card active"><span class="id">TOOL-012 · seat0</span><span class="t">[CR 제목]</span></div>
+                                    <div class="card active"><span class="id">TOOL-013 · seat1 · review 중</span><span class="t">[CR 제목]</span></div>
+                                    <div class="card active"><span class="id">TOOL-017 · seat2 · review 대기</span><span class="t">[CR 제목]</span></div>
+                                </div>                            </div>
+                        </div>
+
+                        <div data-panel="w0" hidden>
+                            <div class="drawer-head" style="margin-bottom: 12px">
+                                <h4><span class="mono">seat0 · TOOL-012</span> — [CR 제목]</h4>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                            <dl class="kv">
+                                <div class="card"><dt>상태</dt><dd>in-progress · 작업 중</dd></div>
+                                <div class="card"><dt>Session</dt><dd class="mono">2h 14m</dd></div>
+                                <div class="card"><dt>Branch</dt><dd class="mono">cr/TOOL-012</dd></div>
+                                <div class="card"><dt>Base</dt><dd class="mono">[git hash]</dd></div>
+                                <div class="card"><dt>Result</dt><dd>제출 없음</dd></div>
+                            </dl>
+                            <div class="card excerpt" style="margin-top: 10px"><p><strong>Implementation</strong> [CR 본문 요약]</p><p><strong>Verification</strong> [검증 기준]</p></div>
+                        </div>
+
+                        <div data-panel="w1" hidden>
+                            <div class="drawer-head" style="margin-bottom: 12px">
+                                <h4><span class="mono">seat1 · TOOL-013</span> — [CR 제목]</h4>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                            <dl class="kv">
+                                <div class="card"><dt>상태</dt><dd>in-progress · Leader review 중</dd></div>
+                                <div class="card"><dt>Session</dt><dd class="mono">5h 40m</dd></div>
+                                <div class="card"><dt>Branch</dt><dd class="mono">cr/TOOL-013</dd></div>
+                                <div class="card"><dt>Base</dt><dd class="mono">[git hash]</dd></div>
+                                <div class="card"><dt>Result</dt><dd class="mono">[제출 commit]</dd></div>
+                            </dl>
+                            <div class="card excerpt" style="margin-top: 10px"><p><strong>Result</strong> [검증 명령과 결과]</p></div>
+                        </div>
+
+                        <div data-panel="w2" hidden>
+                            <div class="drawer-head" style="margin-bottom: 12px">
+                                <h4><span class="mono">seat2 · TOOL-017</span> — [CR 제목]</h4>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                            <dl class="kv">
+                                <div class="card"><dt>상태</dt><dd>in-progress · review 대기</dd></div>
+                                <div class="card"><dt>Session</dt><dd class="mono">1d 2h 5m</dd></div>
+                                <div class="card"><dt>Branch</dt><dd class="mono">cr/TOOL-017</dd></div>
+                                <div class="card"><dt>Result</dt><dd class="mono">[제출 commit]</dd></div>
+                            </dl>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+        </article>
+
+        <!-- project B -->
+        <article class="room" data-open="" aria-label="project B">
+            <div class="room-head">
+                <h3>[project B]</h3>
+                <span class="path">[base 경로]</span>
+                <span class="provider">claude</span>
+                <span class="status">Leader 작업 중 · seat 2</span>
+            </div>
+            <div class="floor-scroll">
+                <div class="floor">
+                    <div class="whiteboard">
+                        <button type="button" class="wb-decide" data-open-key="decide" aria-expanded="false"><span>결정</span><span class="n">0</span></button>
+                        <button type="button" class="wb-cr" data-open-key="cr" aria-expanded="false">
+                            <span>open<b>0</b></span><span>todo<b>3</b></span><span>진행<b>2</b></span>
+                        </button>
+                    </div>
+
+                    <div class="desk lead" style="left: 176px; top: 56px" aria-hidden="true"><span class="time"><span>4h</span><span>32m</span></span></div>
+                    <span class="leader working" style="left: 142px; top: 74px" aria-hidden="true"></span>
+                    <span class="label" style="left: 132px; top: 128px">leader</span>
+
+                    <button type="button" class="station" style="left: 290px; top: 26px" data-open-key="w0" aria-expanded="false" aria-label="seat0, WEB-031 작업 중, session 48m"></button>
+                    <div class="desk on" style="left: 300px; top: 36px" aria-hidden="true"><span class="id">WEB-031</span><span class="time">48m</span><span class="typing"><i></i><i></i><i></i></span></div>
+                    <span class="worker working" style="left: 324px; top: 84px" aria-hidden="true"></span>
+                    <span class="label" style="left: 280px; top: 122px">seat0</span>
+
+                    <button type="button" class="station" style="left: 422px; top: 26px" data-open-key="w1" aria-expanded="false" aria-label="seat1, WEB-032 연결 중"></button>
+                    <div class="desk" style="left: 432px; top: 36px" aria-hidden="true"><span class="id">WEB-032</span></div>
+                    <span class="worker pending" style="left: 456px; top: 84px" aria-hidden="true"></span>
+                    <span class="label" style="left: 412px; top: 122px">seat1 · 연결 중</span>
+                </div>
+            </div>
+
+            <div class="drawer-wrap">
+                <div class="drawer">
+                    <div class="drawer-inner">
+                        <div data-panel="decide" hidden>
+                            <div class="drawer-head">
+                                <p class="muted" style="font-size: 14px">결정 대기 항목이 없습니다.</p>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                        </div>
+                        <div data-panel="cr" hidden>
+                            <div class="drawer-head" style="margin-bottom: 12px">
+                                <h4>CR · 5</h4>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                            <div class="cols">
+                                <div class="col"><p class="col-title">todo · 3</p>
+                                    <div class="card"><span class="id">WEB-033</span><span class="t">[CR 제목]</span></div>
+                                    <p class="muted" style="font-size: 12px">외 2건</p>
+                                </div>
+                                <div class="col"><p class="col-title">in-progress · 2</p>
+                                    <div class="card active"><span class="id">WEB-031 · seat0</span><span class="t">[CR 제목]</span></div>
+                                    <div class="card active"><span class="id">WEB-032 · seat1 · 연결 중</span><span class="t">[CR 제목]</span></div>
+                                </div>                            </div>
+                        </div>
+                        <div data-panel="w0" hidden>
+                            <div class="drawer-head" style="margin-bottom: 12px">
+                                <h4><span class="mono">seat0 · WEB-031</span> — [CR 제목]</h4>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                            <dl class="kv">
+                                <div class="card"><dt>상태</dt><dd>in-progress · 작업 중</dd></div>
+                                <div class="card"><dt>Session</dt><dd class="mono">48m</dd></div>
+                                <div class="card"><dt>Branch</dt><dd class="mono">cr/WEB-031</dd></div>
+                                <div class="card"><dt>Result</dt><dd>제출 없음</dd></div>
+                            </dl>
+                        </div>
+                        <div data-panel="w1" hidden>
+                            <div class="drawer-head" style="margin-bottom: 12px">
+                                <h4><span class="mono">seat1 · WEB-032</span> — [CR 제목]</h4>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                            <dl class="kv">
+                                <div class="card"><dt>상태</dt><dd>in-progress · Worker 연결 중</dd></div>
+                                <div class="card"><dt>Branch</dt><dd class="mono">cr/WEB-032</dd></div>
+                                <div class="card"><dt>Result</dt><dd>제출 없음</dd></div>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </article>
+
+    </div>
+</section>
+
+<!-- ===================== 2. Elements ===================== -->
+<section aria-labelledby="s-elements">
+    <div class="section-head">
+        <h2 id="s-elements">2. 요소와 상태</h2>
+        <p>각 상태가 어떤 데이터에서 나오는지 함께 적었습니다. 상태가 바뀌면 이동 animation 없이 바로 바뀝니다.</p>
+    </div>
+    <ul class="spec">
+        <li>Seat 72×44</li><li>Leader desk 48×64</li><li>선택 영역 92×92</li><li>Worker ⌀24</li><li>Leader ⌀28</li><li>선 1.5px</li><li>시간 9.5px</li>
+        <li>작업 #2563EB</li><li>결정 #B4410E</li><li>Leader #1D2330</li><li>선택 #EAF1FE</li>
+    </ul>
+
+    <div class="sheet">
+
+        <div class="sheet-row">
+            <div class="row-name"><p>Seat</p><p>직사각형</p></div>
+            <div class="cells">
+                <figure>
+                    <div class="stage"><div class="scene">
+                        <div class="desk empty" style="left: 124px; top: 30px"></div>
+                    </div></div>
+                    <figcaption><b>빈 seat · 종료되면 원이 바로 사라짐</b><span>job_id: null</span></figcaption>
+                </figure>
+                <figure>
+                    <div class="stage"><div class="scene">
+                        <div class="desk" style="left: 124px; top: 30px"><span class="id">TOOL-014</span></div>
+                        <span class="worker pending" style="left: 148px; top: 78px"></span>
+                    </div></div>
+                    <figcaption><b>배정됨 · 연결 전</b><span>job_id 있음 · session: null</span></figcaption>
+                </figure>
+                <figure>
+                    <div class="stage"><div class="scene">
+                        <div class="desk on" style="left: 60px; top: 30px"><span class="id">TOOL-012</span><span class="time">1d 4h 12m</span><span class="typing"><i></i><i></i><i></i></span></div>
+                        <div class="desk lead" style="left: 200px; top: 22px"><span class="time"><span>2d</span><span>6h</span><span>20m</span></span></div>
+                    </div></div>
+                    <figcaption><b>Session 시간 · 9.5px</b><span>CLI 생성 시각부터 경과 · 앞의 0 단위 생략</span></figcaption>
+                </figure>
+            </div>
+        </div>
+
+        <div class="sheet-row">
+            <div class="row-name"><p>Worker</p><p>원 ⌀24</p></div>
+            <div class="cells">
+                <figure>
+                    <div class="stage"><div class="scene">
+                        <div class="desk on" style="left: 124px; top: 30px"><span class="id">TOOL-012</span><span class="time">2h 14m</span><span class="typing"><i></i><i></i><i></i></span></div>
+                        <span class="worker working" style="left: 148px; top: 78px"></span>
+                    </div></div>
+                    <figcaption><b>작업 중 · 위아래 2px · 모니터 점 3개</b><span>session 있음 · CR in-progress</span></figcaption>
+                </figure>
+                <figure>
+                    <div class="stage"><div class="scene">
+                        <div class="desk" style="left: 124px; top: 30px"><span class="id">TOOL-017</span><span class="time">1d 2h 5m</span></div>
+                        <span class="worker review" style="left: 148px; top: 78px"></span>
+                    </div></div>
+                    <figcaption><b>Review 대기 · 속 빈 원 · 정지</b><span>## Result 제출 · Leader는 아직 오지 않음</span></figcaption>
+                </figure>
+                <figure>
+                    <div class="stage"><div class="scene">
+                        <span class="station selected" style="left: 114px; top: 20px" aria-hidden="true"></span>
+                        <div class="desk on" style="left: 124px; top: 30px"><span class="id">TOOL-012</span><span class="time">2h 14m</span><span class="typing"><i></i><i></i><i></i></span></div>
+                        <span class="worker working" style="left: 148px; top: 78px"></span>
+                    </div></div>
+                    <figcaption><b>선택 · desk + Worker 영역 · 옅은 파랑</b><span>누르면 배정된 CR을 펼침</span></figcaption>
+                </figure>
+            </div>
+        </div>
+
+        <div class="sheet-row">
+            <div class="row-name"><p>Leader</p><p>동심원 ⌀28</p></div>
+            <div class="cells">
+                <figure>
+                    <div class="stage"><div class="scene">
+                        <div class="mini-board" style="left: 70px; top: 22px"><i></i><i></i><i></i><i></i><i></i></div>
+                        <span class="leader working" style="left: 126px; top: 59px"></span>
+                        <div class="desk lead" style="left: 164px; top: 41px"><span class="time"><span>2d</span><span>6h</span><span>20m</span></span></div>
+                    </div></div>
+                    <figcaption><b>자기 자리에서 작업 · 좌우 2px</b><span>leader session 있음</span></figcaption>
+                </figure>
+                <figure>
+                    <div class="stage"><div class="scene">
+                        <div class="desk" style="left: 108px; top: 30px"><span class="id">TOOL-013</span><span class="time">5h 40m</span></div>
+                        <span class="worker review" style="left: 132px; top: 78px"></span>
+                        <span class="leader working" style="left: 162px; top: 76px"></span>
+                    </div></div>
+                    <figcaption><b>Review 중 · Worker 바로 옆</b><span>Leader가 실제로 review 중인 seat에만 섬</span></figcaption>
+                </figure>
+                <figure>
+                    <div class="stage"><div class="scene">
+                        <div class="mini-board" style="left: 70px; top: 22px"><i></i><i></i><i></i><i></i><i></i></div>
+                        <span class="leader absent" style="left: 126px; top: 59px"></span>
+                        <div class="desk lead empty" style="left: 164px; top: 41px"></div>
+                    </div></div>
+                    <figcaption><b>부재 · 점선 원</b><span>leader: null · 결정 답변 전송 불가</span></figcaption>
+                </figure>
+            </div>
+        </div>
+
+        <div class="sheet-row">
+            <div class="row-name"><p>화이트보드</p><p>Leader 뒤 벽</p></div>
+            <div class="cells">
+                <figure>
+                    <div class="stage"><div class="scene">
+                        <div class="whiteboard" style="left: 100px; top: 10px; height: 127px; gap: 5px">
+                            <span class="wb-decide" style="height: 38px"><span>결정</span><span class="n">0</span></span>
+                            <span class="wb-cr" style="font-size: 11.5px; gap: 2px"><span>open<b>0</b></span><span>todo<b>3</b></span><span>진행<b>2</b></span></span>
+                        </div>
+                    </div></div>
+                    <figcaption><b>평상시</b><span>open·todo·진행 파일 수 · done 제외</span></figcaption>
+                </figure>
+                <figure>
+                    <div class="stage"><div class="scene">
+                        <div class="whiteboard" style="left: 100px; top: 10px; height: 127px; gap: 5px">
+                            <span class="wb-decide attn" style="height: 38px"><span>결정</span><span class="n">2</span></span>
+                            <span class="wb-cr" style="font-size: 11.5px; gap: 2px"><span>open<b>2</b></span><span>todo<b>1</b></span><span>진행<b>2</b></span></span>
+                        </div>
+                    </div></div>
+                    <figcaption><b>결정 대기 · 화면의 유일한 주황</b><span>decide/open 1건 이상</span></figcaption>
+                </figure>
+                <figure>
+                    <div class="stage"><div class="scene">
+                        <div class="expand-demo" style="top: 12px; height: 30px; border: 1.5px solid var(--line)"><span style="position: absolute; left: 6px; top: 6px; width: 22px; height: 15px; border-radius: 3px; background: var(--decide-bg); border: 1px solid var(--decide-line)"></span></div>
+                        <div class="expand-demo" style="top: 44px; height: 54px; border: 1.5px dashed #CBD1D9; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px"><span style="width: 60%; height: 5px; border-radius: 3px; background: var(--line-soft)"></span><span style="width: 85%; height: 4px; border-radius: 2px; background: var(--line-faint)"></span><span style="width: 70%; height: 4px; border-radius: 2px; background: var(--line-faint)"></span></div>
+                        <div class="expand-demo" style="top: 108px; height: 30px; border: 1.5px solid var(--line-soft)"></div>
+                        <svg width="20" height="56" viewBox="0 0 20 56" style="position: absolute; left: 272px; top: 70px" fill="none" stroke="#5B6472" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4 V50"/><path d="M4 44 L10 50 L16 44"/></svg>
+                    </div></div>
+                    <figcaption><b>누르면 펼침</b><span>아래 project가 밀려남</span></figcaption>
+                </figure>
+            </div>
+        </div>
+
+    </div>
+</section>
+
+</div>
+
+<script>
+document.querySelectorAll('.room').forEach(function (room) {
+    var drawer = room.querySelector('.drawer');
+    var triggers = room.querySelectorAll('[data-open-key]');
+    function show(key) {
+        room.dataset.open = key;
+        room.classList.toggle('is-open', key !== '');
+        drawer.inert = key === '';
+        if (key !== '') {
+            drawer.querySelectorAll('[data-panel]').forEach(function (p) {
+                p.hidden = p.dataset.panel !== key;
+            });
+        }
+        triggers.forEach(function (t) {
+            t.setAttribute('aria-expanded', String(t.dataset.openKey === key));
+        });
+    }
+    triggers.forEach(function (t) {
+        t.addEventListener('click', function () {
+            show(room.dataset.open === t.dataset.openKey ? '' : t.dataset.openKey);
+        });
+    });
+    room.querySelectorAll('[data-close]').forEach(function (b) {
+        b.addEventListener('click', function () { show(''); });
+    });
+    show(room.dataset.open || '');
+});
+
+document.querySelectorAll('[data-send]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        var out = btn.parentElement.querySelector('.send-status');
+        out.textContent = '전송했습니다. 항목 이동은 Leader가 합니다.';
+        out.classList.add('done');
+    });
+});
+</script>
+</body>
+</html>
