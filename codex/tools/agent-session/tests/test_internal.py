@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 
 import pytest
@@ -180,3 +181,26 @@ def test_binding_check_ignores_review_marks_but_not_connection_changes(native_sl
         assert error.value.code == "target_changed"
     else:
         assert call()["alive"] is True
+
+
+def test_liveness_reads_tmux_and_process_facts_without_a_provider(native_slot, monkeypatch):
+    fixture = native_slot
+    previous = fixture["previous"]
+
+    def no_provider(name):
+        raise AssertionError("liveness must not call a provider")
+    monkeypatch.setattr(providers, "get_provider", no_provider)
+    call = lambda: api.liveness(fixture["seat"], config_path=fixture["config"], socket=previous["socket_path"])
+    assert call() == {"0": {"session_id": previous["session_id"], "state": "alive"}}
+    other = str(uuid.uuid4())
+    fixture["store"].update(lambda state: state["0"]["session"].update(session_id=other))
+    assert call() == {"0": {"session_id": other, "state": "unknown"}}
+    fixture["store"].update(lambda state: state["0"]["session"].update(session_id=previous["session_id"]))
+    os.kill(fixture["tmux"].pane_info(previous["pane_id"])["pane_pid"], 15)
+    deadline = time.monotonic() + 10
+    while not fixture["tmux"].pane_info(previous["pane_id"])["pane_dead"]:
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    assert call() == {"0": {"session_id": previous["session_id"], "state": "stopped"}}
+    fixture["tmux"].command("kill-window", "-t", previous["window_id"])
+    assert call() == {"0": {"session_id": previous["session_id"], "state": "unknown"}}

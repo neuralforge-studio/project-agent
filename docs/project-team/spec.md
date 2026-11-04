@@ -390,12 +390,19 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | --- | --- |
 | read_state(cwd, config_path=None) | 현재 디렉토리로 프로젝트를 선택하고 state 원본 snapshot을 반환. 파일 생성·갱신 없음 |
 | check_binding(cwd, target, expected_session_id=None, config_path=None, socket=None) | Target은 leader 또는 현재 JOB ID. 현재 배정·실제 실행·선택적 예상 session_id를 대조하여 seat·작업 경로·run_id·session과 종료 관찰 결과 반환 |
+| liveness(cwd=None, config_path=None, socket=None) | Session이 있는 slot(`leader`, seat 번호)마다 판정한 `session_id`와 `state`(`alive`·`stopped`·`unknown`) 반환. tmux 실행 근거와 CLI process만 조회하고 provider를 호출하지 않음 |
 
-두 함수는 읽기 전용입니다.
+세 함수는 읽기 전용입니다.
 호출자는 선택한 등록 파일과 socket을 전달할 수 있습니다.
 전달하지 않은 등록 경로는 CLI와 같은 표준 경로 규칙을 적용합니다.
 상태 손상·미등록·현재 소유자 불일치·관찰 불가를 구분해 공통 오류로 반환합니다.
 오류를 빈 배정이나 종료 완료로 변환하지 않습니다.
+Liveness의 `alive`는 현재 실행 pointer의 session이 state의 session과 같고 pane과 CLI process가 살아 있다는 뜻입니다.
+`stopped`는 그 실행의 pane이나 CLI process가 끝났다는 뜻입니다.
+`unknown`은 현재 실행 pointer가 없거나 다른 session을 가리키거나 조회가 실패했다는 뜻입니다.
+Liveness는 조회 실패를 오류로 올리지 않고 `unknown`으로 돌려줍니다. 주기적으로 상태를 보여 주는 consumer용입니다.
+호출자는 결과의 `session_id`가 현재 session과 다르면 그 판정을 버립니다.
+Liveness는 화면 표시용이며 stop·반납의 native 종료 확인을 대신하지 않습니다.
 Provider 시작 전 기준 기록은 이 live 대조를 요구하지 않습니다.
 그 시점의 JOB·seat 예약 검사는 공통 start가 수행합니다.
 
@@ -617,7 +624,9 @@ Send의 파일 입력은 메시지 전달이며 새 JOB 배정을 자동으로 �
 발신 실행·현재 JOB과 state의 대상 session을 실제 연결과 대조합니다.
 Session이 없거나 중지한 실행이면 보내지 않습니다.
 수신 주소를 새로 확인해야 하면 같은 대화인지 검증하고 공통 저장 함수를 사용합니다.
-동료 메시지임을 표시하며 사용자 승인으로 해석하지 않습니다.
+Leader·Worker의 발신은 동료 메시지임을 표시하며 사용자 승인으로 해석하지 않습니다.
+Operator 발신은 첫 줄에 로컬 operator 입력임을 표시합니다. Operator는 관리 session도 식별된 agent도 아닌 발신 process의 분류이며 사람 인증이 아닙니다.
+결정 항목의 답으로 받은 operator 발신의 승인 효력은 [결정 항목 절차](../../codex/skills/project-item/references/decide.md)가 정합니다.
 Accepted·held는 읽음·동의·JOB 완료가 아닙니다.
 전달 여부가 불명확하면 자동 재전송하지 않습니다.
 일반 메시지에 tmux 키 입력과 화면 scraping을 사용하지 않습니다.

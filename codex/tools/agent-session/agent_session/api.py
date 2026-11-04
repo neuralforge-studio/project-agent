@@ -52,6 +52,43 @@ def _unlaunched_observation(meta, pane):
             "background": [], "idle": True, "cli_alive": False, "stopped": stopped, "pane": pane}
 
 
+def _cli_alive(meta, pane):
+    """Whether the run's CLI process (or the pane process before it marked one) still runs."""
+    from . import process
+
+    pid = meta.get("cli_pid", pane.get("pane_pid"))
+    return bool(pid and process.alive(int(pid), meta.get("cli_birth")))
+
+
+def liveness(cwd=None, config_path=None, socket=None):
+    """Classify each bound slot's current run from tmux and process facts, without a provider call.
+
+    Keys are "leader" and seat numbers that have a session. Each value names the session it
+    judged and its state. "alive": the current run is this session and its pane and CLI run.
+    "stopped": that run's pane or CLI ended. "unknown": no current run, a run of another
+    session, or a failed lookup. A caller drops a verdict whose session is no longer current.
+    """
+    project = _project(cwd, config_path)
+    state = StateStore(project).read()
+    control = _tmux(socket)
+    result = {}
+    for key, entry in state.items():
+        session = entry if key == "leader" else entry["session"]
+        if not session:
+            continue
+        slot = "leader" if key == "leader" else f"seat-{key}"
+        verdict = "unknown"
+        try:
+            meta = control.get_current(project.project_id, slot)
+            if meta and meta.get("session_id") == session["session_id"]:
+                pane = control.pane_info(meta["pane_id"])
+                verdict = "alive" if _cli_alive(meta, pane) and not pane["pane_dead"] else "stopped"
+        except SessionError:
+            pass
+        result[key] = {"session_id": session["session_id"], "state": verdict}
+    return result
+
+
 def check_binding(cwd, target, expected_session_id=None, config_path=None, socket=None):
     """Observe a binding, then reject concurrent changes to its identity."""
     from . import process
@@ -77,9 +114,7 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
     if meta.get("target") != slot or (session and meta.get("session_id") != session["session_id"]):
         raise SessionError("owner_mismatch", "The native conversation does not match this slot.")
     info = control.pane_info(meta["pane_id"])
-    pid = meta.get("cli_pid", info.get("pane_pid"))
-    expected_birth = meta.get("cli_birth")
-    cli_alive = bool(pid and process.alive(int(pid), expected_birth))
+    cli_alive = _cli_alive(meta, info)
     context = {
         "base": str(project.base), "project_id": project.project_id,
         "provider": project.provider, "target": slot, "seat": seat,

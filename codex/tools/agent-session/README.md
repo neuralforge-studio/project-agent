@@ -80,6 +80,7 @@ Launcher의 cd만으로 remote daemon의 작업 경로를 추측하지 않습니
 | --- | --- |
 | `read_state(cwd, config_path=None)` | 선택한 프로젝트의 현재 state snapshot |
 | `check_binding(cwd, target, expected_session_id=None, config_path=None, socket=None)` | 현재 JOB·run·실제 session의 대조 결과와 ready·alive·종료 확인 |
+| `liveness(cwd=None, config_path=None, socket=None)` | Session이 있는 slot마다 판정한 `session_id`와 `alive`·`stopped`·`unknown`. Provider를 호출하지 않음 |
 
 Target은 `leader` 또는 현재 배정된 CR ID입니다.
 두 함수는 업무·배정을 변경하지 않으며 제어 잠금을 획득하지 않습니다.
