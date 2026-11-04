@@ -322,6 +322,10 @@ class Tmux:
         self._run("kill-window", "-t", window_id)
         return True
 
+    def capture_pane(self, pane_id):
+        """The visible text of a pane; read only to find a provider's startup dialog."""
+        return self._run("capture-pane", "-p", "-t", _safe_text(pane_id, "pane handle"))
+
     def pane_info(self, pane_id):
         """The pane's fields. A dead pane may have no pane_pid (tmux 3.8 clears it); it is None then."""
         fields = ("window_id", "pane_id", "pane_pid", "pane_current_path", "pane_current_command",

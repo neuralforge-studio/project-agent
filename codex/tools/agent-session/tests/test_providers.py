@@ -568,3 +568,49 @@ for line in sys.stdin:
         with pytest.raises(SessionError) as caught:
             client.tool("SendMessage", {"to": "peer", "message": "text", "unexpected": "field"})
         assert caught.value.code == "provider_protocol_unsupported"
+
+
+@pytest.mark.parametrize(("screen", "kind"), [
+    ("Accessing workspace:\n\n /work/seat0\n\n❯ 1. Yes, I trust this folder\n  2. No, exit", "workspace_trust"),
+    ("WARNING: Claude Code running in Bypass Permissions mode\n\n❯ 1. No, exit\n  2. Yes, I accept",
+     "bypass_permissions"),
+    ("Select login method:\n\n❯ 1. Claude account with subscription", "login"),
+    ("❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)", None),
+])
+def test_claude_startup_dialog_is_named_from_its_screen(screen, kind):
+    # The dialog text is the 2.1.317 CLI's own wording.
+    assert ClaudeProvider().startup_dialog(screen) == kind
+
+
+def test_claude_trust_adds_one_entry_under_claude_config_lock(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    config = tmp_path / ".claude.json"
+    seat = tmp_path / "seat"
+    seat.mkdir()
+    config.write_text(json.dumps({"numStartups": 3, "projects": {
+        str(seat): {"allowedTools": ["Bash"], "hasTrustDialogAccepted": False},
+        "/other": {"hasTrustDialogAccepted": True}}}, indent=2))
+    config.chmod(0o600)
+    assert ClaudeProvider().trust_new_seat(seat) is True
+    data = json.loads(config.read_text())
+    assert data["numStartups"] == 3 and data["projects"]["/other"] == {"hasTrustDialogAccepted": True}
+    assert data["projects"][str(seat)] == {"allowedTools": ["Bash"], "hasTrustDialogAccepted": True}
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".claude.json", "seat"]
+
+
+def test_claude_trust_waits_for_a_held_lock_then_leaves_the_config(tmp_path, monkeypatch):
+    from agent_session.providers.claude import trust_workspace
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    config = tmp_path / ".claude.json"
+    config.write_text('{"projects": {}}')
+    (tmp_path / ".claude.json.lock").mkdir()
+    assert trust_workspace(tmp_path, wait=0.2) is False
+    assert config.read_text() == '{"projects": {}}' and (tmp_path / ".claude.json.lock").is_dir()
+
+
+def test_claude_trust_does_not_create_a_missing_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    assert ClaudeProvider().trust_new_seat(tmp_path) is False
+    assert list(tmp_path.iterdir()) == []

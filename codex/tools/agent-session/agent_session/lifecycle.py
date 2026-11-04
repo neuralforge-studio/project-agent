@@ -17,6 +17,7 @@ from .tmux import Tmux
 from .util import write_json
 
 SWEEP_SECONDS = 30                                 # after this, a cleanup leaves later windows to the next sweep
+DIALOG_SCREEN_SECONDS = 1                          # how often an unregistered start reads its pane for a dialog
 
 
 def _bound(previous, session, leader=False):
@@ -395,6 +396,7 @@ class Manager:
             return {"closed": [], "kept": [{"window_id": None, "reason": error.code}]}
 
     def _wait_ready(self, context):
+        screened = 0.0
         while True:
             self.remaining()
             meta = self.tmux.get_current(self.project.project_id, context["target"])
@@ -418,6 +420,13 @@ class Manager:
             if self.tmux.pane_info(meta["pane_id"])["pane_dead"]:
                 raise SessionError("provider_exited", "The CLI exited before registering its conversation.", 4,
                                    self._result(meta))
+            if time.monotonic() - screened >= DIALOG_SCREEN_SECONDS:
+                screened = time.monotonic()
+                dialog = self.provider.startup_dialog(self.tmux.capture_pane(meta["pane_id"]))
+                if dialog:
+                    raise SessionError("needs_user_action", f"The CLI waits at its {dialog} dialog. Answer it in "
+                                       "the window, then run the same start again.", 3,
+                                       {**self._result(meta), "dialog": dialog})
             time.sleep(min(0.1, self.remaining()))
 
     def _result(self, meta, **extra):
@@ -476,6 +485,9 @@ class Manager:
                         return self._wait_ready(current)
                     elif current.get("provider_launch_attempted") is False:
                         return self._start_existing(current, request)
+                    elif (not current.get("registered") and not current.get("stopping")
+                          and not self.tmux.pane_info(current["pane_id"])["pane_dead"]):
+                        return self._wait_ready(current)   # e.g. a start that waited at a startup dialog
                     else:
                         raise SessionError("leader_exists", "The current Leader is alive or its exit is unconfirmed.")
                 context = self._context("leader")
@@ -521,7 +533,8 @@ class Manager:
                         continue
                     selected_guard = False
                     try:
-                        workspace.ensure_seat(self.project, root)
+                        if workspace.ensure_seat(self.project, root):
+                            self.provider.trust_new_seat(root)
                         checked = workspace.check_seat(self.project, root, item)
                         if not checked.get("allowed"):
                             reasons[str(index)] = checked.get("reasons", [])

@@ -125,6 +125,46 @@ def test_missing_seat_is_cloned_from_the_base_origin(session_env):
     assert not (env.seats[0] / ".git" / "objects" / "info" / "alternates").exists()
 
 
+def test_only_a_seat_that_start_cloned_gets_workspace_trust(session_env, monkeypatch):
+    from agent_session_fake_provider import FakeProvider
+    import shutil
+
+    env = session_env
+    trusted = []
+    monkeypatch.setattr(FakeProvider, "trust_new_seat", lambda self, root: trusted.append(Path(root)) or True)
+    shutil.rmtree(env.seats[0])
+    assert env.manager().start(env.cr())["seat"] == 0
+    assert env.manager().start(env.cr(2))["seat"] == 1
+    assert trusted == [env.seats[0]]
+
+
+@pytest.mark.parametrize("target", ["leader", "worker"])
+def test_start_held_at_a_startup_dialog_needs_the_user_and_resumes(session_env, monkeypatch, target):
+    import agent_session.lifecycle as lifecycle
+    from agent_session_fake_provider import FakeProvider
+
+    env = session_env
+    job, slot = ("leader", "leader") if target == "leader" else (env.cr(), "seat-0")
+    monkeypatch.setattr(lifecycle, "get_provider", lambda name: FakeProvider(dialog=True))
+    for _ in range(2):                     # a second start waits at the same dialog instead of refusing
+        with pytest.raises(SessionError) as error:
+            env.manager().start(job)
+        assert (error.value.code, error.value.exit_code) == ("needs_user_action", 3)
+        assert error.value.details["dialog"] == "workspace_trust"
+    waiting = env.tmux.get_current("fixture", slot)
+    assert error.value.details["run_id"] == waiting["run_id"]
+    if target == "leader":
+        assert env.store.read()["leader"] is None
+    else:
+        assert env.cr_state(job)[0] == "in-progress"
+        assert env.store.read()["0"]["job_id"] == job and env.store.read()["0"]["session"] is None
+    env.tmux.command("send-keys", "-t", waiting["pane_id"], "-l", "approve")
+    env.tmux.command("send-keys", "-t", waiting["pane_id"], "Enter")
+    wait_until(lambda: env.tmux.get_current("fixture", slot).get("registered"))
+    result = env.manager().start(job)
+    assert result["run_id"] == waiting["run_id"] and result["ready"] is True
+
+
 def test_automatic_allocation_skips_a_controlled_unassigned_seat(session_env):
     env = session_env
     with locked(env.base / "agent/control/seat-0.lock"):

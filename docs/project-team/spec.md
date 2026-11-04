@@ -297,6 +297,7 @@ agent-session start --job leader --prompt-file REQUEST.md
 Prompt 파일은 선택입니다.
 생략하면 프로젝트 지침과 Leader 역할로 시작합니다. Leader는 `project-item ls`로 결정 대기와 CR을 확인하고 사용자 지시를 기다립니다.
 현재 Leader가 실행 중이거나 종료를 확인할 수 없으면 새로 시작하지 않습니다.
+등록 전 시작 dialog에서 기다리는 Leader(5절 Provider 내부 등록)는 예외입니다. 다시 실행한 start는 새로 시작하지 않고 그 실행의 등록을 기다립니다.
 정상 종료가 확인된 이전 Leader는 명시적인 새 시작을 막지 않습니다.
 Leader 시작은 base의 Git 상태를 바꾸지 않습니다.
 
@@ -327,6 +328,7 @@ CR의 Cwd가 seat 밖으로 나가면 배정 전에 거절합니다. Cwd 디렉�
 시작 실패는 CR 배정과 이미 기록한 Git 기준을 유지합니다.
 
 Seat 생성: base가 Git 저장소이면 `git clone --no-recurse-submodules --reference <base> --dissociate <base origin URL> <seat>`을 실행합니다. 아니면 seat_unavailable입니다. 접속 인증은 사용자의 Git·SSH 설정을 그대로 따르며 공통 도구가 설정을 더하지 않습니다.
+Claude provider는 이렇게 만든 seat의 workspace trust를 기록합니다(5절 Claude 실행·전송·관찰).
 
 공통 workspace 검사:
 
@@ -426,7 +428,10 @@ Claude의 CLAUDECODE·CLAUDE_CODE_SESSION_ID·CLAUDE_CODE_MESSAGING_*와 부모 
 자격증명과 유효 사용자 설정은 일괄 제거하지 않습니다.
 공통 코드가 모델·추론 강도·권한 우회를 고정하지 않습니다.
 로그인·trust·권한 dialog로 시작이 멈추면 needs_user_action 오류를 반환합니다.
-이 오류는 exit 3이며 배정과 생성한 창을 보존합니다.
+이 오류는 exit 3이며 배정과 생성한 창을 보존합니다. 결과의 `dialog`는 provider가 판정한 dialog 종류입니다.
+시작 controller는 등록 전까지 1초마다 관리 pane의 보이는 화면을 읽어 provider의 dialog 문구와 대조합니다.
+이 화면 읽기는 dialog 탐지에만 사용합니다. 등록 뒤에는 읽지 않습니다.
+사용자가 그 창에서 dialog에 답한 뒤 같은 start를 다시 실행하면 그 실행의 등록을 기다려 게시합니다.
 기존에 승인한 프로젝트 설정을 사용하며 새 승인을 대신하는 키 입력을 보내지 않습니다.
 
 ### Claude 실행·전송·관찰
@@ -439,6 +444,13 @@ Claude의 CLAUDECODE·CLAUDE_CODE_SESSION_ID·CLAUDE_CODE_MESSAGING_*와 부모 
 공통 코드는 hook 조각을 제공하며 같은 파일을 다시 쓰지 않습니다.
 `crossSessionInbound: "accept"`도 이 --settings 파일에 넣습니다.
 사용자 설정 파일을 수정하거나 project/local settings의 accept에 의존하지 않습니다.
+
+Claude는 workspace trust를 cwd부터 git 저장소 루트까지만 찾습니다. Trust한 상위 디렉토리는 새 clone을 덮지 않습니다.
+등록에 seat 경로를 적은 것이 그 seat의 승인입니다. 공통 start가 seat를 새로 clone하면 Claude provider가 그 경로의 trust를 기록합니다.
+기록 위치는 Claude 전역 설정(`~/.claude.json`, CLAUDE_CONFIG_DIR가 있으면 그 아래 `.claude.json`)의 `projects[<seat 실제 경로>].hasTrustDialogAccepted`입니다.
+Claude의 설정 잠금(`.claude.json.lock` 디렉토리)을 잡고 파일을 다시 읽은 뒤 그 항목만 true로 씁니다. 다른 key와 파일 권한은 보존합니다.
+설정 파일이 없거나 잠금을 5초 안에 얻지 못하거나 읽기·쓰기가 실패하면 기록하지 않고 시작을 계속합니다. 그 시작은 위의 dialog 탐지로 needs_user_action을 반환합니다.
+Base와 이미 있던 seat에는 기록하지 않습니다.
 Managed 정책이나 기존 refuse/deny가 이를 막으면 오류로 알리며 우회하지 않습니다.
 수신 정책의 적용 범위는 [Claude 공식 문서](https://code.claude.com/docs/en/cross-session-messaging#control-inbound-messages)를 따릅니다.
 
@@ -519,7 +531,7 @@ Sandbox가 적용된 profile은 시작 전에 unsupported_sandbox로 거절합�
 지원 판정은 실제 적용할 argv와 profile·config를 합친 설정을 기준으로 합니다.
 Binary를 직접 실행하므로 shell function·alias가 붙이던 인자는 상속하지 않습니다.
 기존에 승인한 비sandbox 실행 인자는 등록의 `launch`에 명시합니다.
-공통 tool이 권한 우회 옵션을 추가하거나 사용자 설정을 자동 변경하지 않습니다.
+공통 tool이 권한 우회 옵션을 추가하거나 사용자 설정을 자동 변경하지 않습니다. 새로 clone한 Claude seat의 trust 기록(5절 Claude 실행·전송·관찰)만 예외입니다.
 현재 파일 쓰기 권한이나 tmux 접근이 없으면 needs_user_action입니다.
 프로젝트 mode read-only는 업무 수정 금지이며 OS sandbox나 승인 prompt 정책과 구분합니다.
 

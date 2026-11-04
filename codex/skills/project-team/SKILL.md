@@ -19,6 +19,7 @@ JOB은 CR 파일입니다. CR 형식과 상태는 [project-item skill](../projec
 
 모든 명령의 `--job`은 `leader` 또는 CR ID입니다.
 Worker seat는 start가 자동으로 선택합니다. Seat 디렉토리가 없으면 start가 만듭니다.
+Start가 `needs_user_action`과 `dialog`를 반환하면 그 window와 dialog 종류를 사용자에게 알립니다. 사용자가 그 창에서 답한 뒤 같은 start를 다시 실행합니다. Dialog에 대신 답하지 않습니다.
 
 ## Leader
 

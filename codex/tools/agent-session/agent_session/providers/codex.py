@@ -128,6 +128,12 @@ class CodexProvider:
         })
         return result
 
+    def trust_new_seat(self, root):
+        return False                       # Codex trust is not recorded by this tool
+
+    def startup_dialog(self, screen):
+        return None                        # no Codex startup dialog is known to this tool
+
     def registration_hooks(self, context):
         # SessionStart alone does not prove which tmux run created a thread.
         return {}

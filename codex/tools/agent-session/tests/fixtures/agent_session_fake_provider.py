@@ -9,6 +9,9 @@ import uuid
 
 
 class FakeProvider:
+    def __init__(self, dialog=False):
+        self.dialog = dialog               # hold the start at a trust dialog until the pane reads "approve"
+
     def prepare_context(self, context):
         return {**context, "endpoint": "unix:///tmp/agent-session-fixture.sock"}
 
@@ -20,9 +23,16 @@ class FakeProvider:
             "argv": [context["python"], "-u", str(Path(__file__).resolve()),
                      "--library", context["library_path"], "--run", context["run_id"],
                      "--config", context["config_path"], "--socket", context["socket_path"],
-                     "--endpoint", context["endpoint"]],
+                     "--endpoint", context["endpoint"]] + (["--dialog"] if self.dialog else []),
             "env": prepared.get("env", {}), "unset_env": [],
         }
+
+    def trust_new_seat(self, root):
+        return False
+
+    def startup_dialog(self, screen):
+        from agent_session.providers.claude import startup_dialog
+        return startup_dialog(screen)
 
     def verify_binding(self, session, context, meta, timeout=30):
         from agent_session.errors import SessionError
@@ -49,7 +59,14 @@ def main():
     parser = argparse.ArgumentParser()
     for key in ("library", "run", "config", "socket", "endpoint"):
         parser.add_argument("--" + key, required=True)
+    parser.add_argument("--dialog", action="store_true")
     args = parser.parse_args()
+    if args.dialog:
+        print("Accessing workspace:\n\n❯ 1. Yes, I trust this folder\n  2. No, exit", flush=True)
+        for line in sys.stdin:
+            if line.strip() == "approve":
+                break
+        print("\033[2J\033[H", end="", flush=True)  # the answered dialog leaves the screen
     sys.path.insert(0, args.library)
     import agent_session.providers as providers
     providers.get_provider = lambda name: FakeProvider()

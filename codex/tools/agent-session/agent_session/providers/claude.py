@@ -67,6 +67,72 @@ def _validate_args(values):
     return sources
 
 
+# Dialogs that hold a 2.1.317 start before its SessionStart hook, by their own text.
+STARTUP_DIALOGS = (
+    ("workspace_trust", re.compile(r"Accessing workspace:|Yes, I trust this folder")),
+    ("bypass_permissions", re.compile(r"running in Bypass Permissions mode")),
+    ("login", re.compile(r"Select login method:")),
+)
+TRUST_LOCK_SECONDS = 5                     # wait for Claude's own config lock, then leave trust unrecorded
+
+
+def startup_dialog(screen):
+    """The kind of startup dialog a pane shows, or None."""
+    return next((kind for kind, pattern in STARTUP_DIALOGS if pattern.search(screen)), None)
+
+
+def _config_file():
+    root = os.environ.get("CLAUDE_CONFIG_DIR")
+    return (Path(root).expanduser() if root else Path.home()) / ".claude.json"
+
+
+def trust_workspace(path, wait=TRUST_LOCK_SECONDS):
+    """Record workspace trust for one directory in Claude's global config; return whether it holds.
+
+    Claude looks for trust only from the cwd up to the git root, so a trusted parent does not
+    cover a new clone. The write takes Claude's own lock (the directory <config>.lock), reads
+    the file again and adds that one entry. Any failure leaves the file as it was."""
+    config = _config_file().resolve()
+    if not config.is_file():
+        return False
+    lock = config.with_name(config.name + ".lock")
+    end = time.monotonic() + wait
+    while True:
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.05)
+        except OSError:
+            return False
+    temporary = config.with_name(f".{config.name}.agent-session-{os.getpid()}")
+    try:
+        data = json.loads(config.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("projects", {}), dict):
+            return False
+        key = str(Path(path).resolve())
+        entry = data.setdefault("projects", {}).get(key)
+        entry = entry if isinstance(entry, dict) else {}
+        if entry.get("hasTrustDialogAccepted") is True:
+            return True
+        data["projects"][key] = {**entry, "hasTrustDialogAccepted": True}
+        handle = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, config.stat().st_mode & 0o777)
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(data, indent=2, ensure_ascii=False))
+        os.replace(temporary, config)
+        return True
+    except (OSError, ValueError):
+        return False
+    finally:
+        for remove in (temporary.unlink, lock.rmdir):
+            try:
+                remove()
+            except OSError:
+                pass
+
+
 def parse_peers(result):
     """Read the 2.1.317 listing's tmux locator, never a UUID-derived ref."""
     listing = result.get("listing")
@@ -109,6 +175,13 @@ class ClaudeProvider:
         result.update({"provider_executable": cli, "provider_version": version,
                        "session_id": identity, "expected_session_id": identity, "endpoint": None})
         return result
+
+    def trust_new_seat(self, root):
+        """A seat that start cloned is registered work, so record its workspace trust."""
+        return trust_workspace(root)
+
+    def startup_dialog(self, screen):
+        return startup_dialog(screen)
 
     def registration_hooks(self, context):
         required = ("python", "library_path", "run_id", "config_path", "socket_path")
