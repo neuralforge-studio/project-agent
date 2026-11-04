@@ -1,0 +1,17 @@
+#!/bin/bash
+# Entry point of project-board: a local page of every registered project team.
+# Source: agent repo codex/tools/project-board. Install: ln -s <this file> ~/.local/bin/project-board
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+IH=/primehome/tools/Inhouse
+if [ -x "$IH/Python3/latest/bin/python3" ]; then
+    PY="$IH/Python3/latest/bin/python3"         # Workstation: global in-house python
+    export LD_LIBRARY_PATH="$IH/Python3/latest/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+elif [ -x "$HOME/python/.venv/bin/python" ]; then
+    PY="$HOME/python/.venv/bin/python"          # WSL
+else
+    PY=python3
+fi
+export PYTHONPATH="$ROOT"
+export PYTHONNOUSERSITE=1
+unset PYTHONHOME
+exec "$PY" -m project_board "$@"

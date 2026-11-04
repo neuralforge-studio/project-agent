@@ -166,6 +166,8 @@ CR은 project-team의 JOB을 겸합니다. 기능·리팩터링·조사 작업�
 
 - 역할 지침·읽을 문서·필요한 submodule은 본문에 link와 문장으로 적습니다. 예: `## References` 절.
 - Read-only CR(조사)은 결과를 `## Result`에 씁니다. Leader는 결과에 따라 CR을 옮깁니다: 문제를 확인하고 고치기로 하면 todo, 판정이 더 필요하면 open, 문제가 없으면 done(Outcome waived)입니다.
+- Write CR의 Worker는 제출할 때마다 `## Result`에 들여쓰지 않은 제출 행 `- 제출 commit: <40자리 hash>`를 한 줄 씁니다. Hash는 backtick으로 감싸도 됩니다. 검증 명령·비교 기준 같은 다른 hash는 이 행에 쓰지 않습니다. 들여쓴 행과 code fence 안의 행은 제출 행이 아닙니다.
+- Leader는 검토 결과(인수·수정 요청)를 Disposition에 쓸 때 검토한 제출 hash를 함께 적습니다. 앞 7자리 이상이면 됩니다. Project Board는 마지막 제출 행의 hash가 Disposition에 없으면 review 대기로 표시합니다.
 - Write CR의 작업 branch는 `cr/<ID>`입니다. 보류(in-progress→todo)하면 branch를 origin에 게시한 상태로 둡니다. 다시 배정하면 그 branch를 이어받습니다.
 - 새 기준으로 다시 시작하려면 Leader가 `- Base:`를 지우고 Disposition에 이유를 적습니다.
 

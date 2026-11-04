@@ -26,7 +26,7 @@ Worker seat는 start가 자동으로 선택합니다. Seat 디렉토리가 없�
 2. `project-item new cr`로 CR을 만들고 Implementation·Verification을 채웁니다. 역할 지침과 읽을 문서는 CR 본문에 link로 적습니다.
 3. 사용자 합의를 Disposition에 기록하고 CR을 todo로 옮깁니다. Todo에 있다는 사실이 승인입니다.
 4. `agent-session start --job <CR-ID>`로 Worker를 시작합니다. CR은 in-progress로 옮겨집니다.
-5. Review를 시작할 때 `agent-session review --job <CR-ID>`를 실행합니다. Worker가 CR의 `## Result`에 쓴 제출 hash와 실제 검증 결과를 review합니다. 수정이 필요하면 Disposition에 기록하고 같은 CR에 feedback을 보냅니다. Feedback을 보내면 review 표시는 자동으로 지워집니다. Review를 멈추고 다른 일을 하면 `agent-session review --clear`를 실행합니다.
+5. Review를 시작할 때 `agent-session review --job <CR-ID>`를 실행합니다. Worker가 CR의 `## Result`에 쓴 제출 hash와 실제 검증 결과를 review합니다. 검토 결과(인수·수정 요청)는 검토한 제출 hash와 함께 Disposition에 기록합니다. 수정이 필요하면 같은 CR에 feedback을 보냅니다. Feedback을 보내면 review 표시는 자동으로 지워집니다. Review를 멈추고 다른 일을 하면 `agent-session review --clear`를 실행합니다.
 6. Write CR은 검토한 hash를 통합하고 원격 반영을 확인한 뒤 done(Outcome fixed)으로 옮깁니다. Read-only CR은 결과에 따라 todo(고치기로 함)·open(판정 필요)·done(Outcome waived, 문제 없음)으로 옮깁니다. 보류는 todo, 재판정은 open입니다.
 7. Worker의 정리 완료를 확인한 뒤 stop으로 실제 종료와 반납을 확인합니다.
 
@@ -57,7 +57,7 @@ Tmux window와 provider session은 유지하고 후속 메시지에서 관리를
 1. 최초 prompt의 CR 본문, 범위, 작업 경로, 검증 기준, link한 지침 문서를 확인합니다.
 2. 지정한 범위에서 작업하고 해당 검증을 수행합니다.
 3. Write CR이면 `cr/<CR-ID>` branch에 commit·push합니다.
-4. CR 파일의 `## Result`에 제출 commit과 검증 명령·결과를 추가합니다. 다른 절은 고치지 않습니다.
+4. CR 파일의 `## Result`에 들여쓰지 않은 제출 행 `- 제출 commit: <40자리 hash>`와 검증 명령·결과를 추가합니다. Read-only CR은 제출 행 없이 결과만 씁니다. 다른 절은 고치지 않습니다.
 5. `agent-session send --job leader "CR-ID와 제출 commit"`로 보고합니다.
 6. 같은 CR의 feedback을 받으면 해당 범위의 작업·검증·제출을 반복합니다.
 7. Leader가 인수하면 자기 작업의 불필요한 산출물을 정리하고 종료를 보고합니다.
