@@ -484,6 +484,7 @@ SendMessage 성공을 읽음이나 사용자 승인으로 기록하지 않습니
 
 Stop·StopFailure hook은 해당 UUID/run의 turn 종료와 background 관찰을 기록합니다.
 SessionEnd는 정상 CLI 종료 관찰을 추가합니다.
+관찰값에는 판정에 쓰는 field만 남깁니다. 응답 본문 같은 대화 내용은 저장하지 않습니다.
 관찰 원본은 위 window option과 runs의 hook 진단이며 JOB 업무 상태를 변경하지 않습니다.
 Stop hook 부재·누락된 background 필드를 빈 목록으로 가정하지 않습니다.
 사용자 interrupt에는 Stop hook이 없을 수 있으므로 실제 종료·process 검사도 사용합니다.

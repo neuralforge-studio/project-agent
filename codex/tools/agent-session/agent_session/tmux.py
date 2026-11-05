@@ -42,6 +42,16 @@ def _json_value(value):
     return value
 
 
+_VALUES_MARK = "agent-session-values"
+
+
+def _meta_keys(lines):
+    keys = [line.split(" ", 1)[0][len(_PREFIX):] for line in lines if line.startswith(_PREFIX)]
+    if any(re.fullmatch(r"[a-z][a-z0-9_]*", key) is None for key in keys):
+        raise SessionError("tmux_metadata_invalid", "The managed window has invalid runtime metadata.")
+    return keys
+
+
 def _absent(stderr):
     return any(text in stderr for text in ("no server running", "No such file or directory", "can't find session"))
 
@@ -190,19 +200,35 @@ class Tmux:
         return self.read_meta(window_id)
 
     def read_meta(self, window_id):
-        raw = self._run("show-options", "-w", "-t", _safe_text(window_id, "window handle"))
-        values = {}
-        for line in raw.splitlines():
-            if not line.startswith(_PREFIX):
-                continue
-            try:
-                parts = shlex.split(line)
-                if len(parts) != 2:
-                    raise ValueError("Incomplete tmux option")
-                values[parts[0][len(_PREFIX):]] = json.loads(parts[1])
-            except (ValueError, IndexError) as exc:
-                raise SessionError("tmux_metadata_invalid", "The managed window has invalid runtime metadata.") from exc
-        return values
+        """Read values with -v, because the quoted listing escapes $ in a way shlex cannot undo.
+
+        One tmux command sequence lists the options and prints the requested values, so the
+        result is one snapshot. A key that write_meta added after the request is read again;
+        managed options are never unset, so the key list only grows.
+        """
+        window_id = _safe_text(window_id, "window handle")
+        keys = None
+        while True:
+            arguments = ["show-options", "-w", "-t", window_id,
+                         ";", "display-message", "-p", "-t", window_id, _VALUES_MARK]
+            for key in keys or ():
+                arguments += [";", "show-options", "-wv", "-t", window_id, _PREFIX + key]
+            # JSON escapes control characters, so only tmux adds "\n"; splitlines would also cut U+2028.
+            lines = self._run(*arguments).split("\n")
+            if lines.count(_VALUES_MARK) != 1:
+                raise SessionError("tmux_metadata_invalid", "The managed window has invalid runtime metadata.")
+            mark = lines.index(_VALUES_MARK)
+            listed = _meta_keys(lines[:mark])
+            if not listed or listed == keys:
+                break
+            keys = listed
+        values = lines[mark + 1:]
+        try:
+            if len(values) != len(listed):
+                raise ValueError("Incomplete tmux option values")
+            return {key: json.loads(value) for key, value in zip(listed, values)}
+        except ValueError as exc:
+            raise SessionError("tmux_metadata_invalid", "The managed window has invalid runtime metadata.") from exc
 
     def write_meta(self, window_id, updates):
         """Keep mutable fields in separate options so concurrent updates merge."""

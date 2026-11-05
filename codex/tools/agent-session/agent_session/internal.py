@@ -11,6 +11,9 @@ from .errors import SessionError
 from .state import StateStore
 
 
+_HOOK_FIELDS = ("session_id", "hook_event_name", "cwd", "source", "reason", "background_tasks", "session_crons")
+
+
 def _run(run_id, config_path, socket_path, cwd=None):
     project = _project(cwd, config_path)
     control = _tmux(socket_path)
@@ -142,7 +145,9 @@ def register_from_hook(run_id, config_path, socket_path, expected_session_id=Non
     elif context.get("session_id") != session_id:
         raise SessionError("owner_mismatch", "This event belongs to an old conversation.")
     observations = control.read_meta(context["window_id"]).get("hook_observations", {})
-    observations[event] = {**payload, "observed_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+    # Keep what the provider check reads; reply text such as last_assistant_message is not evidence.
+    observed = {key: payload[key] for key in _HOOK_FIELDS if key in payload}
+    observations[event] = {**observed, "observed_at": dt.datetime.now(dt.timezone.utc).isoformat()}
     control.write_meta(context["window_id"], {"hook_observations": observations})
     if event == "SessionStart":
         _wait_ready(control, context, {"session_id": session_id}, output=False)

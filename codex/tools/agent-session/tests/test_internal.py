@@ -1,5 +1,6 @@
 """Registration regression tests across real tmux and canonical state."""
 
+import io
 import json
 import os
 from pathlib import Path
@@ -131,6 +132,27 @@ def test_registration_rejects_wrong_runtime_context_without_state_change(native_
                            old["session_id"], endpoint, cwd=cwd)
     assert error.value.code == "owner_mismatch"
     assert fixture["store"].read() == before
+
+
+def test_stop_hook_keeps_observation_fields_and_drops_the_reply(native_slot, monkeypatch):
+    fixture = native_slot
+    old = fixture["previous"]
+
+    def hook(payload):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+        internal.register_from_hook(old["run_id"], str(fixture["config"]), old["socket_path"],
+                                    expected_session_id=old["session_id"])
+
+    stop = {"session_id": old["session_id"], "hook_event_name": "Stop", "cwd": str(fixture["seat"]),
+            "transcript_path": "/tmp/fixture.jsonl", "background_tasks": [], "session_crons": [],
+            "last_assistant_message": "Set $HOME first."}
+    hook(stop)
+    hook({**stop, "last_assistant_message": "Done."})
+    saved = fixture["tmux"].get_current("fixture", "seat-0")["hook_observations"]["Stop"]
+    assert "last_assistant_message" not in saved and "transcript_path" not in saved
+    assert saved["session_id"] == old["session_id"]
+    assert saved["background_tasks"] == [] and saved["session_crons"] == []
+    assert saved["hook_event_name"] == "Stop" and "observed_at" in saved
 
 
 def test_read_only_binding_api_does_not_take_the_project_domain_lock(native_slot, monkeypatch):

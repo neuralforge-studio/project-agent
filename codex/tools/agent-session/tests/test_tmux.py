@@ -111,6 +111,36 @@ def test_mutable_updates_merge_and_identity_cannot_be_rewritten(tmp_path, tmux):
     assert tmux.get_current("demo", "seat-0")["run_id"] == "run-one"
 
 
+def test_metadata_values_round_trip_shell_and_format_characters(tmp_path, tmux):
+    # show-options prints $ as \$ inside quotes, which shlex keeps and JSON rejects (SESSION-002).
+    text = 'cost $HOME \\$x back\\slash "quoted" #{pane_id} 한글'
+    value = {"message": text, "items": [text]}
+    meta = new_window(tmux, tmp_path)
+    written = tmux.write_meta(meta["window_id"], {"note": text, "nested": value})
+    assert written["note"] == text and written["nested"] == value
+    read = tmux.read_meta(meta["window_id"])
+    assert read["note"] == text and read["nested"] == value and read["run_id"] == "run-one"
+
+
+def test_metadata_read_is_one_snapshot_when_keys_are_added_meanwhile(tmp_path, tmux):
+    # Registration sets session_id, then registered=True, as separate options. A read that lists
+    # the keys before that write and reads values after it must not see registered without its ID.
+    meta = new_window(tmux, tmp_path)
+    run = tmux._run
+    written = []
+
+    def register_after_first_call(*arguments, **options):
+        output = run(*arguments, **options)
+        if not written:
+            written.append(True)
+            tmux.write_meta(meta["window_id"], {"session_id": "native-id", "registered": True})
+        return output
+
+    tmux._run = register_after_first_call
+    read = tmux.read_meta(meta["window_id"])
+    assert written and (read["registered"], read.get("session_id")) in ((False, None), (True, "native-id"))
+
+
 def test_unowned_and_restored_session_options_do_not_get_adopted(tmp_path, tmux):
     tmux.command("new-session", "-d", "-s", "user-session", "sleep", "86400")
     with pytest.raises(SessionError) as error:
