@@ -10,20 +10,17 @@
 
 ## 운영 대상
 
-CR 항목은 각 저장소의 git CR 디렉토리(`open/`, `todo/`, `done/`, `deferred/`) 파일로 관리합니다. 등록 프로그램과 CR 디렉토리의 대응은 `~/.codex/tools/cr/programs.json`이 소유합니다. 담당 session은 시작할 때 `cr list <program>`으로 자기 프로그램의 `open/`, `todo/`, `deferred/`를 확인합니다. 등록 대상이 아닌 저장소도 CR 방식을 적용할 때 같은 형식을 씁니다.
+CR 항목은 각 저장소의 git CR 디렉토리(`open/`, `todo/`, `done/`, `deferred/`) 파일로 관리합니다. 등록 project와 CR 디렉토리의 대응은 project 등록(`project.json`)의 `path_cr`가 소유합니다. 담당 session은 시작할 때 `project-item ls`로 자기 project의 `open/`, `todo/`, `deferred/`를 확인합니다. 등록 대상이 아닌 저장소도 CR 방식을 적용할 때 같은 형식을 씁니다.
 
 ## 도구
 
-`cr`(`~/.codex/tools/cr/bin/cr`, 설명은 `~/.codex/tools/cr/README.md`)을 사용합니다. Codex와 Claude Code가 같은 도구를 씁니다.
+`project-item`을 사용합니다. Codex와 Claude Code가 같은 도구를 씁니다. 명령, 허용 전이, `move`의 동작은 [project-item skill](../SKILL.md)이 소유합니다.
 
-- `cr new <program> --area <AREA> --title ...`: 다음 번호로 `open/`에 파일을 만듭니다.
-- `cr list [program]`: `open/`, `todo/`, `deferred/`의 항목과 상태별 개수를 보여 줍니다.
-- `cr check [program]`: 이 문서의 파일 형식을 검사합니다.
-- `cr owner <program>`: 담당 session 이름을 보여 줍니다.
-
-프로그램과 저장소, CR 디렉토리의 대응은 `~/.codex/tools/cr/programs.json`이 소유합니다. 이 도구는 파일을 옮기지 않습니다. 상태 전이는 담당자가 `git mv`로 합니다.
-
-Project 등록(`project.json`)에 `path_cr`가 있는 project는 `cr` 대신 `project-item` 도구를 사용합니다. 명령, 허용 전이, `move`의 동작은 [project-item skill](../SKILL.md)이 소유합니다. 이 문서는 두 도구에 같은 CR 판정 절차·파일 형식을 적용합니다.
+- `project-item new cr --project <project> --area <AREA> --title ...`: 다음 번호로 `open/`에 파일을 만듭니다.
+- `project-item ls [--project <project>]`: `open/`, `todo/`, `deferred/`의 항목과 상태별 개수를 보여 줍니다.
+- `project-item check cr`: 이 문서의 파일 형식을 검사합니다.
+- `project-item owner <project>`: 담당 session 이름을 보여 줍니다.
+- `project-item move <ID> <STATE>`: 허용 전이에 따라 상태를 옮깁니다.
 
 ## 상태와 소유권
 
@@ -52,7 +49,7 @@ Project 등록(`project.json`)에 `path_cr`가 있는 project는 `cr` 대신 `pr
 
 ### 다른 문서에 상태를 복사하지 않습니다
 
-- README, 순서 문서(`ORDER*.md`), 요약 문서, `TODO.md`에 항목 개수와 상태를 적지 않습니다. 개수는 `cr list`가 디렉토리에서 계산합니다.
+- README, 순서 문서(`ORDER*.md`), 요약 문서, `TODO.md`에 항목 개수와 상태를 적지 않습니다. 개수는 `project-item ls`가 디렉토리에서 계산합니다.
 - 순서 문서에는 실행 순서와 묶음을 ID로만 적습니다. 끝난 항목을 순서 문서에서 지우거나 표시하지 않습니다. 디렉토리가 그 사실을 보여 줍니다.
 - 다른 문서(spec, coverage plan, 코드 주석)는 CR ID만 가리킵니다.
 
@@ -78,7 +75,7 @@ Project 등록(`project.json`)에 `path_cr`가 있는 project는 `cr` 대신 `pr
 - **병합과 공통 원인**: 여러 항목이 하나의 원인을 공유하면 하나로 합칩니다. 증상은 합쳐진 항목 안에 모두 남깁니다.
 - **함께 처리할 것 묶기**: 같은 파일·같은 계약·같은 트랜잭션 경계를 건드리는 항목은 한 단위로 묶습니다. 따로 고치면 서로의 수정을 되돌립니다.
 - **순서와 의존**: 어떤 항목이 다른 항목의 선행인지 결정합니다. 이 순서가 Phase 4의 실행 순서가 됩니다.
-- **소관 판정**: 이 범위 밖 원인이면 대상 쪽 `open/`에 같은 내용을 열고(`cr new <program>`), 이 항목은 `deferred/`로 보냅니다.
+- **소관 판정**: 이 범위 밖 원인이면 대상 쪽 `open/`에 같은 내용을 열고(`project-item new cr --project <project>`), 이 항목은 `deferred/`로 보냅니다.
 
 판정 결과는 다섯 중 하나입니다. 판정마다 `## Disposition`에 날짜와 결정자를 붙인 항목을 하나 추가합니다. 이전 판정은 지우지 않습니다. 재판정도 같은 절에 항목을 추가합니다.
 
@@ -175,16 +172,16 @@ CR은 project-team의 JOB을 겸합니다. 기능·리팩터링·조사 작업�
 - 저장소에 필요한 절(예: `## Owner request`, `## Blocking`)은 추가할 수 있습니다. 위 절의 내용을 대신하는 절은 만들지 않습니다.
 - 헤더는 위 목록만 씁니다. 저장소에 필요한 헤더는 그 저장소 CR 문서에 선언한 뒤 씁니다. 상태를 뜻하는 헤더는 선언할 수 없습니다.
 - Severity는 영향 기준입니다. S1은 기능 결함이나 release 차단, S2는 계약 위반이지만 우회 가능, S3은 정리·문서·비용입니다.
-- 파일명은 `<AREA>-<NNN>-<슬러그>.md`입니다. 번호는 AREA마다 3자리이고 그 저장소 안에서 재사용하지 않습니다. 새 번호는 `cr new`가 정합니다. 병합된 항목의 번호와 파일은 살려둡니다.
+- 파일명은 `<AREA>-<NNN>-<슬러그>.md`입니다. 번호는 AREA마다 3자리이고 그 저장소 안에서 재사용하지 않습니다. 새 번호는 `project-item new cr`가 정합니다. 병합된 항목의 번호와 파일은 살려둡니다.
 - 2026-10-20 이전의 ID와 파일은 바꾸지 않습니다. 이 형식은 새 항목과 2026-10-20 이관 항목(`- Migrated:` 헤더)에 적용합니다. 이관 항목은 작업할 때 이 형식으로 정리합니다.
 
 ## 다른 프로그램에 결함을 요청할 때
 
-다른 프로그램(`cr programs`의 목록)의 결함은 해당 담당자가 수정합니다. 요청자는 그 프로그램을 직접 고치지 않습니다.
+다른 프로그램(`project-item projects`의 목록)의 결함은 해당 담당자가 수정합니다. 요청자는 그 프로그램을 직접 고치지 않습니다.
 
 1. 최소 재현을 확인하십시오. 명령, 입력, 도구 경로와 version을 기록하십시오.
-2. `cr new <program> --area <AREA> --title ... --body-file -`로 대상 프로그램의 `open/`에 CR을 여십시오. 본문 절은 `cr new -h`를 따르십시오. `- Requester:`를 남기십시오. 요청자는 파일을 commit하지 않습니다. 담당 session이 판정과 함께 commit합니다.
-3. `cr owner <program>`으로 담당 session 이름을 찾으십시오. `SendMessage`로 프로그램, CR ID, 제목, 파일 경로만 한 줄로 알리십시오. 상세 내용은 CR 파일에만 쓰십시오. 담당 session이나 `SendMessage` 도구가 없으면 알림을 생략하십시오.
+2. `project-item new cr --project <project> --area <AREA> --title ... --body-file -`로 대상 프로그램의 `open/`에 CR을 여십시오. 본문 절은 `project-item new cr -h`를 따르십시오. `- Requester:`를 남기십시오. 요청자는 파일을 commit하지 않습니다. 담당 session이 판정과 함께 commit합니다.
+3. `project-item owner <project>`로 담당 session 이름을 찾으십시오. `SendMessage`로 프로그램, CR ID, 제목, 파일 경로만 한 줄로 알리십시오. 상세 내용은 CR 파일에만 쓰십시오. 담당 session이나 `SendMessage` 도구가 없으면 알림을 생략하십시오.
 4. 자기 작업은 우회 방법으로 계속하십시오. 막힌 항목에는 CR ID를 기록하고 다음 항목으로 넘어가십시오. 회신을 기다리며 멈추지 마십시오.
 
 요청자 쪽에 같은 CR 항목이 있으면 `deferred/`로 보내고 `Outcome: moved <program> <ID>`를 적습니다. 담당 session은 받은 요청을 현재 작업이 끝나는 시점에 확인합니다. Phase 2 판정은 사용자와 합의한 뒤 `## Disposition`에 기록합니다. 처리가 끝나면 요청자 session에 결과(commit, version)를 `SendMessage`로 알립니다. 도구가 없으면 알림을 생략합니다.

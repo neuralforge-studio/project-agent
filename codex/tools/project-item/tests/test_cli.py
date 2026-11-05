@@ -95,13 +95,6 @@ def test_unset_path_is_refused_without_a_default(project, capsys):
     assert not (project["other"] / "decide").exists()
 
 
-def test_legacy_cr_directory_is_refused(project, capsys, no_legacy):
-    no_legacy.write_text(json.dumps({"programs": {"demo_tool": {
-        "repo": str(project["base"]), "cr_dir": "cr/open", "owner_cwd": [str(project["base"])]}}}))
-    code, _, err = run(capsys, "ls", "cr", "--config", str(project["config"]), "--project", "demo")
-    assert code == 2 and "item_path_duplicate" in err
-
-
 def test_unknown_project_name(project, capsys):
     code, _, err = run(capsys, "ls", "--config", str(project["config"]), "--project", "missing")
     assert code == 2 and "project_not_found" in err

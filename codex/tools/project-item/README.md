@@ -8,7 +8,6 @@ project. Codex and Claude Code use the same copy.
   `codex/skills/project-item/references/decide.md` (decisions). This tool does not define
   rules.
 - Executable copies of the formats: `project_item/cr.py` and `project_item/decide.py`.
-  The legacy `cr` tool re-exports `project_item/cr.py`.
 - Registry: the project registry of agent-session (`~/.codex/project.json`, contract in
   `docs/project-team/spec.md` section 2). The keys `path_cr` and `path_decide` give the item
   roots. This tool imports the registry parser from the sibling `codex/tools/agent-session`.
@@ -51,7 +50,6 @@ Errors print `project-item: <code>: <message>` and exit 2.
 | Code | Cause |
 | --- | --- |
 | `item_path_unset` | the project has no `path_cr` or `path_decide` |
-| `item_path_duplicate` | the item root overlaps a CR directory in the legacy `programs.json` |
 | `project_not_found` | no project with that name, or the cwd is outside every project |
 | `invalid_transition` | the move is not in the transition table, or `fixed` does not come from `todo` |
 | `invalid_outcome` | the Outcome does not fit the destination (for example `moved` outside `deferred/`) |

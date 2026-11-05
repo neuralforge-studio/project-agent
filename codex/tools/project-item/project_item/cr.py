@@ -2,8 +2,7 @@
 (codex/skills/project-item/references/cr.md).
 
 The format (references/cr.md "파일 형식") is the single source. This module is its
-only executable copy; keep the two in step. The legacy `cr` tool re-exports this module
-(codex/tools/cr/cr_tool/fmt.py).
+only executable copy; keep the two in step.
 """
 from __future__ import annotations
 

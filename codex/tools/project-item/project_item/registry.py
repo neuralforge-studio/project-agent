@@ -19,7 +19,6 @@ if _AGENT_SESSION not in sys.path:
 from agent_session.config import load_registry, resolve_project  # noqa: E402
 from agent_session.errors import SessionError  # noqa: E402
 
-LEGACY_PROGRAMS = TOOLS / "cr" / "programs.json"
 KEYS = {"cr": "path_cr", "decide": "path_decide"}
 
 
@@ -62,29 +61,11 @@ def project_of_cwd(config=None, cwd=None):
         return None
 
 
-def _overlap(first: Path, second: Path) -> bool:
-    return first == second or first in second.parents or second in first.parents
-
-
-def legacy_roots() -> dict[str, Path]:
-    """CR roots of the legacy `cr` registry (programs not yet moved to the project registry)."""
-    try:
-        table = json.loads(LEGACY_PROGRAMS.read_text(encoding="utf-8"))["programs"]
-    except FileNotFoundError:
-        return {}
-    return {name: (Path(entry["repo"]) / entry["cr_dir"]).resolve() for name, entry in table.items()}
-
-
 def item_root(project, kind: str) -> Path:
     root = getattr(project, KEYS[kind])
     if root is None:
         raise ItemError("item_path_unset",
                         f"Project '{project.project_id}' has no {KEYS[kind]} in {project.config_path}.")
-    for program, legacy in legacy_roots().items():
-        if _overlap(root, legacy):
-            raise ItemError("item_path_duplicate",
-                            f"{KEYS[kind]} {root} overlaps the CR directory of program '{program}' "
-                            f"in {LEGACY_PROGRAMS}. Remove the program there first.")
     return root
 
 

@@ -21,7 +21,6 @@ CR은 JOB을 겸합니다. project-team의 `agent-session start --job <CR-ID>`�
 - 항목 위치는 project 등록 파일의 `path_cr`·`path_decide`가 정합니다. [등록 계약](../../../docs/project-team/spec.md#2-등록과-프로젝트-선택)을 따릅니다.
 - Key가 없는 project는 그 종류를 쓰지 않습니다. 도구는 `item_path_unset`으로 거절합니다. 기본 위치를 만들지 않습니다.
 - 항목 파일의 commit 여부는 project 운영이 정합니다. 이 skill은 정하지 않습니다.
-- 아직 이전하지 않은 프로그램은 기존 `cr` 도구와 `~/.codex/tools/cr/programs.json`을 씁니다. 같은 디렉토리를 두 등록에 함께 두지 않습니다.
 
 ## 공통 뼈대
 
