@@ -25,11 +25,12 @@ Start가 `needs_user_action`과 `dialog`를 반환하면 그 window와 dialog �
 
 1. 사용자 지시에서 작업 범위와 완료 기준을 정합니다.
 2. `project-item new cr`로 CR을 만들고 Implementation·Verification을 채웁니다. 역할 지침과 읽을 문서는 CR 본문에 link로 적습니다.
-3. 사용자 합의를 Disposition에 기록하고 CR을 todo로 옮깁니다. Todo에 있다는 사실이 승인입니다.
-4. `agent-session start --job <CR-ID>`로 Worker를 시작합니다. CR은 in-progress로 옮겨집니다.
-5. Review를 시작할 때 `agent-session review --job <CR-ID>`를 실행합니다. Worker가 CR의 `## Result`에 쓴 제출 hash와 실제 검증 결과를 review합니다. 검토 결과(인수·수정 요청)는 검토한 제출 hash와 함께 Disposition에 기록합니다. 수정이 필요하면 같은 CR에 feedback을 보냅니다. Feedback을 보내면 review 표시는 자동으로 지워집니다. Review를 멈추고 다른 일을 하면 `agent-session review --clear`를 실행합니다.
-6. Write CR은 검토한 hash를 통합하고 원격 반영을 확인한 뒤 done(Outcome fixed)으로 옮깁니다. 예: `project-item move <CR-ID> done --outcome fixed --by Leader --note "<통합 hash>"`. Read-only CR은 결과에 따라 todo(고치기로 함)·open(판정 필요)·done(Outcome waived, 문제 없음)으로 옮깁니다. 보류는 todo, 재판정은 open입니다.
-7. Worker의 정리 완료를 확인한 뒤 stop으로 실제 종료와 반납을 확인합니다.
+3. 일의 성격으로 판정합니다. 아래 위임 범위이면 Disposition에 `Leader 판정`과 근거를 기록합니다. 범위 밖이면 `project-item new decide`로 결정 항목을 만들어 사용자에게 알리고, 답을 받으면 결정 항목 ID와 사용자 원문을 Disposition에 씁니다. 사용자가 대화로 답해도 결정 항목으로 남깁니다.
+4. 판정을 기록한 CR을 todo로 옮깁니다. Todo에 있다는 사실이 승인입니다.
+5. `agent-session start --job <CR-ID>`로 Worker를 시작합니다. CR은 in-progress로 옮겨집니다.
+6. Review를 시작할 때 `agent-session review --job <CR-ID>`를 실행합니다. Worker가 CR의 `## Result`에 쓴 제출 hash와 검증 결과를 review합니다. Review는 제출 commit과 그 검증 결과를 확인하는 일입니다. 통합 뒤 별도 전체 검증으로 CR과 seat를 붙잡지 않습니다. 인수하면 통합·done·종료를 이어서 합니다. 검토 결과(인수·수정 요청)는 검토한 제출 hash와 함께 Disposition에 기록합니다. 수정이 필요하면 같은 CR에 feedback을 보냅니다. Feedback을 보내면 review 표시는 자동으로 지워집니다. Review를 멈추고 다른 일을 하면 `agent-session review --clear`를 실행합니다.
+7. Write CR은 검토한 hash를 통합하고 원격 반영을 확인한 뒤 done(Outcome fixed)으로 옮깁니다. 예: `project-item move <CR-ID> done --outcome fixed --by Leader --note "<통합 hash>"`. Read-only CR은 결과에 따라 todo(고치기로 함)·open(판정 필요)·done(Outcome waived, 문제 없음)으로 옮깁니다. 보류는 todo, 재판정은 open입니다.
+8. Worker의 정리 완료를 확인한 뒤 stop으로 실제 종료와 반납을 확인합니다.
 
 ```sh
 agent-session start --job leader
@@ -37,9 +38,16 @@ agent-session start --job TOOL-012
 agent-session review --job TOOL-012
 agent-session send --job TOOL-012 --file FEEDBACK.md
 agent-session stop --job TOOL-012
+project-item new decide --title "질문 한 줄" --urgency high --blocks "기다리는 일" --related TOOL-012 --body-file -
+project-item move D-20261105-01 done --outcome "decided A" --by user --note "D-20261105-01 A"
 ```
 
-사용자 결정이 필요한 질문은 `project-item` skill의 결정 항목으로 남깁니다.
+위임 범위:
+
+- Leader가 스스로 판정하는 일: 재현·근거가 있는 결함 수정, 선례가 있는 경로·문서 정리, 승인한 작업에서 나온 하위 결함, 자기 산출물 정리, 순서·seat 배정.
+- 사용자에게 결정 항목으로 묻는 일: 범위·정책·설계 선택, 되돌리기 어려운 삭제·외부 반영, 다른 project 소유의 일.
+- 사용자는 Leader 판정을 언제든 되돌릴 수 있습니다(CR을 open으로).
+
 새 대화로 교체된 Leader는 `project-item ls`로 결정 대기와 CR todo·in-progress를 이어받습니다.
 
 제출 hash가 바뀌면 새 hash를 다시 검토합니다.
@@ -60,7 +68,7 @@ Tmux window와 provider session은 유지하고 후속 메시지에서 관리를
 
 1. 최초 prompt가 가리키는 CR 파일과 그 본문이 link한 지침 문서를 읽고 범위, 작업 경로, 검증 기준을 확인합니다.
 2. 지정한 범위에서 작업하고 해당 검증을 수행합니다.
-3. Write CR이면 `cr/<CR-ID>` branch에 commit·push합니다.
+3. Write CR이면 `cr/<CR-ID>` branch에 commit합니다. 작업 중 `origin/main`이 진행했으면 `cr/<CR-ID>`에 merge하고, merge한 상태에서 Verification을 다시 실행해 통과한 commit을 push합니다. 검증을 모두 마친 뒤에만 review를 요청합니다.
 4. CR 파일의 `## Result`에 들여쓰지 않은 제출 행 `- 제출 commit: <40자리 hash>`와 검증 명령·결과를 추가합니다. Read-only CR은 제출 행 없이 결과만 씁니다. 다른 절은 고치지 않습니다.
 5. `agent-session send --job leader "CR-ID와 제출 commit"`로 보고합니다.
 6. 같은 CR의 feedback을 받으면 해당 범위의 작업·검증·제출을 반복합니다.

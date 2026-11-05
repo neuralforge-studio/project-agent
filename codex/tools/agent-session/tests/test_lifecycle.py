@@ -437,6 +437,13 @@ def test_fixed_result_must_be_on_origin_main_before_release(session_env):
     assert env.store.read()["0"] == EMPTY
 
 
+def test_leader_default_prompt_routes_user_questions_to_decision_items(session_env):
+    env = session_env
+    result = env.manager().start("leader")
+    prompt = (env.base / "agent/runs" / result["run_id"] / "prompt.md").read_text()
+    assert "결정 항목으로 남기고" in prompt and "위임 범위의 판정" in prompt
+
+
 def test_leader_prelaunch_retry_preserves_the_request(session_env, monkeypatch):
     import agent_session.lifecycle as lifecycle
 
