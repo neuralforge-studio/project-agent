@@ -772,12 +772,20 @@ class Manager:
             self.tmux.write_meta(meta["window_id"], {"stopping": True})
             try:
                 while True:
-                    observed = self._observe(meta)
-                    if observed["stopped"]:
-                        break
-                    if observed.get("idle") and not exit_sent:
-                        self.provider.request_exit(meta, self.tmux)
-                        exit_sent = True
+                    try:
+                        observed = self._observe(meta)
+                    except SessionError as error:
+                        # After the exit request, leaving the provider's listing is part of the end.
+                        # Keep watching the same CLI and pane until the wait limit expires.
+                        if not exit_sent or error.code != "session_not_bound":
+                            raise
+                        observed = None
+                    if observed is not None:
+                        if observed["stopped"]:
+                            break
+                        if observed.get("idle") and not exit_sent:
+                            self.provider.request_exit(meta, self.tmux)
+                            exit_sent = True
                     time.sleep(min(0.1, self.remaining()))
             except BaseException as error:
                 self._restore_stopping(meta, error)

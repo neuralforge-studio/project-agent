@@ -591,6 +591,55 @@ def test_claude_stop_signals_its_cli_and_types_nothing_in_the_pane(session_env, 
     assert "/exit" not in env.tmux.capture_pane(worker["pane_id"])
 
 
+def listing_drops_the_run(manager, monkeypatch, after_exit):
+    """Make ListAgents lose the run: from the SIGTERM on if after_exit, otherwise from the first look."""
+    from agent_session.errors import SessionError
+
+    provider = manager.provider
+    observe, request_exit = provider.observe, provider.request_exit
+    state = {"exited": False, "dropped": 0}
+
+    def exit_then_drop(meta, tmux):
+        state["exited"] = True
+        return request_exit(meta, tmux)
+
+    def observe_without_row(session, context, meta=None, timeout=30):
+        if state["exited"] == after_exit and state["dropped"] < 3:
+            state["dropped"] += 1
+            raise SessionError("session_not_bound", "Claude ListAgents does not identify one managed pane.", 3)
+        return observe(session, context, meta, timeout)
+
+    monkeypatch.setattr(provider, "request_exit", exit_then_drop)
+    monkeypatch.setattr(provider, "observe", observe_without_row)
+    return state
+
+
+def test_claude_stop_waits_for_the_cli_when_sigterm_drops_it_from_listagents(session_env, monkeypatch):
+    env = session_env
+    record = claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    manager = env.manager(timeout=30)
+    state = listing_drops_the_run(manager, monkeypatch, after_exit=True)
+    result = manager.control("stop", job=worker["job_id"])
+    assert result["stopped"] is True and result["released"] is False
+    assert state["dropped"] == 3
+    assert recorded(record) == [{"signal": "SIGTERM"}]
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is True
+
+
+def test_claude_stop_that_loses_the_listing_before_the_signal_is_still_an_error(session_env, monkeypatch):
+    env = session_env
+    record = claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    manager = env.manager(timeout=30)
+    listing_drops_the_run(manager, monkeypatch, after_exit=False)
+    with pytest.raises(SessionError) as error:
+        manager.control("stop", job=worker["job_id"])
+    assert error.value.code == "session_not_bound"
+    assert recorded(record) == []
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
+
+
 def test_claude_stop_does_not_signal_a_cli_whose_birth_differs(session_env, monkeypatch):
     env = session_env
     record = claude_project(env, monkeypatch)
