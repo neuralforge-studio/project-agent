@@ -20,13 +20,12 @@ for _name in ("agent-session", "project-item"):
 from agent_session import api  # noqa: E402
 from agent_session.config import load_registry  # noqa: E402
 from agent_session.errors import SessionError  # noqa: E402
+from project_item.cr import submitted_hash  # noqa: E402  (the CR format owns the submission row)
 from project_item.kinds import CR, DECIDE  # noqa: E402
 from project_item.render import markdown, sections  # noqa: E402
 from project_item.store import item_files  # noqa: E402
 
 CR_STATES = ("open", "todo", "in-progress")           # done and deferred are not shown (plan 2)
-SUBMISSION = re.compile(r"^- 제출 commit:\s*`?([0-9a-f]{40})\b")    # CR contract "JOB으로 쓸 때": top level only
-FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 HASH_TOKEN = re.compile(r"\b[0-9a-f]{7,40}\b")
 DECIDE_SECTIONS = ("Background", "Options", "Recommendation")
 
@@ -42,32 +41,6 @@ def _elapsed(connected_at: str | None, now: dt.datetime) -> int | None:
         return None
     start = dt.datetime.strptime(connected_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
     return max(0, int((now - start).total_seconds()))
-
-
-def submitted_hash(result: str) -> str | None:
-    """The hash of the last top-level submission line `- 제출 commit: <40-hex>` of `## Result`.
-
-    Other hashes (verification ranges, comparison bases) are not submissions. Lines in a code
-    fence, indented or not, and indented lines are examples, not submissions.
-    """
-    found = None
-    fence = None                                     # the opening run, e.g. "````"
-    for line in result.splitlines():
-        marker = FENCE.match(line)
-        if fence is None:
-            if marker:
-                fence = marker.group(1)
-                continue
-        else:
-            # Only the same character, at least as long, with nothing after it closes the fence.
-            if (marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence)
-                    and not marker.group(2).strip()):
-                fence = None
-            continue
-        match = SUBMISSION.match(line)
-        if match:
-            found = match.group(1)
-    return found
 
 
 def cited(disposition: str, commit: str) -> bool:

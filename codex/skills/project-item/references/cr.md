@@ -157,8 +157,8 @@ CR은 project-team의 JOB을 겸합니다. 기능·리팩터링·조사 작업�
 
 | 주체 | 고치는 곳 |
 | --- | --- |
-| Leader | CR 생성, Disposition(판정·사용자 결정 또는 Leader 판정·검토 결과·수정 요청), 상태 이동 |
-| Worker | 자기 CR이 in-progress인 동안 `## Result`에 제출 commit과 검증 결과만 추가 |
+| Leader | CR 생성, Disposition(판정·사용자 결정 또는 Leader 판정·검토 결과·수정 요청), 상태 이동. 제출을 인수할 때 `project-item accept <CR-ID> --commit <hash>`를 실행합니다. |
+| Worker | 자기 CR이 in-progress인 동안 `## Result`에 제출 commit과 검증 결과만 추가. 팀 project에서 CR을 옮기면 `role_denied`입니다. |
 | agent-session | todo→in-progress 이동, `- Base:` 기록 |
 
 - 역할 지침·읽을 문서·필요한 submodule은 본문에 link와 문장으로 적습니다. 예: `## References` 절.

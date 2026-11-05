@@ -919,6 +919,8 @@ CR 형식·상태·전이는 project-item skill과 `codex/skills/project-item/re
 
 역할 지침·읽을 문서·필요한 submodule 초기화는 CR 본문에 link와 문장으로 적습니다. 공통 형식은 이를 해석하지 않습니다.
 팀 project에서 `project-item move`의 in-progress 이동은 agent_session_only로 거절합니다.
+in-progress에서 나가는 이동과 `--by Leader`는 현재 Leader와 operator(`--by Leader`는 Leader만)만 할 수 있고, 다른 호출자는 role_denied입니다. 호출자 판정은 이 명세의 호출자 규칙(`agent_session.api.caller`)을 `project-item`이 그대로 씁니다.
+Write CR의 in-progress→done(fixed)은 `## Result`의 마지막 제출 hash, `project-item accept`가 쓴 Leader의 인수 기록, base `origin/main`에 있는 그 hash가 모두 있어야 하며, 없으면 review_missing으로 거절합니다.
 
 ### 실행 입력
 

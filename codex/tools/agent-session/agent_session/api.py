@@ -1,4 +1,4 @@
-"""Read-only integration for project task, verification, and CR code."""
+"""Integration for project task, verification, and CR code: state reads and the caller rule."""
 
 import os
 from pathlib import Path
@@ -19,6 +19,50 @@ def _tmux(socket=None):
     if isinstance(socket, dict):
         return Tmux(**socket)
     return Tmux(socket_path=str(socket)) if socket else Tmux()
+
+
+def caller(project, tmux=None, store=None):
+    """Who runs this command: (slot, session id) of this project's Leader ("leader") or Worker
+    ("seat-N"), ("operator", None) for a CLI outside every managed run, or ("unmanaged-agent", id)
+    for an agent session that is not a member of this project.
+
+    A conversation ID in the environment is matched with the state's bindings; without one, the
+    tmux pane of the managed run names the slot. This is the one caller rule of the project tools.
+    """
+    tmux = tmux or _tmux()
+    store = store or StateStore(project)
+    identity = os.environ.get("CODEX_THREAD_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    state = store.read(missing_ok=True)
+    if identity:
+        if state["leader"] and state["leader"]["session_id"] == identity:
+            return "leader", identity
+        for key, item in state.items():
+            if key != "leader" and item["session"] and item["session"]["session_id"] == identity:
+                return f"seat-{key}", identity
+        return "unmanaged-agent", identity
+    pane = os.environ.get("TMUX_PANE")
+    inherited_socket = os.environ.get("TMUX", "").split(",", 1)[0]
+    if pane and inherited_socket and Path(inherited_socket).resolve() == Path(tmux.effective_socket()).resolve():
+        for slot in ("leader", *(f"seat-{n}" for n in range(len(project.seats)))):
+            try:
+                meta = tmux.get_current(project.project_id, slot)
+            except SessionError as error:
+                if error.code != "execution_evidence_missing":
+                    raise
+                continue
+            if meta and meta.get("pane_id") == pane:
+                return slot, meta.get("session_id")
+    return "operator", None
+
+
+def require_live(project, slot, identity, tmux=None):
+    """Reject a Leader or Worker caller whose slot no longer holds its live managed CLI."""
+    from . import process
+
+    own = (tmux or _tmux()).get_current(project.project_id, slot)
+    if (not own or own.get("session_id") != identity or not own.get("ready")
+            or not own.get("cli_pid") or not process.alive(int(own["cli_pid"]), own.get("cli_birth"))):
+        raise SessionError("caller_not_running", "The sender no longer owns a live managed CLI.")
 
 
 def read_state(cwd=None, config_path=None):

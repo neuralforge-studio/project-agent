@@ -8,7 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import git_ops, jobs, process, workspace
+from . import api, git_ops, jobs, process, workspace
 from .api import _check_owner, _project, _unlaunched_observation
 from .config import load_registry
 from .errors import SessionError
@@ -59,32 +59,8 @@ class Manager:
     def _lock(self, slot):
         return locked(self.project.runtime_path / "control" / f"{slot}.lock", self.remaining())
 
-    def _actor(self):
-        identity = os.environ.get("CODEX_THREAD_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
-        state = self.store.read(missing_ok=True)
-        if identity:
-            if state["leader"] and state["leader"]["session_id"] == identity:
-                return "leader", identity
-            for key, item in state.items():
-                if key != "leader" and item["session"] and item["session"]["session_id"] == identity:
-                    return f"seat-{key}", identity
-            return "unmanaged-agent", identity
-        pane = os.environ.get("TMUX_PANE")
-        inherited_socket = os.environ.get("TMUX", "").split(",", 1)[0]
-        if pane and inherited_socket and Path(inherited_socket).resolve() == Path(self.tmux.effective_socket()).resolve():
-            for slot in ("leader", *(f"seat-{n}" for n in range(len(self.project.seats)))):
-                try:
-                    meta = self.tmux.get_current(self.project.project_id, slot)
-                except SessionError as error:
-                    if error.code != "execution_evidence_missing":
-                        raise
-                    continue
-                if meta and meta.get("pane_id") == pane:
-                    return slot, meta.get("session_id")
-        return "operator", None
-
     def _authorize(self, operation, slot):
-        actor, identity = self._actor()
+        actor, identity = api.caller(self.project, self.tmux, self.store)
         if actor == "unmanaged-agent":
             if operation == "start" and slot == "leader":
                 return actor, identity
@@ -92,10 +68,7 @@ class Manager:
         if operation == "send_project" and (actor != "leader" or not identity):
             raise SessionError("role_denied", "Only this project's Leader may send to another project.")
         if actor == "leader" or actor.startswith("seat-"):
-            own = self.tmux.get_current(self.project.project_id, actor)
-            if (not own or own.get("session_id") != identity or not own.get("ready")
-                    or not own.get("cli_pid") or not process.alive(int(own["cli_pid"]), own.get("cli_birth"))):
-                raise SessionError("caller_not_running", "The sender no longer owns a live managed CLI.")
+            api.require_live(self.project, actor, identity, self.tmux)
         if actor.startswith("seat-"):
             if operation == "start" or (slot != actor and not (operation == "send" and slot == "leader")):
                 raise SessionError("role_denied", "A Worker may report to the Leader or control its own execution.")
