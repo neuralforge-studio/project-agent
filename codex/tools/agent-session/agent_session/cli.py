@@ -2,9 +2,12 @@
 
 import argparse
 from contextlib import redirect_stdout
+import datetime as dt
 import json
+import os
 from pathlib import Path
 import sys
+import traceback
 
 from .errors import SessionError
 
@@ -97,11 +100,26 @@ def _emit(ok, data=None, error=None):
     print(raw, flush=True)
 
 
+def _diagnostic(manager, operation):
+    """Write the current traceback to a private file of the selected project. Return None on any failure."""
+    try:
+        directory = manager.project.runtime_path / "diagnostics"
+        directory.mkdir(parents=True, exist_ok=True)
+        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        path = directory / f"{stamp}-{operation}-{os.getpid()}.log"
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as stream:
+            stream.write(traceback.format_exc())
+        return str(path)
+    except Exception:
+        return None
+
+
 def main(argv=None, manager_factory=None):
     """Run one command. A factory can supply an isolated manager in tests."""
     parsing = True
     operation = None
     effects_possible = False
+    manager = None
     try:
         arguments = build_parser().parse_args(argv)
         parsing = False
@@ -146,6 +164,10 @@ def main(argv=None, manager_factory=None):
                             "details": {"operation": operation, "effects_possible": effects_possible}})
         return 4
     except Exception:
+        details = {"operation": operation, "effects_possible": effects_possible}
+        diagnostic = _diagnostic(manager, operation)
+        if diagnostic:
+            details["diagnostic"] = diagnostic
         _emit(False, error={"code": "internal_error", "message": "The command failed. Check the retained project state.",
-                            "details": {"operation": operation, "effects_possible": effects_possible}})
+                            "details": details})
         return 5

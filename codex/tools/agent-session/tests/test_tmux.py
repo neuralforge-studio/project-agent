@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_session.config import Project
 from agent_session.errors import SessionError
+from agent_session.lifecycle import Manager
 from agent_session.process import alive, birth
 from agent_session.tmux import Tmux
 
@@ -139,6 +140,46 @@ def test_metadata_read_is_one_snapshot_when_keys_are_added_meanwhile(tmp_path, t
     tmux._run = register_after_first_call
     read = tmux.read_meta(meta["window_id"])
     assert written and (read["registered"], read.get("session_id")) in ((False, None), (True, "native-id"))
+
+
+def test_registration_update_is_never_seen_half_written(tmp_path, tmux):
+    # SESSION-003: a start that read registered=True before message_to raised KeyError in _session.
+    meta = tmux.create_window("demo", "demo-worker-0-J-20261103-01", tmp_path,
+                              {"base": str(tmp_path), "run_id": "run-one", "target": "seat-0",
+                               "job_id": "J-20261103-01", "provider": "claude"})
+    window = meta["window_id"]
+    reader = Tmux(socket_name=tmux.socket_name)
+    run = tmux._run
+    records = []
+
+    def read_after_each_call(*arguments, **options):
+        output = run(*arguments, **options)
+        records.append(reader.read_meta(window))
+        return output
+
+    tmux._run = read_after_each_call
+    tmux.write_meta(window, {"session_id": "native-id", "registered": True, "message_to": "worker [abc123]",
+                             "ends_with_separator": "a;", "spaced_separator": "x ; y"})
+    tmux._run = run
+    assert records
+    before = (None, False, None)
+    after = ("native-id", True, "worker [abc123]")
+    for record in records:
+        if record["registered"]:
+            assert Manager._session(record) == {"session_id": "native-id", "message_to": "worker [abc123]"}
+    for record in records:
+        assert (record.get("session_id"), record["registered"], record.get("message_to")) in (before, after)
+    read = reader.read_meta(window)
+    assert read["ends_with_separator"] == "a;" and read["spaced_separator"] == "x ; y"
+
+
+def test_window_creation_accepts_a_job_text_near_the_tmux_command_limit(tmp_path, tmux):
+    # Tmux 3.8 rejects a command whose arguments exceed about 16 KiB; the JOB alone holds the whole CR text.
+    job = {"job_id": "J-20261103-01", "text": "가" * 5150}       # 15,450 bytes in UTF-8
+    meta = tmux.create_window("demo", "demo-worker-0-J-20261103-01", tmp_path,
+                              {"base": str(tmp_path), "run_id": "run-one", "target": "seat-0",
+                               "job_id": "J-20261103-01", "job": job})
+    assert meta["job"] == job and meta["registered"] is False
 
 
 def test_unowned_and_restored_session_options_do_not_get_adopted(tmp_path, tmux):

@@ -196,7 +196,10 @@ class Tmux:
                        "registered": False, "ready": False, "stopping": False,
                        "placeholder_pid": pane["pane_pid"], "placeholder_birth": process.birth(pane["pane_pid"]),
                        "placeholder_process_group": placeholder_group})
-        self.write_meta(window_id, values)
+        # The JOB holds the whole CR text. Tmux rejects a command over about 16 KiB, so the JOB is a separate update.
+        self.write_meta(window_id, {key: value for key, value in values.items() if key != "job"})
+        if "job" in values:
+            self.write_meta(window_id, {"job": values["job"]})
         return self.read_meta(window_id)
 
     def read_meta(self, window_id):
@@ -231,7 +234,10 @@ class Tmux:
             raise SessionError("tmux_metadata_invalid", "The managed window has invalid runtime metadata.") from exc
 
     def write_meta(self, window_id, updates):
-        """Keep mutable fields in separate options so concurrent updates merge."""
+        """Keep mutable fields in separate options so concurrent updates merge.
+
+        One tmux command sequence sets all options of one update, so a reader sees all or none of them.
+        """
         current = self.read_meta(window_id)
         updates = _json_value(dict(updates))
         for key, value in updates.items():
@@ -242,9 +248,13 @@ class Tmux:
                                    details={"field": key})
             if key == "provider_launch_attempted" and current.get(key) is True and value is not True:
                 raise SessionError("target_changed", "A provider launch attempt cannot be cleared in the same run.")
+        arguments = []
         for key, value in updates.items():
-            self._run("set-option", "-w", "-t", window_id, _PREFIX + key,
-                      json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+            # Tmux ends a command at an argument that ends with ";". A JSON value never ends with ";".
+            arguments += [";", "set-option", "-w", "-t", window_id, _PREFIX + key,
+                          json.dumps(value, ensure_ascii=False, separators=(",", ":"))]
+        if arguments:
+            self._run(*arguments[1:])
         return self.read_meta(window_id)
 
     def _current_option(self, target):

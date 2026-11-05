@@ -2,8 +2,10 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -122,17 +124,68 @@ def test_known_failure_keeps_partial_work_facts(capsys):
     assert not output.err
 
 
-def test_unknown_failure_does_not_print_exception_data(capsys):
+def failing_manager(runtime_path, error):
     class Failed(FakeManager):
+        def __init__(self, **options):
+            super().__init__(**options)
+            self.project = SimpleNamespace(runtime_path=runtime_path)
+
+        def start(self, *args, **kwargs):
+            raise error
+
         def send(self, **kwargs):
-            raise RuntimeError("DO_NOT_PRINT_PRIVATE_EXCEPTION_DATA")
-    assert cli.main(["send", "--job", "leader", "hello"], manager_factory=Failed) == 5
+            raise error
+    return Failed
+
+
+def test_unknown_failure_does_not_print_exception_data(tmp_path, capsys):
+    error = RuntimeError("DO_NOT_PRINT_PRIVATE_EXCEPTION_DATA")
+    assert cli.main(["send", "--job", "leader", "hello"],
+                    manager_factory=failing_manager(tmp_path / "agent", error)) == 5
     output = capsys.readouterr()
     assert "DO_NOT_PRINT" not in output.out + output.err
     assert not output.err
     result = json.loads(output.out)
     assert result["error"]["code"] == "internal_error"
-    assert result["error"]["details"] == {"operation": "send", "effects_possible": True}
+    diagnostic = result["error"]["details"]["diagnostic"]
+    assert result["error"]["details"] == {"operation": "send", "effects_possible": True, "diagnostic": diagnostic}
+    assert "DO_NOT_PRINT_PRIVATE_EXCEPTION_DATA" in Path(diagnostic).read_text(encoding="utf-8")
+
+
+def test_unexpected_failure_keeps_its_traceback_in_a_private_project_file(tmp_path, capsys):
+    # SESSION-003: a start failed with internal_error and left no trace of its KeyError.
+    runtime = tmp_path / "agent"
+    assert cli.main(["start", "--job", "leader"],
+                    manager_factory=failing_manager(runtime, KeyError("message_to"))) == 5
+    output = capsys.readouterr()
+    assert not output.err
+    assert "KeyError" not in output.out and "message_to" not in output.out
+    error = json.loads(output.out)["error"]
+    assert error["code"] == "internal_error"
+    assert error["message"] == "The command failed. Check the retained project state."
+    diagnostic = Path(error["details"].pop("diagnostic"))
+    assert error["details"] == {"operation": "start", "effects_possible": True}
+    assert diagnostic.parent == runtime / "diagnostics"
+    assert diagnostic.name.endswith(f"-start-{os.getpid()}.log")
+    assert stat.S_IMODE(diagnostic.stat().st_mode) == 0o600
+    text = diagnostic.read_text(encoding="utf-8")
+    assert "Traceback" in text and "KeyError: 'message_to'" in text
+
+
+@pytest.mark.parametrize("unwritable", [False, True])
+def test_unexpected_failure_without_a_diagnostic_place_keeps_the_result(tmp_path, capsys, unwritable):
+    if unwritable:
+        (tmp_path / "agent").write_text("not a directory")
+        factory = failing_manager(tmp_path / "agent", KeyError("message_to"))
+    else:
+        def factory(**options):
+            raise KeyError("message_to")
+    assert cli.main(["start", "--job", "leader"], manager_factory=factory) == 5
+    output = capsys.readouterr()
+    assert not output.err
+    error = json.loads(output.out)["error"]
+    assert error["code"] == "internal_error"
+    assert error["details"] == {"operation": "start", "effects_possible": True}
 
 
 def test_interruption_does_not_report_a_completed_stop(capsys):

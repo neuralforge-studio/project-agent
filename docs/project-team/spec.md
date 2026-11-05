@@ -210,6 +210,10 @@ State는 배정과 연결의 원본이며 실행 process 정보의 원본은 아
 | Provider 연결 | 실제 session_id, Claude message_to 또는 Codex endpoint |
 | 제어와 관찰 | stopping 여부, provider 실행 시도 여부, 등록 완료 여부, hook 관찰값, controller PID·생성 시각 |
 
+한 번의 갱신에 포함된 option은 tmux 명령 한 번으로 씁니다.
+읽기는 한 번의 명령으로 option 목록과 값을 함께 읽습니다.
+따라서 읽는 쪽은 한 갱신의 일부만 쓰인 상태를 보지 않습니다.
+
 현재 pointer의 window가 없으면 `execution_evidence_missing` 오류입니다.
 공통 코드는 해당 seat의 배정과 pointer를 지우지 않습니다.
 자동 배정은 그 seat의 이유를 기록하고 다음 seat를 검사합니다.
@@ -231,6 +235,8 @@ Tmux server를 다시 시작하면 예약 seat의 현재 실행 포인터와 실
 그 seat의 start·stop·restart는 execution_unknown입니다. 운영자가 7절의 수동 복구를 수행합니다.
 `agent/runs/<run_id>/`에는 prompt·settings·launch·hook 진단·제어 결과를 둡니다.
 이 파일은 실행 산출물이며 배정의 두 번째 원본으로 사용하지 않습니다.
+`agent/diagnostics/`에는 예상하지 못한 예외의 traceback을 둡니다.
+이 파일도 배정의 원본이 아닙니다.
 
 잠금 파일은 삭제로 해제하지 않고 열린 파일의 OS 잠금을 사용합니다.
 
@@ -908,6 +914,10 @@ Stdout은 `{"ok": true, "data": {...}, "error": null}` 형태의 JSON 하나입�
 실패는 ok=false와 error의 code·message·details로 반환합니다.
 Details는 남은 JOB·실행과 부수 효과 발생 여부를 포함합니다.
 진단 로그는 stderr로 보냅니다.
+예상하지 못한 예외는 `internal_error`입니다.
+출력에는 예외 내용을 넣지 않습니다.
+Details의 `diagnostic`에 `agent/diagnostics/`의 traceback 파일 경로를 줍니다.
+프로젝트를 선택하기 전에 실패했거나 파일을 쓰지 못하면 `diagnostic`이 없습니다.
 타입·누락·경로·배정·실행 오류는 상태 enum 대신 명령 오류로 반환합니다.
 
 | Exit | 의미 |
