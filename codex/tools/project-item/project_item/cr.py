@@ -174,10 +174,11 @@ def files(root: Path, state: str) -> list[Path]:
     return sorted(p for p in base.rglob("*.md") if p.name != "README.md" and not p.name.startswith("ORDER"))
 
 
-def next_id(root: Path, area: str) -> str:
-    """Next free <AREA>-<NNN>: highest number of the area in any state directory + 1."""
+def next_id(root: Path, area: str, issued: int = 0) -> str:
+    """Next free <AREA>-<NNN>: highest number of the area in any state directory, or `issued`
+    (the highest number seen in removed files), + 1."""
     pat = re.compile(rf"^{re.escape(area)}-(\d+)\b")
-    high = 0
+    high = issued
     for state in STATES:
         for path in files(root, state):
             m = pat.match(path.name)
