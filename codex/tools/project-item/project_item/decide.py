@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .cr import HEADER_RE, SECTION_RE, STATUS_LINE_RE, files
+from .cr import HEADER_RE, SECTION_RE, STATUS_LINE_RE, files, outside_fence
 
 STATES = ("open", "done")
 URGENCIES = ("high", "normal", "low")
@@ -44,14 +44,8 @@ def parse(path: Path, state: str) -> Decision:
 
 def parse_text(text: str, path: Path, state: str) -> Decision:
     item = Decision(path=path, state=state)
-    in_fence = False
     in_header = False
-    for line in text.splitlines():
-        if line.startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
+    for _, line in outside_fence(text.splitlines()):
         if item.title is None and line.startswith("# "):
             m = TITLE_RE.match(line)
             if m:

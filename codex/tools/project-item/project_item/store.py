@@ -10,6 +10,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from .cr import section_heads
 from .kinds import CR, DECIDE, Kind
 from .registry import ItemError
 
@@ -176,7 +177,7 @@ def set_outcome(text: str, outcome: str | None) -> str:
 def add_disposition(text: str, entry: str, order: tuple[str, ...]) -> str:
     """Append one entry to '## Disposition', creating the section at its place in the order."""
     lines = text.rstrip("\n").splitlines()
-    heads = [(n, line[3:].strip()) for n, line in enumerate(lines) if line.startswith("## ")]
+    heads = section_heads(lines)
     for n, name in heads:
         if name == "Disposition":
             end = next((m for m, _ in heads if m > n), len(lines))
