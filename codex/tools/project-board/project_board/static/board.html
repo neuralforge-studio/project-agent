@@ -59,7 +59,9 @@ h1, h2, h3, h4, p { margin: 0; }
 .notice { background: var(--error-bg); color: var(--error); border-radius: 10px; padding: 12px 16px; font-size: 14px; }
 
 /* ---------- room ---------- */
-.rooms { display: flex; flex-direction: column; gap: 20px; }
+.rooms { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+/* Plan 4.1: two columns once a 520px floor fits in each room (2 x (520 + 42) + 20 gap + 32 page padding). */
+@media (min-width: 1180px) { .rooms { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .room { background: var(--surface); border: 1px solid #DCE0E5; border-radius: 14px; }
 .room-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 16px 20px; }
 .room-head h3 { font-size: 17px; font-weight: 600; }
@@ -72,23 +74,23 @@ h1, h2, h3, h4, p { margin: 0; }
 .room-errors { margin: 0 20px 16px; display: flex; flex-direction: column; gap: 4px; }
 .room-errors:empty { display: none; }
 .room-errors p { background: var(--error-bg); color: var(--error); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
-.floor-scroll { overflow-x: auto; padding: 0 20px 20px; }
-.floor { position: relative; min-width: 760px; height: 176px; border: 1.5px solid var(--wall); border-radius: 10px; background: var(--floor); }
+.floor-scroll { padding: 0 20px 20px; }
+.floor { position: relative; width: 520px; margin: 0 auto; height: 176px; border: 1.5px solid var(--wall); border-radius: 10px; background: var(--floor); }
 
 /* whiteboard: Leader 뒤 벽 */
-.whiteboard { position: absolute; left: 12px; top: 12px; width: 120px; height: 148px; display: flex; flex-direction: column; gap: 6px; }
+.whiteboard { position: absolute; left: 12px; top: 12px; width: 84px; height: 148px; display: flex; flex-direction: column; gap: 6px; }
 .wb-decide, .wb-cr { border: 1px solid var(--line-soft); background: var(--surface); border-radius: 8px; color: var(--muted); cursor: pointer; text-align: left; }
-.wb-decide { height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-size: 13px; font-weight: 600; }
+.wb-decide { height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; font-size: 13px; font-weight: 600; }
 .wb-decide .n { font-family: var(--mono); font-size: 18px; font-weight: 500; color: var(--ink); }
 .wb-decide.attn { border-color: var(--decide-line); background: var(--decide-bg); color: var(--decide); }
 .wb-decide.attn .n { color: var(--decide); }
-.wb-cr { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 6px 12px; font-size: 12px; }
+.wb-cr { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 6px 10px; font-size: 12px; }
 .wb-cr span { display: flex; justify-content: space-between; width: 100%; }
 .wb-cr b { font-family: var(--mono); font-weight: 400; color: var(--ink); }
 .wb-decide[aria-expanded="true"], .wb-cr[aria-expanded="true"] { outline: 2px solid var(--ink); outline-offset: 1px; }
 
 /* station: desk + worker를 묶은 선택 영역 */
-.station { position: absolute; width: 92px; height: 92px; padding: 0; border: 1.5px solid transparent; border-radius: 10px; background: transparent; cursor: pointer; }
+.station { position: absolute; width: 76px; height: 92px; padding: 0; border: 1.5px solid transparent; border-radius: 10px; background: transparent; cursor: pointer; }
 .station:hover { background: var(--hover-bg); }
 .station[aria-expanded="true"] { background: var(--select-bg); border-color: var(--select-line); }
 .station:focus-visible { outline: 2px solid var(--work); outline-offset: 2px; }
@@ -126,7 +128,9 @@ h1, h2, h3, h4, p { margin: 0; }
 .leader.absent { border: 1.5px dashed var(--ghost); background: transparent; }
 .leader.absent::after { display: none; }
 
-.label { position: absolute; width: 112px; text-align: center; font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.label { position: absolute; width: 76px; text-align: center; font-family: var(--mono); font-size: 11px; line-height: 1.3; color: var(--muted); }
+.label.lead { width: 100px; }
+.label .sub { display: block; }
 
 /* drawer: 펼치면 아래 project가 밀려납니다 */
 .drawer-wrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .28s ease; }
@@ -203,6 +207,7 @@ h1, h2, h3, h4, p { margin: 0; }
     'use strict';
     var TOKEN = document.querySelector('meta[name="board-token"]').content;
     var BOARD_MS = 2000, LIVE_MS = 10000;
+    var SEATS_PER_ROW = 4, SEAT_X = 200, SEAT_STEP = 78, ROW_STEP = 130, FLOOR_HEIGHT = 176;   // floor geometry (px), plan 4.1
     var UNCONFIRMED = ['send_unconfirmed', 'delivery_unconfirmed'];   // the Leader may have the answer already
     var roomsEl = document.getElementById('rooms');
     var syncEl = document.getElementById('sync');
@@ -309,40 +314,42 @@ h1, h2, h3, h4, p { margin: 0; }
         var ls = leaderStatus(p);
         var away = p.leader && p.leader.reviewing_seat != null;
         var leadTime = p.leader ? units(p.leader.elapsed).map(function (u) { return '<span>' + u + '</span>'; }).join('') : '';
-        html += '<div class="desk lead" style="left: 176px; top: 56px" aria-hidden="true"><span class="time">' + leadTime + '</span></div>';
+        html += '<div class="desk lead" style="left: 134px; top: 56px" aria-hidden="true"><span class="time">' + leadTime + '</span></div>';
         var home = ls === 'absent' || away ? 'absent' : ls === 'working' ? 'working' : 'stopped';
-        html += '<span class="leader ' + home + '" style="left: 142px; top: 74px" aria-hidden="true"></span>';
-        var leadLabel = ls === 'absent' ? 'leader 없음' : away ? 'leader → seat' + p.leader.reviewing_seat
-            : ls === 'working' ? 'leader' : 'leader · ' + LABEL[ls];
-        html += '<span class="label" style="left: 132px; top: 128px">' + esc(leadLabel) + '</span>';
+        html += '<span class="leader ' + home + '" style="left: 102px; top: 74px" aria-hidden="true"></span>';
+        var leadLabel = ls === 'absent' ? 'leader 없음' : away ? 'leader → seat' + p.leader.reviewing_seat : 'leader';
+        var leadSub = ls === 'stopped' || ls === 'unknown' ? '<span class="sub">' + esc(LABEL[ls]) + '</span>' : '';
+        html += '<span class="label lead" style="left: 98px; top: 128px">' + esc(leadLabel) + ' ' + leadSub + '</span>';
 
         p.seats.forEach(function (seat) {
-            var x = 300 + 132 * seat.index, st = seatStatus(p, seat), key = 'w' + seat.index;
+            var x = SEAT_X + SEAT_STEP * (seat.index % SEATS_PER_ROW), y = ROW_STEP * Math.floor(seat.index / SEATS_PER_ROW);
+            var st = seatStatus(p, seat), key = 'w' + seat.index;
             var time = seat.session ? since(seat.elapsed) : '';
             if (seat.job_id) {
-                html += '<button type="button" class="station" style="left: ' + (x - 10) + 'px; top: 26px" data-open-key="' + key
+                html += '<button type="button" class="station" style="left: ' + (x - 2) + 'px; top: ' + (y + 26) + 'px" data-open-key="' + key
                     + '" aria-expanded="' + (open === key) + '" aria-label="seat' + seat.index + ', ' + esc(seat.job_id) + ' '
                     + LABEL[st] + (time ? ', session ' + time : '') + '"></button>';
             }
             var deskClass = !seat.job_id ? 'desk empty' : st === 'working' ? 'desk on' : 'desk';
-            html += '<div class="' + deskClass + '" style="left: ' + x + 'px; top: 36px" aria-hidden="true">'
+            html += '<div class="' + deskClass + '" style="left: ' + x + 'px; top: ' + (y + 36) + 'px" aria-hidden="true">'
                 + (seat.job_id ? '<span class="id">' + esc(seat.job_id) + '</span>' : '')
                 + (time ? '<span class="time">' + time + '</span>' : '')
                 + (st === 'working' ? '<span class="typing"><i></i><i></i><i></i></span>' : '') + '</div>';
             if (seat.job_id) {
                 var worker = st === 'working' ? 'working' : st === 'pending' ? 'pending'
                     : st === 'stopped' || st === 'unknown' ? 'stopped' : 'review';
-                html += '<span class="worker ' + worker + '" style="left: ' + (x + 24) + 'px; top: 84px" aria-hidden="true"></span>';
+                html += '<span class="worker ' + worker + '" style="left: ' + (x + 24) + 'px; top: ' + (y + 84) + 'px" aria-hidden="true"></span>';
             }
             if (away && p.leader.reviewing_seat === seat.index) {
-                html += '<span class="leader ' + (ls === 'working' ? 'working' : 'stopped') + '" style="left: ' + (x + 54)
-                    + 'px; top: 82px" aria-hidden="true"></span>';
+                html += '<span class="leader ' + (ls === 'working' ? 'working' : 'stopped') + '" style="left: ' + (x + 50)
+                    + 'px; top: ' + (y + 82) + 'px" aria-hidden="true"></span>';
             }
-            var label = 'seat' + seat.index + (seat.job_id && st !== 'working' ? ' · ' + LABEL[st] : '');
-            html += '<span class="label" style="left: ' + (x - 20) + 'px; top: 122px">' + esc(label) + '</span>';
+            var sub = seat.job_id && st !== 'working' ? '<span class="sub">' + esc(LABEL[st]) + '</span>' : '';
+            html += '<span class="label" style="left: ' + (x - 2) + 'px; top: ' + (y + 122) + 'px">seat' + seat.index + ' ' + sub + '</span>';
         });
-        var width = Math.max(760, 300 + 132 * Math.max(p.seats.length - 1, 0) + 72 + 100);
-        return { html: html, width: width };
+        // Plan 4.1: 4 seats a row; the floor grows by rows, never by width.
+        var rows = Math.max(1, Math.ceil(p.seats.length / SEATS_PER_ROW));
+        return { html: html, height: FLOOR_HEIGHT + ROW_STEP * (rows - 1) };
     }
 
     // ------------------------------------------------------------ drawer panels
@@ -530,7 +537,7 @@ h1, h2, h3, h4, p { margin: 0; }
             return '<p>' + esc(e.source) + ': ' + esc(e.code) + ' — ' + esc(e.message) + '</p>';
         }).join(''));
         var floor = floorHTML(p), floorEl = room.querySelector('.floor');
-        floorEl.style.minWidth = floor.width + 'px';
+        floorEl.style.height = floor.height + 'px';
         setHTML(floorEl, floor.html);
         var drawer = room.querySelector('.drawer');
         room.classList.toggle('is-open', open !== '' && !fold);
