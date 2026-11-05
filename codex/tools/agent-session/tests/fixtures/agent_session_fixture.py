@@ -82,6 +82,21 @@ class Environment:
     def manager(self, timeout=15):
         return Manager(self.base, self.config, socket_name=self.socket_name, timeout=timeout)
 
+    def add_project(self, name="other"):
+        """Register a second project (own clone and state, no seats) and return its base."""
+        base = self.root / f"{name}.main"
+        git(self.root, "clone", str(self.remote), str(base))
+        git(base, "config", "user.name", "Fixture")
+        git(base, "config", "user.email", "fixture@example.invalid")
+        (base / "agent").mkdir()
+        registry = json.loads(self.config.read_text())
+        registry[str(base)] = {"project": name, "provider": "codex", "seats": []}
+        self.config.write_text(json.dumps(registry))
+        return base
+
+    def manager_at(self, base, timeout=15):
+        return Manager(base, self.config, socket_name=self.socket_name, timeout=timeout)
+
     def cr(self, number=1, mode="write", cwd=None):
         """Write an approved CR in todo/ and return its ID."""
         cr_id = f"TOOL-{number:03}"
