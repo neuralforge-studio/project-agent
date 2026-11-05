@@ -175,6 +175,14 @@ class Manager:
         _check_owner(self.project, slot, session, meta)
         return meta
 
+    def _adopted(self, meta, slot):
+        """Start may handle an existing run only as this base's run of the slot.
+
+        A run that is not published yet is compared by base and slot only; a published run
+        must also be the conversation the state names.
+        """
+        return self._owned(meta, slot, self.store.read(missing_ok=True) if meta.get("ready") else None)
+
     @staticmethod
     def _session(meta):
         if not meta.get("registered") or not meta.get("session_id"):
@@ -498,6 +506,7 @@ class Manager:
             with self._lock("leader"):
                 current = self.tmux.get_current(self.project.project_id, "leader")
                 if current:
+                    self._adopted(current, "leader")
                     if current.get("registered") and self._observe(current)["stopped"]:
                         self._retire_name(current)
                     elif current.get("registered") and not current.get("ready") and not current.get("stopping"):
@@ -565,6 +574,8 @@ class Manager:
                                 raise
                             reasons[str(index)] = ["previous execution evidence is missing"]
                             continue
+                        if prior:
+                            self._adopted(prior, slot)
                         if prior and not self._observe(prior)["stopped"]:
                             reasons[str(index)] = ["previous execution termination is unconfirmed"]
                             continue
@@ -597,6 +608,7 @@ class Manager:
                 if (not current or current.get("run_id") != context["run_id"]
                         or self.store.read()[str(number)]["job_id"] != item["job_id"]):
                     raise SessionError("target_changed", "The JOB changed before its startup retry.")
+                self._adopted(current, slot)
                 return self._start_existing(current)
         try:
             self._prepare_launch(context)

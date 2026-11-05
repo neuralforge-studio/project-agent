@@ -677,6 +677,69 @@ def test_a_run_of_another_base_gets_no_input_through_its_socket(session_env, tmp
         subprocess.run(["tmux", "-L", other.socket_name, "kill-server"], capture_output=True, timeout=10)
 
 
+@pytest.mark.parametrize("scenario", ["stopped-worker", "waiting-worker", "waiting-leader", "live-leader", "unassigned-seat"])
+def test_start_does_not_handle_the_run_of_another_base(session_env, tmp_path, monkeypatch, scenario):
+    """Start's re-handling of an existing run applies the same base check as send and control."""
+    import agent_session.git_ops as git_ops
+    import agent_session.lifecycle as lifecycle
+    from agent_session.lifecycle import Manager
+    from agent_session_fake_provider import FakeProvider
+    from agent_session_fixture import Environment
+
+    env = session_env
+    (tmp_path / "other").mkdir()
+    other = Environment(tmp_path / "other").setup()
+    try:
+        cr = env.cr()
+        assert other.cr() == cr
+        other.manager().start("leader")
+        if scenario != "unassigned-seat":
+            other.manager().start(cr)
+        slot = "leader" if scenario.endswith("leader") else "seat-0"
+        job = "leader" if slot == "leader" else cr
+        if scenario == "unassigned-seat":
+            job = other.cr(2)                      # a new CR takes an empty seat, whose slot the foreign run holds
+        if scenario in ("stopped-worker", "unassigned-seat"):
+            env.manager().start(cr)
+            assert env.manager().control("stop", job=cr)["released"] is False
+        elif scenario == "waiting-worker":
+            fail_once(monkeypatch, git_ops, "sync_main")
+            with pytest.raises(SessionError):
+                env.manager().start(cr)
+        elif scenario == "waiting-leader":
+            fail_once(monkeypatch, lifecycle.Manager, "_session_input")
+            with pytest.raises(SessionError):
+                env.manager().start("leader")
+        else:
+            env.manager().start("leader")
+        foreign = env.tmux.get_current("fixture", slot)
+        calls = []
+        for name in ("observe", "launch_spec", "send", "request_stop", "request_exit"):
+            original = getattr(FakeProvider, name)
+            monkeypatch.setattr(FakeProvider, name, lambda self, *args, _name=name, _original=original, **kwargs:
+                                calls.append(_name) or _original(self, *args, **kwargs))
+
+        from agent_session.tmux import Tmux
+        command = Tmux.command
+        monkeypatch.setattr(Tmux, "command", lambda self, *args, **kwargs:
+                            (calls.append(args[0]) if args[0] == "rename-window" else None) or command(self, *args, **kwargs))
+
+        def names():
+            return env.tmux.command("list-windows", "-t", "fixture", "-F", "#{window_id} #{window_name}")
+
+        before = (names(), env.tmux.read_meta(foreign["window_id"]), env.project.state_path.read_bytes(),
+                  other.project.state_path.read_bytes())
+        crossed = Manager(other.base, other.config, socket_name=env.socket_name, timeout=15)
+        assert outcome(lambda: crossed.start(job)) == "owner_mismatch"
+        assert calls == []
+        after = (names(), env.tmux.read_meta(foreign["window_id"]), env.project.state_path.read_bytes(),
+                 other.project.state_path.read_bytes())
+        assert after == before
+        assert env.tmux.get_current("fixture", slot)["run_id"] == foreign["run_id"]
+    finally:
+        subprocess.run(["tmux", "-L", other.socket_name, "kill-server"], capture_output=True, timeout=10)
+
+
 def test_a_run_that_the_state_does_not_name_gets_no_input(session_env, monkeypatch):
     env = session_env
     cr = env.cr()
