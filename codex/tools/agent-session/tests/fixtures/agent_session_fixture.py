@@ -32,6 +32,13 @@ def git(root, *args):
     return result.stdout.strip()
 
 
+def stop_test_server(socket_name):
+    """Kill a test tmux server and remove its socket file, which kill-server leaves behind."""
+    path = Tmux(socket_name=socket_name).effective_socket()
+    subprocess.run(["tmux", "-L", socket_name, "kill-server"], capture_output=True, timeout=10)
+    Path(path).unlink(missing_ok=True)
+
+
 class Environment:
     def __init__(self, directory):
         self.root = directory
@@ -150,4 +157,4 @@ def session_env(tmp_path, monkeypatch):
     monkeypatch.setattr(providers, "get_provider", lambda name: FakeProvider())
     fixture = Environment(tmp_path).setup()
     yield fixture
-    subprocess.run(["tmux", "-L", fixture.socket_name, "kill-server"], capture_output=True, timeout=10)
+    stop_test_server(fixture.socket_name)

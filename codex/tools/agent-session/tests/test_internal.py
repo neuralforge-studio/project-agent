@@ -14,11 +14,13 @@ import pytest
 
 TOOL = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 from agent_session import api, internal, providers
 from agent_session.config import resolve_project
 from agent_session.errors import SessionError
 from agent_session.state import StateStore, locked
 from agent_session.tmux import Tmux
+from agent_session_fixture import stop_test_server
 
 
 @pytest.fixture
@@ -58,7 +60,7 @@ def native_slot(tmp_path, monkeypatch):
     previous = publish("old-run", str(uuid.uuid4()))
     yield {"project": project, "store": store, "tmux": control, "previous": previous,
            "config": config, "base": base, "seat": seat, "endpoint": endpoint, "publish": publish}
-    subprocess.run(["tmux", "-L", socket_name, "kill-server"], capture_output=True, timeout=10)
+    stop_test_server(socket_name)
 
 
 def test_late_registration_cannot_replace_a_new_run_after_native_check(native_slot, monkeypatch):
