@@ -155,6 +155,7 @@ Leader는 필요할 때 state.json과 JOB 문서를 직접 읽어 배정을 확�
 예제의 값과 주소는 설명용입니다.
 Root는 leader와 등록 seat 수만큼의 연속한 숫자 key입니다.
 Worker seat가 없으면 `{"leader": null}`입니다.
+등록 seat 수가 state보다 많으면 없는 seat를 미배정 행으로 읽고 다음 쓰기에서 저장합니다. 등록 seat 수가 state보다 적으면 사라지는 seat가 모두 미배정일 때만 그 행을 빼고 읽습니다. 하나라도 배정·연결이 있으면 `state_invalid`이고 details에 그 seat 번호를 담습니다. Key가 연속 숫자가 아니거나 형식이 깨진 state는 seat 수와 무관하게 거절합니다.
 
 | 항목 | 의미 |
 | --- | --- |

@@ -54,8 +54,14 @@ def test_claude_connection_has_exact_transport_fields(tmp_path):
     assert store.read() == expected
 
 
-@pytest.mark.parametrize("raw", ["{broken", '{"leader":null,"leader":null}', '{"leader":null}',
-                                       '{"leader":null,"0":{"job_id":null,"git_hash":"a","session":null}}'])
+UNASSIGNED = {"job_id": None, "git_hash": None, "session": None}
+
+
+@pytest.mark.parametrize("raw", ["{broken", '{"leader":null,"leader":null}',
+                                 '{"leader":null,"0":{"job_id":null,"git_hash":"a","session":null}}',
+                                 '{"leader":null,"1":{"job_id":null,"git_hash":null,"session":null}}',
+                                 '{"leader":null,"0":{"job_id":null,"git_hash":null,"session":null},"x":null}',
+                                 '{"leader":null,"0":{"job_id":null}}'])
 def test_damaged_state_is_not_replaced(tmp_path, raw):
     value = project(tmp_path, count=1)
     value.runtime_path.mkdir()
@@ -63,6 +69,48 @@ def test_damaged_state_is_not_replaced(tmp_path, raw):
     with pytest.raises(SessionError):
         StateStore(value).update(lambda state: empty_state(value))
     assert value.state_path.read_text() == raw
+
+
+def write_state(value, rows):
+    value.runtime_path.mkdir(exist_ok=True)
+    value.state_path.write_text(json.dumps({"leader": None, **rows}))
+
+
+def test_added_registry_seat_reads_as_unassigned_and_is_saved_on_next_write(tmp_path):
+    held = {"job_id": "J-1", "git_hash": "a" * 40, "session": None}
+    write_state(project(tmp_path, count=2), {"0": held, "1": UNASSIGNED})
+    grown = project(tmp_path, count=3)
+    store = StateStore(grown)
+    assert store.read() == {"leader": None, "0": held, "1": UNASSIGNED, "2": UNASSIGNED}
+    assert "2" not in json.loads(grown.state_path.read_text())
+    store.update(lambda state: state["2"].update(job_id="J-2"))
+    saved = json.loads(grown.state_path.read_text())
+    assert saved["0"] == held and saved["2"]["job_id"] == "J-2"
+
+
+def test_removed_registry_seat_is_dropped_only_when_unassigned(tmp_path):
+    held = {"job_id": "J-1", "git_hash": None, "session": None}
+    write_state(project(tmp_path, count=3), {"0": held, "1": UNASSIGNED, "2": UNASSIGNED})
+    shrunk = project(tmp_path, count=2)
+    store = StateStore(shrunk)
+    assert store.read() == {"leader": None, "0": held, "1": UNASSIGNED}
+    store.update(lambda state: None)
+    assert set(json.loads(shrunk.state_path.read_text())) == {"leader", "0", "1"}
+
+    write_state(shrunk, {"0": held, "1": UNASSIGNED, "2": held | {"job_id": "J-2"}})
+    raw = shrunk.state_path.read_text()
+    for call in (lambda: store.read(), lambda: store.update(lambda state: None)):
+        with pytest.raises(SessionError) as error:
+            call()
+        assert error.value.code == "state_invalid" and error.value.details == {"seat": 2}
+    assert shrunk.state_path.read_text() == raw
+
+
+def test_removed_registry_seat_with_broken_row_is_rejected(tmp_path):
+    write_state(project(tmp_path, count=3), {"0": UNASSIGNED, "1": UNASSIGNED, "2": {"job_id": None}})
+    with pytest.raises(SessionError) as error:
+        StateStore(project(tmp_path, count=2)).read()
+    assert error.value.details == {"seat": 2}
 
 
 def test_conflicting_jobs_and_unassigned_data_are_rejected(tmp_path):
