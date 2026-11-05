@@ -67,6 +67,7 @@ def build_parser():
     body = send.add_mutually_exclusive_group(required=True)
     body.add_argument("message", nargs="?", type=_nonempty, metavar="MESSAGE")
     body.add_argument("--file", type=_nonempty, metavar="FILE")
+    send.add_argument("--project", type=_nonempty, metavar="PROJECT")
     send.add_argument("--timeout", type=_seconds, default=30, metavar="SECONDS")
 
     for name, description in (("stop", "Stop a session and release it when its work is preserved."),
@@ -135,7 +136,8 @@ def main(argv=None, manager_factory=None):
                 result = manager.start(arguments.job, prompt_file=arguments.prompt_file)
             elif operation == "send":
                 result = manager.send(job=arguments.job, seat=arguments.seat,
-                                      message=arguments.message, file=arguments.file)
+                                      message=arguments.message, file=arguments.file,
+                                      project=arguments.project)
             elif operation == "review":
                 result = manager.review(job=arguments.job, clear=arguments.clear)
             else:

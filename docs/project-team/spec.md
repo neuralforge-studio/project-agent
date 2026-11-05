@@ -12,6 +12,7 @@ agent-session start --job leader
 agent-session start --job TOOL-012
 agent-session send --job leader "작업 결과를 보고합니다."
 agent-session send --job TOOL-012 --file FEEDBACK.md
+agent-session send --project other --job leader "협업 요청입니다."
 agent-session stop --seat 1
 agent-session restart --job leader
 agent-session review --job TOOL-012
@@ -112,7 +113,7 @@ Base·seat의 하위 디렉토리도 지원합니다.
 상대 seat 경로는 해당 base를 기준으로 해석합니다.
 Seat 번호는 배열 순서의 0~9입니다.
 
-프로젝트 선택을 위한 별도 옵션은 두지 않습니다.
+프로젝트 선택을 위한 별도 옵션은 두지 않습니다. 예외는 send의 `--project`이며 수신 project만 지정합니다(6절).
 내부 호출과 자동 등록은 선택한 base 또는 seat에서 실행합니다.
 선택한 등록 파일·socket도 그대로 전달합니다.
 현재 실행의 프로젝트가 선택 결과와 다르면 거절합니다.
@@ -622,12 +623,14 @@ Claude는 실제 도구 환경의 CLAUDE_CODE_SESSION_ID도 등록한 UUID와 �
 JOB 배정·다른 Worker 제어는 Leader가 담당합니다.
 Worker는 자기 작업과 Leader 보고를 담당합니다.
 Run 값은 내부 실행 확인에 사용하며 권한 자격증명으로 취급하지 않습니다.
+발신자의 역할은 수신 project가 아니라 발신자 자신의 project(현재 디렉토리로 선택한 project)의 state와 실제 실행으로 판정합니다.
 
 ## 6. send
 
 ```sh
 agent-session send --job leader "완료 보고입니다."
 agent-session send --seat 1 --file FEEDBACK.md
+agent-session send --project other --job leader "협업 요청입니다."
 ```
 
 ### Send 옵션
@@ -636,6 +639,7 @@ agent-session send --seat 1 --file FEEDBACK.md
 | --- | --- | --- |
 | --job leader 또는 JOB_ID | seat와 택일 | State의 Leader 또는 해당 JOB의 Worker에게 전송 |
 | --seat N | job과 택일 | 현재 그 seat에 배정된 Worker에게 전송 |
+| --project PROJECT | 선택. 현재 디렉토리의 project | 수신 project의 등록 이름. 다른 project를 지정하면 `--job leader`만 허용(아래 Project 간 Leader 협업) |
 | MESSAGE | file과 택일 | 위치 인자의 메시지 본문 |
 | --file FILE | 본문과 택일 | UTF-8 메시지 파일 읽기 |
 | --timeout SECONDS | 선택. 30초 | 대상 확인과 transport 수락 확인의 전체 대기 제한 |
@@ -648,6 +652,21 @@ Native provider가 더 작은 한도를 알리면 전송 전에 그 한도를 �
 크기 초과는 message_too_large·exit 2이며 자르기·분할·파일 경로 대체를 하지 않습니다.
 Worker가 Leader에게 보고할 때는 `send --job leader`를 사용합니다.
 Leader가 보낸 send가 accepted되고 그 JOB이 `leader.reviewing`이면 reviewing을 null로 만듭니다(7절 Review 표시).
+
+### Project 간 Leader 협업
+
+서로 다른 project의 Leader는 `send --project <수신 project> --job leader`로 협업 메시지를 보내고 같은 방법으로 회신합니다.
+`--project`는 같은 등록 파일의 project 이름이며 생략하면 현재 디렉토리로 고른 project가 수신자입니다.
+자기 project 이름을 지정하면 생략한 것과 같습니다.
+수신 project는 등록되어 있어야 하며 아니면 project_not_found·exit 2입니다.
+다른 project에는 `--job leader`만 허용하고 JOB ID·`--seat`는 invalid_input·exit 2입니다.
+발신자는 자기 project(현재 디렉토리)의 현재 Leader여야 합니다. 자기 project의 state Leader session과 대조하고 그 실행이 살아 있어야 합니다.
+Worker와 operator는 role_denied, 이전 run의 Leader·다른 project의 session·등록되지 않은 session은 caller_unbound입니다. 발신 marker를 지우거나 임의 session_id를 입력해 통과할 수 없습니다.
+수신 대상은 수신 project의 base·state session·현재 실행으로 같은 조건으로 대조합니다.
+전송 허용은 send에 한정합니다. 다른 project의 start·stop·restart·review·배정 권한을 주지 않으며 이 명령들에는 `--project`가 없습니다.
+Envelope는 발신 project·역할·run과 `ToProject`를 포함하고 회신 방법으로 `agent-session send --project <발신 project> --job leader`를 적습니다.
+수신 Leader는 자기 project 디렉토리에서 이 명령으로 회신합니다.
+협업 메시지는 동료 메시지이며 사용자 승인·읽음·작업 완료가 아닙니다.
 
 같은 JOB의 문서나 feedback을 다시 보내도 JOB ID·Git 기준·branch를 초기화하지 않습니다.
 Send의 파일 입력은 메시지 전달이며 새 JOB 배정을 자동으로 수행하지 않습니다.
