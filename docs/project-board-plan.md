@@ -34,7 +34,7 @@ Board는 원본을 복사하지 않습니다. 요청마다 아래 파일을 읽�
 | CR 본문 | `in-progress/`의 CR 파일 | 제목, `- Base:` header, `## Result`, `## Disposition` |
 | 결정 대기 | `path_decide`의 `open/` 파일 | 결정 대기 숫자, 질문 본문 |
 
-- `~/.claude/project.json`은 현재 `~/.codex/project.json`을 가리키는 symlink입니다. 두 파일을 읽고 base 경로로 중복을 없앱니다.
+- 등록 파일은 `agent_session.config.load_registry`로 읽습니다. 두 표준 경로 가운데 어느 파일을 쓰는지는 [spec 2절](project-team/spec.md#2-등록과-프로젝트-선택)의 선택 규칙을 따릅니다.
 - 등록에 `path_cr` 또는 `path_decide`가 없는 project는 그 종류를 쓰지 않습니다. 화이트보드에 해당 숫자를 표시하지 않습니다.
 - `state.json`은 `agent_session.api.read_state`로 읽습니다. `agent-session`과 같은 형식 검사를 재사용합니다.
 - `state.json`은 lock 없이 읽습니다. `agent-session`이 임시 파일에 쓴 뒤 `os.replace`로 교체하므로 반쯤 쓰인 파일을 읽지 않습니다.
