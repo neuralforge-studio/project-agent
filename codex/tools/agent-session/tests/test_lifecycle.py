@@ -474,6 +474,68 @@ def test_rejected_stop_request_does_not_mark_a_ready_session_stopping(session_en
     assert ident(env.store.read()["0"]["session"]) == worker["session"]
 
 
+def test_stop_that_times_out_on_a_live_cli_lets_it_take_messages_again(session_env, monkeypatch):
+    env = session_env
+    worker = env.manager().start(env.cr())
+    manager = env.manager(timeout=3)
+    busy = {"known": True, "terminal": False, "active_turn": True, "pending": [], "background": [], "idle": False}
+    monkeypatch.setattr(manager.provider, "observe", lambda *args, **kwargs: busy)
+    with pytest.raises(SessionError) as error:
+        manager.control("stop", job=worker["job_id"])
+    assert (error.value.code, error.value.exit_code) == ("timeout", 4)
+    stopping = env.tmux.get_current("fixture", "seat-0")["stopping"]
+    try:
+        delivered = env.manager().send(job=worker["job_id"], message="the stop did not end you")["disposition"]
+    except SessionError as failure:
+        delivered = failure.code
+    assert (stopping, delivered) == (False, "accepted")
+    assert error.value.details == {"stopping_restored": True}
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
+
+
+def claude_project(env, monkeypatch):
+    """Make the fixture a Claude project; return the file where its CLI records input and signals."""
+    import agent_session.lifecycle as lifecycle
+    import agent_session.providers as providers
+    from agent_session_fake_provider import FakeClaudeProvider
+
+    config = json.loads(env.config.read_text())
+    config[str(env.base)]["provider"] = "claude"
+    env.config.write_text(json.dumps(config))
+    monkeypatch.setattr(lifecycle, "get_provider", lambda name: FakeClaudeProvider())
+    monkeypatch.setattr(providers, "get_provider", lambda name: FakeClaudeProvider())
+    return env.base / "agent" / "fixture-cli.jsonl"
+
+
+def recorded(path):
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def test_claude_stop_signals_its_cli_and_types_nothing_in_the_pane(session_env, monkeypatch):
+    env = session_env
+    record = claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    result = env.manager().control("stop", job=worker["job_id"])
+    assert result["stopped"] is True and result["released"] is False
+    assert recorded(record) == [{"signal": "SIGTERM"}]
+    assert "/exit" not in env.tmux.capture_pane(worker["pane_id"])
+
+
+def test_claude_stop_does_not_signal_a_cli_whose_birth_differs(session_env, monkeypatch):
+    env = session_env
+    record = claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    env.tmux.write_meta(worker["window_id"], {"cli_birth": "linux:another-boot:1"})
+    with pytest.raises(SessionError) as error:
+        env.manager(timeout=5).control("stop", job=worker["job_id"])
+    assert error.value.code == "target_changed"
+    # The CLI that the run recorded is not confirmed alive, so stop leaves its block for the operator.
+    assert error.value.details == {"stopping_restored": False, "stopping_kept": "cli_unconfirmed"}
+    assert env.tmux.get_current("fixture", "seat-0")["stopping"] is True
+    assert recorded(record) == []
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
+
+
 @pytest.mark.parametrize("attempted", [True, None])
 def test_unbound_attempted_or_unknown_launch_cannot_be_stopped_as_a_placeholder(session_env, monkeypatch, attempted):
     import agent_session.git_ops as git_ops
