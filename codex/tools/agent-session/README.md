@@ -91,9 +91,11 @@ Target은 `leader` 또는 현재 배정된 CR ID입니다.
 환경 표의 Python을 PY로 지정한 뒤 원본 repo에서 focused 검사를 실행합니다.
 
 ```sh
-"$PY" -m pytest -q codex/tools/agent-session/tests
+"$PY" -m pytest -q -n 8 codex/tools/agent-session/tests
 ```
 
+테스트는 서로 독립이므로 `-n 8`로 병렬 실행합니다. 직렬 실행은 `-n 0`입니다. Fixture는 git 저장소를
+pytest 프로세스(xdist worker)마다 한 번 만들고, 테스트마다 그 복사본을 씁니다.
 Machine load가 높으면 `AGENT_SESSION_TEST_TIMEOUT`(초, 기본 15)으로 fixture의 명령당 대기 한도를
 늘립니다. `codex/tools/conftest.py`는 `--basetemp`가 없을 때 실행마다 `TMPDIR` 아래 전용 임시
 디렉터리를 쓰고, 통과하면 지웁니다. 실패하면 조사를 위해 남깁니다.

@@ -47,6 +47,54 @@ def stop_test_server(socket_name):
     Path(path).unlink(missing_ok=True)
 
 
+def build_repositories(layout):
+    """Create the bare remote, the seed clone, the base and the seat clones under ``layout.root``.
+
+    Return the hash of the seed commit, the main every clone starts at. ``--template=`` leaves out
+    Git's sample hooks, which no test uses, so the template has a third of the files to copy.
+    """
+    layout.remote.mkdir()
+    git(layout.remote, "init", "--bare", "--template=", "--initial-branch=main")
+    layout.seed.mkdir()
+    git(layout.seed, "init", "--template=", "--initial-branch=main")
+    git(layout.seed, "config", "user.name", "Fixture")
+    git(layout.seed, "config", "user.email", "fixture@example.invalid")
+    (layout.seed / "server.py").write_text("VALUE = 1\n")
+    (layout.seed / ".gitignore").write_text("/agent/\n")
+    git(layout.seed, "add", ".")
+    git(layout.seed, "commit", "-m", "Seed fixture main")
+    git(layout.seed, "remote", "add", "origin", str(layout.remote))
+    git(layout.seed, "push", "-u", "origin", "main")
+    for target in [layout.base, *layout.seats]:
+        git(layout.root, "clone", "--template=", str(layout.remote), str(target))
+        git(target, "config", "user.name", "Fixture")
+        git(target, "config", "user.email", "fixture@example.invalid")
+    return git(layout.seed, "rev-parse", "HEAD")
+
+
+class GitTemplate:
+    """The fixture's Git repositories, built once and copied for each test.
+
+    The copy keeps every test's remote, seed, base and seats private; the template itself is never
+    handed to a test. Only the remote URL of the seed and the clones names a path, so the copy
+    rewrites it to its own ``origin.git``.
+    """
+
+    def __init__(self, directory):
+        self.layout = Environment(directory)
+        self.initial_hash = build_repositories(self.layout)
+
+    def copy_to(self, env):
+        for name in ("remote", "seed", "base"):
+            shutil.copytree(getattr(self.layout, name), getattr(env, name), symlinks=True)
+        for source, target in zip(self.layout.seats, env.seats):
+            shutil.copytree(source, target, symlinks=True)
+        for source, target in zip([self.layout.seed, self.layout.base, *self.layout.seats],
+                                  [env.seed, env.base, *env.seats]):
+            git(target, "remote", "set-url", "origin", str(env.remote))
+        return self.initial_hash
+
+
 class Environment:
     def __init__(self, directory):
         self.root = directory
@@ -57,24 +105,15 @@ class Environment:
         self.config = directory / "project.json"
         self.socket_name = "agent-lifecycle-test-" + uuid.uuid4().hex[:10]
 
-    def setup(self):
-        self.remote.mkdir()
-        git(self.remote, "init", "--bare", "--initial-branch=main")
-        self.seed.mkdir()
-        git(self.seed, "init", "--initial-branch=main")
-        git(self.seed, "config", "user.name", "Fixture")
-        git(self.seed, "config", "user.email", "fixture@example.invalid")
-        (self.seed / "server.py").write_text("VALUE = 1\n")
-        (self.seed / ".gitignore").write_text("/agent/\n")
-        git(self.seed, "add", ".")
-        git(self.seed, "commit", "-m", "Seed fixture main")
-        git(self.seed, "remote", "add", "origin", str(self.remote))
-        git(self.seed, "push", "-u", "origin", "main")
-        for target in [self.base, *self.seats]:
-            git(self.root, "clone", str(self.remote), str(target))
-            git(target, "config", "user.name", "Fixture")
-            git(target, "config", "user.email", "fixture@example.invalid")
-        self.initial_hash = git(self.seed, "rev-parse", "HEAD")
+    def setup(self, template=None):
+        """Lay out the Git repositories and the tmux harness.
+
+        With a ``GitTemplate`` the repositories are copied from it instead of being built again.
+        """
+        if template is None:
+            self.initial_hash = build_repositories(self)
+        else:
+            self.initial_hash = template.copy_to(self)
         self.config.write_text(json.dumps({str(self.base): {"project": "fixture", "provider": "codex",
                                                           "seats": [str(path) for path in self.seats],
                                                           "path_cr": "agent/cr", "path_decide": "agent/decide"}}))
@@ -162,8 +201,19 @@ class Environment:
         return submitted
 
 
+_template = None
+
+
+def shared_template(tmp_path_factory):
+    """The Git template of this pytest process, built on first use (once per xdist worker)."""
+    global _template
+    if _template is None:
+        _template = GitTemplate(tmp_path_factory.mktemp("git-template"))
+    return _template
+
+
 @pytest.fixture
-def session_env(tmp_path, monkeypatch):
+def session_env(tmp_path, tmp_path_factory, monkeypatch):
     if not shutil.which("tmux") or not shutil.which("git"):
         pytest.skip("tmux and Git are required")
     home = tmp_path / "home"
@@ -178,6 +228,6 @@ def session_env(tmp_path, monkeypatch):
     import agent_session.providers as providers
     monkeypatch.setattr(lifecycle, "get_provider", lambda name: FakeProvider())
     monkeypatch.setattr(providers, "get_provider", lambda name: FakeProvider())
-    fixture = Environment(tmp_path).setup()
+    fixture = Environment(tmp_path).setup(shared_template(tmp_path_factory))
     yield fixture
     stop_test_server(fixture.socket_name)
