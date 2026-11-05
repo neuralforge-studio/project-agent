@@ -180,3 +180,21 @@ def test_rooms_sit_in_two_columns_and_seats_in_rows_of_four(browser, tmp_path, m
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_the_board_is_titled_and_room_heads_carry_no_leader_or_seat_text(browser, tmp_path, monkeypatch):
+    # BOARD-003 (plan 4.1): the title is "노냐?" and the floor plan, not the head, shows Leader state and seats.
+    board = Board(tmp_path)
+    project(board, "alpha", "D-20261105-01")
+    httpd, _ = serve(board, monkeypatch, tmp_path)
+    try:
+        page = browser.new_page()
+        page.goto(f"http://127.0.0.1:{httpd.server_address[1]}/")
+        page.wait_for_selector('article.room[aria-label="alpha"] .room-head h3')
+        assert page.title() == "노냐?" and page.locator("h1").inner_text() == "노냐?"
+        head = page.locator('article.room[aria-label="alpha"] .room-head')
+        assert head.locator(".status").count() == 0
+        assert "Leader" not in head.inner_text() and "seat" not in head.inner_text()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
