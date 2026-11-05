@@ -99,10 +99,31 @@ def _session(value, provider, leader=False):
     return reviewing is None or (isinstance(reviewing, str) and bool(reviewing.strip()) and reviewing != "leader")
 
 
+def _unassigned(row):
+    return row == {"job_id": None, "git_hash": None, "session": None}
+
+
+def _fit_seats(project, value):
+    """Fit the seat rows to the registry: add missing rows as unassigned, drop only unassigned extra rows."""
+    if not isinstance(value, dict) or "leader" not in value:
+        raise SessionError("state_invalid", "The state root or leader connection does not match the registry.")
+    count = len(value) - 1
+    if set(value) != {"leader", *(str(n) for n in range(count))}:
+        raise SessionError("state_invalid", "The state seat keys must be consecutive numbers from 0.")
+    wanted = len(project.seats)
+    for n in range(wanted, count):
+        if not _unassigned(value[str(n)]):
+            raise SessionError("state_invalid", "A seat removed from the registry is still assigned.",
+                               details={"seat": n})
+    return {"leader": value["leader"],
+            **{str(n): value[str(n)] if n < count else {"job_id": None, "git_hash": None, "session": None}
+               for n in range(wanted)}}
+
+
 def validate_state(project, value):
-    expected = {"leader", *(str(n) for n in range(len(project.seats)))}
-    if (not isinstance(value, dict) or set(value) != expected
-            or not _session(value.get("leader"), project.provider, leader=True)):
+    """Return the state fitted to the registered seat count; the input is not changed."""
+    value = _fit_seats(project, value)
+    if not _session(value["leader"], project.provider, leader=True):
         raise SessionError("state_invalid", "The state root or leader connection does not match the registry.")
     jobs = set()
     for n in range(len(project.seats)):
@@ -174,7 +195,7 @@ class StateStore:
             changed = mutator(value)
             if changed is not None:
                 value = changed
-            validate_state(self.project, value)
+            value = validate_state(self.project, value)
             temporary = None
             try:
                 fd, temporary = tempfile.mkstemp(prefix=".state.", suffix=".tmp", dir=self.path.parent)
