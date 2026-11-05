@@ -50,6 +50,22 @@ def state_of(path: Path, root: Path) -> str | None:
     return first if first in STATES else None
 
 
+def outside_fence(lines: list[str]):
+    """Yield (index, line) of the lines outside code fences; the fence lines are skipped.
+    The Markdown section boundary: every reader and writer of CR sections uses it."""
+    in_fence = False
+    for n, line in enumerate(lines):
+        if line.startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence:
+            yield n, line
+
+
+def section_heads(lines: list[str]) -> list[tuple[int, str]]:
+    """(index, name) of each '## <name>' section heading outside code fences."""
+    return [(n, m.group(1)) for n, line in outside_fence(lines) if (m := SECTION_RE.match(line))]
+
+
 def parse(path: Path, state: str) -> Cr:
     return parse_text(path.read_text(encoding="utf-8"), path, state)
 
@@ -57,14 +73,8 @@ def parse(path: Path, state: str) -> Cr:
 def parse_text(text: str, path: Path, state: str) -> Cr:
     """Parse CR text as if it were the file `path` in `state` (used before a move)."""
     cr = Cr(path=path, state=state)
-    in_fence = False
     in_header = False
-    for line in text.splitlines():
-        if line.startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
+    for _, line in outside_fence(text.splitlines()):
         if cr.title is None:
             m = TITLE_RE.match(line)
             if m:

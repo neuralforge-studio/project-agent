@@ -181,6 +181,58 @@ def test_disposition_goes_before_implementation_in_a_cr(tmp_path):
     assert CR.fmt.check(CR.fmt.parse(moved, "done")) == []
 
 
+FENCED_DISPOSITION = "Markdown example:\n```markdown\n## Disposition\n- example\n```\n"
+
+
+def test_disposition_in_a_code_fence_is_not_the_section(tmp_path):
+    root = tmp_path / "cr"
+    path = root / "open" / "TOOL-001-t.md"
+    path.parent.mkdir(parents=True)
+    text = cr_text("TOOL-001").replace("## Symptom\ns\n", "## Symptom\n" + FENCED_DISPOSITION)
+    path.write_text(text + "\n## Disposition\n- previous disposition\n")
+    moved = store.move_locked(CR, root, "TOOL-001", "done", outcome="waived", by="review-user",
+                              note="review-decision-token", today=dt.date(2026, 11, 5))
+    out = moved.read_text()
+    assert FENCED_DISPOSITION in out
+    assert out.rstrip().endswith("- previous disposition\n- 2026-11-05 review-user: open -> done, "
+                                 "Outcome waived. review-decision-token")
+    assert out.count("review-decision-token") == 1
+    assert out.index("review-decision-token") > out.rindex("\n## Disposition\n")
+    assert CR.fmt.check(CR.fmt.parse(moved, "done")) == []
+
+
+def test_fenced_example_only_gets_a_new_disposition_section_in_order(tmp_path):
+    root = tmp_path / "cr"
+    path = root / "todo" / "TOOL-001-t.md"
+    path.parent.mkdir(parents=True)
+    text = cr_text("TOOL-001").replace("## Symptom\ns\n", "## Symptom\n" + FENCED_DISPOSITION)
+    path.write_text(text + "\n## Implementation\ni\n\n## Verification\nv\n\n## Result\nr\n")
+    moved = store.move(CR, root, "TOOL-001", "done", outcome="fixed", by="owner", note="abc123",
+                       today=dt.date(2026, 11, 5))
+    out = moved.read_text()
+    assert FENCED_DISPOSITION in out
+    assert out.count("\n## Disposition\n") == 1 + 1      # the example and the new section
+    real = out.rindex("\n## Disposition\n")
+    assert out.index("## Contract") < real < out.index("## Implementation")
+    assert out.index("abc123") > real
+    assert CR.fmt.check(CR.fmt.parse(moved, "done")) == []
+
+
+def test_decision_disposition_in_a_code_fence_is_not_the_section(tmp_path):
+    root = tmp_path / "decide"
+    path = store.new_decide(root, decision_text, dt.date(2026, 11, 4))
+    text = path.read_text().replace("## Background\nb\n", "## Background\nb\n" + FENCED_DISPOSITION)
+    path.write_text(text + "\n## Disposition\n- previous disposition\n")
+    done = store.move(DECIDE, root, "D-20261104-01", "done", outcome="withdrawn", by="user",
+                      note="decision-token", today=dt.date(2026, 11, 5))
+    out = done.read_text()
+    assert FENCED_DISPOSITION in out
+    assert out.rstrip().endswith("- previous disposition\n- 2026-11-05 user: open -> done, "
+                                 "Outcome withdrawn. decision-token")
+    assert out.index("decision-token") > out.rindex("\n## Disposition\n")
+    assert DECIDE.fmt.check(DECIDE.fmt.parse(done, "done")) == []
+
+
 def test_tracked_file_moves_with_git_mv(tmp_path):
     repo = tmp_path / "repo"
     git_init(repo)
