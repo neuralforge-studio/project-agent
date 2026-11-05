@@ -95,6 +95,24 @@ def uncommitted(root: Path) -> set[Path]:
     return paths
 
 
+def history_high(root: Path, area: str) -> int:
+    """Highest <AREA>-<NNN> number named by any state-directory file in the git history of the root,
+    removed files included (a number is not reused). Other directories are not read. 0 outside git."""
+    if not in_git(root):
+        return 0
+    out = subprocess.run(["git", "-C", str(root), "log", "--all", "--name-only", "--format=", "-z",
+                          "--relative", "--", "."], capture_output=True)
+    pat = re.compile(rf"^{re.escape(area)}-(\d+)\b")
+    high = 0
+    for name in out.stdout.decode("utf-8", "surrogateescape").split("\0"):
+        parts = Path(name.strip("\n")).parts
+        if len(parts) > 1 and parts[0] in CR.states:
+            m = pat.match(parts[-1])
+            if m:
+                high = max(high, int(m.group(1)))
+    return high
+
+
 def check_targets(kind: Kind, root: Path) -> list[tuple[str, Path]]:
     """Every file in a non-terminal state, and the terminal files that are not committed history.
     Outside a git work tree every file is a target."""
@@ -120,7 +138,7 @@ def new_cr(root: Path, area: str, title: str, text_of) -> Path:
     """Create open/<AREA>-<NNN>-<slug>.md with the next free number. text_of(id) gives the text."""
     fmt = CR.fmt
     with root_lock(root):
-        item_id = fmt.next_id(root, area)
+        item_id = fmt.next_id(root, area, history_high(root, area))
         _pause("new")
         path = root / "open" / f"{item_id}-{fmt.slug(title)}.md"
         _create(path, text_of(item_id))

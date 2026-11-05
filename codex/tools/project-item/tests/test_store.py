@@ -247,6 +247,45 @@ def test_tracked_file_moves_with_git_mv(tmp_path):
     assert git(repo, "log", "--oneline").count("\n") == 1
 
 
+def _commit_then_remove(repo, rel):
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("x\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "add")
+    git(repo, "rm", "-q", rel)
+    git(repo, "commit", "-q", "-m", "remove")
+    path.parent.mkdir(parents=True, exist_ok=True)    # git rm drops the emptied directories
+    (repo / "cr").mkdir(exist_ok=True)
+
+
+def test_number_of_a_removed_file_is_not_reused(tmp_path):
+    repo = tmp_path / "repo"
+    git_init(repo)
+    _commit_then_remove(repo, "cr/done/TOOL-003-a.md")
+    assert new_cr(repo / "cr", "t").name.startswith("TOOL-004-")
+
+
+def test_removed_numbers_of_other_areas_and_new_areas_do_not_count(tmp_path):
+    repo = tmp_path / "repo"
+    git_init(repo)
+    _commit_then_remove(repo, "cr/done/AXI-002-a.md")
+    assert new_cr(repo / "cr", "t").name.startswith("TOOL-001-")
+
+
+def test_outside_git_only_existing_files_count(tmp_path):
+    root = tmp_path / "cr"
+    assert new_cr(root, "t").name.startswith("TOOL-001-")
+
+
+def test_history_of_other_directories_does_not_count(tmp_path):
+    repo = tmp_path / "repo"
+    git_init(repo)
+    _commit_then_remove(repo, "other/done/TOOL-009-a.md")
+    _commit_then_remove(repo, "cr/notes/TOOL-008-a.md")
+    assert new_cr(repo / "cr", "t").name.startswith("TOOL-001-")
+
+
 def test_duplicate_ids_across_states(tmp_path):
     root = tmp_path / "cr"
     for state, name in (("open", "TOOL-001-a.md"), ("done", "TOOL-001-b.md"), ("open", "TOOL-002-c.md")):
