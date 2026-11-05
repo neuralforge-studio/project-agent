@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import time
 import uuid
 
@@ -380,5 +381,23 @@ class ClaudeProvider:
                 "pending_disposition": "unknown", "runtime_status": status}
 
     def request_stop(self, session, context, meta=None, timeout=30):
-        # The controller waits for idle and sends /exit to its owned pane.
+        # The controller waits for idle, then request_exit asks the CLI to end.
         return self.observe(session, context, meta, timeout)
+
+    def request_exit(self, meta, tmux):
+        """Send SIGTERM to the run's own idle CLI process; type nothing in its pane.
+
+        A person may be typing in the managed pane, so keys there could join their input.
+        Only the recorded PID with its recorded birth gets the signal, never its process group."""
+        pid, birth = meta.get("cli_pid"), meta.get("cli_birth")
+        if not pid or not birth:
+            raise SessionError("target_changed", "The managed Claude CLI has no recorded process identity.")
+        pid = int(pid)
+        if not process.alive(pid):
+            return                         # it already ended; the stop observation confirms that
+        if process.birth(pid) != birth:
+            raise SessionError("target_changed", "The provider pane process identity changed.")
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass                           # it ended after the identity check

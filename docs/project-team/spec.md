@@ -689,10 +689,21 @@ Codex의 pending 입력은 개별 취소하고 active turn은 완료 또는 inte
 Claude는 turn hook·SessionEnd·실제 process 종료로 더 이상 작업하지 않음을 확인합니다.
 Claude에서 개별 메시지의 처리 여부를 조회할 수 없으면 그 결과는 unknown으로 남깁니다.
 CLI 종료로 폐기된 입력을 처리 완료로 보고하거나 자동 재전송하지 않습니다.
-해당 CLI의 idle 또는 turn terminal을 확인한 뒤 관리 pane에 /exit와 Enter를 전달합니다.
-키 입력은 이 종료 요청에만 사용하며 JOB 메시지·dialog 승인에 사용하지 않습니다.
-현재 turn을 확인하지 못하면 임의 키를 반복하지 않고 timeout 오류를 반환합니다.
+공통 코드는 provider가 해당 CLI의 idle 또는 turn terminal을 확인한 뒤 종료 요청을 한 번 보냅니다.
+종료 요청 방식은 provider가 정합니다.
+Claude는 실행 근거의 cli_pid가 기록한 cli_birth와 같은 process일 때만 그 PID 하나에 SIGTERM을 보냅니다.
+Birth가 다르거나 확인할 수 없으면 Claude는 신호를 보내지 않고 오류를 반환합니다.
+Claude는 process group에 신호를 보내지 않습니다.
+Claude 관리 pane에는 어떤 키도 입력하지 않습니다. 사용자가 같은 입력란에 입력하는 중일 수 있습니다.
+Codex는 SIGTERM 종료 동작을 확인하기 전까지 관리 pane에 /exit와 Enter를 전달합니다.
+이 키 입력은 Codex 종료 요청에만 사용하며 JOB 메시지·dialog 승인에 사용하지 않습니다.
+현재 turn을 확인하지 못하면 종료 요청을 반복하지 않고 timeout 오류를 반환합니다.
+실제 종료는 PID·process group·pane·provider 관찰로 확인합니다. Hook만으로 종료 완료를 판정하지 않습니다.
 실제 종료를 확인한 뒤 결과를 반환합니다.
+Stop·restart가 실제 종료를 확인하기 전에 실패할 수 있습니다. Timeout도 이 실패에 포함합니다.
+이때 공통 코드는 같은 cli_birth의 CLI가 살아 있음을 확인한 경우에만 stopping을 false로 되돌립니다.
+결과는 원래 오류 code와 exit를 유지하고 details의 `stopping_restored`에 복원 여부를 적습니다.
+생존을 확인하지 못하면 stopping을 유지하고 details의 `stopping_kept`에 이유를 적습니다. 이 unknown은 자동 처리하지 않습니다.
 Worker는 아래 반납 검사를 추가로 확인합니다.
 
 - CR이 in-progress에 없습니다. Leader가 done·todo·open·deferred로 먼저 옮깁니다.
@@ -784,7 +795,7 @@ tmux -S TMUX_SOCKET set-option -w -t @WINDOW @agent_session_control_pending fals
 파일 값은 `{"ok":false,"data":{"completed":true},"error":{"code":"controller_failed","message":"Verified controller exit.","details":{}}}` 형식입니다.
 첫 번째 명령은 최신 turn이 없는 대화에 한해 latest_turn_id=null을 사용합니다.
 
-종료 확인 오류 뒤 입력란에 원래 /exit가 남으면 전체 stop을 반복하지 않습니다.
+Codex의 종료 확인 오류 뒤 입력란에 원래 /exit가 남으면 전체 stop을 반복하지 않습니다.
 운영자는 같은 run·pane·idle과 원래 입력을 확인한 뒤 Enter 한 번으로 그 요청만 마칩니다.
 그 뒤 기존 제어 결과와 실제 종료를 확인합니다.
 입력이나 실제 실행을 확인하지 못하면 추가 키를 보내지 않습니다.

@@ -342,3 +342,7 @@ class CodexProvider:
                     if turn_id in current["active_turn_ids"]:
                         raise
             return self._observe(rpc, session, context, meta)
+
+    def request_exit(self, meta, tmux):
+        # The idle TUI gets /exit and Enter in its owned pane until its SIGTERM exit is verified.
+        tmux.send_exit(meta["pane_id"])

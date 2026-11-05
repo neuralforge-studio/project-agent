@@ -712,14 +712,18 @@ class Manager:
                 self._record_background_clear(meta, observed)
                 exit_sent = False
             self.tmux.write_meta(meta["window_id"], {"stopping": True})
-            while True:
-                observed = self._observe(meta)
-                if observed["stopped"]:
-                    break
-                if observed.get("idle") and not exit_sent:
-                    self.tmux.send_exit(meta["pane_id"])
-                    exit_sent = True
-                time.sleep(min(0.1, self.remaining()))
+            try:
+                while True:
+                    observed = self._observe(meta)
+                    if observed["stopped"]:
+                        break
+                    if observed.get("idle") and not exit_sent:
+                        self.provider.request_exit(meta, self.tmux)
+                        exit_sent = True
+                    time.sleep(min(0.1, self.remaining()))
+            except BaseException as error:
+                self._restore_stopping(meta, error)
+                raise
             self._retire_name(meta)
             if operation == "restart":
                 current_job = jobs.lookup(self.project, meta["job_id"], ("in-progress",)) if meta.get("job_id") else None
@@ -761,6 +765,20 @@ class Manager:
             result = self._result(meta, stopped=True, released=bool(check.get("allowed")),
                                   reasons=check.get("reasons", []))
             return self._finish_control(result, meta, defer_cleanup, pointer_kept)
+
+    def _restore_stopping(self, meta, error):
+        """After a control that failed before the end, unblock the run only while its same CLI lives."""
+        pid, birth = meta.get("cli_pid"), meta.get("cli_birth")
+        try:
+            if pid and birth and process.alive(int(pid), birth):
+                self.tmux.write_meta(meta["window_id"], {"stopping": False})
+                note = {"stopping_restored": True}
+            else:
+                note = {"stopping_restored": False, "stopping_kept": "cli_unconfirmed"}
+        except SessionError as failure:
+            note = {"stopping_restored": False, "stopping_kept": failure.code}
+        if isinstance(error, SessionError):
+            error.details = {**error.details, **note}
 
     def _finish_control(self, result, meta, defer_cleanup, kept=()):
         if defer_cleanup:
