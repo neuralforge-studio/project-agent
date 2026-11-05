@@ -55,30 +55,32 @@ h1, h2, h3, p { margin: 0; }
 .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
 
 /* ---------- room ---------- */
-.rooms { display: flex; flex-direction: column; gap: 20px; }
+.rooms { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+/* 520px 평면도가 방마다 들어가는 너비(1180px)부터 2열입니다. */
+@media (min-width: 1180px) { .rooms { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .room { background: var(--surface); border: 1px solid #DCE0E5; border-radius: 14px; }
 .room-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 16px 20px; }
 .room-head h3 { font-size: 17px; font-weight: 600; }
 .room-head .path { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 .room-head .provider { font-family: var(--mono); font-size: 11px; background: #EEF0F3; border-radius: 999px; padding: 2px 8px; }
 .room-head .status { margin-left: auto; font-size: 13px; color: var(--muted); }
-.floor-scroll { overflow-x: auto; padding: 0 20px 20px; }
-.floor { position: relative; min-width: 760px; height: 176px; border: 1.5px solid var(--wall); border-radius: 10px; background: var(--floor); }
+.floor-scroll { padding: 0 20px 20px; }
+.floor { position: relative; width: 520px; margin: 0 auto; height: 176px; border: 1.5px solid var(--wall); border-radius: 10px; background: var(--floor); }
 
 /* whiteboard: Leader 뒤 벽 */
-.whiteboard { position: absolute; left: 12px; top: 12px; width: 120px; height: 148px; display: flex; flex-direction: column; gap: 6px; }
+.whiteboard { position: absolute; left: 12px; top: 12px; width: 84px; height: 148px; display: flex; flex-direction: column; gap: 6px; }
 .wb-decide, .wb-cr { border: 1px solid var(--line-soft); background: var(--surface); border-radius: 8px; color: var(--muted); cursor: pointer; text-align: left; }
-.wb-decide { height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-size: 13px; font-weight: 600; }
+.wb-decide { height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; font-size: 13px; font-weight: 600; }
 .wb-decide .n { font-family: var(--mono); font-size: 18px; font-weight: 500; color: var(--ink); }
 .wb-decide.attn { border-color: var(--decide-line); background: var(--decide-bg); color: var(--decide); }
 .wb-decide.attn .n { color: var(--decide); }
-.wb-cr { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 6px 12px; font-size: 12px; }
+.wb-cr { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 6px 10px; font-size: 12px; }
 .wb-cr span { display: flex; justify-content: space-between; width: 100%; }
 .wb-cr b { font-family: var(--mono); font-weight: 400; color: var(--ink); }
 .wb-decide[aria-expanded="true"], .wb-cr[aria-expanded="true"] { outline: 2px solid var(--ink); outline-offset: 1px; }
 
 /* station: desk + worker를 묶은 선택 영역 */
-.station { position: absolute; width: 92px; height: 92px; padding: 0; border: 1.5px solid transparent; border-radius: 10px; background: transparent; cursor: pointer; }
+.station { position: absolute; width: 76px; height: 92px; padding: 0; border: 1.5px solid transparent; border-radius: 10px; background: transparent; cursor: pointer; }
 .station:hover { background: var(--hover-bg); }
 .station[aria-expanded="true"], .station.selected { background: var(--select-bg); border-color: var(--select-line); }
 .station:focus-visible { outline: 2px solid var(--work); outline-offset: 2px; }
@@ -113,7 +115,9 @@ h1, h2, h3, p { margin: 0; }
 .leader.absent { border: 1.5px dashed var(--ghost); background: transparent; }
 .leader.absent::after { display: none; }
 
-.label { position: absolute; width: 112px; text-align: center; font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.label { position: absolute; width: 76px; text-align: center; font-family: var(--mono); font-size: 11px; line-height: 1.3; color: var(--muted); }
+.label.lead { width: 100px; }
+.label .sub { display: block; }
 
 /* drawer: 펼치면 아래 project가 밀려납니다 */
 .drawer-wrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .28s ease; }
@@ -216,25 +220,25 @@ figcaption span { font-family: var(--mono); font-size: 11.5px; color: var(--mute
                         </button>
                     </div>
 
-                    <div class="desk lead" style="left: 176px; top: 56px" aria-hidden="true"><span class="time"><span>3d</span><span>6h</span><span>20m</span></span></div>
-                    <span class="leader absent" style="left: 142px; top: 74px" aria-hidden="true"></span>
-                    <span class="label" style="left: 132px; top: 128px">leader → seat1</span>
+                    <div class="desk lead" style="left: 134px; top: 56px" aria-hidden="true"><span class="time"><span>3d</span><span>6h</span><span>20m</span></span></div>
+                    <span class="leader absent" style="left: 102px; top: 74px" aria-hidden="true"></span>
+                    <span class="label lead" style="left: 98px; top: 128px">leader → seat1</span>
 
-                    <button type="button" class="station" style="left: 290px; top: 26px" data-open-key="w0" aria-expanded="false" aria-label="seat0, TOOL-012 작업 중, session 2h 14m"></button>
-                    <div class="desk on" style="left: 300px; top: 36px" aria-hidden="true"><span class="id">TOOL-012</span><span class="time">2h 14m</span><span class="typing"><i></i><i></i><i></i></span></div>
-                    <span class="worker working" style="left: 324px; top: 84px" aria-hidden="true"></span>
-                    <span class="label" style="left: 280px; top: 122px">seat0</span>
+                    <button type="button" class="station" style="left: 198px; top: 26px" data-open-key="w0" aria-expanded="false" aria-label="seat0, TOOL-012 작업 중, session 2h 14m"></button>
+                    <div class="desk on" style="left: 200px; top: 36px" aria-hidden="true"><span class="id">TOOL-012</span><span class="time">2h 14m</span><span class="typing"><i></i><i></i><i></i></span></div>
+                    <span class="worker working" style="left: 224px; top: 84px" aria-hidden="true"></span>
+                    <span class="label" style="left: 198px; top: 122px">seat0</span>
 
-                    <button type="button" class="station" style="left: 422px; top: 26px" data-open-key="w1" aria-expanded="false" aria-label="seat1, TOOL-013 Leader review 중, session 5h 40m"></button>
-                    <div class="desk" style="left: 432px; top: 36px" aria-hidden="true"><span class="id">TOOL-013</span><span class="time">5h 40m</span></div>
-                    <span class="worker review" style="left: 456px; top: 84px" aria-hidden="true"></span>
-                    <span class="leader working" style="left: 486px; top: 82px" aria-hidden="true"></span>
-                    <span class="label" style="left: 412px; top: 122px">seat1 · review 중</span>
+                    <button type="button" class="station" style="left: 276px; top: 26px" data-open-key="w1" aria-expanded="false" aria-label="seat1, TOOL-013 Leader review 중, session 5h 40m"></button>
+                    <div class="desk" style="left: 278px; top: 36px" aria-hidden="true"><span class="id">TOOL-013</span><span class="time">5h 40m</span></div>
+                    <span class="worker review" style="left: 302px; top: 84px" aria-hidden="true"></span>
+                    <span class="leader working" style="left: 328px; top: 82px" aria-hidden="true"></span>
+                    <span class="label" style="left: 276px; top: 122px">seat1 <span class="sub">review 중</span></span>
 
-                    <button type="button" class="station" style="left: 554px; top: 26px" data-open-key="w2" aria-expanded="false" aria-label="seat2, TOOL-017 review 대기, session 1d 2h 5m"></button>
-                    <div class="desk" style="left: 564px; top: 36px" aria-hidden="true"><span class="id">TOOL-017</span><span class="time">1d 2h 5m</span></div>
-                    <span class="worker review" style="left: 588px; top: 84px" aria-hidden="true"></span>
-                    <span class="label" style="left: 544px; top: 122px">seat2 · review 대기</span>
+                    <button type="button" class="station" style="left: 354px; top: 26px" data-open-key="w2" aria-expanded="false" aria-label="seat2, TOOL-017 review 대기, session 1d 2h 5m"></button>
+                    <div class="desk" style="left: 356px; top: 36px" aria-hidden="true"><span class="id">TOOL-017</span><span class="time">1d 2h 5m</span></div>
+                    <span class="worker review" style="left: 380px; top: 84px" aria-hidden="true"></span>
+                    <span class="label" style="left: 354px; top: 122px">seat2 <span class="sub">review 대기</span></span>
                 </div>
             </div>
 
@@ -349,19 +353,19 @@ figcaption span { font-family: var(--mono); font-size: 11.5px; color: var(--mute
                         </button>
                     </div>
 
-                    <div class="desk lead" style="left: 176px; top: 56px" aria-hidden="true"><span class="time"><span>4h</span><span>32m</span></span></div>
-                    <span class="leader working" style="left: 142px; top: 74px" aria-hidden="true"></span>
-                    <span class="label" style="left: 132px; top: 128px">leader</span>
+                    <div class="desk lead" style="left: 134px; top: 56px" aria-hidden="true"><span class="time"><span>4h</span><span>32m</span></span></div>
+                    <span class="leader working" style="left: 102px; top: 74px" aria-hidden="true"></span>
+                    <span class="label lead" style="left: 98px; top: 128px">leader</span>
 
-                    <button type="button" class="station" style="left: 290px; top: 26px" data-open-key="w0" aria-expanded="false" aria-label="seat0, WEB-031 작업 중, session 48m"></button>
-                    <div class="desk on" style="left: 300px; top: 36px" aria-hidden="true"><span class="id">WEB-031</span><span class="time">48m</span><span class="typing"><i></i><i></i><i></i></span></div>
-                    <span class="worker working" style="left: 324px; top: 84px" aria-hidden="true"></span>
-                    <span class="label" style="left: 280px; top: 122px">seat0</span>
+                    <button type="button" class="station" style="left: 198px; top: 26px" data-open-key="w0" aria-expanded="false" aria-label="seat0, WEB-031 작업 중, session 48m"></button>
+                    <div class="desk on" style="left: 200px; top: 36px" aria-hidden="true"><span class="id">WEB-031</span><span class="time">48m</span><span class="typing"><i></i><i></i><i></i></span></div>
+                    <span class="worker working" style="left: 224px; top: 84px" aria-hidden="true"></span>
+                    <span class="label" style="left: 198px; top: 122px">seat0</span>
 
-                    <button type="button" class="station" style="left: 422px; top: 26px" data-open-key="w1" aria-expanded="false" aria-label="seat1, WEB-032 연결 중"></button>
-                    <div class="desk" style="left: 432px; top: 36px" aria-hidden="true"><span class="id">WEB-032</span></div>
-                    <span class="worker pending" style="left: 456px; top: 84px" aria-hidden="true"></span>
-                    <span class="label" style="left: 412px; top: 122px">seat1 · 연결 중</span>
+                    <button type="button" class="station" style="left: 276px; top: 26px" data-open-key="w1" aria-expanded="false" aria-label="seat1, WEB-032 연결 중"></button>
+                    <div class="desk" style="left: 278px; top: 36px" aria-hidden="true"><span class="id">WEB-032</span></div>
+                    <span class="worker pending" style="left: 302px; top: 84px" aria-hidden="true"></span>
+                    <span class="label" style="left: 276px; top: 122px">seat1 <span class="sub">연결 중</span></span>
                 </div>
             </div>
 
@@ -417,6 +421,105 @@ figcaption span { font-family: var(--mono); font-size: 11.5px; color: var(--mute
             </div>
         </article>
 
+
+        <!-- project C: seat 5개 = 2줄 -->
+        <article class="room" data-open="" aria-label="project C">
+            <div class="room-head">
+                <h3>[project C]</h3>
+                <span class="path">[base 경로]</span>
+                <span class="provider">codex</span>
+                <span class="status">Leader 작업 중 · seat 5</span>
+            </div>
+            <div class="floor-scroll">
+                <div class="floor" style="height: 306px">
+                    <div class="whiteboard">
+                        <button type="button" class="wb-decide" data-open-key="decide" aria-expanded="false"><span>결정</span><span class="n">0</span></button>
+                        <button type="button" class="wb-cr" data-open-key="cr" aria-expanded="false">
+                            <span>open<b>1</b></span><span>todo<b>0</b></span><span>진행<b>3</b></span>
+                        </button>
+                    </div>
+
+                    <div class="desk lead" style="left: 134px; top: 56px" aria-hidden="true"><span class="time"><span>1h</span><span>40m</span></span></div>
+                    <span class="leader working" style="left: 102px; top: 74px" aria-hidden="true"></span>
+                    <span class="label lead" style="left: 98px; top: 128px">leader</span>
+
+                    <button type="button" class="station" style="left: 198px; top: 26px" data-open-key="w0" aria-expanded="false" aria-label="seat0, WEB-041"></button>
+                    <div class="desk on" style="left: 200px; top: 36px" aria-hidden="true"><span class="id">WEB-041</span><span class="time">1h 05m</span><span class="typing"><i></i><i></i><i></i></span></div>
+                    <span class="worker working" style="left: 224px; top: 84px" aria-hidden="true"></span>
+                    <span class="label" style="left: 198px; top: 122px">seat0</span>
+                    <button type="button" class="station" style="left: 276px; top: 26px" data-open-key="w1" aria-expanded="false" aria-label="seat1, WEB-042"></button>
+                    <div class="desk" style="left: 278px; top: 36px" aria-hidden="true"><span class="id">WEB-042</span><span class="time">3h 12m</span></div>
+                    <span class="worker review" style="left: 302px; top: 84px" aria-hidden="true"></span>
+                    <span class="label" style="left: 276px; top: 122px">seat1 <span class="sub">review 대기</span></span>
+                    <button type="button" class="station" style="left: 354px; top: 26px" data-open-key="w2" aria-expanded="false" aria-label="seat2, WEB-043"></button>
+                    <div class="desk on" style="left: 356px; top: 36px" aria-hidden="true"><span class="id">WEB-043</span><span class="time">22m</span><span class="typing"><i></i><i></i><i></i></span></div>
+                    <span class="worker working" style="left: 380px; top: 84px" aria-hidden="true"></span>
+                    <span class="label" style="left: 354px; top: 122px">seat2</span>
+                    <div class="desk empty" style="left: 434px; top: 36px" aria-hidden="true"></div>
+                    <span class="label" style="left: 432px; top: 122px">seat3</span>
+                    <div class="desk empty" style="left: 200px; top: 166px" aria-hidden="true"></div>
+                    <span class="label" style="left: 198px; top: 252px">seat4</span>
+                </div>
+            </div>
+
+            <div class="drawer-wrap">
+                <div class="drawer">
+                    <div class="drawer-inner">
+                        <div data-panel="decide" hidden>
+                            <div class="drawer-head">
+                                <p class="muted" style="font-size: 14px">결정 대기 항목이 없습니다.</p>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                        </div>
+                        <div data-panel="cr" hidden>
+                            <div class="drawer-head" style="margin-bottom: 12px">
+                                <h4>CR · 4</h4>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                            <div class="cols">
+                                <div class="col"><p class="col-title">open · 1</p>
+                                    <div class="card"><span class="id">WEB-044</span><span class="t">[CR 제목]</span></div>
+                                </div>
+                                <div class="col"><p class="col-title">in-progress · 3</p>
+                                    <div class="card active"><span class="id">WEB-041 · seat0</span><span class="t">[CR 제목]</span></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div data-panel="w0" hidden>
+                            <div class="drawer-head" style="margin-bottom: 12px">
+                                <h4><span class="mono">seat0 · WEB-041</span> — [CR 제목]</h4>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                            <dl class="kv">
+                                <div class="card"><dt>상태</dt><dd>in-progress · 작업 중</dd></div>
+                                <div class="card"><dt>Result</dt><dd>제출 없음</dd></div>
+                            </dl>
+                        </div>
+                        <div data-panel="w1" hidden>
+                            <div class="drawer-head" style="margin-bottom: 12px">
+                                <h4><span class="mono">seat1 · WEB-042</span> — [CR 제목]</h4>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                            <dl class="kv">
+                                <div class="card"><dt>상태</dt><dd>in-progress · review 대기</dd></div>
+                                <div class="card"><dt>Result</dt><dd>제출 있음</dd></div>
+                            </dl>
+                        </div>
+                        <div data-panel="w2" hidden>
+                            <div class="drawer-head" style="margin-bottom: 12px">
+                                <h4><span class="mono">seat2 · WEB-043</span> — [CR 제목]</h4>
+                                <button type="button" class="btn" data-close>닫기</button>
+                            </div>
+                            <dl class="kv">
+                                <div class="card"><dt>상태</dt><dd>in-progress · 작업 중</dd></div>
+                                <div class="card"><dt>Result</dt><dd>제출 없음</dd></div>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </article>
+
     </div>
 </section>
 
@@ -427,7 +530,7 @@ figcaption span { font-family: var(--mono); font-size: 11.5px; color: var(--mute
         <p>각 상태가 어떤 데이터에서 나오는지 함께 적었습니다. 상태가 바뀌면 이동 animation 없이 바로 바뀝니다.</p>
     </div>
     <ul class="spec">
-        <li>Seat 72×44</li><li>Leader desk 48×64</li><li>선택 영역 92×92</li><li>Worker ⌀24</li><li>Leader ⌀28</li><li>선 1.5px</li><li>시간 9.5px</li>
+        <li>Seat 72×44</li><li>Leader desk 48×64</li><li>선택 영역 76×92</li><li>Worker ⌀24</li><li>Leader ⌀28</li><li>선 1.5px</li><li>시간 9.5px</li>
         <li>작업 #2563EB</li><li>결정 #B4410E</li><li>Leader #1D2330</li><li>선택 #EAF1FE</li>
     </ul>
 
@@ -478,7 +581,7 @@ figcaption span { font-family: var(--mono); font-size: 11.5px; color: var(--mute
                 </figure>
                 <figure>
                     <div class="stage"><div class="scene">
-                        <span class="station selected" style="left: 114px; top: 20px" aria-hidden="true"></span>
+                        <span class="station selected" style="left: 122px; top: 20px" aria-hidden="true"></span>
                         <div class="desk on" style="left: 124px; top: 30px"><span class="id">TOOL-012</span><span class="time">2h 14m</span><span class="typing"><i></i><i></i><i></i></span></div>
                         <span class="worker working" style="left: 148px; top: 78px"></span>
                     </div></div>
