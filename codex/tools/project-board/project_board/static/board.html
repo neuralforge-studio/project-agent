@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="board-token" content="__BOARD_TOKEN__">
-<title>Project Board</title>
+<title>노냐?</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans+KR:wght@400;500;600;700&amp;display=swap">
 <style>
@@ -67,8 +67,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .room-head h3 { font-size: 17px; font-weight: 600; }
 .room-head .path { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 .room-head .provider { font-family: var(--mono); font-size: 11px; background: #EEF0F3; border-radius: 999px; padding: 2px 8px; }
-.room-head .status { margin-left: auto; font-size: 13px; color: var(--muted); }
-.room-head .toggle { min-height: 32px; padding: 0 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface); font-size: 12.5px; cursor: pointer; }
+.room-head .toggle { margin-left: auto; min-height: 32px; padding: 0 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface); font-size: 12.5px; cursor: pointer; }
 .room-head .idle { font-size: 12px; color: var(--muted); border: 1px solid var(--line-soft); border-radius: 999px; padding: 2px 8px; }
 .room.collapsed .floor-scroll, .room.collapsed .drawer-wrap { display: none; }
 .room-errors { margin: 0 20px 16px; display: flex; flex-direction: column; gap: 4px; }
@@ -177,9 +176,6 @@ h1, h2, h3, h4, p { margin: 0; }
 .md th { background: #F6F7F9; color: var(--ink); }
 .md-label { font-size: 12px; font-weight: 600; color: var(--ink); }
 
-@media (max-width: 640px) {
-    .room-head .status { margin-left: 0; }
-}
 /* Motion shows the state, so it runs whatever the OS motion setting is (plan 4.5). */
 </style>
 </head>
@@ -187,7 +183,7 @@ h1, h2, h3, h4, p { margin: 0; }
 <div class="page">
     <header class="topbar">
         <div class="topbar-title">
-            <h1>Project Board</h1>
+            <h1>노냐?</h1>
             <p class="sync" id="sync" role="status">불러오는 중…</p>
         </div>
         <ul class="legend">
@@ -278,18 +274,11 @@ h1, h2, h3, h4, p { margin: 0; }
 
     // ------------------------------------------------------------ head
     function headHTML(p) {
-        var ls = leaderStatus(p), text;
-        if (ls === 'absent') text = 'Leader 없음';
-        else if (ls === 'stopped') text = 'Leader 멈춤';
-        else if (ls === 'unknown') text = 'Leader 확인 불가';
-        else if (p.leader.reviewing_seat != null) text = 'Leader review 중 · seat' + p.leader.reviewing_seat;
-        else text = 'Leader 작업 중';
         var fold = idle(p);
         return '<h3>' + esc(p.id) + '</h3>'
             + '<span class="path">' + esc(p.base_display) + '</span>'
             + '<span class="provider">' + esc(p.provider) + '</span>'
             + (fold ? '<span class="idle">할 일 없음</span>' : '')
-            + '<span class="status">' + esc(text) + ' · seat ' + p.seat_count + '</span>'
             + (fold ? '<button type="button" class="toggle" data-toggle aria-expanded="' + !!ui.expanded[p.id] + '">'
                       + (ui.expanded[p.id] ? '접기' : '펼치기') + '</button>' : '');
     }
