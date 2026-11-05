@@ -19,17 +19,7 @@ def isolated_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def no_legacy(tmp_path, monkeypatch):
-    """Point the legacy cr registry at an empty file."""
-    from project_item import registry
-    legacy = tmp_path / "programs.json"
-    legacy.write_text(json.dumps({"sessions_dir": str(tmp_path), "programs": {}}))
-    monkeypatch.setattr(registry, "LEGACY_PROGRAMS", legacy)
-    return legacy
-
-
-@pytest.fixture
-def project(tmp_path, no_legacy):
+def project(tmp_path):
     """A registered project 'demo' with cr/ and decide/ under its base, and a second one 'other'."""
     base = tmp_path / "demo.main"
     base.mkdir()

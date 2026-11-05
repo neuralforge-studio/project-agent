@@ -19,8 +19,7 @@ def _modules():
 
 
 def _session_error(error):
-    exit_code = 2 if error.code in ("item_path_unset", "item_path_duplicate", "item_not_found",
-                                    "project_not_found") else 3
+    exit_code = 2 if error.code in ("item_path_unset", "item_not_found", "project_not_found") else 3
     return SessionError(error.code, error.message, exit_code)
 
 
