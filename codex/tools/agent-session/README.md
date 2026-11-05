@@ -48,7 +48,7 @@ JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자�
 | 명령 | 예 |
 | --- | --- |
 | start | `agent-session start --job leader` 또는 `agent-session start --job TOOL-012` |
-| send | `agent-session send --job leader "제출 commit과 CR ID"` |
+| send | `agent-session send --job leader "제출 commit과 CR ID"`. 다른 project의 Leader에게는 `agent-session send --project <project> --job leader "..."` |
 | stop | `agent-session stop --job TOOL-012` |
 | restart | `agent-session restart --job TOOL-012` |
 | review | `agent-session review --job TOOL-012` 또는 `agent-session review --clear` |
