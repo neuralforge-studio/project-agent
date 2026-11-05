@@ -18,6 +18,7 @@ from .util import write_json
 
 SWEEP_SECONDS = 30                                 # after this, a cleanup leaves later windows to the next sweep
 DIALOG_SCREEN_SECONDS = 1                          # how often an unregistered start reads its pane for a dialog
+PARKED_ALIVE = "The parked JOB still has a run; stop it before starting the JOB again."
 
 
 def _bound(previous, session, leader=False):
@@ -443,23 +444,29 @@ class Manager:
         self._authorize("start", meta["target"])
         if meta.get("control_pending"):
             raise SessionError("control_busy", "This run has an accepted control request.", 4)
+        # A JOB parked in todo/ resumes only in a new run, so its live run must stop first.
+        parked = bool(meta.get("job_id")) and jobs.lookup(self.project, meta["job_id"])["state"] == "todo"
         if meta.get("registered"):
             observed = self._observe(meta)
             if not observed["stopped"]:
                 if meta.get("stopping"):
                     raise SessionError("target_stopping", "This execution is stopping.")
+                if parked:
+                    raise SessionError("assignment_mismatch", PARKED_ALIVE, 3)
                 return self._wait_ready(meta)
+            job = jobs.claim(self.project, meta["job_id"]) if meta.get("job_id") else None
             handoff = self._fresh_handoff(meta)
             self._retire_name(meta)
-            context = self._context(meta["target"], jobs.lookup(self.project, meta["job_id"], ("in-progress",))
-                                    if meta.get("job_id") else None)
+            context = self._context(meta["target"], job)
             context["handoff_file"] = _handoff(handoff)
             context = self._new_window(context)
             return self._launch(context)
         if meta.get("provider_launch_attempted") is not False:
+            if parked:
+                raise SessionError("assignment_mismatch", PARKED_ALIVE, 3)
             return self._wait_ready(meta)
         if meta.get("job"):
-            meta["job"] = jobs.lookup(self.project, meta["job_id"], ("in-progress",))
+            meta["job"] = jobs.claim(self.project, meta["job_id"])
             self._prepare_launch(meta)
             git_ops.prepare(meta, self.project, self.store)
             self.tmux.write_meta(meta["window_id"], {"job": meta["job"]})
@@ -503,8 +510,8 @@ class Manager:
             assigned = [key for key, value in state.items() if key != "leader" and value["job_id"] == item["job_id"]]
             item = jobs.lookup(self.project, job)
             if assigned:
-                if item["state"] != "in-progress":
-                    raise SessionError("assignment_mismatch", "A reserved CR must be in in-progress.", 3)
+                if item["state"] not in ("todo", "in-progress"):
+                    raise SessionError("assignment_mismatch", "A reserved CR must be in todo or in-progress.", 3)
                 number = int(assigned[0])
                 slot = f"seat-{number}"
                 context = self.tmux.get_current(self.project.project_id, slot)

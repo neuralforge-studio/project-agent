@@ -246,6 +246,24 @@ def test_pre_provider_failure_reuses_its_reservation_without_syncing_again(sessi
     assert git(env.seats[0], "branch", "--show-current") == "cr/TOOL-001"
 
 
+def test_parked_reservation_that_never_launched_keeps_its_run_and_git_preparation(session_env, monkeypatch):
+    import agent_session.lifecycle as lifecycle
+
+    env = session_env
+    cr = env.cr()
+    fail_once(monkeypatch, lifecycle.Manager, "_launch")
+    with pytest.raises(SessionError):
+        env.manager().start(cr)
+    pending = env.tmux.get_current("fixture", "seat-0")
+    env.finish(cr, state="todo", outcome=None, note="park before the Worker started")
+    newer = env.advance_remote()
+    result = env.manager().start(cr)
+    assert result["run_id"] == pending["run_id"] and result["ready"] is True
+    assert env.cr_state(cr)[0] == "in-progress"
+    assert git(env.seats[0], "rev-parse", "HEAD") == env.initial_hash != newer
+    assert git(env.seats[0], "branch", "--show-current") == "cr/TOOL-001"
+
+
 def test_saved_base_is_reused_after_a_failure_before_branch_creation(session_env, monkeypatch):
     import agent_session.git_ops as git_ops
 
@@ -289,6 +307,40 @@ def test_parked_cr_continues_its_published_branch_on_another_seat(session_env):
     assert git(env.seats[1], "rev-parse", "HEAD") == parked
     assert env.cr_header(cr, "Base") == base
     assert env.store.read()["1"]["git_hash"] == env.initial_hash
+
+
+def test_parked_cr_that_kept_its_seat_resumes_there_after_its_run_stops(session_env):
+    env = session_env
+    cr = env.cr()
+    first = env.manager().start(cr)
+    kept = env.seats[0] / "worker-notes.txt"
+    kept.write_text("unfinished work\n")
+    env.finish(cr, state="todo", outcome=None, note="park on the user's stop")
+    with pytest.raises(SessionError) as error:
+        env.manager().start(cr)
+    assert error.value.code == "assignment_mismatch"
+    assert env.cr_state(cr)[0] == "todo"
+    assert env.tmux.pane_info(first["pane_id"])["pane_dead"] is False
+    stopped = env.manager().control("stop", job=cr)
+    assert stopped["released"] is False
+    assert stopped["reasons"] == ["seat has uncommitted or untracked files"]
+    import agent_session.lifecycle as lifecycle
+    with pytest.MonkeyPatch.context() as patch:
+        fail_once(patch, lifecycle.Manager, "_launch")
+        with pytest.raises(SessionError) as error:
+            env.manager().start(cr)
+    assert error.value.code == "fixture_failure"
+    pending = env.tmux.get_current("fixture", "seat-0")
+    assert pending["run_id"] != first["run_id"] and pending["provider_launch_attempted"] is False
+    assert env.cr_state(cr)[0] == "in-progress" and env.store.read()["0"]["job_id"] == cr
+    resumed = env.manager().start(cr)
+    assert resumed["seat"] == 0 and resumed["run_id"] == pending["run_id"]
+    assert resumed["session"]["session_id"] != first["session"]["session_id"]
+    assert env.cr_state(cr)[0] == "in-progress"
+    assert kept.read_text() == "unfinished work\n"
+    assert git(env.seats[0], "branch", "--show-current") == "cr/TOOL-001"
+    assert env.store.read()["0"]["git_hash"] == env.initial_hash
+    assert env.store.read()["0"]["session"]["session_id"] == resumed["session"]["session_id"]
 
 
 def test_read_only_preparation_syncs_main_without_a_branch(session_env):

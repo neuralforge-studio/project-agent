@@ -8,6 +8,7 @@ import shlex
 import time
 import uuid
 
+from .. import process
 from ..errors import SessionError
 from .common import context_timeout, deadline, executable, json_result, run, session_id, text_file
 from .mcp import MCPClient
@@ -74,6 +75,12 @@ STARTUP_DIALOGS = (
     ("login", re.compile(r"Select login method:")),
 )
 TRUST_LOCK_SECONDS = 5                     # wait for Claude's own config lock, then leave trust unrecorded
+
+
+def _cli_ended(meta):
+    """The run's recorded CLI process is gone, not merely missing from a listing."""
+    pid = meta.get("cli_pid")
+    return bool(pid) and not process.alive(int(pid), meta.get("cli_birth"))
 
 
 def startup_dialog(screen):
@@ -344,7 +351,9 @@ class ClaudeProvider:
             with self.mcp_factory([executable("claude", context), "mcp", "serve"], timeout) as client:
                 peer = self._peer(client, session, context, meta)
         except SessionError as error:
-            if error.code != "session_not_bound" or not meta.get("pane_dead"):
+            # A CLI that exits while ListAgents runs leaves the listing before the caller sees a
+            # dead pane, and a later stop passes no pane state; its hooks then tell the end.
+            if error.code != "session_not_bound" or not (meta.get("pane_dead") or _cli_ended(meta)):
                 raise
         current = self._latest_meta(context, meta)
         observations = current.get("hook_observations", {})

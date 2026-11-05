@@ -520,6 +520,31 @@ def test_claude_observation_preserves_missing_background(claude):
     assert result["terminal"] is False
 
 
+def test_claude_cli_that_ended_during_the_listing_is_observed_from_its_hooks(claude):
+    # The stop loop read a live pane, then /exit ended the CLI before ListAgents ran.
+    import subprocess
+
+    provider, fake, context, meta, _ = claude
+    ended = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+    fake.listing = listing(pane="%99")
+    meta.update(cli_pid=int(ended.stdout), cli_birth="ended", pane_dead=False)
+    meta["hook_observations"]["SessionEnd"] = {"session_id": IDENTITY, "reason": "prompt_input_exit"}
+    result = provider.observe({"session_id": IDENTITY}, context, meta)
+    assert (result["known"], result["terminal"], result["background"]) == (True, True, [])
+
+
+def test_claude_live_cli_missing_from_the_listing_is_not_bound(claude):
+    import os
+    from agent_session.process import birth
+
+    provider, fake, context, meta, _ = claude
+    fake.listing = listing(pane="%99")
+    meta.update(cli_pid=os.getpid(), cli_birth=birth(os.getpid()), pane_dead=False)
+    with pytest.raises(SessionError) as error:
+        provider.observe({"session_id": IDENTITY}, context, meta)
+    assert error.value.code == "session_not_bound"
+
+
 def test_claude_managed_deny_and_sandbox_are_not_overridden(claude):
     provider, _, context, _, prepared = claude
     path = Path(context["managed_settings_file"])

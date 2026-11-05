@@ -28,7 +28,7 @@ Start가 `needs_user_action`과 `dialog`를 반환하면 그 window와 dialog �
 3. 사용자 합의를 Disposition에 기록하고 CR을 todo로 옮깁니다. Todo에 있다는 사실이 승인입니다.
 4. `agent-session start --job <CR-ID>`로 Worker를 시작합니다. CR은 in-progress로 옮겨집니다.
 5. Review를 시작할 때 `agent-session review --job <CR-ID>`를 실행합니다. Worker가 CR의 `## Result`에 쓴 제출 hash와 실제 검증 결과를 review합니다. 검토 결과(인수·수정 요청)는 검토한 제출 hash와 함께 Disposition에 기록합니다. 수정이 필요하면 같은 CR에 feedback을 보냅니다. Feedback을 보내면 review 표시는 자동으로 지워집니다. Review를 멈추고 다른 일을 하면 `agent-session review --clear`를 실행합니다.
-6. Write CR은 검토한 hash를 통합하고 원격 반영을 확인한 뒤 done(Outcome fixed)으로 옮깁니다. Read-only CR은 결과에 따라 todo(고치기로 함)·open(판정 필요)·done(Outcome waived, 문제 없음)으로 옮깁니다. 보류는 todo, 재판정은 open입니다.
+6. Write CR은 검토한 hash를 통합하고 원격 반영을 확인한 뒤 done(Outcome fixed)으로 옮깁니다. 예: `project-item move <CR-ID> done --outcome fixed --by Leader --note "<통합 hash>"`. Read-only CR은 결과에 따라 todo(고치기로 함)·open(판정 필요)·done(Outcome waived, 문제 없음)으로 옮깁니다. 보류는 todo, 재판정은 open입니다.
 7. Worker의 정리 완료를 확인한 뒤 stop으로 실제 종료와 반납을 확인합니다.
 
 ```sh
@@ -45,6 +45,9 @@ agent-session stop --job TOOL-012
 제출 hash가 바뀌면 새 hash를 다시 검토합니다.
 완료 보고만으로 CR을 done으로 옮기거나 seat를 비우지 않습니다.
 `released: false`이면 배정을 보존하고 반환한 이유를 처리합니다. CR이 in-progress에 남아 있거나 결과가 origin에 없으면 반납하지 않습니다.
+보류한 todo CR의 배정이 남았으면 같은 `agent-session start --job <CR-ID>`로 같은 seat에서 재개합니다.
+Tmux server를 다시 시작하기 전에 모든 Worker를 stop하고 반납을 확인합니다. 실행 근거가 tmux에 있으므로 반납하지 않은 배정은 다시 시작한 뒤 제어할 수 없습니다.
+근거를 잃은 seat의 start·restart가 `execution_unknown`이면 배정을 바꾸지 않고 운영자에게 수동 복구를 요청합니다.
 
 Codex의 동료 보고는 현재 turn이 끝난 뒤 처리될 수 있습니다.
 배정·feedback 뒤 외부 보고만 기다리는 시점에는 현재 turn을 끝냅니다.

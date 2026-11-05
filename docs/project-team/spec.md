@@ -227,6 +227,8 @@ Leader는 leader, Worker는 seat-N을 option의 고정 target으로 사용합니
 옛 window에 남은 자기 run 값만으로 새 실행의 state를 갱신하지 못합니다.
 죽은 server의 값과 복원한 창의 복사된 option은 현재 실행의 근거가 아닙니다.
 Tmux 근거가 사라지면 state를 자동 삭제하거나 실행을 자동 채택하지 않습니다.
+Tmux server를 다시 시작하면 예약 seat의 현재 실행 포인터와 실행 근거가 함께 사라집니다.
+그 seat의 start·stop·restart는 execution_unknown입니다. 운영자가 7절의 수동 복구를 수행합니다.
 `agent/runs/<run_id>/`에는 prompt·settings·launch·hook 진단·제어 결과를 둡니다.
 이 파일은 실행 산출물이며 배정의 두 번째 원본으로 사용하지 않습니다.
 
@@ -311,6 +313,7 @@ agent-session start --job TOOL-012
 Leader는 사용자 합의를 CR의 Disposition에 기록한 뒤 todo로 옮깁니다.
 배정이 없는데 CR이 in-progress에 있거나, CR이 다른 상태이면 cr_not_assignable입니다.
 같은 CR의 기존 배정이 있으면 아래 재요청 규칙을 적용합니다.
+기존 배정의 CR은 in-progress에 있거나 보류로 todo에 있어야 합니다. 그 밖이면 assignment_mismatch입니다.
 
 1. CR과 mode·cwd를 확인합니다.
 2. 미배정 seat를 번호순으로 확인합니다. Seat 디렉토리가 없으면 만듭니다.
@@ -345,6 +348,9 @@ Provider 실행 전 실패한 예약이면 같은 run에서 Git 준비부터 재
 이 경우 Worker가 아직 작업하지 않았으므로 별도 handoff를 요구하지 않습니다.
 Provider 실행 여부가 불명확하면 미시작으로 추측하지 않고 오류를 반환합니다.
 실제 종료가 확인됐으면 같은 seat에서 CR을 이어받는 새 대화로 시작할 수 있습니다.
+보류로 todo에 있는 CR은 새 run을 만들기 직전에 in-progress로 옮깁니다.
+보류한 CR의 기존 실행이 살아 있거나 시작 중이면 assignment_mismatch입니다. 이때 CR을 옮기지 않습니다.
+Provider 실행 전 실패한 예약은 CR이 보류 중이어도 같은 run에서 Git 준비부터 재개합니다.
 Git 기준과 branch는 유지합니다.
 기존 run 시작 뒤 갱신한 `agent/handoff/<slot>.md`가 있으면 최초 prompt에 넣습니다.
 같은 CR 인계에는 새 후보용 clean 검사를 적용하거나 main 동기화를 반복하지 않습니다.
@@ -693,6 +699,7 @@ Worker는 아래 반납 검사를 추가로 확인합니다.
 조건이 안 맞으면 종료만 수행하고 JOB·hash·대화 기록을 보존합니다.
 이때 `leader.reviewing`이 이 JOB이면 null로 만들고 현재 실행 포인터와 window는 유지합니다.
 이 경우 `stopped: true, released: false`와 이유를 반환합니다.
+보류로 todo에 둔 CR의 배정이 남으면 같은 CR의 start가 같은 seat에서 새 대화로 이어받습니다(4절).
 종료 성공·반납 보류는 exit 0입니다. 실제 종료 미확인은 exit 4입니다.
 보존한 session은 종료한 대화의 이력이며 송신 가능을 뜻하지 않습니다.
 Provider 대화 값과 주소는 종료 pane에서도 유지하며 재시작 때 다시 대조합니다.
@@ -752,6 +759,7 @@ Stop은 session_unbound를 반환하고 배정·Git 기준·기존 runtime 근�
 7. 최초 Leader가 잘못된 cwd로 시작한 경우에는 그 대화를 채택하지 마십시오. 작업 부재와 종료 근거를 run의 startup-failure.json에 기록하십시오. State의 Leader가 null인 것을 확인한 뒤 그 실패 run의 current pointer만 해제하십시오. 원인을 수정하고 start하십시오.
 8. 등록 binding이 일치하고 background 근거만 없으면 4·5번의 실제 확인을 완료하십시오. 운영자는 해당 run window에 last_background_clear를 기록하십시오. 값은 실제 session_id·run_id·thread/turns/list의 desc 첫 native turn ID입니다. 기록한 뒤 stop 또는 start를 다시 실행하십시오. 확인하지 못한 background를 빈 목록으로 기록하지 마십시오.
 9. 분리 controller가 죽어 control_pending만 남으면 해당 controller의 PID·생성 정보를 대조하십시오. 운영자는 죽음을 확인한 뒤 control-result.json에 완료한 실패를 기록하고 그 run window의 control_pending만 false로 바꾸십시오. 그 뒤 정상 명령을 다시 실행하십시오. PID 기록이 없고 실행 여부도 확인하지 못하면 pending을 보존하십시오.
+10. Tmux 근거를 잃은 예약 seat(3절)는 다음 순서로 처리하십시오. State에 기록한 provider 대화에 active turn과 pending이 없는지 확인하십시오. 그 대화의 background와 seat 작업 process가 남지 않았는지 확인하십시오. 종료 근거가 하나라도 unknown이면 예약을 유지하고 여기서 중단하십시오. 필요한 추가 확인을 완료한 경우에만 다음 반납을 수행하십시오. Seat의 보존할 변경을 `cr/<ID>`에 commit하고 push하십시오. 배정 잠금, 대상 제어 잠금, state 잠금 순서로 잠그십시오. State의 JOB·session과 현재 포인터의 부재를 다시 대조하십시오. 그 seat 행의 job_id·git_hash·session 세 필드를 모두 null로 바꾸십시오. `leader.reviewing`이 이 JOB이면 같은 저장에서 null로 바꾸십시오. CR이 todo이면 다음 start가 게시한 branch를 이어받습니다.
 
 위 절차는 명시적 운영자의 수동 정비입니다. 일반 Agent의 state 직접 편집을 허용하지 않습니다.
 Worker의 연결·종료·보존 근거가 부족하면 JOB과 seat를 그대로 보존합니다.
