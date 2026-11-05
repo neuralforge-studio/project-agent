@@ -43,7 +43,8 @@ def check_id(job_id):
 
 
 def _job(item):
-    item = dict(item)
+    # A JOB only points to its CR: the CR file is the one copy of the text, which can outgrow a tmux option.
+    item = {key: value for key, value in item.items() if key != "text"}
     if item["mode"] not in ("write", "read-only"):
         raise SessionError("job_invalid", "The CR Mode must be write or read-only.", 2)
     item["branch"] = f"cr/{item['job_id']}" if item["mode"] == "write" else None

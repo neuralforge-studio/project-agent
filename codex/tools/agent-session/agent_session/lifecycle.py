@@ -231,7 +231,9 @@ class Manager:
                      + "작업 디렉토리: " + context["cwd"] + "\n"
                      + "Mode: " + job["mode"] + "\n"
                      + "Branch: " + (job.get("branch") or "없음(read-only)") + "\n"
-                     + "Base: " + base + "\n\nCR 본문:\n" + job["text"] + "\n")
+                     + "Base: " + base + "\n\n"
+                     + "작업 전에 위 CR 파일을 읽고, 그 본문이 link한 지침 문서도 읽으십시오. "
+                     + "범위·구현·검증 기준의 원본은 CR 파일입니다.\n\n")
         text += request or (
             "인계 문서와 프로젝트 지침을 읽고 승인된 미완료 작업을 계속하십시오." if context.get("handoff_file") else
             "프로젝트 지침과 `project-item ls`의 결정 대기·CR을 확인하고 사용자 작업 지시를 기다리십시오."

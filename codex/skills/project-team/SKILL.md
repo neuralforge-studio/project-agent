@@ -58,7 +58,7 @@ Tmux window와 provider session은 유지하고 후속 메시지에서 관리를
 
 ## Worker
 
-1. 최초 prompt의 CR 본문, 범위, 작업 경로, 검증 기준, link한 지침 문서를 확인합니다.
+1. 최초 prompt가 가리키는 CR 파일과 그 본문이 link한 지침 문서를 읽고 범위, 작업 경로, 검증 기준을 확인합니다.
 2. 지정한 범위에서 작업하고 해당 검증을 수행합니다.
 3. Write CR이면 `cr/<CR-ID>` branch에 commit·push합니다.
 4. CR 파일의 `## Result`에 들여쓰지 않은 제출 행 `- 제출 commit: <40자리 hash>`와 검증 명령·결과를 추가합니다. Read-only CR은 제출 행 없이 결과만 씁니다. 다른 절은 고치지 않습니다.
