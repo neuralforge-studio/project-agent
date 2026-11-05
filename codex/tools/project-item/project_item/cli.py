@@ -8,7 +8,8 @@ import re
 import sys
 from pathlib import Path
 
-from . import registry, render, store
+from . import guard, registry, render, store
+from .cr import acceptance
 from .kinds import CR, DECIDE, KINDS, kind_of_id
 from .registry import ItemError
 
@@ -180,10 +181,31 @@ def cmd_move(args) -> int:
     if args.state == "in-progress" and project.seats:
         raise ItemError("agent_session_only", "In a team project, `agent-session start --job <CR-ID>` "
                         "moves a CR to in-progress with its seat assignment.")
-    target = store.move(kind, root, args.id, args.state, outcome=args.outcome, by=args.by, note=args.note)
+    with store.root_lock(root):
+        if project.seats:
+            guard.check_move(project, kind, root, args.id, args.state, args.outcome, args.by)
+        target = store.move_locked(kind, root, args.id, args.state, outcome=args.outcome, by=args.by,
+                                   note=args.note)
     print(f"moved {target}")
     if kind is DECIDE:
         _render(project, root)
+    return 0
+
+
+def cmd_accept(args) -> int:
+    project = _select(args)
+    if not project.seats:
+        raise ItemError("not_team_project", f"Project '{project.project_id}' has no seats; "
+                        "there is no Leader review to record.")
+    if not re.fullmatch(r"[0-9a-f]{40}", args.commit):
+        raise ItemError("commit_invalid", "--commit is the 40-hex submitted commit of the CR Result.")
+    kind = kind_of_id(args.id)
+    if kind is not CR:
+        raise ItemError("invalid_input", "accept takes a CR ID.")
+    guard.require_leader(project)
+    target = store.record(CR, registry.item_root(project, "cr"), args.id,
+                          acceptance(dt.date.today().isoformat(), args.commit, args.note))
+    print(f"accepted {args.commit} in {target}")
     return 0
 
 
@@ -259,6 +281,12 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--by", help="decider; writes one Disposition entry")
     p.add_argument("--note", help="reason or the user's words for the Disposition entry (needs --by)")
     p.set_defaults(run=cmd_move)
+
+    p = sub.add_parser("accept", parents=[common], help="record the Leader's acceptance of a submitted commit")
+    p.add_argument("id")
+    p.add_argument("--commit", required=True, help="40-hex submitted commit of the CR Result")
+    p.add_argument("--note", help="text after the acceptance in the Disposition entry")
+    p.set_defaults(run=cmd_accept)
 
     p = sub.add_parser("render", parents=[common], help="write the decision page")
     p.add_argument("kind", choices=("decide",))

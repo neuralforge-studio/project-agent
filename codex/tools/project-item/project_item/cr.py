@@ -22,6 +22,8 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\b")
 OUTCOME_RE = re.compile(rf"^(fixed|waived|merged\s+{ID_RE}|moved\s+\S+\s+\S+)$")
 BASE_RE = re.compile(r"^[0-9a-f]{40} \d{4}-\d{2}-\d{2}T\S+$")
 STATUS_LINE_RE = re.compile(r"^-\s+\**Status\**\s*:", re.I)
+SUBMISSION_RE = re.compile(r"^- 제출 commit:\s*`?([0-9a-f]{40})\b")    # "JOB으로 쓸 때": top level only
+FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 
 REQUIRED_HEADERS = ("Opened", "Scope", "Severity")
 FINDING_SECTIONS = ("Symptom", "Evidence", "Contract")
@@ -64,6 +66,54 @@ def outside_fence(lines: list[str]):
 def section_heads(lines: list[str]) -> list[tuple[int, str]]:
     """(index, name) of each '## <name>' section heading outside code fences."""
     return [(n, m.group(1)) for n, line in outside_fence(lines) if (m := SECTION_RE.match(line))]
+
+
+def section_text(text: str, name: str) -> str:
+    """Body of the '## <name>' section outside code fences ('' when the section is missing)."""
+    lines = text.splitlines()
+    heads = section_heads(lines)
+    for n, head in heads:
+        if head == name:
+            end = next((m for m, _ in heads if m > n), len(lines))
+            return "\n".join(lines[n + 1:end])
+    return ""
+
+
+def submitted_hash(result: str) -> str | None:
+    """The hash of the last top-level submission line `- 제출 commit: <40-hex>` of `## Result`.
+
+    Other hashes (verification ranges, comparison bases) are not submissions. Lines in a code
+    fence, indented or not, and indented lines are examples, not submissions.
+    """
+    found = None
+    fence = None                                     # the opening run, e.g. "````"
+    for line in result.splitlines():
+        marker = FENCE_RE.match(line)
+        if fence is None:
+            if marker:
+                fence = marker.group(1)
+                continue
+        else:
+            # Only the same character, at least as long, with nothing after it closes the fence.
+            if (marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence)
+                    and not marker.group(2).strip()):
+                fence = None
+            continue
+        match = SUBMISSION_RE.match(line)
+        if match:
+            found = match.group(1)
+    return found
+
+
+def acceptance(day: str, commit: str, note: str | None = None) -> str:
+    """The Disposition entry (without the '- ') of the Leader accepting a submitted commit."""
+    return f"{day} Leader: 제출 {commit}를 인수합니다." + (f" {note}" if note else "")
+
+
+def accepted(disposition: str, commit: str) -> bool:
+    """Whether the Disposition holds the Leader's acceptance of exactly this commit."""
+    pattern = re.compile(rf"^- \d{{4}}-\d{{2}}-\d{{2}} Leader: 제출 {commit}를 인수합니다\.")
+    return any(pattern.match(line) for line in disposition.splitlines())
 
 
 def parse(path: Path, state: str) -> Cr:
