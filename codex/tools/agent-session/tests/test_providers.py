@@ -459,6 +459,41 @@ def test_claude_unsupported_listing_cannot_adopt_a_name():
         parse_peers(result)
 
 
+def listing_with_unrelated_blank_row(blank):
+    result = listing()
+    other = {"name": "other", "ref": "aaaaaa", "type": "interactive", "status": "idle", **blank}
+    result["listing"] += "\n  other [aaaaaa]  ·  interactive  ·  starting  ·  tmux project:@13.%30  ·  started 1s ago"
+    result["sections"][0]["rows"].append(other)
+    return result
+
+
+@pytest.mark.parametrize("blank", [{"status": ""}, {"name": ""}, {"ref": ""}])
+def test_claude_unrelated_blank_row_does_not_block_the_target(claude, blank):
+    provider, fake, context, meta, _ = claude
+    fake.listing = listing_with_unrelated_blank_row(blank)
+    skipped = []
+    assert [peer["name"] for peer in parse_peers(fake.listing, skipped)] == ["worker"]
+    assert len(skipped) == 1
+    assert provider.verify_binding({"session_id": IDENTITY}, context, meta)["message_to"] == "worker [6d267e]"
+    assert provider.send({"session_id": IDENTITY}, "peer message", context)["disposition"] == "accepted"
+
+
+def test_claude_blank_target_row_or_other_format_is_still_an_error(claude):
+    provider, fake, context, meta, _ = claude
+    fake.listing = listing(status="")
+    with pytest.raises(SessionError):
+        provider.verify_binding({"session_id": IDENTITY}, context, meta)
+    for broken in ({"listing": None, "sections": []}, {"listing": "x", "sections": None}):
+        with pytest.raises(SessionError) as caught:
+            parse_peers(broken)
+        assert caught.value.code == "provider_protocol_unsupported"
+    result = listing()
+    result["sections"][0]["rows"] = ["not a row"]
+    with pytest.raises(SessionError) as caught:
+        parse_peers(result)
+    assert caught.value.code == "provider_protocol_error"
+
+
 def test_claude_send_refreshes_address_and_never_claims_read(claude):
     provider, fake, context, _, _ = claude
     fake.delivery = {"success": True, "status": "held"}
