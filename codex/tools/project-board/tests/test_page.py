@@ -99,3 +99,27 @@ def test_text_edited_while_an_answer_is_sent_stays_as_an_unsent_draft(browser, t
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_status_motion_runs_even_when_the_os_asks_for_reduced_motion(browser, tmp_path, monkeypatch):
+    # User decision 2026-11-05 (plan 4.5): motion shows the state, so the board ignores the OS setting.
+    from board_testing import WORKER_IDS, session
+    board = Board(tmp_path)
+    base = board.project("alpha", seats=1)
+    board.cr(base, "in-progress", "TOOL-001")
+    board.state(base, {"leader": leader(), "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)}})
+    monkeypatch.setattr(board_server.model.api, "liveness", lambda cwd, config_path=None: {
+        "leader": {"session_id": leader()["session_id"], "state": "alive"},
+        "0": {"session_id": WORKER_IDS[0], "state": "alive"}})
+    httpd, _ = serve(board, monkeypatch, tmp_path)
+    try:
+        page = browser.new_context(reduced_motion="reduce").new_page()
+        page.goto(f"http://127.0.0.1:{httpd.server_address[1]}/")
+        page.wait_for_selector(".worker.working")
+        assert page.evaluate("matchMedia('(prefers-reduced-motion: reduce)').matches") is True
+        names = page.evaluate("""() => ['.worker.working', '.leader.working', '.desk .typing i']
+            .map(s => getComputedStyle(document.querySelector(s)).animationName)""")
+        assert names == ["bob", "sway", "type"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

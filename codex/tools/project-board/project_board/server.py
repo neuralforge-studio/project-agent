@@ -173,6 +173,12 @@ class BoardServer(http.server.ThreadingHTTPServer):
         self.token = secrets.token_urlsafe(32)
         self.verbose = verbose
 
+    def handle_error(self, request, client_address):
+        # A reload or a closed tab aborts the page's request before the reply; nothing failed here.
+        if isinstance(sys.exc_info()[1], ConnectionError):
+            return
+        super().handle_error(request, client_address)
+
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="project-board",

@@ -176,10 +176,7 @@ h1, h2, h3, h4, p { margin: 0; }
 @media (max-width: 640px) {
     .room-head .status { margin-left: 0; }
 }
-@media (prefers-reduced-motion: reduce) {
-    .worker.working, .leader.working, .desk .typing i { animation: none; }
-    .drawer-wrap { transition: none; }
-}
+/* Motion shows the state, so it runs whatever the OS motion setting is (plan 4.5). */
 </style>
 </head>
 <body>

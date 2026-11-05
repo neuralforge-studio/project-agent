@@ -176,3 +176,21 @@ def test_main_warns_inside_an_agent_session(monkeypatch, capsys, tmp_path):
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     board_server.main([])
     assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("reset", [True, False])
+def test_a_client_that_leaves_before_the_reply_is_not_reported(running, monkeypatch, capfd, reset):
+    # A reload or a closed tab aborts the page's request; the reply then meets a closed socket.
+    import socket
+    import struct
+    import time
+    monkeypatch.setattr(board_server.model.api, "liveness", lambda cwd, config_path=None: (time.sleep(0.5), {})[1])
+    client = socket.create_connection(("127.0.0.1", running["port"]))
+    if reset:
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    client.sendall(f"GET /api/live HTTP/1.1\r\nHost: 127.0.0.1:{running['port']}\r\n\r\n".encode())
+    client.close()
+    time.sleep(1.5)
+    assert call(running["port"], "GET", "/api/board")[0] == 200
+    err = capfd.readouterr().err
+    assert "Traceback" not in err and "Exception occurred" not in err, err
