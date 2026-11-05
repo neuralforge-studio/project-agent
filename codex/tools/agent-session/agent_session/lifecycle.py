@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 from . import git_ops, jobs, process, workspace
-from .api import _project, _unlaunched_observation
+from .api import _check_owner, _project, _unlaunched_observation
 from .errors import SessionError
 from .providers import get_provider
 from .state import StateStore, locked, utc_now
@@ -156,14 +156,24 @@ class Manager:
             number = slot[5:]
             if state[number]["job_id"] != meta.get("job_id"):
                 raise SessionError("target_changed", "The JOB differs from the managed execution.")
-        return meta
+        return self._owned(meta, slot, state)
 
-    def _same(self, selected):
+    def _same(self, selected, published=True):
+        """Re-read the selected run under its control lock. Before publication, compare only its base and slot."""
         current = self.tmux.get_current(self.project.project_id, selected["target"])
         keys = ("run_id", "window_id", "pane_id", "job_id", "session_id")
         if not current or any(current.get(key) != selected.get(key) for key in keys):
             raise SessionError("target_changed", "The command target changed before control.")
-        return current
+        return self._owned(current, selected["target"], self.store.read() if published else None)
+
+    def _owned(self, meta, slot, state=None):
+        """Adopt only this base's run of the slot and, with a state, the conversation it names there."""
+        session = None
+        if state is not None and meta.get("session_id"):
+            # A run without a conversation, such as a failed restart's waiting pane, has none to misdirect.
+            session = state["leader"] if slot == "leader" else state[slot[5:]]["session"]
+        _check_owner(self.project, slot, session, meta)
+        return meta
 
     @staticmethod
     def _session(meta):
@@ -408,7 +418,7 @@ class Manager:
             if meta.get("registered"):
                 if not meta.get("ready"):
                     session = self._session(meta)
-                    self._same(meta)
+                    self._same(meta, published=False)
                     def publish(value):
                         if meta["seat"] is None:
                             value["leader"] = _bound(value["leader"], session, leader=True)

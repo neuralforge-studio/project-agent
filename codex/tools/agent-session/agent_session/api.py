@@ -37,6 +37,17 @@ def _select(state, target):
     return seat, state[str(seat)]["session"]
 
 
+def _check_owner(project, slot, session, meta):
+    """Accept a tmux run only as this base's run of the slot and as the conversation the state names.
+
+    Session is the state's conversation for the slot; None leaves the conversation uncompared.
+    """
+    if Path(meta.get("base", "")).resolve() != project.base:
+        raise SessionError("owner_mismatch", "The tmux window belongs to another project.")
+    if meta.get("target") != slot or (session and meta.get("session_id") != session["session_id"]):
+        raise SessionError("owner_mismatch", "The native conversation does not match this slot.")
+
+
 def _unlaunched_observation(meta, pane):
     from . import process
 
@@ -109,10 +120,7 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
     for field in ("run_id", "window_id", "pane_id"):
         if pointer.get(field) != meta.get(field):
             raise SessionError("owner_mismatch", "The tmux execution has changed.")
-    if Path(meta.get("base", "")).resolve() != project.base:
-        raise SessionError("owner_mismatch", "The tmux window belongs to another project.")
-    if meta.get("target") != slot or (session and meta.get("session_id") != session["session_id"]):
-        raise SessionError("owner_mismatch", "The native conversation does not match this slot.")
+    _check_owner(project, slot, session, meta)
     info = control.pane_info(meta["pane_id"])
     cli_alive = _cli_alive(meta, info)
     context = {

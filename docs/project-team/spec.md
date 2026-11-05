@@ -49,6 +49,10 @@ JOB ID는 현재 state에서 정확히 한 seat를 찾아 지정합니다.
 Seat 방식도 선택 시점의 JOB ID와 실행을 확정한 뒤 제어 직전에 다시 대조합니다.
 대상 확인과 제어는 해당 자리의 시작·종료·교체와 같은 제어 잠금으로 직렬화합니다.
 그 사이 JOB·실행이 바뀌면 target_changed 오류이며 다른 대상으로 다시 해석하지 않습니다.
+선택과 재대조에서 실행은 선택한 등록 base의 그 자리 실행이어야 합니다.
+그 실행에 대화가 있으면 state가 그 자리에 게시한 session과 같아야 합니다.
+다르면 owner_mismatch 오류입니다. Provider 호출·pane 입력·state 갱신을 하지 않습니다.
+이 대조는 check_binding(5절)과 같은 조건을 사용합니다.
 중지된 실행에 send하지 않습니다.
 
 관리 ID는 base_path_key·project_id·run_id입니다.

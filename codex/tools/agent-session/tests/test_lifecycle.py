@@ -620,6 +620,90 @@ def test_unbound_attempted_or_unknown_launch_cannot_be_stopped_as_a_placeholder(
     assert env.store.read()["0"] == before
 
 
+def record_provider_input(monkeypatch):
+    """Record each provider send, stop request, and pane exit request; return the record."""
+    from agent_session_fake_provider import FakeProvider
+
+    calls = []
+    for name in ("send", "request_stop", "request_exit"):
+        original = getattr(FakeProvider, name)
+        monkeypatch.setattr(FakeProvider, name, lambda self, *args, _name=name, _original=original, **kwargs:
+                            calls.append(_name) or _original(self, *args, **kwargs))
+    return calls
+
+
+def outcome(command):
+    try:
+        result = command()
+    except SessionError as error:
+        return error.code
+    return result.get("disposition") or ("stopped" if result.get("stopped") else "returned")
+
+
+def test_a_run_of_another_base_gets_no_input_through_its_socket(session_env, tmp_path, monkeypatch):
+    """Two registries name the same project ID; the other base's socket holds no target for this base."""
+    from agent_session.lifecycle import Manager
+    from agent_session_fixture import Environment
+
+    env = session_env
+    (tmp_path / "other").mkdir()
+    other = Environment(tmp_path / "other").setup()
+    try:
+        cr = env.cr()
+        foreign = {"leader": env.manager().start("leader"), cr: env.manager().start(cr)}
+        assert other.cr() == cr
+        other.manager().start("leader")
+        other.manager().start(cr)
+        calls = record_provider_input(monkeypatch)
+        crossed = lambda: Manager(other.base, other.config, socket_name=env.socket_name, timeout=15)
+        snapshots = (env.project.state_path.read_bytes(), other.project.state_path.read_bytes())
+        results = [outcome(lambda: crossed().send(job=job, message="for the other base")) for job in foreign]
+        results += [outcome(lambda: crossed().control("stop", job=job)) for job in foreign]
+        assert (results, calls) == (["owner_mismatch"] * 4, [])
+        # The base alone decides even when the state names the foreign run's conversation.
+        def adopt(value):
+            value["leader"]["session_id"] = foreign["leader"]["session"]["session_id"]
+            value["0"]["session"]["session_id"] = foreign[cr]["session"]["session_id"]
+        other.store.update(adopt)
+        results = [outcome(lambda: crossed().send(job=job, message="for the other base")) for job in foreign]
+        assert (results, calls) == (["owner_mismatch"] * 2, [])
+        assert not (env.base / "agent/fixture-messages.jsonl").exists()
+        for job, run in foreign.items():
+            current = env.tmux.get_current("fixture", "leader" if job == "leader" else "seat-0")
+            assert current["run_id"] == run["run_id"] and current["stopping"] is False
+            assert env.tmux.pane_info(run["pane_id"])["pane_dead"] is False
+        assert env.project.state_path.read_bytes() == snapshots[0]
+    finally:
+        subprocess.run(["tmux", "-L", other.socket_name, "kill-server"], capture_output=True, timeout=10)
+
+
+def test_a_run_that_the_state_does_not_name_gets_no_input(session_env, monkeypatch):
+    env = session_env
+    cr = env.cr()
+    runs = {"leader": env.manager().start("leader"), cr: env.manager().start(cr)}
+    env.handoff("leader")
+    env.handoff("seat-0")
+    published = env.store.read()
+
+    def replace(value):
+        value["leader"]["session_id"] = str(uuid.uuid4())
+        value["0"]["session"]["session_id"] = str(uuid.uuid4())
+    env.store.update(replace)
+    calls = record_provider_input(monkeypatch)
+    results = [outcome(lambda: env.manager().send(job=job, message="for the named conversation")) for job in runs]
+    for operation in ("stop", "restart"):
+        results += [outcome(lambda: env.manager().control(operation, job=job)) for job in runs]
+    assert (results, calls) == (["owner_mismatch"] * 6, [])
+    for job, run in runs.items():
+        current = env.tmux.get_current("fixture", "leader" if job == "leader" else "seat-0")
+        assert current["run_id"] == run["run_id"] and current["stopping"] is False
+        assert env.tmux.pane_info(run["pane_id"])["pane_dead"] is False
+    # The same runs take input again once the state names their conversations.
+    env.store.update(lambda value: published)
+    results = [outcome(lambda: env.manager().send(job=job, message="for the named conversation")) for job in runs]
+    assert (results, calls) == (["accepted"] * 2, ["send"] * 2)
+
+
 def test_launch_args_reach_the_provider_input(session_env, monkeypatch):
     env = session_env
     config = json.loads(env.config.read_text())

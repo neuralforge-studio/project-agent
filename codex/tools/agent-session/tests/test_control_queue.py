@@ -12,9 +12,12 @@ from agent_session.lifecycle import Manager
 
 
 def manager(tmp_path):
-    meta = {"run_id": "fixture-run", "target": "seat-0", "window_id": "@1",
+    base = tmp_path.resolve()
+    meta = {"base": str(base), "run_id": "fixture-run", "target": "seat-0", "window_id": "@1",
             "pane_id": "%1", "job_id": "J-20261103-01", "session_id": "native-fixture",
             "socket_path": str(tmp_path / "tmux.sock")}
+    state = {"leader": None, "0": {"job_id": meta["job_id"], "git_hash": None,
+                                   "session": {"session_id": meta["session_id"]}}}
     class Tmux:
         def __init__(self):
             self.submitted = []
@@ -32,11 +35,11 @@ def manager(tmp_path):
         def run_controller(self, script, cwd):
             self.submitted.append(str(script))
     value = Manager.__new__(Manager)
-    value.project = SimpleNamespace(base=tmp_path, runtime_path=tmp_path / "agent",
+    value.project = SimpleNamespace(base=base, runtime_path=tmp_path / "agent",
                                     project_id="fixture", config_path=tmp_path / "projects.json")
     value.timeout = 10
     value.end = time.monotonic() + 10
-    value.store = SimpleNamespace(timeout=10)
+    value.store = SimpleNamespace(timeout=10, read=lambda: state)
     value.tmux = Tmux()
     return value, meta
 
