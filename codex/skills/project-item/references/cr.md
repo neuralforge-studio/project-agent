@@ -29,7 +29,7 @@ CR 항목은 각 저장소의 git CR 디렉토리(`open/`, `todo/`, `done/`, `de
 | 디렉토리 | 의미 | 진입 조건 | 나가는 조건 |
 | --- | --- | --- | --- |
 | `open/` | 문제라고 **의심**되는 것. 아직 판정되지 않음. | Phase 1에서 증거와 함께 열림 | Phase 2 일괄 재검토의 판정 |
-| `todo/` | 실제 문제로 판정되었고 고치기로 결정된 것. 승인된 JOB입니다. | 구현 방법과 검증 오라클, 사용자 합의를 적은 Disposition이 작성됨 | 배정(in-progress) 또는 구현 + 검증 통과 |
+| `todo/` | 실제 문제로 판정되었고 고치기로 결정된 것. 승인된 JOB입니다. | 구현 방법과 검증 오라클, 사용자 결정 또는 위임 범위의 Leader 판정을 적은 Disposition이 작성됨 | 배정(in-progress) 또는 구현 + 검증 통과 |
 | `in-progress/` | seat에서 실행 중인 것. | 팀 project는 `agent-session start --job <ID>`가 옮김 | Leader가 done·todo·open·deferred로 옮김 |
 | `done/` | 결론이 난 것. | `Outcome`과 그 종류의 필수 기록이 작성됨 | — |
 | `deferred/` | 다른 프로그램이나 범위의 소관으로 확인된 것. | 대상 쪽 `open/`에 항목이 열리고 `Outcome: moved`가 작성됨 | — |
@@ -157,7 +157,7 @@ CR은 project-team의 JOB을 겸합니다. 기능·리팩터링·조사 작업�
 
 | 주체 | 고치는 곳 |
 | --- | --- |
-| Leader | CR 생성, Disposition(판정·사용자 합의·검토 결과·수정 요청), 상태 이동 |
+| Leader | CR 생성, Disposition(판정·사용자 결정 또는 Leader 판정·검토 결과·수정 요청), 상태 이동 |
 | Worker | 자기 CR이 in-progress인 동안 `## Result`에 제출 commit과 검증 결과만 추가 |
 | agent-session | todo→in-progress 이동, `- Base:` 기록 |
 
@@ -184,7 +184,7 @@ CR은 project-team의 JOB을 겸합니다. 기능·리팩터링·조사 작업�
 3. `project-item owner <project>`로 담당 session 이름을 찾으십시오. `SendMessage`로 프로그램, CR ID, 제목, 파일 경로만 한 줄로 알리십시오. 상세 내용은 CR 파일에만 쓰십시오. 담당 session이나 `SendMessage` 도구가 없으면 알림을 생략하십시오.
 4. 자기 작업은 우회 방법으로 계속하십시오. 막힌 항목에는 CR ID를 기록하고 다음 항목으로 넘어가십시오. 회신을 기다리며 멈추지 마십시오.
 
-요청자 쪽에 같은 CR 항목이 있으면 `deferred/`로 보내고 `Outcome: moved <program> <ID>`를 적습니다. 담당 session은 받은 요청을 현재 작업이 끝나는 시점에 확인합니다. Phase 2 판정은 사용자와 합의한 뒤 `## Disposition`에 기록합니다. 처리가 끝나면 요청자 session에 결과(commit, version)를 `SendMessage`로 알립니다. 도구가 없으면 알림을 생략합니다.
+요청자 쪽에 같은 CR 항목이 있으면 `deferred/`로 보내고 `Outcome: moved <program> <ID>`를 적습니다. 담당 session은 받은 요청을 현재 작업이 끝나는 시점에 확인합니다. Phase 2 판정은 사용자 결정 또는 위임 범위의 Leader 판정을 `## Disposition`에 기록합니다. 위임 범위는 project 운영 문서(팀이 있으면 project-team skill의 Leader 절)가 정합니다. 팀이 없는 project는 사용자와 합의한 뒤 기록합니다. 처리가 끝나면 요청자 session에 결과(commit, version)를 `SendMessage`로 알립니다. 도구가 없으면 알림을 생략합니다.
 
 ## 위임 규칙
 

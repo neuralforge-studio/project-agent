@@ -258,7 +258,8 @@ class Manager:
                      + "범위·구현·검증 기준의 원본은 CR 파일입니다.\n\n")
         text += request or (
             "인계 문서와 프로젝트 지침을 읽고 승인된 미완료 작업을 계속하십시오." if context.get("handoff_file") else
-            "프로젝트 지침과 `project-item ls`의 결정 대기·CR을 확인하고 사용자 작업 지시를 기다리십시오."
+            "프로젝트 지침과 `project-item ls`의 결정 대기·CR을 확인하고 사용자 작업 지시를 기다리십시오. "
+            "사용자에게 묻는 결정은 결정 항목으로 남기고, 위임 범위의 판정은 근거와 함께 CR에 기록하십시오(project-team skill)."
             if job is None else
             "CR의 범위에서 작업하고 검증하십시오. 제출 commit과 검증 결과를 CR 파일의 `## Result`에 쓰고 "
             "`agent-session send --job leader`로 보고하십시오.")
