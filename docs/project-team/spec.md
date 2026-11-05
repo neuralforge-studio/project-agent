@@ -210,6 +210,8 @@ State는 배정과 연결의 원본이며 실행 process 정보의 원본은 아
 | Provider 연결 | 실제 session_id, Claude message_to 또는 Codex endpoint |
 | 제어와 관찰 | stopping 여부, provider 실행 시도 여부, 등록 완료 여부, hook 관찰값, controller PID·생성 시각 |
 
+JOB 값은 CR을 가리키는 값(8절)만 둡니다. CR 본문은 option에 복제하지 않고 CR 파일에서 읽습니다.
+
 한 번의 갱신에 포함된 option은 tmux 명령 한 번으로 씁니다.
 읽기는 한 번의 명령으로 option 목록과 값을 함께 읽습니다.
 따라서 읽는 쪽은 한 갱신의 일부만 쓰인 상태를 보지 않습니다.
@@ -743,7 +745,7 @@ Restart는 다음 순서로 새 대화로 교체합니다.
 2. 기존 실행의 실제 종료를 확인합니다. JOB·seat를 반납하지 않습니다.
 3. 같은 seat·JOB·Git 기준·branch를 유지하고 새 run을 발급합니다.
 4. 최신 프로젝트 지침으로 prompt·settings·환경을 다시 생성합니다.
-5. 인계 파일과 현재 CR 본문을 최초 prompt에 넣고 새 대화를 시작합니다.
+5. 인계 파일과 현재 CR 파일 경로를 최초 prompt에 넣고 새 대화를 시작합니다.
 6. 시작 controller가 새 window의 실제 binding을 검증해 state에 게시한 뒤 시작 완료를 표시합니다.
 7. 같은 target의 종료한 window를 정리합니다(3절).
 
@@ -878,7 +880,7 @@ CR 형식·상태·전이는 project-item skill과 `codex/skills/project-item/re
 | JOB 값 | CR 원본 |
 | --- | --- |
 | ID | CR ID |
-| 작업 | 제목과 본문 전체. 최초 prompt에 넣습니다 |
+| 작업 | 제목과 CR 파일 경로. 최초 prompt는 CR 파일을 읽으라고 지시합니다 |
 | mode | `- Mode: write \| read-only`. 없으면 write |
 | 작업 디렉토리 | `- Cwd: <seat 기준 상대 경로>`. 없으면 seat root |
 | branch | Write이면 `cr/<ID>`. Read-only이면 없음 |
@@ -899,7 +901,7 @@ Start와 restart는 다음 실행 입력을 만듭니다.
 
 | 항목 | 계약 |
 | --- | --- |
-| prompt_file | `agent/runs/<run_id>/prompt.md`. 공통 prompt, 인계 파일, CR 본문을 포함 |
+| prompt_file | `agent/runs/<run_id>/prompt.md`. 공통 prompt, 인계 파일, CR 파일 경로와 그 파일을 읽으라는 지시를 포함 |
 | settings_file | Claude만. 공통 코드가 `agent/runs/<run_id>/settings.json`을 씁니다: `crossSessionInbound: accept`와 등록 hook. Codex는 null |
 | provider_name | Claude만. Tmux window 이름 |
 | env | 공통 `AGENT_SESSION_*` |

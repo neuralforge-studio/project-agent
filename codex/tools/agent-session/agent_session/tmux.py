@@ -196,10 +196,7 @@ class Tmux:
                        "registered": False, "ready": False, "stopping": False,
                        "placeholder_pid": pane["pane_pid"], "placeholder_birth": process.birth(pane["pane_pid"]),
                        "placeholder_process_group": placeholder_group})
-        # The JOB holds the whole CR text. Tmux rejects a command over about 16 KiB, so the JOB is a separate update.
-        self.write_meta(window_id, {key: value for key, value in values.items() if key != "job"})
-        if "job" in values:
-            self.write_meta(window_id, {"job": values["job"]})
+        self.write_meta(window_id, values)
         return self.read_meta(window_id)
 
     def read_meta(self, window_id):

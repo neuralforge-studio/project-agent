@@ -173,15 +173,6 @@ def test_registration_update_is_never_seen_half_written(tmp_path, tmux):
     assert read["ends_with_separator"] == "a;" and read["spaced_separator"] == "x ; y"
 
 
-def test_window_creation_accepts_a_job_text_near_the_tmux_command_limit(tmp_path, tmux):
-    # Tmux 3.8 rejects a command whose arguments exceed about 16 KiB; the JOB alone holds the whole CR text.
-    job = {"job_id": "J-20261103-01", "text": "가" * 5150}       # 15,450 bytes in UTF-8
-    meta = tmux.create_window("demo", "demo-worker-0-J-20261103-01", tmp_path,
-                              {"base": str(tmp_path), "run_id": "run-one", "target": "seat-0",
-                               "job_id": "J-20261103-01", "job": job})
-    assert meta["job"] == job and meta["registered"] is False
-
-
 def test_unowned_and_restored_session_options_do_not_get_adopted(tmp_path, tmux):
     tmux.command("new-session", "-d", "-s", "user-session", "sleep", "86400")
     with pytest.raises(SessionError) as error:

@@ -65,7 +65,7 @@ def test_worker_assignment_moves_the_cr_and_release_follows_integration(session_
     assert env.cr_header(cr, "Base") == f"{env.initial_hash} {commit_time}"
     assert git(env.seats[0], "branch", "--show-current") == "cr/TOOL-001"
     prompt = (env.base / "agent/runs" / worker["run_id"] / "prompt.md").read_text()
-    assert "배정 CR: TOOL-001" in prompt and "## Implementation" in prompt and "## Result" in prompt
+    assert "배정 CR: TOOL-001" in prompt and "## Result" in prompt
     (env.seats[0] / "server.py").write_text("VALUE = 2\n")
     git(env.seats[0], "add", "server.py")
     git(env.seats[0], "commit", "-m", "Refactor temporary server")
@@ -341,6 +341,69 @@ def test_parked_cr_that_kept_its_seat_resumes_there_after_its_run_stops(session_
     assert git(env.seats[0], "branch", "--show-current") == "cr/TOOL-001"
     assert env.store.read()["0"]["git_hash"] == env.initial_hash
     assert env.store.read()["0"]["session"]["session_id"] == resumed["session"]["session_id"]
+
+
+BODY_MARKER = "BODY-ONLY-MARKER-7f3c"
+
+
+def grow(env, cr_id, size=20000):
+    """Pad the CR's Evidence past tmux's command limit (about 16 KiB), as Results and Dispositions do."""
+    _, path = env.cr_state(cr_id)
+    padding = BODY_MARKER + "\n" + "- evidence line kept in the CR file\n" * (size // 36)
+    path.write_text(path.read_text().replace("## Evidence\n", "## Evidence\n" + padding, 1))
+    assert len(path.read_bytes()) > size
+
+
+def assert_job_points_to_the_cr(env, cr, run_id):
+    job = env.tmux.get_current("fixture", "seat-0")["job"]
+    assert "text" not in job
+    assert job["job_id"] == cr and job["path"] == str(env.cr_state(cr)[1])
+    assert BODY_MARKER not in (env.base / "agent/runs" / run_id / "prompt.md").read_text()
+
+
+def test_worker_start_with_a_cr_over_the_tmux_command_limit(session_env):
+    env = session_env
+    cr = env.cr()
+    grow(env, cr)
+    worker = env.manager().start(cr)
+    assert worker["seat"] == 0 and worker["ready"] is True
+    assert_job_points_to_the_cr(env, cr, worker["run_id"])
+
+
+@pytest.mark.parametrize("previous", ["stopped", "unlaunched"])
+def test_a_cr_that_grew_past_the_tmux_command_limit_resumes_on_its_seat(session_env, monkeypatch, previous):
+    import agent_session.lifecycle as lifecycle
+
+    env = session_env
+    cr = env.cr()
+    if previous == "stopped":
+        first = env.manager().start(cr)
+        (env.seats[0] / "worker-notes.txt").write_text("unfinished work\n")
+        env.finish(cr, state="todo", outcome=None, note="park on the user's stop")
+        assert env.manager().control("stop", job=cr)["released"] is False
+    else:
+        fail_once(monkeypatch, lifecycle.Manager, "_launch")
+        with pytest.raises(SessionError):
+            env.manager().start(cr)
+        first = env.tmux.get_current("fixture", "seat-0")
+    grow(env, cr)
+    resumed = env.manager().start(cr)
+    assert resumed["seat"] == 0 and resumed["ready"] is True
+    assert (resumed["run_id"] == first["run_id"]) is (previous == "unlaunched")
+    assert env.cr_state(cr)[0] == "in-progress"
+    assert_job_points_to_the_cr(env, cr, resumed["run_id"])
+
+
+def test_worker_prompt_points_to_the_cr_file_instead_of_its_text(session_env):
+    env = session_env
+    cr = env.cr()
+    _, path = env.cr_state(cr)
+    path.write_text(path.read_text().replace("Change server.py.", "Change server.py. " + BODY_MARKER))
+    worker = env.manager().start(cr)
+    prompt = (env.base / "agent/runs" / worker["run_id"] / "prompt.md").read_text()
+    assert "CR 파일: " + str(env.cr_state(cr)[1]) + "\n" in prompt
+    assert "위 CR 파일을 읽" in prompt
+    assert BODY_MARKER not in prompt and "## Implementation" not in prompt
 
 
 def test_read_only_preparation_syncs_main_without_a_branch(session_env):
