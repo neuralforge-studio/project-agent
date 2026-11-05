@@ -11,11 +11,13 @@ import uuid
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 from agent_session.config import Project
 from agent_session.errors import SessionError
 from agent_session.lifecycle import Manager
 from agent_session.process import alive, birth
 from agent_session.tmux import Tmux
+from agent_session_fixture import stop_test_server
 
 
 @pytest.fixture
@@ -27,7 +29,7 @@ def tmux():
     original_argv = instance._argv
     instance._argv = lambda arguments: ["tmux", "-f", os.devnull] + original_argv(arguments)[1:]
     yield instance
-    subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=10)
+    stop_test_server(name)
 
 
 def new_window(tmux, tmp_path, run="run-one", target="seat-0", job="J-20261103-01"):

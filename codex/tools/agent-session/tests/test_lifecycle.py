@@ -13,7 +13,7 @@ import uuid
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
-from agent_session_fixture import git, session_env
+from agent_session_fixture import git, session_env, stop_test_server
 from agent_session.errors import SessionError
 from agent_session.state import locked
 
@@ -674,7 +674,7 @@ def test_a_run_of_another_base_gets_no_input_through_its_socket(session_env, tmp
             assert env.tmux.pane_info(run["pane_id"])["pane_dead"] is False
         assert env.project.state_path.read_bytes() == snapshots[0]
     finally:
-        subprocess.run(["tmux", "-L", other.socket_name, "kill-server"], capture_output=True, timeout=10)
+        stop_test_server(other.socket_name)
 
 
 def test_a_run_that_the_state_does_not_name_gets_no_input(session_env, monkeypatch):
