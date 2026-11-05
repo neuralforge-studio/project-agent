@@ -53,6 +53,7 @@ Seat 방식도 선택 시점의 JOB ID와 실행을 확정한 뒤 제어 직전�
 그 실행에 대화가 있으면 state가 그 자리에 게시한 session과 같아야 합니다.
 다르면 owner_mismatch 오류입니다. Provider 호출·pane 입력·state 갱신을 하지 않습니다.
 이 대조는 check_binding(5절)과 같은 조건을 사용합니다.
+start가 기존 실행을 관찰·이름 변경·launch하기 전에도 같은 조건을 적용합니다. 게시 전 실행은 base와 자리만 대조합니다.
 중지된 실행에 send하지 않습니다.
 
 관리 ID는 base_path_key·project_id·run_id입니다.
