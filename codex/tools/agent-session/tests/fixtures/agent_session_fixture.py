@@ -24,6 +24,14 @@ from project_item import store as item_store  # noqa: E402
 from project_item.kinds import CR  # noqa: E402
 
 
+DEFAULT_TIMEOUT = 15
+
+
+def command_timeout():
+    """The wait limit for one fixture Manager command; AGENT_SESSION_TEST_TIMEOUT raises it under machine load."""
+    return float(os.environ.get("AGENT_SESSION_TEST_TIMEOUT", DEFAULT_TIMEOUT))
+
+
 def git(root, *args):
     result = subprocess.run(["git", "-c", "submodule.recurse=false", "-C", str(root), *args],
                             capture_output=True, text=True, timeout=15)
@@ -79,8 +87,8 @@ class Environment:
         self.tmux = Tmux(socket_name=self.socket_name)
         return self
 
-    def manager(self, timeout=15):
-        return Manager(self.base, self.config, socket_name=self.socket_name, timeout=timeout)
+    def manager(self, timeout=None):
+        return Manager(self.base, self.config, socket_name=self.socket_name, timeout=timeout or command_timeout())
 
     def add_project(self, name="other"):
         """Register a second project (own clone and state, no seats) and return its base."""
@@ -94,8 +102,8 @@ class Environment:
         self.config.write_text(json.dumps(registry))
         return base
 
-    def manager_at(self, base, timeout=15):
-        return Manager(base, self.config, socket_name=self.socket_name, timeout=timeout)
+    def manager_at(self, base, timeout=None):
+        return Manager(base, self.config, socket_name=self.socket_name, timeout=timeout or command_timeout())
 
     def cr(self, number=1, mode="write", cwd=None):
         """Write an approved CR in todo/ and return its ID."""

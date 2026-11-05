@@ -13,7 +13,7 @@ import uuid
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
-from agent_session_fixture import git, session_env, stop_test_server
+from agent_session_fixture import command_timeout, git, session_env, stop_test_server
 from agent_session.errors import SessionError
 from agent_session.state import locked
 
@@ -662,7 +662,7 @@ def test_a_run_of_another_base_gets_no_input_through_its_socket(session_env, tmp
         other.manager().start("leader")
         other.manager().start(cr)
         calls = record_provider_input(monkeypatch)
-        crossed = lambda: Manager(other.base, other.config, socket_name=env.socket_name, timeout=15)
+        crossed = lambda: Manager(other.base, other.config, socket_name=env.socket_name, timeout=command_timeout())
         snapshots = (env.project.state_path.read_bytes(), other.project.state_path.read_bytes())
         results = [outcome(lambda: crossed().send(job=job, message="for the other base")) for job in foreign]
         results += [outcome(lambda: crossed().control("stop", job=job)) for job in foreign]
@@ -736,7 +736,7 @@ def test_start_does_not_handle_the_run_of_another_base(session_env, tmp_path, mo
 
         before = (names(), env.tmux.read_meta(foreign["window_id"]), env.project.state_path.read_bytes(),
                   other.project.state_path.read_bytes())
-        crossed = Manager(other.base, other.config, socket_name=env.socket_name, timeout=15)
+        crossed = Manager(other.base, other.config, socket_name=env.socket_name, timeout=command_timeout())
         assert outcome(lambda: crossed.start(job)) == "owner_mismatch"
         assert calls == []
         after = (names(), env.tmux.read_meta(foreign["window_id"]), env.project.state_path.read_bytes(),

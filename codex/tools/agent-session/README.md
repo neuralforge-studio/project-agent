@@ -94,4 +94,8 @@ Target은 `leader` 또는 현재 배정된 CR ID입니다.
 "$PY" -m pytest -q codex/tools/agent-session/tests
 ```
 
+Machine load가 높으면 `AGENT_SESSION_TEST_TIMEOUT`(초, 기본 15)으로 fixture의 명령당 대기 한도를
+늘립니다. `codex/tools/conftest.py`는 `--basetemp`가 없을 때 실행마다 `TMPDIR` 아래 전용 임시
+디렉터리를 쓰고, 통과하면 지웁니다. 실패하면 조사를 위해 남깁니다.
+
 이 검사는 실제 provider 연결과 실제 project의 인수 결과를 대신하지 않습니다.
