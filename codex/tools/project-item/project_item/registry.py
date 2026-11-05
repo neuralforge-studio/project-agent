@@ -16,6 +16,7 @@ _AGENT_SESSION = str(TOOLS / "agent-session")
 if _AGENT_SESSION not in sys.path:
     sys.path.insert(0, _AGENT_SESSION)
 
+from agent_session import api  # noqa: E402
 from agent_session.config import load_registry, resolve_project  # noqa: E402
 from agent_session.errors import SessionError  # noqa: E402
 
@@ -59,6 +60,18 @@ def project_of_cwd(config=None, cwd=None):
         return resolve_project(cwd, config)
     except SessionError:
         return None
+
+
+def caller(project) -> tuple[str, str | None]:
+    """The caller by agent-session's rule: "leader" or "seat-N" (checked against its live run),
+    "operator" or "unmanaged-agent", with the conversation ID."""
+    try:
+        actor, identity = api.caller(project)
+        if actor == "leader" or actor.startswith("seat-"):
+            api.require_live(project, actor, identity)
+    except SessionError as error:
+        raise _registry_error(error) from error
+    return actor, identity
 
 
 def item_root(project, kind: str) -> Path:

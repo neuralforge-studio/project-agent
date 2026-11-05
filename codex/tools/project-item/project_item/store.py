@@ -212,6 +212,18 @@ def add_disposition(text: str, entry: str, order: tuple[str, ...]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def record(kind: Kind, root: Path, item_id: str, entry: str) -> Path:
+    """Append one Disposition entry to an item in place. Nothing changes on a refusal."""
+    with root_lock(root):
+        state, path = find(kind, root, item_id)
+        text = add_disposition(path.read_text(encoding="utf-8"), entry, kind.sections)
+        bad = kind.fmt.check(kind.fmt.parse_text(text, path, state))
+        if bad:
+            raise ItemError("format_invalid", f"{item_id} does not meet {state}/: " + "; ".join(bad))
+        path.write_text(text, encoding="utf-8")
+    return path
+
+
 def _outcome_kind(outcome: str | None) -> str:
     return outcome.split()[0] if outcome else ""
 

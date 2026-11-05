@@ -141,8 +141,11 @@ def trust_workspace(path, wait=TRUST_LOCK_SECONDS):
                 pass
 
 
-def parse_peers(result):
-    """Read the 2.1.317 listing's tmux locator, never a UUID-derived ref."""
+def parse_peers(result, skipped=None):
+    """Read the 2.1.317 listing's tmux locator, never a UUID-derived ref.
+
+    A row whose name, ref or status is blank cannot be the target, so it is left out and
+    appended to `skipped` when given; it does not reject the rest of the listing."""
     listing = result.get("listing")
     sections = result.get("sections")
     if not isinstance(listing, str) or not isinstance(sections, list):
@@ -155,8 +158,12 @@ def parse_peers(result):
         if not isinstance(rows, list):
             raise SessionError("provider_protocol_error", "Claude returned invalid session rows.", 4)
         for row in rows:
-            if not isinstance(row, dict) or any(not isinstance(row.get(key), str) or not row[key] for key in ("name", "ref", "status")):
+            if not isinstance(row, dict):
                 raise SessionError("provider_protocol_error", "Claude returned an invalid peer row.", 4)
+            if any(not isinstance(row.get(key), str) or not row[key] for key in ("name", "ref", "status")):
+                if skipped is not None:
+                    skipped.append(row)
+                continue
             prefix = row["name"] + " [" + row["ref"] + "]"
             lines = [line.strip() for line in listing.splitlines() if line.strip().startswith(prefix + " ")]
             if len(lines) != 1:
