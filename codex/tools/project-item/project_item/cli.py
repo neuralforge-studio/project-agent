@@ -255,9 +255,9 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("move", parents=[common], help="move an item to another state")
     p.add_argument("id")
     p.add_argument("state")
-    p.add_argument("--outcome", help="Outcome header for done/ or deferred/")
+    p.add_argument("--outcome", help="Outcome header for done/ or deferred/ (needs --by)")
     p.add_argument("--by", help="decider; writes one Disposition entry")
-    p.add_argument("--note", help="reason or the user's words for the Disposition entry")
+    p.add_argument("--note", help="reason or the user's words for the Disposition entry (needs --by)")
     p.set_defaults(run=cmd_move)
 
     p = sub.add_parser("render", parents=[common], help="write the decision page")

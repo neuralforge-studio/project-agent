@@ -63,7 +63,8 @@ CR은 JOB을 겸합니다. project-team의 `agent-session start --job <CR-ID>`�
 `move`의 동작:
 
 1. 출발·도착 쌍이 위 표에 있는지 확인합니다.
-2. `--outcome`이 있으면 Outcome header를 씁니다. `--by`가 있으면 Disposition 항목을 씁니다.
+2. `--outcome`이 있으면 Outcome header를 씁니다. `--by`가 있으면 `--note`를 근거로 Disposition 항목을 씁니다.
+   판정은 결정자를 남기므로 `--outcome`·`--note`는 `--by`와 함께 씁니다. `--by`가 없으면 `decider_missing`으로 거절합니다.
    도착 상태에 맞지 않는 Outcome은 `invalid_outcome`으로 거절합니다. 예를 들어 cr의 `moved`는 deferred에만 씁니다.
 3. 도착 상태 기준 형식 검사를 합니다. 실패하면 파일을 바꾸지 않습니다.
 4. Git이 추적하는 파일은 `git mv`로 옮깁니다. 추적하지 않는 파일은 rename합니다.

@@ -157,6 +157,18 @@ def test_reopen_needs_a_reason(tmp_path):
     assert error.value.code == "reason_missing"
 
 
+@pytest.mark.parametrize("options", [{"outcome": "fixed"}, {"note": "n"}])
+def test_outcome_or_note_without_a_decider_is_refused(tmp_path, options):
+    root = tmp_path / "cr"
+    path = root / "todo" / "TOOL-001-t.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(cr_text("TOOL-001"))
+    with pytest.raises(ItemError) as error:
+        store.move(CR, root, "TOOL-001", "done", **options)
+    assert error.value.code == "decider_missing"
+    assert path.read_text() == cr_text("TOOL-001") and not (root / "done").exists()
+
+
 def test_disposition_goes_before_implementation_in_a_cr(tmp_path):
     root = tmp_path / "cr"
     path = root / "todo" / "TOOL-001-t.md"
