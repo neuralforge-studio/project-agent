@@ -3,6 +3,7 @@ import copy
 import json
 from pathlib import Path
 import shlex
+import subprocess
 import sys
 
 import pytest
@@ -628,6 +629,39 @@ for line in sys.stdin:
         with pytest.raises(SessionError) as caught:
             client.tool("SendMessage", {"to": "peer", "message": "text", "unexpected": "field"})
         assert caught.value.code == "provider_protocol_unsupported"
+
+
+def test_send_reports_provider_timeout_when_the_silent_mcp_is_not_reaped(claude, tmp_path, monkeypatch):
+    # The MCP stand-in never answers, and even after SIGTERM and SIGKILL the wait for it times out
+    # (a host stuck in I/O wait). The caller must still see the stage that failed.
+    silent = tmp_path / "claude"
+    silent.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(60)\n")
+    silent.chmod(0o755)
+    spawned = []
+    original_popen = subprocess.Popen
+
+    class Unreaped(original_popen):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            spawned.append(self)
+
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired(self.args, timeout)
+
+    monkeypatch.setattr(subprocess, "Popen", Unreaped)
+    provider, _, context, _, _ = claude
+    provider.mcp_factory = MCPClient
+    context["provider_executable"] = str(silent)
+    try:
+        with pytest.raises(SessionError) as caught:
+            provider.send({"session_id": IDENTITY}, "peer message", context, timeout=0.5)
+    finally:
+        for process in spawned:
+            original_popen.kill(process)
+            original_popen.wait(process)
+    assert caught.value.code == "provider_timeout"
+    assert caught.value.exit_code == 4
+    assert caught.value.details["unreaped_pid"] == spawned[0].pid
 
 
 @pytest.mark.parametrize(("screen", "kind"), [
