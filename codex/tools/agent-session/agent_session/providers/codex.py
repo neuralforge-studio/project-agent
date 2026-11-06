@@ -14,6 +14,7 @@ from .websocket import WebSocketRPC
 
 TERMINAL_TURNS = {"completed", "interrupted", "failed"}
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_LAUNCH_CONFIG_KEYS = ("sandbox_mode", "shell_environment_policy")
 
 
 def _merge(base, update):
@@ -23,6 +24,70 @@ def _merge(base, update):
             result[key] = _merge(result[key], value)
         else:
             result[key] = value
+    return result
+
+
+def _merge_configuration(base, update):
+    """Keep Codex's filter format replacement and case-insensitive map merge."""
+    policy_update = update.get("shell_environment_policy")
+    if not isinstance(policy_update, dict):
+        return _merge(base, update)
+    legacy_keys = ("include_only", "exclude")
+    has_filters = policy_update.get("filters") is not None
+    has_legacy = any(policy_update.get(key) is not None for key in legacy_keys)
+    if has_filters and has_legacy:
+        raise SessionError("env_policy_conflict", "Do not mix legacy environment arrays and filters in one config layer.", 3)
+    result = _merge(base, update)
+    policy = dict(result["shell_environment_policy"])
+    if has_filters:
+        for key in legacy_keys:
+            policy.pop(key, None)
+        previous = base.get("shell_environment_policy")
+        old_filters = previous.get("filters") if isinstance(previous, dict) else None
+        new_filters = policy_update["filters"]
+        if isinstance(old_filters, dict) and isinstance(new_filters, dict):
+            policy["filters"] = {key.casefold(): value for key, value in old_filters.items()}
+            policy["filters"].update({key.casefold(): value for key, value in new_filters.items()})
+    elif has_legacy:
+        policy.pop("filters", None)
+    result["shell_environment_policy"] = policy
+    return result
+
+
+def _profile_configuration(config, layers, profile):
+    """Resolve launch checks with a replacement profile and the native layer order."""
+    if layers is None:
+        raise SessionError("provider_protocol_unsupported", "Codex profile validation requires config layers.", 3)
+    if not isinstance(layers, list):
+        raise SessionError("provider_protocol_error", "Codex config layers must be an array.", 4)
+    resolved = {}
+    user_seen = False
+    # config/read returns layers from highest to lowest precedence.
+    for layer in reversed(layers):
+        if not isinstance(layer, dict):
+            raise SessionError("provider_protocol_error", "A Codex config layer is invalid.", 4)
+        if layer.get("disabledReason") is not None:
+            continue
+        source, values = layer.get("name"), layer.get("config")
+        if (not isinstance(source, dict) or not isinstance(source.get("type"), str)
+                or not source["type"] or not isinstance(values, dict)):
+            raise SessionError("provider_protocol_error", "A Codex config layer has invalid source or values.", 4)
+        kind = source["type"]
+        if kind == "user" and source.get("profile") is not None:
+            continue
+        if kind in {"project", "sessionFlags"} and not user_seen:
+            raise SessionError("provider_protocol_unsupported", "Codex config layers do not locate the user profile.", 3)
+        if kind == "user" and user_seen:
+            raise SessionError("provider_protocol_error", "Codex returned multiple base user config layers.", 4)
+        resolved = _merge_configuration(resolved, {key: values[key] for key in _LAUNCH_CONFIG_KEYS if key in values})
+        if kind == "user":
+            user_seen = True
+            resolved = _merge_configuration(resolved, {key: profile[key] for key in _LAUNCH_CONFIG_KEYS if key in profile})
+    if not user_seen:
+        raise SessionError("provider_protocol_unsupported", "Codex did not return an active base user config layer.", 3)
+    # A key absent after replay must not retain the daemon's previous profile value.
+    result = {key: value for key, value in config.items() if key not in _LAUNCH_CONFIG_KEYS}
+    result.update(resolved)
     return result
 
 
@@ -139,12 +204,12 @@ class CodexProvider:
         return {}
 
     def _configuration(self, context, parsed, limit):
+        profile = parsed["profile"]
         with self.rpc_factory(context["endpoint"], limit) as rpc:
-            response = rpc.call("config/read", {"cwd": str(context["cwd"]), "includeLayers": False})
+            response = rpc.call("config/read", {"cwd": str(context["cwd"]), "includeLayers": bool(profile)})
         config = response.get("config")
         if not isinstance(config, dict):
             raise SessionError("provider_protocol_error", "Codex did not return effective configuration.", 4)
-        profile = parsed["profile"]
         if profile:
             if not re.fullmatch(r"[A-Za-z0-9_-]+", profile):
                 raise SessionError("invalid_provider_args", "Invalid Codex profile name.", 2)
@@ -158,8 +223,8 @@ class CodexProvider:
                 raise SessionError("provider_protocol_unsupported", "Codex profile validation needs Python 3.11 or newer.", 3) from error
             except (OSError, ValueError) as error:
                 raise SessionError("invalid_provider_args", "Cannot read the selected Codex profile v2 file.", 2) from error
-            config = _merge(config, layer)
-        return _merge(config, parsed["overrides"])
+            config = _profile_configuration(config, response.get("layers"), layer)
+        return _merge_configuration(config, parsed["overrides"])
 
     def _environment_arguments(self, prepared, config, parsed):
         values = prepared.get("env", {})
@@ -182,6 +247,8 @@ class CodexProvider:
         command_policy = parsed["overrides"].get("shell_environment_policy", {})
         if remove and isinstance(command_policy, dict) and any(key in command_policy for key in ("exclude", "include_only")):
             raise SessionError("env_policy_conflict", "Do not mix legacy environment arrays and filters in one CLI layer.", 3)
+        if remove and any(policy.get(key) is not None for key in ("exclude", "include_only")):
+            raise SessionError("env_policy_conflict", "Required environment removals would replace configured legacy filters.", 3)
         filters = policy.get("filters") or {}
         if not isinstance(filters, dict):
             raise SessionError("env_policy_conflict", "Invalid environment filters.", 3)

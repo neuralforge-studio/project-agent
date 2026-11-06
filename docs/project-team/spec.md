@@ -562,6 +562,10 @@ Codex 실행 입력은 settings_file=null과 검증한 argv 배열입니다.
 설정은 `-c key=value`, 모델은 --model, profile은 --profile을 사용합니다.
 0.166.0의 --profile NAME은 `$CODEX_HOME/NAME.config.toml`의 profile v2입니다.
 기존 `[profiles.NAME]`를 이 파일과 같은 입력으로 가정하지 않습니다.
+Profile의 sandbox·환경 정책은 user 설정 위, 활성 project 설정 아래에 적용합니다.
+명시한 CLI override는 그 위에 적용합니다. 비활성 project와 선택하지 않은 profile 값은 적용하지 않습니다.
+Profile 검증에 필요한 활성 설정 계층을 확인할 수 없으면 시작을 거절합니다.
+Profile을 지정하지 않으면 native 유효 설정으로 검증합니다.
 설치 때 실제 지원 형식을 확인하고 기존 값의 명시 override 또는 검토한 v2 파일로 옮깁니다.
 공통 start가 사용자 config를 자동 변환하거나 존재하지 않는 profile을 생성하지 않습니다.
 Effort는 `-c model_reasoning_effort="..."`로 전달합니다.
@@ -573,6 +577,9 @@ Codex env는 launcher뿐 아니라 `-c shell_environment_policy.set.KEY="value"`
 Unset-env의 정확한 각 이름을 필터 key로 옮기며 wildcard를 사용하지 않습니다.
 기존 profile·inherit·기본 제외·include allowlist를 임의로 넓히지 않습니다.
 같은 설정 계층에 legacy exclude 배열과 filters를 혼합하지 않습니다.
+상위 계층이 legacy 배열과 filters 중 다른 형식을 지정하면 이전 형식의 규칙은 대체합니다.
+Filters끼리는 대소문자를 구분하지 않는 key로 병합하며 같은 key의 상위 값이 우선합니다.
+Unset-env 필터를 추가할 때 기존 legacy 배열의 제약을 잃게 되면 env_policy_conflict로 거절합니다.
 기존 set이 제거 대상을 다시 주입하거나 allowlist가 필수 값을 막으면 env_policy_conflict입니다.
 빈 문자열을 unset으로 대신하지 않습니다.
 실제 tool 환경 수신은 별도 인수하며 설정 파싱 성공만으로 통과시키지 않습니다.
