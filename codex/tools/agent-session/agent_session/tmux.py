@@ -361,15 +361,18 @@ class Tmux:
         return self._run("capture-pane", "-p", "-t", _safe_text(pane_id, "pane handle"))
 
     def pane_info(self, pane_id):
-        """The pane's fields. A dead pane may have no pane_pid (tmux 3.8 clears it); it is None then."""
-        fields = ("window_id", "pane_id", "pane_pid", "pane_current_path", "pane_current_command",
-                  "pane_dead", "pane_dead_status", "pane_dead_signal")
+        """The pane's fields. A dead pane may have no pane_pid (tmux 3.8 clears it); it is None then.
+
+        Only fields that can never hold a tab are read: pane_current_path and pane_current_command
+        are printed as is, so a tab in a directory name would shift every field after it."""
+        fields = ("window_id", "pane_id", "pane_pid", "pane_dead", "pane_dead_status", "pane_dead_signal")
         raw = self._run("display-message", "-p", "-t", _safe_text(pane_id, "pane handle"),
                         "\t".join("#{" + field + "}" for field in fields))
         parts = raw.split("\t")
-        if (len(parts) != len(fields) or parts[5] not in ("0", "1")
-                or not (parts[2].isdigit() or (parts[2] == "" and parts[5] == "1"))):
-            raise SessionError("tmux_unknown", "The managed pane observation is incomplete.", 4)
+        if (len(parts) != len(fields) or parts[3] not in ("0", "1")
+                or not (parts[2].isdigit() or (parts[2] == "" and parts[3] == "1"))):
+            raise SessionError("tmux_unknown", "The managed pane observation is incomplete.", 4,
+                               {"pane": pane_id, "raw": raw, "field_count": len(parts)})
         row = dict(zip(fields, parts))
         row["pane_pid"] = int(row["pane_pid"]) if row["pane_pid"] else None
         row["pane_dead"] = row["pane_dead"] == "1"
