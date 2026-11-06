@@ -74,6 +74,8 @@ agent-session resume --project agent
 - shutdown은 `--force`가 없으면 끝나기를 기다리고, 마감까지 쉬지 않은 대상은 종료하지 않고 보고합니다(exit 4). 보고의 `rerun`을 보고 다시 실행합니다.
 - 기다리는 동안 tmux client에 마감 시각을 알리고, 마감 60초 전과 마감에 쉬지 않은 window에 bell을 남깁니다.
 - shutdown은 반납하지 않습니다. 배정·CR·seat 파일은 그대로이고, 종료를 확인한 대상만 `<base>/agent/suspend.json`에 기록합니다.
+- 서버가 뜬 뒤에는 tmux-resurrect 복원보다 resume을 먼저 실행합니다. 복원이 먼저면 project 이름의 session이 agent-session의 owner 표시 없이 생겨 resume이 `tmux_owner_mismatch`로 멈춥니다.
+  이때는 그 project 이름의 복원된 session을 닫고 resume을 다시 실행합니다. 복원된 session의 pane은 재부팅 전 process가 아니라 새 shell입니다.
 - resume이 실패한 대상은 기록이 남습니다. Worker는 `agent-session start --job <CR>`로 새 대화를 시작합니다.
 
 resume 뒤 재개 메시지를 받은 Leader는 메시지의 "재개하지 못한 대상"과 `project-item ls`·state로 Worker 상태를 확인합니다.

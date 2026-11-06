@@ -864,6 +864,10 @@ Provider가 Claude인 project만 처리합니다. Codex project는 건드리지 
    - Leader의 메시지에는 재개한 Worker와 재개하지 못한 대상을 적습니다.
    - 메시지 전달 실패는 해당 대상의 `message`에 보고하며 재전송하지 않습니다.
 8. tmux server가 다시 뜬 경우와 종료한 window가 남은 경우 결과가 같습니다. tmux-resurrect가 복원한 window의 option은 채택하지 않습니다(3절).
+   - 서버가 뜬 뒤에는 tmux-resurrect 복원보다 resume을 먼저 실행합니다.
+   - 복원이 먼저면 project 이름의 session이 owner 표시 없이 생깁니다. 그러면 resume이 `tmux_owner_mismatch`("The named tmux session is not managed by agent-session.")로 멈춥니다.
+   - 이때 운영자는 그 project 이름의 복원된 session을 닫고 resume을 다시 실행합니다. 복원된 session의 pane은 재부팅 전 process가 아니라 새 shell입니다.
+   - 복원된 session을 채택하는 코드는 없습니다.
 9. 모두 재개했으면 exit 0입니다. 하나라도 실패하면 `resume_incomplete`이고 exit 4이며 같은 결과를 details에 담습니다.
 
 #### 새 대화로 시작
