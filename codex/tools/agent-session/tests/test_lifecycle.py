@@ -808,7 +808,7 @@ def test_start_does_not_handle_the_run_of_another_base(session_env, tmp_path, mo
         assert after == before
         assert env.tmux.get_current("fixture", slot)["run_id"] == foreign["run_id"]
     finally:
-        subprocess.run(["tmux", "-L", other.socket_name, "kill-server"], capture_output=True, timeout=10)
+        stop_test_server(other.socket_name)
 
 
 def test_a_run_that_the_state_does_not_name_gets_no_input(session_env, monkeypatch):
