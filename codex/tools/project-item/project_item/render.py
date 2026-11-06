@@ -33,7 +33,7 @@ LIST_RE = re.compile(r"^(\s*)(-|\d+\.)\s+(.*)$")
 
 
 def markdown(text: str) -> str:
-    """Paragraphs, nested lists, tables and code fences. Everything else is plain text."""
+    """Paragraphs, nested lists, tables, code fences and blockquotes. Everything else is plain text."""
     out: list[str] = []
     para: list[str] = []
     lines = text.splitlines()
@@ -53,6 +53,13 @@ def markdown(text: str) -> str:
                 j += 1
             out.append("<pre>" + html.escape("\n".join(lines[i + 1:j])) + "</pre>")
             i = j + 1
+        elif line.startswith(">"):
+            flush()
+            quoted = []
+            while i < len(lines) and lines[i].startswith(">"):
+                quoted.append(re.sub(r"^> ?", "", lines[i]))
+                i += 1
+            out.append("<blockquote>" + markdown("\n".join(quoted)) + "</blockquote>")
         elif line.lstrip().startswith("|"):
             flush()
             rows = []
@@ -183,6 +190,8 @@ section p,section ul,section ol{margin:4px 0}section ul,section ol{padding-left:
 .rec{background:var(--accent-soft);border-radius:8px;padding:8px 12px}
 code{font-family:ui-monospace,monospace;font-size:.86em;background:var(--code);padding:1px 5px;border-radius:4px;
 overflow-wrap:anywhere}
+blockquote{margin:6px 0;padding:2px 0 2px 12px;border-left:3px solid var(--line);color:var(--muted)}
+blockquote>:first-child{margin-top:0}blockquote>:last-child{margin-bottom:0}
 pre{font-family:ui-monospace,monospace;font-size:.84rem;background:var(--code);padding:12px;border-radius:6px;
 white-space:pre-wrap}
 details.closed{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 16px}
