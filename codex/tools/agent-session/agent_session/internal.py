@@ -137,8 +137,11 @@ def register_from_hook(run_id, config_path, socket_path, expected_session_id=Non
     if event not in ("SessionStart", "Stop", "StopFailure", "SessionEnd"):
         raise SessionError("hook_invalid", "This hook event is not used by agent-session.", 2)
     if event == "SessionStart":
-        if payload.get("source") != "startup":
-            raise SessionError("hook_invalid", "Only a new conversation can bind this run.")
+        # Only a resume run (tmux option `resume`) binds a resumed conversation; other runs need a new one.
+        wanted = "resume" if context.get("resume") else "startup"
+        if payload.get("source") != wanted:
+            raise SessionError("hook_invalid", "This run binds only a " + ("resumed" if wanted == "resume" else "new")
+                               + " conversation.")
         project, control, context, _ = _register(
             run_id, config_path, socket_path, session_id, endpoint, cwd,
         )

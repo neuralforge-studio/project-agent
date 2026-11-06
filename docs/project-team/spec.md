@@ -1,7 +1,7 @@
 # Agent Session 동작 명세 v1
 
 공개 CLI는 `agent-session` 하나입니다.
-공개 명령은 start·send·stop·restart·review입니다.
+공개 명령은 start·send·stop·restart·review·shutdown·resume입니다.
 공통 도구는 프로젝트 코드를 import하거나 실행하지 않습니다.
 프로젝트별 차이는 등록(2절)과 프로젝트 문서·CR 본문으로만 표현합니다.
 
@@ -17,10 +17,14 @@ agent-session stop --seat 1
 agent-session restart --job leader
 agent-session review --job TOOL-012
 agent-session review --clear
+agent-session shutdown --all
+agent-session shutdown --project agent --timeout 300 --force
+agent-session resume --all
 ```
 
 Start는 --job 하나가 필수입니다.
 Review는 --job과 --clear 중 정확히 하나가 필수입니다(7절 Review).
+Shutdown과 resume은 --project와 --all 중 정확히 하나가 필수입니다(7절 shutdown·resume).
 나머지 대상 지정 명령은 --job과 --seat 중 정확히 하나가 필수입니다.
 둘 다 입력하면 같은 대상을 가리켜도 오류입니다.
 Leader는 등록 base에서 시작합니다.
@@ -36,6 +40,7 @@ Seat는 등록된 고정 작업 디렉토리이며 JOB이 끝나도 삭제하지
 Leader가 stop으로 종료·반납한 뒤 새 JOB을 start하면 새 session을 만듭니다.
 모든 restart는 기존 실행을 종료하고 새 대화로 교체합니다.
 Seat·JOB·Git 기준·branch는 유지하며 이전 대화를 재개하지 않습니다.
+이전 대화를 같은 ID로 다시 여는 명령은 resume 하나뿐입니다(7절 shutdown·resume).
 이전 대화 기록은 보존합니다.
 새 대화는 인계 문서와 현재 JOB으로 이전 작업을 이어받습니다.
 
@@ -242,6 +247,10 @@ Leader는 leader, Worker는 seat-N을 option의 고정 target으로 사용합니
 Tmux 근거가 사라지면 state를 자동 삭제하거나 실행을 자동 채택하지 않습니다.
 Tmux server를 다시 시작하면 예약 seat의 현재 실행 포인터와 실행 근거가 함께 사라집니다.
 그 seat의 start·stop·restart는 execution_unknown입니다. 운영자가 7절의 수동 복구를 수행합니다.
+예외는 shutdown이 남긴 종료 기록이 있는 slot입니다. 서버를 내리기 전에 `agent-session shutdown`을 실행했으면 이 근거가 사라져도 resume이나 start가 이어 갑니다(7절 shutdown·resume).
+`agent/suspend.json`은 shutdown이 종료를 확인한 slot의 기록입니다. slot(`leader` 또는 `seat-N`)마다 job_id·종료한 run_id·session_id·종료 시각(UTC)·forced를 담습니다.
+이 파일은 배정과 연결의 원본이 아닙니다. resume과 start가 state와 대조하는 데만 사용합니다.
+저장은 `agent/suspend.lock` 아래 원자적 교체로 합니다. 손상한 파일은 `suspend_invalid`이며 덮어쓰지 않습니다.
 `agent/runs/<run_id>/`에는 prompt·settings·launch·hook 진단·제어 결과를 둡니다.
 이 파일은 실행 산출물이며 배정의 두 번째 원본으로 사용하지 않습니다.
 `agent/diagnostics/`에는 예상하지 못한 예외의 traceback을 둡니다.
@@ -441,6 +450,8 @@ Turn 관찰은 아래 provider 종료 확인에만 사용합니다.
 이를 JOB 상태나 별도 state enum으로 저장하지 않습니다.
 
 Claude는 시작 때 지정한 UUID와 실제 hook의 session·cwd·source를 대조합니다.
+일반 start·restart의 run은 SessionStart의 source가 `startup`일 때만 등록합니다. resume의 run은 `resume`일 때만 등록합니다.
+run이 resume인지는 그 window의 `resume` option이 정합니다. hook의 matcher도 같은 값을 씁니다.
 Codex는 실제 도구 문맥의 CODEX_THREAD_ID와 endpoint를 확인합니다.
 내부 등록은 현재 run과 자기 window를 대조하고 그 window의 binding만 기록합니다.
 시작 controller는 대상 제어 잠금 아래 현재 포인터와 binding을 검증해 canonical state에 게시합니다.
@@ -460,6 +471,8 @@ Claude의 CLAUDECODE·CLAUDE_CODE_SESSION_ID·CLAUDE_CODE_MESSAGING_*와 부모 
 
 대화형 `claude --session-id <새 UUID> --settings <최종 파일>`로 시작합니다.
 최초 prompt는 위치 인자이며 대화 재개 옵션을 사용하지 않습니다.
+예외는 resume의 run입니다. 이 run은 `claude --resume <기록한 session_id> --settings <최종 파일>`로 같은 대화를 엽니다(7절 shutdown·resume).
+resume의 run은 `--fork-session`과 위치 인자 prompt를 쓰지 않습니다. 재개 메시지는 등록이 끝난 뒤 send로 보냅니다.
 프로젝트의 provider_name이 있으면 현재 CLI의 이름 옵션 `-n`에 전달합니다.
 최종 --settings에는 프로젝트 guard와 공통 SessionStart·Stop·StopFailure·SessionEnd hook을 합칩니다.
 이 파일의 writer는 prepare-session 하나입니다.
@@ -691,7 +704,7 @@ Accepted·held는 읽음·동의·JOB 완료가 아닙니다.
 전달 여부가 불명확하면 자동 재전송하지 않습니다.
 일반 메시지에 tmux 키 입력과 화면 scraping을 사용하지 않습니다.
 
-## 7. stop·restart
+## 7. stop·restart·shutdown·resume
 
 ### Stop 옵션
 
@@ -782,7 +795,7 @@ Restart는 다음 순서로 새 대화로 교체합니다.
 6. 시작 controller가 새 window의 실제 binding을 검증해 state에 게시한 뒤 시작 완료를 표시합니다.
 7. 같은 target의 종료한 window를 정리합니다(3절).
 
-이전 provider session_id와 새 session_id는 달라야 합니다.
+이전 provider session_id와 새 session_id는 달라야 합니다. 이 원칙의 예외는 resume 하나입니다(아래 shutdown·resume).
 종료 전에는 새 대화를 시작하지 않습니다.
 새 등록 전에는 이전 연결을 송신 가능한 새 연결로 취급하지 않습니다.
 시작 실패 시 JOB·Git 기준과 이전 대화 이력을 보존하며 오류를 반환합니다.
@@ -792,6 +805,77 @@ Provider의 이전 대화 기록을 삭제하거나 새 대화의 transcript로 
 Worker는 인계 파일에 적은 현재 HEAD·branch·미commit 파일·미push를 그대로 보존합니다.
 Worker의 보존한 미완료 작업만으로 restart나 같은 JOB의 재start를 거절하지 않습니다.
 Leader restart는 기존 Worker 배정을 바꾸지 않습니다.
+
+### shutdown·resume
+
+Workstation을 내리기 전에 운영자가 shutdown을 실행합니다. 서버가 다시 뜨면 resume을 실행합니다.
+두 명령은 운영자 명령입니다. 관리 session(Leader·Worker)이 호출하면 role_denied이고, 등록 밖의 agent가 호출하면 caller_unbound입니다. 등록된 모든 project에 대해 이 판정을 먼저 하며, 판정 전에는 아무것도 바꾸지 않습니다.
+두 명령은 현재 디렉토리로 project를 고르지 않습니다. `--project NAME`은 등록 이름, `--all`은 등록 파일의 모든 project입니다. 등록에 없는 이름은 project_not_found·exit 2입니다.
+Provider가 Claude인 project만 처리합니다. Codex project는 건드리지 않고 결과의 `skipped`에 `provider_not_supported`로 보고합니다. Codex의 thread 재개를 검증하지 못했기 때문입니다.
+
+| 옵션 | 필수·기본값 | 처리 |
+| --- | --- | --- |
+| --project NAME | --all과 택일 | 그 project만 |
+| --all | --project와 택일 | 등록 파일의 모든 project |
+| --timeout SECONDS | 선택. 600초 | shutdown은 모든 대상이 함께 쓰는 마감까지의 대기, resume은 전체 대기 제한 |
+| --force | shutdown만. 선택 | 마감까지 쉬지 않는 대상을 강제 종료 |
+
+#### shutdown
+
+1. 대상은 state에 session이 있는 Leader와 Worker입니다. 반납을 보류해 이미 종료한 Worker도 포함합니다. 그 Worker는 기존 종료 근거로 확인합니다. 대화가 등록되지 않은 seat는 건드리지 않고 `skipped`로 보고합니다.
+2. 모든 대상은 한 마감(`--timeout`) 아래 동시에 진행합니다. 한 대상의 대기가 다른 대상을 늦추지 않습니다. 한 project 안에서는 Worker가 모두 끝난 뒤(기록했든 남겼든) Leader를 멈춥니다.
+3. 각 대상은 stop의 종료 경로를 씁니다. 새 입력을 막고, CLI의 idle을 확인한 뒤 종료 요청을 한 번 보내고, 실제 종료를 확인합니다. 관찰 간격은 1초입니다.
+4. shutdown은 반납하지 않습니다. state의 job_id·git_hash·session과 CR의 위치와 seat의 파일을 바꾸지 않습니다. `leader.reviewing`도 유지합니다.
+5. 실제 종료를 확인한 대상만 `agent/suspend.json`에 기록합니다. 그 window의 이름은 종료한 window의 이름(`-exited-<run>`)으로 바꿉니다.
+6. 마감까지 쉬지 않은 대상은 `--force`에 따라 갈립니다.
+   - `--force`가 없으면 종료하지 않고 기록하지 않습니다. stop의 실패 경로처럼 stopping을 되돌려 계속 일하게 합니다. 결과의 `busy`와 `rerun`(강제 종료하려면 다시 실행할 명령)을 보고합니다.
+   - `--force`가 있으면 마감에 같은 CLI에만 SIGTERM을 보냅니다. 기록한 cli_pid의 birth가 같을 때만 보냅니다. process group에는 신호를 보내지 않습니다. 종료를 확인하면 forced=true로 기록합니다. birth가 다르거나 확인하지 못하면 신호를 보내지 않고 `unknown`으로 보고합니다.
+   - 종료 요청을 보낸 뒤에는 마감이 지나도 최대 30초 더 실제 종료를 기다립니다.
+7. 종료를 확인하지 못한 대상(unknown, control_pending 등)은 기록하지 않고 보고합니다. 자동으로 정리하지 않습니다.
+8. 결과는 project별 `recorded`·`busy`·`unknown`·`skipped`입니다. 남은 대상(`busy`·`unknown`)이 없으면 exit 0입니다. 있으면 `shutdown_incomplete`이고 exit 4이며 같은 결과를 details에 담습니다.
+9. shutdown은 다시 실행해도 안전합니다. 이미 종료한 대상은 같은 run으로 다시 기록합니다.
+
+#### 알람
+
+운영자가 마감 시각을 알 수 있도록 tmux에 접속한 모든 client에 알립니다.
+
+| 시점 | 알림 |
+| --- | --- |
+| 대기 시작 | `display-message -d 10000`. `--force`가 있으면 "agent shutdown: 대상 N, 강제 종료 시각 HH:MM:SS". 없으면 대기 마감 시각과 강제 종료하지 않는다는 사실 |
+| 마감 60초 전(`--timeout`이 60초를 넘을 때) | 쉬지 않은 대상과 다음 행동. `--force`가 없으면 강제 종료 명령 |
+| 마감 | 같은 형식. `--force`가 있으면 "강제 종료합니다" |
+
+- 60초 전과 마감에는 아직 쉬지 않은 대상의 window에 bell을 남깁니다. status line이 그 window와 session을 bell 표시로 보입니다.
+- Bell은 그 pane의 tty에 BEL(0x07) 한 byte를 쓰는 것입니다. 이것은 터미널로 나가는 출력이며 pane의 프로그램이 받는 입력이 아닙니다. 사용자가 같은 입력란에 입력하는 중이어도 입력에 섞이지 않습니다. 따라서 "Claude 관리 pane에는 어떤 키도 입력하지 않습니다" 원칙과 충돌하지 않습니다.
+- 알람이 실패하거나 접속한 client가 없어도 shutdown의 판정은 바뀌지 않습니다. 결과의 `alarms`에 시점별 client 수·bell 수·오류를 적습니다.
+- 새 결정 항목을 알리는 알람은 이 명세의 범위가 아닙니다. tmux status script가 맡습니다.
+
+#### resume
+
+1. project마다 종료 기록과 state를 대조합니다. 같은 job_id·session_id여야 하고, Worker의 CR은 in-progress여야 합니다. 다르면 그 대상은 `target_changed`로 남기고 다음 대상으로 넘어갑니다.
+2. project마다 Leader를 먼저, 그다음 Worker를 시작합니다. project들은 동시에 진행합니다. 시작 때마다 새 run과 새 window를 만들고 최신 project 지침으로 prompt·settings를 다시 만듭니다.
+3. Claude는 `--session-id` 대신 `--resume <기록한 session_id>`로 같은 대화를 엽니다. 이 예외로 resume은 이전 session_id를 다시 쓰며 새 session_id를 만들지 않습니다.
+4. 등록은 이 run의 SessionStart `source == "resume"`만 받고, session_id가 기대값과 같아야 합니다.
+5. 같은 session_id를 다시 게시하는 것이므로 3절 규칙대로 `connected_at`과 `reviewing`을 보존합니다.
+6. 시작이 끝난 대상을 종료 기록에서 지웁니다. 실패한 대상은 기록을 남기고 이유와 `agent-session start --job <CR>`(새 대화) 안내를 보고합니다.
+7. 모든 시작이 끝난 뒤 send 경로로 재개 메시지를 한 번 보냅니다. Worker가 먼저, Leader가 마지막입니다.
+   - 서버를 내려 CLI가 끊겼고 background 작업과 monitor는 끝났으니 상태를 확인하고 이어 가라고 알립니다.
+   - forced였으면 실행 중이던 명령이 강제 종료되어 결과가 없다는 사실을 넣습니다.
+   - Leader의 메시지에는 재개한 Worker와 재개하지 못한 대상을 적습니다.
+   - 메시지 전달 실패는 해당 대상의 `message`에 보고하며 재전송하지 않습니다.
+8. tmux server가 다시 뜬 경우와 종료한 window가 남은 경우 결과가 같습니다. tmux-resurrect가 복원한 window의 option은 채택하지 않습니다(3절).
+   - 서버가 뜬 뒤에는 tmux-resurrect 복원보다 resume을 먼저 실행합니다.
+   - 복원이 먼저면 project 이름의 session이 owner 표시 없이 생깁니다. 그러면 resume이 `tmux_owner_mismatch`("The named tmux session is not managed by agent-session.")로 멈춥니다.
+   - 이때 운영자는 그 project 이름의 복원된 session을 닫고 resume을 다시 실행합니다. 복원된 session의 pane은 재부팅 전 process가 아니라 새 shell입니다.
+   - 복원된 session을 채택하는 코드는 없습니다.
+9. 모두 재개했으면 exit 0입니다. 하나라도 실패하면 `resume_incomplete`이고 exit 4이며 같은 결과를 details에 담습니다.
+
+#### 새 대화로 시작
+
+- 종료 기록이 있고 state의 job_id·session_id가 그 기록과 같은 Worker seat는 현재 실행 포인터가 없어도 `start --job <CR>`로 시작할 수 있습니다. 같은 seat에서 새 대화로 시작하며 Git 준비를 다시 하지 않습니다. 시작하면 그 기록을 지웁니다.
+- 기록이 없거나 state와 다르면 지금처럼 execution_unknown입니다.
+- `start --job leader`는 실행 포인터가 없으면 새 Leader로 시작합니다. 시작하면 Leader의 기록을 지웁니다.
+- 시작하지 못한 resume의 run이 CLI 종료로 등록 전에 끝났으면 그 포인터를 지워 위 경로가 열리게 합니다.
 
 ### 종료 근거가 부족한 실행의 수동 복구
 
@@ -862,7 +946,7 @@ Claude 종료는 pane dead·CLI·추적한 자식과 background 종료를 확인
 Codex는 공유 engine의 active turn·pending 입력·background도 확인합니다.
 분리된 자식을 process group 검사만으로 종료 처리하지 않습니다.
 근거가 부족하면 오류이며 종료 완료로 표시하지 않습니다.
-시간 초과 뒤 강제 종료로 자동 전환하지 않습니다.
+시간 초과 뒤 강제 종료로 자동 전환하지 않습니다. 이 원칙의 예외는 운영자가 `shutdown --force`를 준 실행뿐입니다(위 shutdown).
 PID 관찰의 Linux·macOS 차이는 provider module이 처리합니다.
 실제 종료 확인은 판정 시점의 관찰입니다.
 외부 주체가 옛 Codex thread로 새 입력을 보내도 seat를 자동 재점유하지 않습니다.
@@ -991,6 +1075,7 @@ Details의 `diagnostic`에 `agent/diagnostics/`의 traceback 파일 경로를 �
 | V3 실행 | 두 provider의 시작·전송·종료·재시작 확인. 내부 등록 실패와 연결 소실을 성공으로 처리하지 않음 |
 | V4 Git | Seat 생성, 최초 준비·재시도·restart·보류 뒤 재배정의 기준 유지, read-only 규약 |
 | V5 통합 | CR todo→배정(in-progress)→작업→제출→review 반복→merge→done→반납 |
+| V6 중단·재개 | shutdown의 기록·마감·`--force`·알람, resume의 같은 대화 재개·재개 메시지, 기록이 있는 slot의 새 대화 시작 |
 
 Review 뒤 제출 hash가 바뀌면 새 hash를 다시 검토합니다.
 V3의 restart는 새 UUID와 이전 실행 종료를 모두 확인합니다.

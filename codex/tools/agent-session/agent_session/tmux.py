@@ -356,6 +356,36 @@ class Tmux:
         self._run("kill-window", "-t", window_id)
         return True
 
+    def notify(self, text, milliseconds):
+        """Show a message on every attached client for the given time. Return how many clients got it.
+
+        Nothing is typed into a pane; a server with no attached client has nobody to tell."""
+        clients = [name for name in (self._run("list-clients", "-F", "#{client_name}", allow_missing=True)
+                                     or "").splitlines() if name]
+        for client in clients:
+            # display-message expands formats, so a literal "#" is doubled.
+            self._run("display-message", "-d", int(milliseconds), "-c", client, text.replace("#", "##"))
+        return len(clients)
+
+    def ring_bell(self, pane_id):
+        """Write one BEL to the pane's tty, which makes tmux flag the window's bell.
+
+        This is output toward the terminal, not input to the program, so it cannot join what a person
+        types in the pane."""
+        tty = self._run("display-message", "-p", "-t", _safe_text(pane_id, "pane handle"), "#{pane_tty}")
+        if not tty.startswith("/dev/"):
+            raise SessionError("tmux_unknown", "Tmux did not return the pane's tty.", 4, {"pane": pane_id})
+        try:
+            descriptor = os.open(tty, os.O_WRONLY | os.O_NOCTTY | os.O_NONBLOCK)
+        except OSError as exc:
+            raise SessionError("bell_failed", "Cannot open the pane's tty.", 5, {"pane": pane_id}) from exc
+        try:
+            os.write(descriptor, b"\a")
+        except OSError as exc:
+            raise SessionError("bell_failed", "Cannot write to the pane's tty.", 5, {"pane": pane_id}) from exc
+        finally:
+            os.close(descriptor)
+
     def capture_pane(self, pane_id):
         """The visible text of a pane; read only to find a provider's startup dialog."""
         return self._run("capture-pane", "-p", "-t", _safe_text(pane_id, "pane handle"))

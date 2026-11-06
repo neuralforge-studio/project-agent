@@ -54,8 +54,32 @@ project-item move D-20261105-01 done --outcome "decided A" --by user --note "D-2
 완료 보고만으로 CR을 done으로 옮기거나 seat를 비우지 않습니다.
 `released: false`이면 배정을 보존하고 반환한 이유를 처리합니다. CR이 in-progress에 남아 있거나 결과가 origin에 없으면 반납하지 않습니다.
 보류한 todo CR의 배정이 남았으면 같은 `agent-session start --job <CR-ID>`로 같은 seat에서 재개합니다.
-Tmux server를 다시 시작하기 전에 모든 Worker를 stop하고 반납을 확인합니다. 실행 근거가 tmux에 있으므로 반납하지 않은 배정은 다시 시작한 뒤 제어할 수 없습니다.
+서버를 내리기 전에는 stop으로 하나씩 반납하지 않습니다. 운영자가 `agent-session shutdown`을 실행합니다(아래 운영자). 실행 근거가 tmux에 있으므로 shutdown 없이 server가 내려가면 배정을 다시 제어할 수 없습니다.
 근거를 잃은 seat의 start·restart가 `execution_unknown`이면 배정을 바꾸지 않고 운영자에게 수동 복구를 요청합니다.
+shutdown이 남긴 종료 기록이 있는 Worker는 근거가 없어도 `start --job <CR>`로 같은 seat에서 새 대화를 시작합니다.
+
+## 운영자: 서버를 내리기 전과 뒤
+
+Leader·Worker가 아니라 운영자가 실행합니다. 관리 session이 호출하면 `role_denied`입니다.
+Claude project만 처리하며 Codex project는 건너뜁니다.
+
+```sh
+agent-session shutdown --all                  # 서버를 내리기 전. 모든 대상이 쉬기를 기다린 뒤 종료
+agent-session shutdown --project agent --timeout 300
+agent-session shutdown --all --force          # 마감까지 쉬지 않는 대상을 SIGTERM으로 종료
+agent-session resume --all                    # 서버가 뜬 뒤. 같은 대화 ID로 다시 열고 재개 메시지를 한 번 보냄
+agent-session resume --project agent
+```
+
+- shutdown은 `--force`가 없으면 끝나기를 기다리고, 마감까지 쉬지 않은 대상은 종료하지 않고 보고합니다(exit 4). 보고의 `rerun`을 보고 다시 실행합니다.
+- 기다리는 동안 tmux client에 마감 시각을 알리고, 마감 60초 전과 마감에 쉬지 않은 window에 bell을 남깁니다.
+- shutdown은 반납하지 않습니다. 배정·CR·seat 파일은 그대로이고, 종료를 확인한 대상만 `<base>/agent/suspend.json`에 기록합니다.
+- 서버가 뜬 뒤에는 tmux-resurrect 복원보다 resume을 먼저 실행합니다. 복원이 먼저면 project 이름의 session이 agent-session의 owner 표시 없이 생겨 resume이 `tmux_owner_mismatch`로 멈춥니다.
+  이때는 그 project 이름의 복원된 session을 닫고 resume을 다시 실행합니다. 복원된 session의 pane은 재부팅 전 process가 아니라 새 shell입니다.
+- resume이 실패한 대상은 기록이 남습니다. Worker는 `agent-session start --job <CR>`로 새 대화를 시작합니다.
+
+resume 뒤 재개 메시지를 받은 Leader는 메시지의 "재개하지 못한 대상"과 `project-item ls`·state로 Worker 상태를 확인합니다.
+재개하지 못한 Worker는 새 대화로 시작할지 판단합니다. 재개한 대화의 background 작업과 monitor는 끝났으므로 필요하면 다시 시작합니다.
 
 Codex의 동료 보고는 현재 turn이 끝난 뒤 처리될 수 있습니다.
 배정·feedback 뒤 외부 보고만 기다리는 시점에는 현재 turn을 끝냅니다.
