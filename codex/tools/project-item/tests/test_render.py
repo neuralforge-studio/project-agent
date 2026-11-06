@@ -38,3 +38,14 @@ def test_markdown_subset():
     assert out.count("<ul>") == 2 and "<ol>" in out
     assert "<pre>&lt;raw&gt;</pre>" in out
     assert "<th>h</th>" in out and "<td>v</td>" in out
+
+
+def test_markdown_blockquote():
+    out = render.markdown("앞\n\n> 제목 <b>\n>\n> - 하나\n> - 둘\n>\n> 끝\n\n뒤")
+    assert out.count("<blockquote>") == 1 and out.count("</blockquote>") == 1
+    inner = out.split("<blockquote>")[1].split("</blockquote>")[0]
+    assert "<p>제목 &lt;b&gt;</p>" in inner
+    assert inner.count("<li>") == 2 and "<ul>" in inner
+    assert "<p>끝</p>" in inner
+    assert "&gt;" not in out.replace("&lt;b&gt;", "")
+    assert out.startswith("<p>앞</p>") and out.endswith("<p>뒤</p>")
