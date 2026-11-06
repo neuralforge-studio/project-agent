@@ -22,6 +22,15 @@ EMPTY = {"job_id": None, "git_hash": None, "session": None}
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
+def test_seat_outside_the_registry_is_invalid(session_env):
+    env = session_env
+    env.manager().start("leader")
+    with pytest.raises(SessionError) as error:
+        env.manager().control("stop", seat=len(env.seats))
+    assert error.value.code == "seat_invalid"
+    assert env.manager().control("stop", job="leader")["released"] is True
+
+
 def ident(session):
     """The connection fields that a command result reports."""
     return {key: session[key] for key in ("session_id", "endpoint")}

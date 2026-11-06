@@ -37,9 +37,9 @@ def _seat(value):
     try:
         seat = int(value)
     except ValueError:
-        raise argparse.ArgumentTypeError("Use a seat number from 0 to 9.") from None
-    if seat not in range(10):
-        raise argparse.ArgumentTypeError("Use a seat number from 0 to 9.")
+        raise argparse.ArgumentTypeError("Use a seat number of 0 or more.") from None
+    if seat < 0:
+        raise argparse.ArgumentTypeError("Use a seat number of 0 or more.")
     return seat
 
 

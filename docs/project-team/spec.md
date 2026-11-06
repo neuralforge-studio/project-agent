@@ -74,7 +74,7 @@ Skill은 JOB·검증·review·commit message 작성 절차를 안내합니다.
 Project는 유일한 문자열, provider는 claude 또는 codex, seats는 경로 문자열 배열입니다.
 Project·경로는 비어 있지 않아야 합니다.
 Base key는 절대 경로 또는 ~/로 시작하는 경로입니다.
-Seats는 0~10개이며 같은 실제 base·seat 경로를 중복 등록하지 않습니다.
+Seats의 개수에는 상한이 없으며 같은 실제 base·seat 경로를 중복 등록하지 않습니다.
 선택 key `path_cr`·`path_decide`는 project-item skill의 항목 루트입니다.
 두 key의 값은 seats와 같이 절대 경로, `~/` 경로, 또는 base 기준 상대 경로입니다.
 Key가 없으면 그 종류의 항목을 쓰지 않는 project입니다. 도구는 기본 위치를 만들지 않습니다.
@@ -111,7 +111,7 @@ Base·seat의 하위 디렉토리도 지원합니다.
 미사용 seat 전체의 존재를 요구하지 않습니다.
 실제 사용하는 base와 seat는 존재해야 합니다.
 상대 seat 경로는 해당 base를 기준으로 해석합니다.
-Seat 번호는 배열 순서의 0~9입니다.
+Seat 번호는 배열 순서의 0부터입니다.
 
 프로젝트 선택을 위한 별도 옵션은 두지 않습니다. 예외는 send의 `--project`이며 수신 project만 지정합니다(6절).
 내부 호출과 자동 등록은 선택한 base 또는 seat에서 실행합니다.
