@@ -14,6 +14,7 @@ from .config import load_registry
 from .errors import SessionError
 from .providers import get_provider
 from .state import StateStore, locked, utc_now
+from .suspend import SuspendMixin, SuspendStore
 from .tmux import Tmux
 from .util import write_json
 
@@ -39,7 +40,7 @@ def _completed(result_file):
         return False
 
 
-class Manager:
+class Manager(SuspendMixin):
     def __init__(self, cwd=None, config_path=None, socket_name=None, socket_path=None, timeout=600):
         self.project = _project(cwd, config_path)
         self.timeout = timeout
@@ -65,6 +66,8 @@ class Manager:
             if operation == "start" and slot == "leader":
                 return actor, identity
             raise SessionError("caller_unbound", "This agent is not a registered member of this project.")
+        if operation in ("shutdown", "resume") and actor != "operator":
+            raise SessionError("role_denied", f"Only the operator may {operation} the project sessions.")
         if operation == "send_project" and (actor != "leader" or not identity):
             raise SessionError("role_denied", "Only this project's Leader may send to another project.")
         if actor == "leader" or actor.startswith("seat-"):
@@ -95,8 +98,11 @@ class Manager:
             return f"{self.project.project_id}-leader"
         return f"{self.project.project_id}-seat{meta['seat']}-{meta['job_id']}"
 
-    def _new_window(self, context):
+    def _new_window(self, context, resume=None):
+        """A new run and window. With `resume`, the run reopens that conversation instead of a new one."""
         context = self.provider.prepare_context(context)
+        if resume:
+            context.update(session_id=resume, expected_session_id=resume, resume=True)
         name = self._window_name(context)
         context["window_name"] = name
         # The waiting pane starts in the seat root; the launch script enters the CR's Cwd after Git preparation.
@@ -176,16 +182,22 @@ class Manager:
         session = self._session(meta)
         observed = self.provider.observe(session, context, context["meta"], timeout=self.remaining())
         self._record_background_clear(meta, observed)
-        live = process.alive(int(meta["cli_pid"]), meta.get("cli_birth")) if meta.get("cli_pid") else not pane["pane_dead"]
-        group = meta.get("process_group")
-        group_live = bool(group and process.group_alive(int(group)))
-        extra_live = any(process.alive(int(item["pid"]), item.get("birth"))
-                         for item in meta.get("background_pids", []))
+        live, group_live, extra_live = self._process_facts(meta, pane)
         stopped = bool(pane["pane_dead"] and not live and not group_live and not extra_live
                        and observed.get("known") and observed.get("terminal")
                        and not observed.get("active_turn") and not observed.get("pending")
                        and not observed.get("background"))
         return {**observed, "stopped": stopped, "pane": pane, "cli_alive": live}
+
+    @staticmethod
+    def _process_facts(meta, pane):
+        """Whether the run's CLI, its process group, and its tracked background PIDs still live."""
+        live = process.alive(int(meta["cli_pid"]), meta.get("cli_birth")) if meta.get("cli_pid") else not pane["pane_dead"]
+        group = meta.get("process_group")
+        group_live = bool(group and process.group_alive(int(group)))
+        extra_live = any(process.alive(int(item["pid"]), item.get("birth"))
+                         for item in meta.get("background_pids", []))
+        return live, group_live, extra_live
 
     def _record_background_clear(self, meta, observed):
         if meta.get("provider") != "codex" or observed.get("background_source") == "last_loaded_clear":
@@ -207,6 +219,8 @@ class Manager:
         command = shlex.join([context["python"], "-c", code, context["library_path"],
                               context["run_id"], context["config_path"], context["socket_path"],
                               context.get("endpoint") or ""])
+        if context.get("resume"):
+            return request                 # the conversation exists; the resume message is sent after registration
         role = "Leader" if context["seat"] is None else "Worker"
         text = "$project-team을 사용하십시오. 현재 프로젝트의 " + role + " 역할입니다.\n"
         if self.project.provider == "codex":
@@ -501,9 +515,12 @@ class Manager:
                 context = self._new_window(context)
                 self.store.update(lambda value: value)
                 self._prepare_launch(context, request)
-                return self._launch(context, request)
+                result = self._launch(context, request)
+                SuspendStore(self.project, self.remaining()).forget("leader")   # a new conversation ends the record
+                return result
         item = jobs.lookup(self.project, job)
         self._authorize("start", "worker")
+        suspended = False
         with locked(self.project.runtime_path / "allocation.lock", self.remaining()):
             state = self.store.read(missing_ok=True)
             assigned = [key for key, value in state.items() if key != "leader" and value["job_id"] == item["job_id"]]
@@ -514,7 +531,9 @@ class Manager:
                 number = int(assigned[0])
                 slot = f"seat-{number}"
                 context = self.tmux.get_current(self.project.project_id, slot)
-                if not context or context.get("job_id") != item["job_id"]:
+                # A shutdown's record is the evidence that a slot without a run was ended on purpose.
+                suspended = not context and self.is_suspended(slot, item)
+                if not suspended and (not context or context.get("job_id") != item["job_id"]):
                     raise SessionError("execution_unknown", "The reserved JOB has no matching run evidence.", 4)
             elif item["state"] != "todo":
                 raise SessionError("cr_not_assignable", "An unassigned CR must be in todo; "
@@ -580,6 +599,8 @@ class Manager:
                             candidate_guard.__exit__(*sys.exc_info())
                 if number is None:
                     raise SessionError("no_available_seat", "No seat passed the allocation checks.", details={"seats": reasons})
+        if assigned and suspended:
+            return self.start_suspended(slot, item)
         if assigned:
             with self._lock(slot):
                 current = self.tmux.get_current(self.project.project_id, slot)

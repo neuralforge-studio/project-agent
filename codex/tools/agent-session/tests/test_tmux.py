@@ -428,3 +428,35 @@ def test_retired_window_closes_only_with_one_dead_managed_pane(tmp_path, tmux):
     windows = tmux.command("list-windows", "-t", "demo", "-F", "#{window_id}").splitlines()
     assert windows == [survivor["window_id"], other["window_id"]]
     assert tmux.managed_windows("demo", "seat-0") == []
+
+
+def test_notify_reaches_each_attached_client_and_says_none_when_nobody_is_attached(tmux, tmp_path):
+    new_window(tmux, tmp_path)
+    assert tmux.notify("agent shutdown: 대상 1", 1000) == 0
+    log = tmp_path / "client.out"
+    client = subprocess.Popen(["tmux", *tmux._argv([])[1:], "-C", "attach", "-t", "demo"],
+                              stdin=subprocess.PIPE, stdout=log.open("w"), stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 60               # a loaded machine attaches slowly
+        while tmux.notify("agent shutdown: 100# #{pane_id}", 1000) != 1:
+            assert time.monotonic() < deadline, "The control client did not attach."
+            time.sleep(0.1)
+        while "%message agent shutdown: 100# #{pane_id}" not in log.read_text():
+            assert time.monotonic() < deadline, "The client did not receive the message."
+            time.sleep(0.1)
+    finally:
+        client.stdin.close()
+        client.wait(timeout=10)
+
+
+def test_bell_is_output_to_the_pane_tty_and_flags_only_that_window(tmux, tmp_path):
+    first = new_window(tmux, tmp_path, run="run-one")
+    second = new_window(tmux, tmp_path, run="run-two", target="seat-1", job="J-20261103-02")
+    tmux.ring_bell(second["pane_id"])
+    flags = lambda: dict(line.split(" ") for line in tmux.command(
+        "list-windows", "-t", "demo", "-F", "#{window_id} #{window_bell_flag}").splitlines())
+    assert wait_for(lambda: flags().get(second["window_id"]) == "1")
+    assert flags()[first["window_id"]] == "0"
+    with pytest.raises(SessionError) as error:
+        tmux.ring_bell("%999999")
+    assert error.value.code in ("tmux_command_failed", "tmux_unknown")

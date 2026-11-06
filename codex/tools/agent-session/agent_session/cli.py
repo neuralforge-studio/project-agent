@@ -82,7 +82,22 @@ def build_parser():
     marks.add_argument("--clear", action="store_true")
     review.add_argument("--timeout", type=_seconds, default=30, metavar="SECONDS")
 
+    for name, description in (("shutdown", "End every Claude session of the selected projects and record them for resume."),
+                              ("resume", "Reopen the sessions that shutdown recorded, in the same conversations.")):
+        command = commands.add_parser(name, help=description)
+        selection = command.add_mutually_exclusive_group(required=True)
+        selection.add_argument("--project", type=_nonempty, metavar="NAME")
+        selection.add_argument("--all", action="store_true")
+        command.add_argument("--timeout", type=_seconds, default=600, metavar="SECONDS")
+        if name == "shutdown":
+            command.add_argument("--force", action="store_true")
+
     return parser
+
+
+def _default_fleet(**kwargs):
+    from .suspend import Fleet
+    return Fleet(**kwargs)
 
 
 def _default_manager(**kwargs):
@@ -115,8 +130,8 @@ def _diagnostic(manager, operation):
         return None
 
 
-def main(argv=None, manager_factory=None):
-    """Run one command. A factory can supply an isolated manager in tests."""
+def main(argv=None, manager_factory=None, fleet_factory=None):
+    """Run one command. A factory can supply an isolated manager (or, for shutdown and resume, fleet) in tests."""
     parsing = True
     operation = None
     effects_possible = False
@@ -129,19 +144,28 @@ def main(argv=None, manager_factory=None):
             raise SessionError("invalid_arguments", "--prompt-file is only valid for --job leader.", 2)
         with redirect_stdout(sys.stderr):
             effects_possible = True
-            manager = (manager_factory or _default_manager)(
-                cwd=None, config_path=arguments.config, socket_name=arguments.socket_name,
-                socket_path=arguments.socket_path, timeout=getattr(arguments, "timeout", 600))
-            if operation == "start":
-                result = manager.start(arguments.job, prompt_file=arguments.prompt_file)
-            elif operation == "send":
-                result = manager.send(job=arguments.job, seat=arguments.seat,
-                                      message=arguments.message, file=arguments.file,
-                                      project=arguments.project)
-            elif operation == "review":
-                result = manager.review(job=arguments.job, clear=arguments.clear)
+            if operation in ("shutdown", "resume"):
+                fleet = (fleet_factory or _default_fleet)(
+                    config_path=arguments.config, socket_name=arguments.socket_name,
+                    socket_path=arguments.socket_path, timeout=arguments.timeout)
+                if operation == "shutdown":
+                    result = fleet.shutdown(project=arguments.project, everything=arguments.all, force=arguments.force)
+                else:
+                    result = fleet.resume(project=arguments.project, everything=arguments.all)
             else:
-                result = manager.control(operation, job=arguments.job, seat=arguments.seat)
+                manager = (manager_factory or _default_manager)(
+                    cwd=None, config_path=arguments.config, socket_name=arguments.socket_name,
+                    socket_path=arguments.socket_path, timeout=getattr(arguments, "timeout", 600))
+                if operation == "start":
+                    result = manager.start(arguments.job, prompt_file=arguments.prompt_file)
+                elif operation == "send":
+                    result = manager.send(job=arguments.job, seat=arguments.seat,
+                                          message=arguments.message, file=arguments.file,
+                                          project=arguments.project)
+                elif operation == "review":
+                    result = manager.review(job=arguments.job, clear=arguments.clear)
+                else:
+                    result = manager.control(operation, job=arguments.job, seat=arguments.seat)
         if not isinstance(result, dict):
             raise SessionError("internal_error", "The command did not return a structured result.", 5,
                                {"operation": operation, "effects_possible": effects_possible})

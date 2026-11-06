@@ -157,6 +157,36 @@ def test_stop_hook_keeps_observation_fields_and_drops_the_reply(native_slot, mon
     assert saved["hook_event_name"] == "Stop" and "observed_at" in saved
 
 
+@pytest.mark.parametrize("resume, source, accepted", [
+    (True, "resume", True), (True, "startup", False), (False, "startup", True), (False, "resume", False),
+])
+def test_session_start_binds_only_the_source_that_fits_the_run(native_slot, monkeypatch, resume, source, accepted):
+    fixture = native_slot
+    old = fixture["previous"]
+    if resume:
+        fixture["tmux"].write_meta(old["window_id"], {"resume": True})
+    bound = []
+
+    def register(*arguments, **keywords):
+        bound.append(arguments)
+        return None, fixture["tmux"], fixture["tmux"].get_current("fixture", "seat-0"), None
+
+    monkeypatch.setattr(internal, "_register", register)
+    monkeypatch.setattr(internal, "_wait_ready", lambda *arguments, **keywords: None)
+    payload = {"session_id": old["session_id"], "hook_event_name": "SessionStart", "cwd": str(fixture["seat"]),
+               "source": source}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    call = lambda: internal.register_from_hook(old["run_id"], str(fixture["config"]), old["socket_path"],
+                                               expected_session_id=old["session_id"])
+    if accepted:
+        call()
+        assert len(bound) == 1
+    else:
+        with pytest.raises(SessionError) as error:
+            call()
+        assert error.value.code == "hook_invalid" and bound == []
+
+
 def test_read_only_binding_api_does_not_take_the_project_domain_lock(native_slot, monkeypatch):
     fixture = native_slot
     class Provider:

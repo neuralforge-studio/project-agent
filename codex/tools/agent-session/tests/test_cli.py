@@ -32,6 +32,64 @@ class FakeManager:
         return {"command": "review", "options": self.options, **arguments}
 
 
+class FakeFleet:
+    def __init__(self, **options):
+        self.options = options
+
+    def shutdown(self, **arguments):
+        return {"command": "shutdown", "options": self.options, **arguments}
+
+    def resume(self, **arguments):
+        return {"command": "resume", "options": self.options, **arguments}
+
+
+@pytest.mark.parametrize("argv, expected", [
+    (["shutdown", "--project", "agent"], {"command": "shutdown", "project": "agent", "everything": False, "force": False}),
+    (["shutdown", "--all", "--force", "--timeout", "5"],
+     {"command": "shutdown", "project": None, "everything": True, "force": True}),
+    (["resume", "--project", "socsim", "--timeout", "90"], {"command": "resume", "project": "socsim", "everything": False}),
+    (["resume", "--all"], {"command": "resume", "project": None, "everything": True}),
+])
+def test_shutdown_and_resume_select_projects_by_name_not_by_directory(argv, expected, capsys):
+    def no_manager(**options):
+        raise AssertionError("shutdown and resume do not select a project from the current directory")
+
+    assert cli.main(["--config", "/tmp/project.json", *argv], manager_factory=no_manager, fleet_factory=FakeFleet) == 0
+    output = capsys.readouterr()
+    assert not output.err and len(output.out.splitlines()) == 1     # the result is stdout JSON, not redirected
+    result = json.loads(output.out)
+    options = result["data"].pop("options")
+    assert result["ok"] is True and result["data"] == expected
+    assert options == {"config_path": "/tmp/project.json", "socket_name": None, "socket_path": None,
+                       "timeout": int(argv[argv.index("--timeout") + 1]) if "--timeout" in argv else 600}
+
+
+@pytest.mark.parametrize("argv", [
+    ["shutdown"], ["resume"], ["shutdown", "--all", "--project", "agent"], ["resume", "--all", "--project", "agent"],
+    ["resume", "--all", "--force"], ["shutdown", "--project", ""], ["shutdown", "--all", "--timeout", "0"],
+    ["shutdown", "--all", "--job", "leader"], ["resume", "--seat", "0"],
+])
+def test_shutdown_and_resume_input_errors_touch_nothing(argv, capsys):
+    calls = []
+
+    def fleet(**options):
+        calls.append(options)
+        return FakeFleet(**options)
+
+    assert cli.main(argv, fleet_factory=fleet) == 2
+    assert calls == [] and json.loads(capsys.readouterr().out)["error"]["code"] == "invalid_arguments"
+
+
+def test_an_incomplete_shutdown_exits_4_with_its_report(capsys):
+    class Incomplete(FakeFleet):
+        def shutdown(self, **arguments):
+            raise SessionError("shutdown_incomplete", "1 target(s) did not end.", 4, {"projects": [{"busy": ["seat-0"]}]})
+
+    assert cli.main(["shutdown", "--all"], fleet_factory=Incomplete) == 4
+    result = json.loads(capsys.readouterr().out)
+    assert result["ok"] is False and result["error"]["details"] == {"projects": [{"busy": ["seat-0"]}]}
+
+
 @pytest.mark.parametrize("argv, expected", [
     (["start", "--job", "leader"], {"command": "start", "job": "leader", "prompt_file": None}),
     (["start", "--job", "J-20261103-07.md"], {"command": "start", "job": "J-20261103-07.md", "prompt_file": None}),
@@ -114,7 +172,7 @@ def test_help_lists_only_current_commands(capsys):
     assert cli.main(["--help"]) == 0
     output = capsys.readouterr()
     assert not output.err
-    assert "{start,send,stop,restart,review}" in output.out
+    assert "{start,send,stop,restart,review,shutdown,resume}" in output.out
     assert re.search(r"\bview\b", output.out) is None
 
 

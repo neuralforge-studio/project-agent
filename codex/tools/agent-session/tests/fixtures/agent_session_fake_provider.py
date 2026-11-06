@@ -24,7 +24,8 @@ class FakeProvider:
             "argv": [context["python"], "-u", str(Path(__file__).resolve()),
                      "--library", context["library_path"], "--run", context["run_id"],
                      "--config", context["config_path"], "--socket", context["socket_path"],
-                     "--endpoint", context["endpoint"]] + (["--dialog"] if self.dialog else []),
+                     "--endpoint", context["endpoint"]] + (["--dialog"] if self.dialog else [])
+                    + (["--session", context["session_id"]] if context.get("resume") else []),
             "env": prepared.get("env", {}), "unset_env": [],
         }
 
@@ -77,12 +78,24 @@ class FakeClaudeProvider(FakeProvider):
         from agent_session.providers.claude import ClaudeProvider
         return ClaudeProvider().request_exit(meta, tmux)
 
+    def observe(self, session, context, meta=None, timeout=30):
+        """The CLI is mid-turn while `<base>/agent/fixture-busy-<target>` exists and its pane lives."""
+        observed = super().observe(session, context, meta, timeout)
+        agent = Path(context["base"]) / "agent"
+        if (agent / ("fixture-busy-" + context["target"])).exists() and not (meta or context).get("pane_dead"):
+            return {**observed, "terminal": False, "active_turn": True, "idle": False}
+        if (agent / ("fixture-background-" + context["target"])).exists():
+            # Idle, but the last Stop report named a background task; that report stays after the CLI dies.
+            return {**observed, "terminal": False, "background": ["task"]}
+        return observed
+
 
 def main():
     parser = argparse.ArgumentParser()
     for key in ("library", "run", "config", "socket", "endpoint"):
         parser.add_argument("--" + key, required=True)
     parser.add_argument("--dialog", action="store_true")
+    parser.add_argument("--session")                   # a resumed conversation keeps its recorded ID
     parser.add_argument("--claude", action="store_true")
     parser.add_argument("--record")
     args = parser.parse_args()
@@ -109,7 +122,7 @@ def main():
     providers.get_provider = lambda name: fake
     from agent_session.internal import register_current
     from agent_session.errors import SessionError
-    os.environ["CODEX_THREAD_ID"] = str(uuid.uuid4())
+    os.environ["CODEX_THREAD_ID"] = args.session or str(uuid.uuid4())
     try:
         register_current(args.run, args.config, args.socket, args.endpoint)
     except SessionError as error:

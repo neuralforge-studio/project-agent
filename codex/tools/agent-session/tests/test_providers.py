@@ -185,6 +185,25 @@ def test_claude_launch_keeps_system_prompt_and_explicit_session(claude):
     assert "--dangerously-skip-permissions" not in argv
 
 
+def test_claude_resume_reopens_the_recorded_conversation_without_forking_or_a_prompt(claude):
+    provider, _, context, _, prepared = claude
+    context["resume"] = True
+    argv = provider.launch_spec(context, prepared)["argv"]
+    assert argv[argv.index("--resume") + 1] == IDENTITY
+    assert "--session-id" not in argv and "--fork-session" not in argv
+    assert "Use the assigned JOB." not in argv                 # the resume message is sent after registration
+    assert argv[argv.index("--settings") + 1] == str(Path(prepared["settings_file"]).resolve())
+    assert argv[argv.index("-n") + 1] == "worker"
+
+
+def test_claude_hooks_wait_for_the_source_that_matches_the_run(claude, tmp_path):
+    provider, _, context, _, _ = claude
+    context.update({"python": sys.executable, "library_path": str(tmp_path), "run_id": "run-one",
+                    "config_path": str(tmp_path / "project.json"), "socket_path": "/tmp/tmux.sock"})
+    assert provider.registration_hooks(context)["SessionStart"][0]["matcher"] == "startup"
+    assert provider.registration_hooks({**context, "resume": True})["SessionStart"][0]["matcher"] == "resume"
+
+
 def test_claude_requires_tmpdir_in_final_settings(claude):
     provider, _, context, _, prepared = claude
     prepared["env"] = {"CLAUDE_CODE_TMPDIR": "/project/scratch"}

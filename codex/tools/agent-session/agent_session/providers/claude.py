@@ -218,7 +218,8 @@ class ClaudeProvider:
         for event in ("SessionStart", "Stop", "StopFailure", "SessionEnd"):
             entry = {"hooks": [{"type": "command", "command": command, "timeout": 30}]}
             if event == "SessionStart":
-                entry["matcher"] = "startup"
+                # A resumed conversation reports source "resume"; every other run starts a new one.
+                entry["matcher"] = "resume" if context.get("resume") else "startup"
             hooks[event] = [entry]
         return hooks
 
@@ -278,14 +279,16 @@ class ClaudeProvider:
         except (ValueError, TypeError, AttributeError) as error:
             raise SessionError("invalid_provider_input", "Claude requires a new session UUID.", 2) from error
         prompt = text_file(prepared.get("prompt_file"), "initial prompt")
-        argv = [executable("claude", context), "--session-id", identity,
+        # A resume reopens the recorded conversation under its own ID; it never forks (--fork-session).
+        argv = [executable("claude", context), "--resume" if context.get("resume") else "--session-id", identity,
                 "--settings", str(Path(prepared["settings_file"]).resolve()), *args]
         if prepared.get("system_prompt_file"):
             text_file(prepared["system_prompt_file"], "system prompt")
             argv.extend(["--append-system-prompt-file", str(Path(prepared["system_prompt_file"]).resolve())])
         if prepared.get("provider_name"):
             argv.extend(["-n", prepared["provider_name"]])
-        argv.append(prompt)
+        if not context.get("resume"):      # the resume message arrives through send after registration
+            argv.append(prompt)
         return {"argv": argv, "env": dict(prepared.get("env", {})),
                 "unset_env": list(prepared.get("unset_env", [])),
                 "session_id": identity, "endpoint": None}

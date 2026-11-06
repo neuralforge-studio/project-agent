@@ -1,0 +1,564 @@
+"""Shutdown and resume of Claude sessions, with real tmux and Git and a Claude-shaped fake CLI."""
+
+import json
+from pathlib import Path
+import subprocess
+import sys
+import threading
+import time
+import uuid
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
+from agent_session_fixture import command_timeout, git, session_env  # noqa: F401  (pytest fixture)
+from agent_session import suspend
+from agent_session.config import resolve_project
+from agent_session.state import StateStore
+from agent_session.errors import SessionError
+from agent_session.suspend import Fleet, SuspendMixin, SuspendStore
+from agent_session.tmux import Tmux
+
+
+def claude_project(env, monkeypatch, others=()):
+    """Make the fixture project (and the named other projects) Claude projects with the fake Claude CLI."""
+    import agent_session.lifecycle as lifecycle
+    import agent_session.providers as providers
+    from agent_session_fake_provider import FakeClaudeProvider
+
+    config = json.loads(env.config.read_text())
+    for entry in config.values():
+        if entry["project"] == "fixture" or entry["project"] in others:
+            entry["provider"] = "claude"
+    env.config.write_text(json.dumps(config))
+    env.project = resolve_project(env.base, env.config)       # the fixture's own project and store read the new provider
+    env.store = StateStore(env.project)
+    monkeypatch.setattr(lifecycle, "get_provider", lambda name: FakeClaudeProvider())
+    monkeypatch.setattr(providers, "get_provider", lambda name: FakeClaudeProvider())
+    return env.base / "agent" / "fixture-cli.jsonl"
+
+
+def fleet(env, timeout=None):
+    return Fleet(config_path=env.config, socket_name=env.socket_name, timeout=timeout or command_timeout())
+
+
+def signals(path):
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def messages(env):
+    path = env.base / "agent" / "fixture-messages.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def records(env):
+    return SuspendStore(env.project).read()
+
+
+def kill_server(env):
+    subprocess.run(["tmux", "-L", env.socket_name, "kill-server"], capture_output=True, timeout=10)
+    Path(Tmux(socket_name=env.socket_name).effective_socket()).unlink(missing_ok=True)
+
+
+def busy(env, slot, base=None):
+    """Mark the slot's fake CLI as mid-turn until the marker is removed."""
+    marker = (base or env.base) / "agent" / f"fixture-busy-{slot}"
+    marker.write_text("busy\n")
+    return marker
+
+
+def started(env):
+    """A Claude project with a Leader and one Worker; return (leader result, worker result, cr id)."""
+    leader = env.manager().start("leader")
+    cr = env.cr()
+    worker = env.manager().start(cr)
+    return leader, worker, cr
+
+
+@pytest.fixture
+def trace(monkeypatch):
+    """The begin and end of every target shutdown, in order, across threads."""
+    events = []
+    original = SuspendMixin.suspend_target
+
+    def wrapped(self, slot, deadline, force, progress):
+        events.append(("begin", self.project.project_id, slot, time.monotonic()))
+        try:
+            return original(self, slot, deadline, force, progress)
+        finally:
+            events.append(("end", self.project.project_id, slot, time.monotonic()))
+
+    monkeypatch.setattr(SuspendMixin, "suspend_target", wrapped)
+    return events
+
+
+def when(events, kind, project, slot):
+    return next(at for what, name, target, at in events if (what, name, target) == (kind, project, slot))
+
+
+# shutdown
+
+def test_shutdown_records_only_what_ended_and_leaves_state_cr_and_seat_alone(session_env, monkeypatch, trace):
+    env = session_env
+    cli = claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    before = env.store.read()
+    seat_files = sorted(path.name for path in env.seats[0].iterdir())
+    result = fleet(env).shutdown(everything=True)
+    row = result["projects"][0]
+    assert {item["slot"] for item in row["recorded"]} == {"seat-0", "leader"}
+    assert not row["busy"] and not row["unknown"]
+    saved = records(env)
+    assert saved["seat-0"]["job_id"] == cr and saved["seat-0"]["run_id"] == worker["run_id"]
+    assert saved["seat-0"]["session_id"] == worker["session"]["session_id"] and saved["seat-0"]["forced"] is False
+    assert saved["leader"]["job_id"] is None and saved["leader"]["session_id"] == leader["session"]["session_id"]
+    assert env.store.read() == before
+    assert env.cr_state(cr)[0] == "in-progress"
+    assert sorted(path.name for path in env.seats[0].iterdir()) == seat_files
+    assert git(env.seats[0], "status", "--porcelain") == ""
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] and env.tmux.pane_info(leader["pane_id"])["pane_dead"]
+    assert signals(cli) == [{"signal": "SIGTERM"}] * 2      # a signal each, and nothing typed in a pane
+    assert "/exit" not in env.tmux.capture_pane(worker["pane_id"])
+    # The Worker rested before the Leader was asked.
+    assert when(trace, "end", "fixture", "seat-0") <= when(trace, "begin", "fixture", "leader")
+
+
+def test_shutdown_again_is_safe_and_records_the_same_runs(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    started(env)
+    fleet(env).shutdown(project="fixture")
+    first = records(env)
+    fleet(env).shutdown(project="fixture")
+    assert {slot: entry["run_id"] for slot, entry in records(env).items()} == {
+        slot: entry["run_id"] for slot, entry in first.items()}
+
+
+def test_shutdown_also_records_a_worker_whose_return_was_held(session_env, monkeypatch):
+    env = session_env
+    cli = claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    held = env.manager().control("stop", job=cr)
+    assert held["stopped"] is True and held["released"] is False
+    assert signals(cli) == [{"signal": "SIGTERM"}]
+    result = fleet(env).shutdown(project="fixture")
+    assert records(env)["seat-0"]["run_id"] == worker["run_id"]
+    assert env.store.read()["0"]["job_id"] == cr
+    assert signals(cli) == [{"signal": "SIGTERM"}] * 2      # only the Leader was signalled by the shutdown
+    assert {item["slot"] for item in result["projects"][0]["recorded"]} == {"seat-0", "leader"}
+
+
+def test_all_targets_wait_under_one_deadline(session_env, monkeypatch, trace):
+    env = session_env
+    other = env.add_project("other")
+    claude_project(env, monkeypatch, others=("other",))
+    env.manager().start("leader")
+    env.manager_at(other).start("leader")
+    cr = env.cr()
+    env.manager().start(cr)
+    marks = [busy(env, "seat-0"), busy(env, "leader", base=other)]
+    with pytest.raises(SessionError) as error:
+        fleet(env, timeout=3).shutdown(everything=True)
+    assert (error.value.code, error.value.exit_code) == ("shutdown_incomplete", 4)
+    # The two busy targets of different projects were waited on at the same time, not one after the other.
+    first = (when(trace, "begin", "fixture", "seat-0"), when(trace, "end", "fixture", "seat-0"))
+    second = (when(trace, "begin", "other", "leader"), when(trace, "end", "other", "leader"))
+    assert second[0] < first[1] and first[0] < second[1]
+    for mark in marks:
+        mark.unlink()
+
+
+def test_without_force_a_working_target_keeps_running_and_nothing_is_recorded_for_it(session_env, monkeypatch):
+    env = session_env
+    cli = claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    busy(env, "seat-0")
+    with pytest.raises(SessionError) as error:
+        fleet(env, timeout=2).shutdown(project="fixture")
+    assert (error.value.code, error.value.exit_code) == ("shutdown_incomplete", 4)
+    row = error.value.details["projects"][0]
+    assert [item["slot"] for item in row["busy"]] == ["seat-0"]
+    assert row["busy"][0]["error"]["details"]["stopping_restored"] is True
+    assert "--force" in error.value.details["rerun"]
+    assert [item["slot"] for item in row["recorded"]] == ["leader"]
+    assert set(records(env)) == {"leader"}
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False       # still running
+    assert env.tmux.get_current("fixture", "seat-0")["stopping"] is False    # input is allowed again
+    assert signals(cli) == [{"signal": "SIGTERM"}]                           # the Leader's only
+    assert env.manager().send(job=cr, message="still here")["disposition"] == "accepted"
+
+
+def test_force_signals_only_the_cli_whose_birth_matches_and_records_forced(session_env, monkeypatch):
+    env = session_env
+    cli = claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    busy(env, "seat-0")
+    result = fleet(env, timeout=2).shutdown(project="fixture", force=True)
+    saved = records(env)
+    assert saved["seat-0"]["forced"] is True and saved["leader"]["forced"] is False
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is True
+    assert signals(cli) == [{"signal": "SIGTERM"}] * 2
+    assert not result["projects"][0]["busy"]
+
+
+def test_an_idle_cli_with_a_background_task_has_not_rested_until_it_is_forced(session_env, monkeypatch):
+    env = session_env
+    cli = claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    marker = env.base / "agent" / "fixture-background-seat-0"
+    marker.write_text("task\n")
+    with pytest.raises(SessionError) as error:
+        fleet(env, timeout=2).shutdown(project="fixture")
+    assert [item["slot"] for item in error.value.details["projects"][0]["busy"]] == ["seat-0"]
+    assert signals(cli) == [{"signal": "SIGTERM"}]                           # the Leader's only; the Worker was not asked
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
+    # The provider still reports the task after the CLI dies; a forced end is confirmed from the processes.
+    result = fleet(env, timeout=2).shutdown(project="fixture", force=True)
+    assert records(env)["seat-0"]["forced"] is True and not result["projects"][0]["busy"]
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is True
+    marker.unlink()
+
+
+def test_force_does_not_signal_a_process_with_a_different_birth(session_env, monkeypatch):
+    env = session_env
+    cli = claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    busy(env, "seat-0")
+    env.tmux.write_meta(worker["window_id"], {"cli_birth": "linux:another-boot:1"})
+    with pytest.raises(SessionError) as error:
+        fleet(env, timeout=2).shutdown(project="fixture", force=True)
+    row = error.value.details["projects"][0]
+    assert [(item["slot"], item["error"]["code"]) for item in row["unknown"]] == [("seat-0", "target_changed")]
+    assert "seat-0" not in records(env)
+    assert signals(cli) == [{"signal": "SIGTERM"}]                           # the Leader's only
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
+
+
+def test_a_codex_project_is_skipped_and_untouched(session_env):
+    env = session_env
+    env.manager().start("leader")
+    result = fleet(env).shutdown(everything=True)
+    row = result["projects"][0]
+    assert row["recorded"] == [] and row["skipped"][0]["reason"] == "provider_not_supported"
+    assert env.tmux.pane_info(env.tmux.get_current("fixture", "leader")["pane_id"])["pane_dead"] is False
+    assert fleet(env).resume(everything=True)["projects"][0]["skipped"][0]["reason"] == "provider_not_supported"
+
+
+def test_project_option_selects_one_registered_project(session_env, monkeypatch):
+    env = session_env
+    other = env.add_project("other")
+    claude_project(env, monkeypatch, others=("other",))
+    env.manager().start("leader")
+    env.manager_at(other).start("leader")
+    result = fleet(env).shutdown(project="other")
+    assert [row["project"] for row in result["projects"]] == ["other"]
+    assert [item["slot"] for item in result["projects"][0]["recorded"]] == ["leader"]
+    assert set(SuspendStore(env.manager_at(other).project).read()) == {"leader"}
+    assert SuspendStore(env.project).read() == {}
+    assert env.tmux.pane_info(env.tmux.get_current("fixture", "leader")["pane_id"])["pane_dead"] is False
+    with pytest.raises(SessionError) as error:
+        fleet(env).shutdown(project="nowhere")
+    assert (error.value.code, error.value.exit_code) == ("project_not_found", 2)
+
+
+@pytest.mark.parametrize("who", ["leader", "seat-0", "stranger"])
+def test_only_the_operator_may_shut_down_or_resume(session_env, monkeypatch, who):
+    env = session_env
+    cli = claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    identity = {"leader": leader, "seat-0": worker}.get(who)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", identity["session"]["session_id"] if identity else str(uuid.uuid4()))
+    code = "caller_unbound" if who == "stranger" else "role_denied"
+    for call in (lambda: fleet(env).shutdown(everything=True), lambda: fleet(env).resume(everything=True)):
+        with pytest.raises(SessionError) as error:
+            call()
+        assert error.value.code == code
+    assert signals(cli) == [] and records(env) == {}
+
+
+# alarms
+
+class ControlClient:
+    """An attached tmux client in control mode: its `%message` lines are what a person would see."""
+
+    def __init__(self, env):
+        self.path = env.root / "client.out"
+        self.process = subprocess.Popen(["tmux", "-L", env.socket_name, "-C", "attach", "-t", "harness"],
+                                        stdin=subprocess.PIPE, stdout=self.path.open("w"), stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if Tmux(socket_name=env.socket_name).notify("hello", 1):
+                return
+            time.sleep(0.1)
+        raise AssertionError("The control client did not attach.")
+
+    def lines(self):
+        return [line for line in self.path.read_text().splitlines() if line.startswith("%message agent shutdown")]
+
+    def close(self):
+        self.process.stdin.close()
+        self.process.wait(timeout=10)
+
+
+def test_alarms_message_every_client_and_flag_the_working_windows(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    monkeypatch.setattr(suspend, "WARN_LEAD", 1)
+    busy(env, "seat-0")
+    client = ControlClient(env)
+    try:
+        with pytest.raises(SessionError) as error:
+            fleet(env, timeout=4).shutdown(project="fixture")
+        deadline = time.monotonic() + 5
+        while len(client.lines()) < 3 and time.monotonic() < deadline:
+            time.sleep(0.1)
+        lines = client.lines()
+    finally:
+        client.close()
+    log = error.value.details["alarms"]
+    assert [entry["event"] for entry in log] == ["start", "warn", "deadline"]
+    assert all(entry["clients"] == 1 and not entry["errors"] for entry in log)
+    assert len(lines) == 3
+    assert "대상 2" in lines[0] and "대기 마감 시각" in lines[0]
+    assert "fixture:seat-0" in lines[1] and "--force" in lines[1]
+    assert "fixture:seat-0" in lines[2]
+    # Only the targets that had not rested were flagged; the bell is output to the pane, not input.
+    flagged = env.tmux.command("list-windows", "-t", "fixture", "-F", "#{window_id} #{window_bell_flag}")
+    assert f"{worker['window_id']} 1" in flagged.splitlines()
+    assert log[1]["bells"] >= 1 and log[2]["bells"] >= 1
+
+
+def test_the_force_alarm_names_the_kill_time(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    started(env)
+    busy(env, "seat-0")
+    monkeypatch.setattr(suspend, "WARN_LEAD", 1)
+    log = fleet(env, timeout=4).shutdown(project="fixture", force=True)["alarms"]
+    assert "강제 종료 시각" in log[0]["text"]
+    assert "강제 종료합니다" in log[1]["text"] + log[2]["text"]
+
+
+def test_without_any_client_the_alarm_says_so_and_the_verdict_is_unchanged(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    started(env)
+    result = fleet(env).shutdown(project="fixture")
+    assert [(entry["event"], entry["clients"]) for entry in result["alarms"]] == [("start", 0)]
+    assert len(result["projects"][0]["recorded"]) == 2
+
+
+def test_failing_alarms_do_not_change_the_verdict(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    started(env)
+    busy(env, "seat-0")
+    monkeypatch.setattr(suspend, "WARN_LEAD", 1)
+
+    def fail(self, *arguments):
+        raise SessionError("alarm_failed", "The fixture injected an alarm failure.", 5)
+
+    monkeypatch.setattr(Tmux, "notify", fail)
+    monkeypatch.setattr(Tmux, "ring_bell", fail)
+    result = fleet(env, timeout=3).shutdown(project="fixture", force=True)
+    assert {item["slot"] for item in result["projects"][0]["recorded"]} == {"seat-0", "leader"}
+    assert len(result["alarms"]) >= 2 and all(entry["errors"] for entry in result["alarms"])
+
+
+# resume
+
+@pytest.mark.parametrize("restart", [True, False], ids=["server-restarted", "server-kept"])
+def test_resume_reopens_the_same_conversations_leader_first(session_env, monkeypatch, restart):
+    env = session_env
+    claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    env.manager().review(job=cr)
+    before = env.store.read()
+    assert before["leader"]["reviewing"] == cr
+    fleet(env).shutdown(project="fixture")
+    first_runs = {slot: entry["run_id"] for slot, entry in records(env).items()}
+    if restart:
+        kill_server(env)
+    order = []
+    original = SuspendMixin.relaunch
+    notified = []
+    monkeypatch.setattr(SuspendMixin, "relaunch", lambda self, slot, record: order.append(slot) or original(self, slot, record))
+    notify = SuspendMixin.notify_resumed
+    monkeypatch.setattr(SuspendMixin, "notify_resumed", lambda self, slot, text: notified.append(slot) or notify(self, slot, text))
+    result = fleet(env).resume(everything=True)
+    assert order == ["leader", "seat-0"] and notified == ["seat-0", "leader"]
+    assert {item["slot"] for item in result["projects"][0]["resumed"]} == {"leader", "seat-0"}
+    # The same conversations: the state is exactly what it was, including connected_at and the review mark.
+    assert env.store.read() == before
+    for slot, session_id in (("leader", leader["session"]["session_id"]), ("seat-0", worker["session"]["session_id"])):
+        current = env.tmux.get_current("fixture", slot)
+        assert current["session_id"] == session_id and current["registered"] and current["ready"]
+        assert current["resume"] is True and current["run_id"] != first_runs[slot]
+        launch = (env.base / "agent/runs" / current["run_id"] / "launch.sh").read_text()
+        assert f"--session {session_id}" in launch
+    assert records(env) == {}
+    assert env.cr_state(cr)[0] == "in-progress"
+    sent = messages(env)
+    assert [item["target"] for item in sent] == ["seat-0", "leader"]       # one message each, Worker first
+    assert all("재개" in item["text"] and "background" in item["text"] for item in sent)
+    assert f"seat-0({cr})" in sent[1]["text"] and "강제 종료" not in sent[0]["text"]
+    assert "로컬 operator 입력" in sent[0]["text"]
+    if not restart:
+        # The ended windows are retired and swept by the new runs.
+        names = env.tmux.command("list-windows", "-t", "fixture", "-F", "#{window_name}").splitlines()
+        assert not [name for name in names if "-exited-" in name]
+
+
+def test_a_forced_shutdown_is_told_to_the_resumed_conversation(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    started(env)
+    busy(env, "seat-0")
+    fleet(env, timeout=2).shutdown(project="fixture", force=True)
+    (env.base / "agent/fixture-busy-seat-0").unlink()
+    kill_server(env)
+    fleet(env).resume(project="fixture")
+    sent = {item["target"]: item["text"] for item in messages(env)}
+    assert "강제 종료" in sent["seat-0"] and "강제 종료" not in sent["leader"]
+
+
+def test_resume_keeps_the_record_of_a_target_the_state_no_longer_names(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    fleet(env).shutdown(project="fixture")
+    env.store.update(lambda value: value["0"]["session"].update(session_id=str(uuid.uuid4())))
+    with pytest.raises(SessionError) as error:
+        fleet(env).resume(project="fixture")
+    row = error.value.details["projects"][0]
+    assert [item["slot"] for item in row["resumed"]] == ["leader"]
+    assert [(item["slot"], item["error"]["code"]) for item in row["failed"]] == [("seat-0", "target_changed")]
+    assert set(records(env)) == {"seat-0"}
+    assert "agent-session start --job " + cr in row["failed"][0]["fallback"]
+
+
+def test_resume_needs_the_worker_cr_to_stay_in_progress(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    fleet(env).shutdown(project="fixture")
+    env.finish(cr, state="todo", outcome=None)
+    with pytest.raises(SessionError) as error:
+        fleet(env).resume(project="fixture")
+    assert [(item["slot"], item["error"]["code"]) for item in error.value.details["projects"][0]["failed"]] == [
+        ("seat-0", "target_changed")]
+    assert set(records(env)) == {"seat-0"}
+
+
+def test_resume_with_nothing_recorded_does_nothing(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    started(env)
+    result = fleet(env).resume(everything=True)
+    assert result["projects"][0]["resumed"] == [] and messages(env) == []
+
+
+# a new conversation when the old one cannot be resumed
+
+def test_a_recorded_worker_starts_a_new_conversation_without_tmux_evidence(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    git_hash = env.store.read()["0"]["git_hash"]
+    fleet(env).shutdown(project="fixture")
+    kill_server(env)
+    result = env.manager().start(cr)
+    assert result["seat"] == 0 and result["ready"] is True
+    assert result["session"]["session_id"] != worker["session"]["session_id"]
+    assert env.store.read()["0"]["session"]["session_id"] == result["session"]["session_id"]
+    assert env.store.read()["0"]["git_hash"] == git_hash                    # the Git baseline is kept
+    assert "seat-0" not in records(env) and "leader" in records(env)
+    assert env.cr_state(cr)[0] == "in-progress"
+    prompt = (env.base / "agent/runs" / result["run_id"] / "prompt.md").read_text()
+    assert "새 대화로 시작" in prompt and "배정 CR: " + cr in prompt
+
+
+def test_without_a_record_the_worker_still_needs_manual_recovery(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    kill_server(env)
+    with pytest.raises(SessionError) as error:
+        env.manager().start(cr)
+    assert error.value.code == "execution_unknown"
+
+
+def test_a_record_that_the_state_contradicts_does_not_open_the_slot(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    fleet(env).shutdown(project="fixture")
+    kill_server(env)
+    env.store.update(lambda value: value["0"]["session"].update(session_id=str(uuid.uuid4())))
+    with pytest.raises(SessionError) as error:
+        env.manager().start(cr)
+    assert error.value.code == "execution_unknown"
+
+
+def test_a_failed_resume_leaves_the_record_and_start_can_take_over(session_env, monkeypatch):
+    from agent_session_fake_provider import FakeClaudeProvider
+
+    env = session_env
+    claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    fleet(env).shutdown(project="fixture")
+    kill_server(env)
+    launch_spec = FakeClaudeProvider.launch_spec
+
+    def exits(self, context, prepared):
+        spec = launch_spec(self, context, prepared)
+        return {**spec, "argv": ["/bin/false"]} if context.get("resume") else spec
+
+    monkeypatch.setattr(FakeClaudeProvider, "launch_spec", exits)
+    with pytest.raises(SessionError) as error:
+        fleet(env, timeout=20).resume(project="fixture")
+    failed = {item["slot"]: item["error"]["code"] for item in error.value.details["projects"][0]["failed"]}
+    assert failed == {"leader": "provider_exited", "seat-0": "provider_exited"}
+    assert set(records(env)) == {"leader", "seat-0"}
+    assert env.tmux.get_current("fixture", "seat-0") is None               # the dead launch left no evidence
+    monkeypatch.setattr(FakeClaudeProvider, "launch_spec", launch_spec)
+    result = env.manager().start(cr)
+    assert result["session"]["session_id"] != worker["session"]["session_id"]
+    assert set(records(env)) == {"leader"}
+
+
+def test_starting_a_new_leader_drops_the_leaders_record(session_env, monkeypatch):
+    env = session_env
+    claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    fleet(env).shutdown(project="fixture")
+    kill_server(env)
+    result = env.manager().start("leader")
+    assert result["session"]["session_id"] != leader["session"]["session_id"]
+    assert set(records(env)) == {"seat-0"}
+
+
+# record file
+
+def test_the_record_rejects_an_invalid_entry_and_keeps_the_file(session_env):
+    env = session_env
+    path = env.base / "agent" / "suspend.json"
+    path.write_text(json.dumps({"seat-0": {"job_id": "TOOL-001"}}))
+    with pytest.raises(SessionError) as error:
+        SuspendStore(env.project).read()
+    assert error.value.code == "suspend_invalid"
+    assert json.loads(path.read_text()) == {"seat-0": {"job_id": "TOOL-001"}}
+
+
+def test_concurrent_records_do_not_lose_each_other(session_env):
+    env = session_env
+    store = SuspendStore(env.project)
+    threads = [threading.Thread(target=store.record, args=(slot, None if slot == "leader" else "TOOL-00" + slot[-1],
+                                                           "run-" + slot, "session-" + slot, False))
+               for slot in ("leader", "seat-0", "seat-1", "seat-2", "seat-3")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert set(store.read()) == {"leader", "seat-0", "seat-1", "seat-2", "seat-3"}

@@ -1,7 +1,7 @@
 # Agent Session
 
 `agent-session`은 등록 프로젝트의 Leader·Worker를 tmux에서 운영합니다.
-공개 명령은 start·send·stop·restart입니다.
+공개 명령은 start·send·stop·restart·review·shutdown·resume입니다.
 상세 동작은 [명세](../../../docs/project-team/spec.md)가 소유합니다.
 이 문서는 설치와 실행 진입점을 안내하며 실제 인수 완료를 뜻하지 않습니다.
 
@@ -52,6 +52,8 @@ JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자�
 | stop | `agent-session stop --job TOOL-012` |
 | restart | `agent-session restart --job TOOL-012` |
 | review | `agent-session review --job TOOL-012` 또는 `agent-session review --clear` |
+| shutdown | `agent-session shutdown --all` 또는 `--project NAME`. 서버를 내리기 전에 운영자가 실행합니다. `--timeout SECONDS`, `--force` |
+| resume | `agent-session resume --all` 또는 `--project NAME`. 서버가 뜬 뒤 운영자가 실행합니다 |
 
 Start는 todo의 CR을 in-progress로 옮기고 Worker seat를 자동 배정합니다.
 Claude seat를 새로 clone하면 그 seat의 workspace trust를 기록합니다.
@@ -65,6 +67,11 @@ Worker 반납은 CR이 in-progress를 떠나고 seat의 결과가 origin에 게�
 반납과 새 실행 뒤에는 종료가 확인된 옛 tmux window를 닫습니다. 반납 보류·pending·종료 미확인 window는 남깁니다.
 Review는 Leader가 지금 review 중인 JOB을 state에 표시합니다. Feedback 전송·stop·Leader 교체 때 자동으로 지워집니다.
 제어 예약이나 메시지 수락을 실제 종료·반납·작업 완료로 해석하지 않습니다.
+
+Shutdown과 resume은 Claude project만 처리하는 운영자 명령입니다. 현재 디렉토리가 아니라 등록 이름으로 project를 고릅니다.
+Shutdown은 모든 대상이 쉬기를 한 마감 아래 기다린 뒤 종료하고 `<base>/agent/suspend.json`에 기록합니다. 반납하지 않습니다.
+`--force`가 없으면 마감까지 쉬지 않은 대상을 종료하지 않고 보고합니다(exit 4). 기다리는 동안 tmux client에 마감 시각을 알리고 마감 전에 bell을 남깁니다.
+Resume은 같은 대화 ID로 Leader, Worker 순서로 다시 열고 재개 메시지를 한 번 보냅니다. 실패한 Worker는 `start --job <CR>`로 새 대화를 시작합니다.
 
 모델·effort·기존에 승인한 권한 인자는 등록의 `launch`로 전달합니다.
 `args`는 모든 session, `leader_args`·`worker_args`는 해당 역할에만 `args` 뒤에 붙습니다.
