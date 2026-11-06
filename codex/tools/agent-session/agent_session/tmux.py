@@ -42,6 +42,15 @@ def _json_value(value):
     return value
 
 
+# What a run adds to its window after the window is created, with the value that reads like a window
+# that never had it. Metadata is never unset (read_meta), so a window handed to a new run gets these.
+_RUN_VALUES = {
+    "cli_pid": None, "cli_birth": None, "process_group": None, "background_pids": [],
+    "last_background_clear": None, "hook_observations": {}, "controller_pid": None,
+    "controller_birth": None, "control_pending": False, "control_operation": None,
+    "session_id": None, "message_to": None, "start_error": None, "launch_file": None, "provider_name": None,
+    "resume": False, "expected_session_id": None, "handoff_file": None, "leader_request": None,
+}
 _VALUES_MARK = "agent-session-values"
 _SEAT_TARGET = re.compile(r"seat-(0|[1-9][0-9]*)")
 
@@ -156,6 +165,31 @@ class Tmux:
             raise SessionError("tmux_owner_mismatch", "The tmux session was restored or its server identity changed.")
         return owner
 
+    @staticmethod
+    def _run_values(metadata):
+        """The checked values of a new run and its normalized base."""
+        values = _json_value(dict(metadata))
+        for key in ("base", "run_id", "target"):
+            _safe_text(values.get(key), "managed " + key)
+        if values["target"] != "leader" and _SEAT_TARGET.fullmatch(values["target"]) is None:
+            raise SessionError("tmux_input", "The managed target must be leader or seat-N.", 2)
+        return values, str(Path(values["base"]).resolve())
+
+    def _waiting_values(self, values, base, name, window_id, pane_id, cwd):
+        """The run's values once its waiting pane exists: the pane, the server, and the waiting process."""
+        pane = self.pane_info(pane_id)
+        try:
+            if pane["pane_pid"] is None:
+                raise ProcessLookupError(pane_id)
+            placeholder_group = os.getpgid(pane["pane_pid"])
+        except OSError as exc:
+            raise SessionError("execution_unknown", "The waiting process group is unavailable.", 4) from exc
+        return {**values, "base": base, "project_id": name, "window_id": window_id, "pane_id": pane_id,
+                "cwd": str(cwd), **self.server_identity(), "provider_launch_attempted": False,
+                "registered": False, "ready": False, "stopping": False,
+                "placeholder_pid": pane["pane_pid"], "placeholder_birth": process.birth(pane["pane_pid"]),
+                "placeholder_process_group": placeholder_group}
+
     def create_window(self, project_id, window_name, cwd, metadata):
         """Create a waiting pane. The caller records its current pointer next."""
         name = _session(project_id)
@@ -163,12 +197,7 @@ class Tmux:
         cwd = Path(cwd).expanduser().resolve()
         if not cwd.is_dir():
             raise SessionError("cwd_unavailable", "The tmux working directory is unavailable.", 3)
-        values = _json_value(dict(metadata))
-        for key in ("base", "run_id", "target"):
-            _safe_text(values.get(key), "managed " + key)
-        if values["target"] != "leader" and _SEAT_TARGET.fullmatch(values["target"]) is None:
-            raise SessionError("tmux_input", "The managed target must be leader or seat-N.", 2)
-        base = str(Path(values["base"]).resolve())
+        values, base = self._run_values(metadata)
         if self.has_session(name):
             owner = self._session_owner(name)
             if owner.get("base") != base:
@@ -185,19 +214,72 @@ class Tmux:
             raise SessionError("tmux_unknown", "Tmux did not return exact window and pane handles.", 4)
         window_id, pane_id = identifiers
         self._run("set-option", "-w", "-t", window_id, "remain-on-exit", "on")
-        pane = self.pane_info(pane_id)
+        self.write_meta(window_id, self._waiting_values(values, base, name, window_id, pane_id, cwd))
+        return self.read_meta(window_id)
+
+    def reuse_window(self, project_id, window_name, cwd, metadata, expected):
+        """Give a retired window to a new run: its dead managed pane restarts as the new run's waiting pane.
+
+        `expected` is the metadata of the retired run. Every check comes before the first change, and a
+        refusal changes nothing. Then the pane respawns without -k, so tmux itself refuses a pane that
+        lives again. One tmux command sequence replaces the window's metadata with the new run's values,
+        points the slot at the new run, and renames the window; the window is the retired run's evidence
+        until that sequence runs and the new run's waiting pane after it. Other panes stay as they are.
+        """
+        name = _session(project_id)
+        window_name = _safe_text(window_name, "window name")
+        if window_name.endswith(";"):
+            raise SessionError("tmux_input", "A window name must not end with ';'.", 2)
+        cwd = Path(cwd).expanduser().resolve()
+        if not cwd.is_dir():
+            raise SessionError("cwd_unavailable", "The tmux working directory is unavailable.", 3)
+        values, base = self._run_values(metadata)
+        window_id = _safe_text(expected.get("window_id"), "window handle")
+        owner = self._session_owner(name)
+        if owner.get("base") != base:
+            raise SessionError("tmux_owner_mismatch", "The tmux session belongs to another project base.")
+        meta = self.read_meta(window_id)
+        keys = ("base", "target", "run_id", "project_id", "window_id", "pane_id")
+        if (not meta.get("run_id") or any(meta.get(key) != expected.get(key) for key in keys)
+                or meta["project_id"] != name or meta["target"] != values["target"]):
+            raise SessionError("target_changed", "The window no longer holds the expected run.")
+        server = self.server_identity()
+        if any(meta.get(key) != value for key, value in server.items()):
+            raise SessionError("tmux_owner_mismatch", "The window was restored or belongs to another server.")
+        handles = self._run("list-windows", "-t", self._session_target(name), "-F", "#{window_id}").splitlines()
+        panes = self._run("list-panes", "-t", window_id, "-F", "#{pane_id}").splitlines()
+        if window_id not in handles or meta["pane_id"] not in panes:
+            raise SessionError("target_changed", "The window or its managed pane is not in the project session.")
+        if not self.pane_info(meta["pane_id"])["pane_dead"]:
+            raise SessionError("target_running", "The managed pane is still running.")
+        leftover = sorted(set(meta) - set(values) - set(_RUN_VALUES) - set(_IDENTITY)
+                          - {"cwd", "provider_launch_attempted", "registered", "ready", "stopping",
+                             "placeholder_pid", "placeholder_birth", "placeholder_process_group"})
+        if leftover:
+            raise SessionError("window_unreusable", "The window has metadata that a new run cannot replace.",
+                               details={"keys": leftover})
+        pane_id = meta["pane_id"]
+        self._run("respawn-pane", "-t", pane_id, "-c", cwd, "sleep", "86400")
+        pid = None
         try:
-            if pane["pane_pid"] is None:
-                raise ProcessLookupError(pane_id)
-            placeholder_group = os.getpgid(pane["pane_pid"])
-        except OSError as exc:
-            raise SessionError("execution_unknown", "The waiting process group is unavailable.", 4) from exc
-        values.update({"base": base, "project_id": name, "window_id": window_id, "pane_id": pane_id,
-                       "cwd": str(cwd), **self.server_identity(), "provider_launch_attempted": False,
-                       "registered": False, "ready": False, "stopping": False,
-                       "placeholder_pid": pane["pane_pid"], "placeholder_birth": process.birth(pane["pane_pid"]),
-                       "placeholder_process_group": placeholder_group})
-        self.write_meta(window_id, values)
+            fresh = self._waiting_values(values, base, name, window_id, pane_id, cwd)
+            pid = fresh["placeholder_pid"]
+            updates = {**_RUN_VALUES, **fresh}
+            pointer = {key: updates.get(key) for key in _IDENTITY}
+            arguments = self._option_arguments(window_id, updates)
+            arguments += [";", "set-option", "-t", self._session_target(name), self._current_option(values["target"]),
+                          json.dumps(pointer, ensure_ascii=False, separators=(",", ":")),
+                          ";", "set-option", "-w", "-t", window_id, "remain-on-exit", "on",
+                          ";", "rename-window", "-t", window_id, window_name]
+            self._run(*arguments[1:])
+        except BaseException:
+            # The waiting process is this call's own; ending it returns the window to the retired run's evidence.
+            if pid is not None:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+            raise
         return self.read_meta(window_id)
 
     def read_meta(self, window_id):
@@ -239,21 +321,26 @@ class Tmux:
         current = self.read_meta(window_id)
         updates = _json_value(dict(updates))
         for key, value in updates.items():
-            if re.fullmatch(r"[a-z][a-z0-9_]*", key) is None:
-                raise SessionError("tmux_metadata_invalid", "A runtime metadata key is invalid.", 2)
             if key in _IDENTITY and key in current and current[key] != value:
                 raise SessionError("target_changed", "An immutable runtime identity cannot be replaced in place.",
                                    details={"field": key})
             if key == "provider_launch_attempted" and current.get(key) is True and value is not True:
                 raise SessionError("target_changed", "A provider launch attempt cannot be cleared in the same run.")
-        arguments = []
-        for key, value in updates.items():
-            # Tmux ends a command at an argument that ends with ";". A JSON value never ends with ";".
-            arguments += [";", "set-option", "-w", "-t", window_id, _PREFIX + key,
-                          json.dumps(value, ensure_ascii=False, separators=(",", ":"))]
+        arguments = self._option_arguments(window_id, updates)
         if arguments:
             self._run(*arguments[1:])
         return self.read_meta(window_id)
+
+    @staticmethod
+    def _option_arguments(window_id, updates):
+        arguments = []
+        for key, value in updates.items():
+            if re.fullmatch(r"[a-z][a-z0-9_]*", key) is None:
+                raise SessionError("tmux_metadata_invalid", "A runtime metadata key is invalid.", 2)
+            # Tmux ends a command at an argument that ends with ";". A JSON value never ends with ";".
+            arguments += [";", "set-option", "-w", "-t", window_id, _PREFIX + key,
+                          json.dumps(value, ensure_ascii=False, separators=(",", ":"))]
+        return arguments
 
     def _current_option(self, target):
         if target != "leader" and _SEAT_TARGET.fullmatch(target or "") is None:

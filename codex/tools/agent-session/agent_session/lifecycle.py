@@ -20,6 +20,7 @@ from .util import write_json
 
 SWEEP_SECONDS = 30                                 # after this, a cleanup leaves later windows to the next sweep
 DIALOG_SCREEN_SECONDS = 1                          # how often an unregistered start reads its pane for a dialog
+REUSE_REFUSED = ("target_changed", "tmux_owner_mismatch", "target_running", "window_unreusable")
 PARKED_ALIVE = "The parked JOB still has a run; stop it before starting the JOB again."
 
 
@@ -98,8 +99,13 @@ class Manager(SuspendMixin):
             return f"{self.project.project_id}-leader"
         return f"{self.project.project_id}-seat{meta['seat']}-{meta['job_id']}"
 
-    def _new_window(self, context, resume=None):
-        """A new run and window. With `resume`, the run reopens that conversation instead of a new one."""
+    def _new_window(self, context, resume=None, ending=None):
+        """A run and its window. With `resume`, the run reopens that conversation instead of a new one.
+
+        The slot's retired window is handed to the run when `_reusable` accepts it, so the panes that a
+        person added stay beside the new CLI. `ending` is the run that this restart's own controller just
+        ended; it is the one run whose pending control does not keep its window from the new run.
+        """
         context = self.provider.prepare_context(context)
         if resume:
             context.update(session_id=resume, expected_session_id=resume, resume=True)
@@ -107,13 +113,45 @@ class Manager(SuspendMixin):
         context["window_name"] = name
         # The waiting pane starts in the seat root; the launch script enters the CR's Cwd after Git preparation.
         cwd = context["cwd"]
-        context = self.tmux.create_window(self.project.project_id, name, context["seat_root"], context)
+        retired = self._reusable(context["target"], ending)
+        reused = None
+        if retired is not None:
+            try:
+                reused = self.tmux.reuse_window(self.project.project_id, name, context["seat_root"], context, retired)
+            except SessionError as error:
+                if error.code not in REUSE_REFUSED:
+                    raise                          # the window may have changed; its state is the caller's to read
+        context = reused or self.tmux.create_window(self.project.project_id, name, context["seat_root"], context)
         if context["cwd"] != cwd:
             context = self.tmux.write_meta(context["window_id"], {"cwd": cwd})
         self.tmux.set_current(self.project.project_id, context["target"], context)
         if context["seat"] is None:
             self.tmux.command("select-window", "-t", self.project.project_id + ":" + context["window_id"])
         return context
+
+    def _reusable(self, target, ending=None):
+        """The retired window that the slot's next run takes over, or None to open a new window.
+
+        With a current pointer, only its window counts. Without one (after a release), the window of the
+        slot's most recent run counts; recency is the time of the run's launch script. The window must
+        be one `_sweep` would accept as ended, except that a person's panes in it do not matter.
+        """
+        try:
+            meta = self.tmux.get_current(self.project.project_id, target)
+            if meta is None:
+                runs = self.project.runtime_path / "runs"
+                found = []
+                for window_id in self.tmux.managed_windows(self.project.project_id, target):
+                    candidate = self.tmux.read_meta(window_id)
+                    script = runs / str(candidate.get("run_id")) / "launch.sh"
+                    found.append((script.stat().st_mtime if script.is_file() else 0.0, candidate))
+                if not found:
+                    return None
+                meta = max(found, key=lambda item: item[0])[1]
+            own = ending is not None and meta.get("run_id") == ending.get("run_id")
+            return meta if self._retained(meta, controller=own) is None else None
+        except SessionError:
+            return None
 
     def _target(self, job=None, seat=None):
         if (job is None) == (seat is None):
@@ -208,7 +246,7 @@ class Manager(SuspendMixin):
         evidence = {"session_id": meta["session_id"], "run_id": meta["run_id"],
                     "latest_turn_id": observed.get("latest_turn_id")} if clear else None
         if meta.get("last_background_clear") != evidence:
-            self.tmux.write_meta(meta["window_id"], {"last_background_clear": evidence})
+            self.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "last_background_clear": evidence})
             meta["last_background_clear"] = evidence
 
     def _write_prompt(self, context, request=None):
@@ -350,20 +388,27 @@ class Manager(SuspendMixin):
             raise
         return current.get("run_id") if current else None
 
-    def _retained(self, meta, owner=None):
-        """Why a retired window must stay, or None when its run ended without pending control."""
+    def _retained(self, meta, owner=None, controller=False):
+        """Why a retired window must stay, or None when its run ended without pending control.
+
+        With `controller`, this process may be the controller that is restarting the run: then the run's
+        own pending control and controller record do not count. Any other pending control does.
+        """
         if not meta.get("base") or Path(meta["base"]).resolve() != self.project.base or not meta.get("pane_id"):
             return "foreign_window"
-        if meta.get("control_pending"):
-            return "control_pending"
         pid, birth = meta.get("controller_pid"), meta.get("controller_birth")
-        if pid and process.alive(int(pid), birth):
-            # The finishing self-controller may close its own run after it saved the completed result.
-            own = (owner is not None and owner["run_id"] == meta.get("run_id")
-                   and owner["pid"] == int(pid) and owner["birth"] == birth
-                   and _completed(owner["result_file"]))
-            if not own:
-                return "controller_running"
+        mine = bool(controller and meta.get("control_pending") and meta.get("control_operation") == "restart"
+                    and pid == os.getpid() and birth == process.birth(os.getpid()))
+        if not mine:
+            if meta.get("control_pending"):
+                return "control_pending"
+            if pid and process.alive(int(pid), birth):
+                # The finishing self-controller may close its own run after it saved the completed result.
+                own = (owner is not None and owner["run_id"] == meta.get("run_id")
+                       and owner["pid"] == int(pid) and owner["birth"] == birth
+                       and _completed(owner["result_file"]))
+                if not own:
+                    return "controller_running"
         if not self._observe(meta)["stopped"]:
             return "termination_unconfirmed"
         return None
@@ -789,7 +834,7 @@ class Manager(SuspendMixin):
                 current_job = jobs.lookup(self.project, meta["job_id"], ("in-progress",)) if meta.get("job_id") else None
                 context = self._context(meta["target"], current_job)
                 context["handoff_file"] = _handoff(handoff)
-                context = self._new_window(context)
+                context = self._new_window(context, ending=meta)
                 result = self._launch(context)
                 if result["session"]["session_id"] == meta["session_id"]:
                     raise SessionError("conversation_reused", "Restart must create a new conversation.")
@@ -831,7 +876,7 @@ class Manager(SuspendMixin):
         pid, birth = meta.get("cli_pid"), meta.get("cli_birth")
         try:
             if pid and birth and process.alive(int(pid), birth):
-                self.tmux.write_meta(meta["window_id"], {"stopping": False})
+                self.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "stopping": False})
                 note = {"stopping_restored": True}
             else:
                 note = {"stopping_restored": False, "stopping_kept": "cli_unconfirmed"}

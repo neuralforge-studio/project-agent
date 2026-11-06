@@ -243,6 +243,10 @@ Leader는 leader, Worker는 seat-N을 option의 고정 target으로 사용합니
 새 실행 예약 때 대상 제어 잠금 아래 이 현재 실행 포인터를 교체합니다.
 등록 callback은 자신의 값과 이 포인터·server 생성 정보·실제 process를 모두 대조합니다.
 옛 window에 남은 자기 run 값만으로 새 실행의 state를 갱신하지 못합니다.
+관리 window는 target마다 다시 씁니다. 새 run은 같은 target의 종료한 window를 이어받을 수 있고(아래 종료한 window 정리), 그때 window의 관리 정보는 새 run의 값만 담습니다.
+이어받으면 이전 run의 값이 하나도 남지 않습니다. 이전 run에만 있던 option은 지우지 않고 처음 만든 window와 같게 읽히는 값(null·false·빈 값)으로 씁니다.
+같은 window를 가리키는 이전 run의 기록이 대상 제어 잠금 밖에서 쓰는 경로는 갱신에 자기 run_id를 함께 넣습니다. 내부 등록·hook 관찰·process 기록, controller의 PID·pending 기록, background 기록, stopping 복원이 그 경로입니다. run_id가 window의 현재 값과 다르면 `target_changed`로 거절하므로 이전 run의 늦은 쓰기가 새 run의 값을 덮지 못합니다.
+Window의 run_id 등 identity option을 바꾸는 쓰기는 window를 새 run에 넘기는 처리 하나뿐입니다.
 죽은 server의 값과 복원한 창의 복사된 option은 현재 실행의 근거가 아닙니다.
 Tmux 근거가 사라지면 state를 자동 삭제하거나 실행을 자동 채택하지 않습니다.
 Tmux server를 다시 시작하면 예약 seat의 현재 실행 포인터와 실행 근거가 함께 사라집니다.
@@ -280,6 +284,7 @@ Hook은 canonical state를 쓰지 않고 자기 window의 binding·관찰값만 
 ### 종료한 window 정리
 
 관리 window는 CLI가 끝난 뒤에도 남습니다(remain-on-exit). 종료 확인과 반납 보류의 근거이기 때문입니다.
+새 run을 만들 때는 먼저 이 window를 이어받을 수 있는지 봅니다(아래 "종료한 window 재사용"). 이어받지 못할 때만 새 window를 만듭니다.
 공통 코드는 다음 시점에 같은 target의 종료한 window를 정리합니다.
 
 1. 반납 성공: stop은 state를 반납한 뒤 대상 제어 잠금 안에서 현재 실행 포인터가 이 run을 가리키는지 대조하고 포인터를 지웁니다. 그 뒤 정리합니다.
@@ -303,6 +308,32 @@ Hook은 canonical state를 쓰지 않고 자기 window의 binding·관찰값만 
 남긴 window는 같은 target의 다음 정리가 다시 검사합니다.
 `agent/runs/<run_id>/`의 실행 산출물은 정리하지 않습니다.
 
+### 종료한 window 재사용
+
+새 run(start·restart·resume·Worker 배정)은 새 window를 만들기 전에 같은 project·target의 종료한 window를 이어받을 수 있는지 대상 제어 잠금 안에서 봅니다.
+대상 window는 현재 실행 포인터가 있으면 그 window 하나입니다. 포인터가 없으면(반납 뒤) 같은 target의 관리 window 가운데 가장 최근 run의 것 하나입니다. 최근 판단은 `agent/runs/<run_id>/launch.sh`의 시각입니다.
+이어받으려면 위 정리 조건에서 "pane이 관리 pane 하나뿐" 조건만 뺀 나머지를 모두 만족해야 합니다.
+
+- 관리 정보의 base·target·run_id·window_id·pane_id와 server PID·시작 시각·생성 정보가 일치합니다. 복원한 window는 채택하지 않습니다.
+- 관리 pane이 그 window에 있고 종료했습니다.
+- 그 run의 실제 종료를 stop과 같은 기준으로 확인했습니다. control_pending이 false이고 살아 있는 controller가 없습니다.
+- 사용자가 추가한 pane이 있는지는 보지 않습니다. 사용자 pane이 없는 window도 같은 방식으로 이어받습니다.
+
+자기 restart는 예외입니다. 분리 controller가 `restart`를 수행하는 중이면, 끝낸 그 run의 control_pending과 그 controller(기록한 PID·생성 시각이 지금 process와 같음)는 이어받는 조건을 막지 않습니다. 다른 controller나 다른 pending은 막습니다.
+
+이어받는 절차는 tmux 하나의 처리입니다.
+
+1. 위 조건의 identity·server 대조를 다시 합니다. 조건이 맞지 않으면 window를 바꾸지 않고 거절하며, 호출한 쪽은 새 window를 만듭니다.
+2. 죽은 관리 pane을 대기 process(`sleep 86400`, seat root)로 `respawn-pane` 합니다. `-k`를 쓰지 않으므로 pane이 다시 살아 있으면 tmux가 거절합니다. 관리 pane에는 키를 입력하지 않습니다.
+3. 한 번의 tmux 명령 sequence로 window의 관리 정보를 새 run의 값으로 바꾸고, 현재 실행 포인터를 새 run으로 바꾸고, window 이름을 새 run의 이름으로 바꿉니다(`-exited-`가 사라집니다).
+4. 그 뒤는 새 window와 같습니다. `launch`가 대기 process를 CLI로 바꾸고 등록을 기다린 뒤 정리합니다.
+
+2와 3 사이에 실패하면 대기 process를 종료해 window를 이전 run의 종료 근거로 되돌립니다. 3의 sequence는 한 번에 적용되므로 window는 이전 run의 종료 근거이거나 새 run의 실행 전 대기 pane입니다. 둘 다 다음 start·stop이 처리하는 상태입니다.
+이어받지 못하면 지금처럼 새 window를 만들고 옛 window는 정리가 판단합니다. 종료 확인·반납 보류·수동 복구의 근거를 지우지 않기 위해서입니다.
+
+반납(stop) 뒤 사용자 pane이 있는 window는 정리가 닫지 않으므로 다음 start까지 `-exited-` 이름으로 남습니다. 다음 start가 그 window를 이어받고 이름을 되돌립니다. 사용자 pane이 없는 window는 지금처럼 정리가 닫습니다.
+Tmux server를 다시 띄운 뒤의 resume·start는 이전 window가 없으므로 새 window를 만듭니다.
+
 ## 4. start
 
 | 옵션 | 필수·기본값 | 처리 |
@@ -325,6 +356,7 @@ Prompt 파일은 선택입니다.
 현재 Leader가 실행 중이거나 종료를 확인할 수 없으면 새로 시작하지 않습니다.
 등록 전 시작 dialog에서 기다리는 Leader(5절 Provider 내부 등록)는 예외입니다. 다시 실행한 start는 새로 시작하지 않고 그 실행의 등록을 기다립니다.
 정상 종료가 확인된 이전 Leader는 명시적인 새 시작을 막지 않습니다.
+새 Leader는 이전 Leader의 종료한 window를 이어받을 수 있습니다. 사용자가 그 window에 붙인 pane은 새 Leader 옆에 그대로 남습니다(3절 종료한 window 재사용).
 Leader 시작은 base의 Git 상태를 바꾸지 않습니다.
 
 ### Worker
@@ -342,7 +374,7 @@ Leader는 사용자 합의를 CR의 Disposition에 기록한 뒤 todo로 옮깁�
 1. CR과 mode·cwd를 확인합니다.
 2. 미배정 seat를 번호순으로 확인합니다. Seat 디렉토리가 없으면 만듭니다.
 3. 공통 workspace 검사를 통과한 seat에서 CR을 todo→in-progress로 옮깁니다.
-4. 새 run·대기 tmux 창·현재 실행 포인터와 state 예약을 기록합니다. 예약이 실패하면 이번 시작이 만든 대기 pane을 종료 확인하고 CR을 todo로 되돌립니다.
+4. 새 run·대기 tmux 창(같은 seat의 종료한 window를 이어받을 수 있으면 그 window, 3절)·현재 실행 포인터와 state 예약을 기록합니다. 예약이 실패하면 이번 시작이 만든 대기 pane을 종료 확인하고 CR을 todo로 되돌립니다.
 5. Git 준비를 수행합니다.
 6. 공통 prompt와 등록의 `launch` Worker 인자로 실행 입력을 만듭니다(8절).
 7. 대화형 CLI를 시작하고 자기 window의 native binding을 확인합니다. 시작 controller가 state에 게시한 뒤 시작 완료를 표시합니다.
@@ -633,7 +665,7 @@ Endpoint와 hook·API 기준은 [공식 app-server 문서](https://learn.chatgpt
 통신 주소는 state에서 읽습니다.
 Tmux의 base·run·seat·JOB·provider 대화·PID 생성 정보로 실제 실행을 대조합니다.
 이름·pane 숫자·복사된 option만으로 복원 창을 채택하지 않습니다.
-CLI 전에 관리 창에 remain-on-exit를 설정합니다. 종료한 창은 3절 종료한 window 정리로만 닫습니다.
+CLI 전에 관리 창에 remain-on-exit를 설정합니다. 종료한 창은 3절 종료한 window 정리로만 닫거나 다음 run이 이어받습니다(3절 종료한 window 재사용).
 다른 창과 사용자 전역 tmux 설정은 변경하지 않습니다.
 Tmux session 이름은 등록의 project를 사용합니다.
 Leader window는 `<project>-leader`, Worker window는 `<project>-<role>-<seat>-<JOB-ID>`로 표시합니다.
@@ -789,11 +821,11 @@ Restart는 다음 순서로 새 대화로 교체합니다.
 
 1. 대상 run의 시작 뒤 갱신한 `agent/handoff/<slot>.md`가 있는지 기존 실행을 종료하기 전에 확인합니다. 없으면 handoff_required입니다. 자기 restart는 요청에 담긴 기존 run으로 같은 검사를 합니다.
 2. 기존 실행의 실제 종료를 확인합니다. JOB·seat를 반납하지 않습니다.
-3. 같은 seat·JOB·Git 기준·branch를 유지하고 새 run을 발급합니다.
+3. 같은 seat·JOB·Git 기준·branch를 유지하고 새 run을 발급합니다. 종료한 window를 이어받을 수 있으면 그 window와 pane 자리를 새 run이 씁니다(3절 종료한 window 재사용).
 4. 최신 프로젝트 지침으로 prompt·settings·환경을 다시 생성합니다.
 5. 인계 파일과 현재 CR 파일 경로를 최초 prompt에 넣고 새 대화를 시작합니다.
-6. 시작 controller가 새 window의 실제 binding을 검증해 state에 게시한 뒤 시작 완료를 표시합니다.
-7. 같은 target의 종료한 window를 정리합니다(3절).
+6. 시작 controller가 새 run window의 실제 binding을 검증해 state에 게시한 뒤 시작 완료를 표시합니다.
+7. 같은 target의 종료한 window를 정리합니다(3절). 이어받은 window는 현재 실행이므로 닫지 않습니다.
 
 이전 provider session_id와 새 session_id는 달라야 합니다. 이 원칙의 예외는 resume 하나입니다(아래 shutdown·resume).
 종료 전에는 새 대화를 시작하지 않습니다.
@@ -853,7 +885,7 @@ Provider가 Claude인 project만 처리합니다. Codex project는 건드리지 
 #### resume
 
 1. project마다 종료 기록과 state를 대조합니다. 같은 job_id·session_id여야 하고, Worker의 CR은 in-progress여야 합니다. 다르면 그 대상은 `target_changed`로 남기고 다음 대상으로 넘어갑니다.
-2. project마다 Leader를 먼저, 그다음 Worker를 시작합니다. project들은 동시에 진행합니다. 시작 때마다 새 run과 새 window를 만들고 최신 project 지침으로 prompt·settings를 다시 만듭니다.
+2. project마다 Leader를 먼저, 그다음 Worker를 시작합니다. project들은 동시에 진행합니다. 시작 때마다 새 run을 만들고 최신 project 지침으로 prompt·settings를 다시 만듭니다. shutdown 뒤에도 tmux server가 유지돼 있으면 종료한 window를 이어받고(3절 종료한 window 재사용), server가 다시 떴으면 이전 window가 없으므로 새 window를 만듭니다.
 3. Claude는 `--session-id` 대신 `--resume <기록한 session_id>`로 같은 대화를 엽니다. 이 예외로 resume은 이전 session_id를 다시 쓰며 새 session_id를 만들지 않습니다.
 4. 등록은 이 run의 SessionStart `source == "resume"`만 받고, session_id가 기대값과 같아야 합니다.
 5. 같은 session_id를 다시 게시하는 것이므로 3절 규칙대로 `connected_at`과 `reviewing`을 보존합니다.
@@ -935,6 +967,7 @@ Controller는 호출 반환 후 같은 대상 제어 잠금으로 실제 제어�
 후임 Leader나 다른 호출자가 이 파일과 현재 state를 대조합니다.
 이 파일은 명령 결과 산출물이며 state.json의 대체 원본이 아닙니다.
 Controller PID·생성 시각을 기록하여 provider의 미종료 업무 process로 오판하지 않습니다.
+자기 restart의 controller는 끝낸 run의 window를 새 run에 넘길 수 있습니다(3절 종료한 window 재사용). 그러면 controller의 control_pending=false 기록은 window의 run_id가 달라 건너뛰고 결과 파일은 지금처럼 completed로 남습니다. 마지막 정리에는 닫을 window가 없습니다.
 Controller는 결과를 기록하고 control_pending을 false로 바꾼 뒤 마지막으로 종료한 window를 정리합니다(3절).
 마지막 window를 닫아 tmux server가 끝나도 결과는 이미 저장되어 있습니다.
 Controller가 살아 있어도 다음을 모두 만족하면 자기 run의 window를 닫을 수 있습니다.
@@ -1038,7 +1071,7 @@ Codex exec 전용 인자와 기존 thread 재개 인자는 거절합니다.
 - 인계 파일은 `<base>/agent/handoff/<slot>.md`입니다. Slot은 leader 또는 seat-N입니다.
 - Restart는 대상 run 시작 뒤 갱신한 인계 파일을 요구합니다.
 - Leader의 결정 대기는 `path_decide`, 다음 작업은 CR todo·in-progress가 소유합니다. 인계 파일은 목표와 맥락을 씁니다.
-- Tmux window 이름은 Leader가 `<project>-leader`, Worker가 `<project>-seat<N>-<CR-ID>`입니다.
+- Tmux window 이름은 Leader가 `<project>-leader`, Worker가 `<project>-seat<N>-<CR-ID>`입니다. 종료한 window는 `-exited-<run 앞 8자리>`가 붙은 이름으로 남고, 다음 run이 이어받으면 그 run의 이름으로 돌아옵니다.
 
 ## 9. 출력과 인수
 

@@ -42,6 +42,12 @@ def windows(env):
     return env.tmux.command("list-windows", "-t", "fixture", "-F", "#{window_id}").splitlines()
 
 
+def without_reuse(monkeypatch):
+    """Make every run open its own window, as a window that cannot be reused would."""
+    import agent_session.lifecycle as lifecycle
+    monkeypatch.setattr(lifecycle.Manager, "_reusable", lambda self, target, ending=None: None)
+
+
 def fail_once(monkeypatch, module, name, code="fixture_failure"):
     """Make module.name raise once, then behave as before."""
     original = getattr(module, name)
@@ -1024,10 +1030,11 @@ def test_review_mark_clears_on_leader_feedback_stop_and_a_new_leader(session_env
     assert released["released"] is True and env.store.read()["0"] == EMPTY and reviewing() is None
 
 
-def test_restart_and_a_later_start_close_retired_windows(session_env):
+def test_restart_and_a_later_start_close_retired_windows(session_env, monkeypatch):
     from agent_session import internal
 
     env = session_env
+    without_reuse(monkeypatch)
     cr = env.cr()
     original = env.manager().start(cr)
     env.handoff("seat-0", "Continue the fixture change.")
@@ -1051,6 +1058,7 @@ def test_sweep_keeps_pending_controlled_shared_or_unconfirmed_windows(session_en
     from agent_session.process import birth
 
     env = session_env
+    without_reuse(monkeypatch)
     cr = env.cr()
     runs = [env.manager().start(cr)]
     with monkeypatch.context() as quiet:
@@ -1160,10 +1168,12 @@ def test_self_stop_saves_its_result_before_closing_the_servers_last_window(sessi
     assert json.loads(saved.read_text(encoding="utf-8")) == result
 
 
-def test_self_restart_keeps_the_old_window_until_its_result_is_saved(session_env):
+def test_self_restart_keeps_an_unreusable_window_until_its_result_is_saved(session_env):
     env = session_env
     cr = env.cr()
     worker = env.manager().start(cr)
+    # A value that no run of this version writes keeps the window from the next run.
+    env.tmux.command("set-option", "-w", "-t", worker["window_id"], "@agent_session_legacy_value", "1")
     env.handoff("seat-0", "Continue the fixture change.")
     result = self_control(env, "restart", cr, worker["session"]["session_id"])
     data = result["data"]
@@ -1195,6 +1205,7 @@ def test_controller_cleanup_needs_the_slot_lock_and_keeps_the_current_run(sessio
     import agent_session.lifecycle as lifecycle
 
     env = session_env
+    without_reuse(monkeypatch)
     cr = env.cr()
     first = env.manager().start(cr)
     with monkeypatch.context() as quiet:
@@ -1237,6 +1248,7 @@ def test_cleanup_budget_leaves_the_rest_for_a_later_sweep(session_env, monkeypat
     import agent_session.lifecycle as lifecycle
 
     env = session_env
+    without_reuse(monkeypatch)
     cr = env.cr()
     first = env.manager().start(cr)
     monkeypatch.setattr(lifecycle, "SWEEP_SECONDS", 0)
@@ -1377,3 +1389,222 @@ def test_sending_to_another_project_does_not_grant_its_control(session_env, monk
     with pytest.raises(SessionError) as error:
         env.manager_at(other).review(clear=True)
     assert error.value.code == "caller_unbound"
+
+
+# --- Window reuse (SESSION-018): a new run takes over the retired window of its slot. ---
+
+def add_pane(env, window_id):
+    """A pane that a person added beside the managed pane."""
+    return env.tmux.command("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", window_id, "sleep", "86400")
+
+
+def panes(env, window_id):
+    return env.tmux.command("list-panes", "-t", window_id, "-F", "#{pane_id}").splitlines()
+
+
+def window_names(env):
+    return env.tmux.command("list-windows", "-t", "fixture", "-F", "#{window_id} #{window_name}").splitlines()
+
+
+# What two runs of one slot may legitimately share; every other value must be the new run's own.
+SHARED = {"base", "project_id", "provider", "config_path", "target", "seat", "seat_root", "cwd", "job_id", "role",
+          "python", "library_path", "allow_daemon_start", "window_id", "pane_id", "window_name", "endpoint",
+          "server_pid", "server_started", "server_birth", "socket_path", "registered", "ready", "stopping",
+          "provider_launch_attempted", "job", "provider_name", "leader_request", "start_error"}
+
+
+def test_leader_restart_reuses_the_window_with_the_panes_a_person_added(session_env):
+    env = session_env
+    first = env.manager().start("leader")
+    first_meta = env.tmux.read_meta(first["window_id"])
+    user = add_pane(env, first["window_id"])
+    env.handoff("leader", "Continue the Leader work.")
+    restarted = env.manager().control("restart", job="leader")
+    assert restarted["window_id"] == first["window_id"] and restarted["pane_id"] == first["pane_id"]
+    assert panes(env, first["window_id"]) == [first["pane_id"], user]
+    assert windows(env) == [first["window_id"]]
+    assert window_names(env) == [first["window_id"] + " fixture-leader"]
+    assert restarted["run_id"] != first["run_id"]
+    assert restarted["session"]["session_id"] != first["session"]["session_id"]
+    assert restarted["cleanup"] == {"closed": [], "kept": []}
+    assert env.store.read()["leader"]["session_id"] == restarted["session"]["session_id"]
+    pointer = env.tmux.get_current("fixture", "leader")
+    assert pointer["run_id"] == restarted["run_id"] and pointer["window_id"] == first["window_id"]
+    meta = env.tmux.read_meta(first["window_id"])
+    assert meta["run_id"] == restarted["run_id"] and meta["session_id"] == restarted["session"]["session_id"]
+    # Nothing of the first run is left: a value equal to the first run's is one the slot's runs share.
+    assert {key for key in first_meta if meta.get(key) == first_meta[key]} <= SHARED
+    assert meta["control_pending"] is False and meta["controller_pid"] is None
+    assert meta["launch_file"].endswith(restarted["run_id"] + "/launch.sh")
+    # It reads as a window that was created for this run: the same keys and kinds of values, plus
+    # neutral values for what only another run would have added.
+    env.tmux.command("kill-pane", "-t", user)
+    env.manager().control("stop", job="leader")        # no person's pane is left, so the window closes
+    assert windows(env) == []
+    fresh = env.tmux.read_meta(env.manager().start("leader")["window_id"])
+    extra = set(meta) - set(fresh) - {"handoff_file"}    # the restart's own input, which a first start lacks
+    assert set(fresh) <= set(meta) and extra and all(not meta[key] for key in extra)
+    assert all(type(meta[key]) is type(fresh[key]) for key in fresh
+               if fresh[key] is not None and meta[key] is not None)
+
+
+def test_restart_without_a_person_pane_reuses_the_window_too(session_env):
+    env = session_env
+    cr = env.cr()
+    worker = env.manager().start(cr)
+    env.handoff("seat-0", "Continue the fixture change.")
+    restarted = env.manager().control("restart", job=cr)
+    assert restarted["window_id"] == worker["window_id"]
+    assert windows(env) == [worker["window_id"]]
+    assert window_names(env) == [worker["window_id"] + " fixture-seat0-" + cr]
+    assert restarted["cleanup"] == {"closed": [], "kept": []}
+
+
+def test_self_restart_reuses_the_window_and_leaves_no_pending_control(session_env):
+    env = session_env
+    leader = env.manager().start("leader")
+    user = add_pane(env, leader["window_id"])
+    env.handoff("leader", "Continue the Leader work.")
+    result = self_control(env, "restart", "leader", leader["session"]["session_id"])
+    data = result["data"]
+    assert result["ok"] is True and data["completed"] is True and data["restarted"] is True
+    assert data["window_id"] == leader["window_id"] and data["run_id"] != leader["run_id"]
+    assert panes(env, leader["window_id"]) == [leader["pane_id"], user]
+    assert windows(env) == [leader["window_id"]]
+    meta = env.tmux.read_meta(leader["window_id"])
+    assert meta["run_id"] == data["run_id"] and meta["control_pending"] is False and meta["controller_pid"] is None
+    saved = env.base / "agent/runs" / leader["run_id"] / "control-result.json"
+    assert json.loads(saved.read_text(encoding="utf-8")) == result
+    assert env.tmux.get_current("fixture", "leader")["run_id"] == data["run_id"]
+
+
+def test_stop_keeps_a_window_with_a_person_pane_until_the_next_start_takes_it(session_env):
+    env = session_env
+    leader = env.manager().start("leader")
+    user = add_pane(env, leader["window_id"])
+    stopped = env.manager().control("stop", job="leader")
+    assert stopped["released"] is True
+    assert stopped["cleanup"]["closed"] == [] and stopped["cleanup"]["kept"][0]["reason"] == "window_shared"
+    assert window_names(env) == [leader["window_id"] + " fixture-leader-exited-" + leader["run_id"][:8]]
+    again = env.manager().start("leader")
+    assert again["window_id"] == leader["window_id"] and again["run_id"] != leader["run_id"]
+    assert panes(env, leader["window_id"]) == [leader["pane_id"], user]
+    assert window_names(env) == [leader["window_id"] + " fixture-leader"]
+    assert env.tmux.get_current("fixture", "leader")["run_id"] == again["run_id"]
+    # Without a person's pane the window still closes at stop, as before.
+    env.tmux.command("kill-pane", "-t", user)
+    closed = env.manager().control("stop", job="leader")
+    assert closed["cleanup"]["closed"] == [leader["window_id"]] and windows(env) == []
+
+
+def test_the_seats_next_cr_takes_the_window_of_the_released_one(session_env):
+    env = session_env
+    first_cr = env.cr()
+    first = env.manager().start(first_cr)
+    user = add_pane(env, first["window_id"])
+    env.finish(first_cr, state="done", outcome="waived", note="no change needed")
+    stopped = env.manager().control("stop", job=first_cr)
+    assert stopped["released"] is True and env.store.read()["0"] == EMPTY
+    assert window_names(env) == [first["window_id"] + " fixture-seat0-" + first_cr + "-exited-" + first["run_id"][:8]]
+    second_cr = env.cr(number=2)
+    second = env.manager().start(second_cr)
+    assert second["seat"] == 0 and second["window_id"] == first["window_id"]
+    assert panes(env, first["window_id"]) == [first["pane_id"], user]
+    assert window_names(env) == [first["window_id"] + " fixture-seat0-" + second_cr]
+    meta = env.tmux.read_meta(first["window_id"])
+    assert meta["job_id"] == second_cr and meta["run_id"] == second["run_id"]
+    assert env.tmux.get_current("fixture", "seat-0")["run_id"] == second["run_id"]
+
+
+@pytest.mark.parametrize("why", ["pending", "controller", "restored", "unconfirmed", "live"])
+def test_a_window_that_is_not_surely_ended_is_left_and_a_new_one_opens(session_env, monkeypatch, why):
+    from agent_session_fake_provider import FakeProvider
+    from agent_session.process import birth
+
+    env = session_env
+    leader = env.manager().start("leader")
+    user = add_pane(env, leader["window_id"])
+    env.manager().control("stop", job="leader")
+    meta = env.tmux.read_meta(leader["window_id"])
+    if why == "pending":
+        env.tmux.write_meta(leader["window_id"], {"control_pending": True})
+    elif why == "controller":
+        env.tmux.write_meta(leader["window_id"], {"controller_pid": os.getpid(), "controller_birth": birth(os.getpid())})
+    elif why == "restored":                         # the window carries another server's identity
+        env.tmux.command("set-option", "-w", "-t", leader["window_id"], "@agent_session_server_pid", "1")
+    elif why == "unconfirmed":
+        observe = FakeProvider.observe
+        monkeypatch.setattr(FakeProvider, "observe", lambda self, session, context, meta=None, timeout=30: (
+            {"known": False} if session["session_id"] == leader["session"]["session_id"]
+            else observe(self, session, context, meta, timeout)))
+    else:                                           # the managed pane lives again
+        env.tmux.command("respawn-pane", "-t", leader["pane_id"], "sleep", "86400")
+    again = env.manager().start("leader")
+    assert again["window_id"] != leader["window_id"]
+    assert leader["window_id"] in windows(env) and user in panes(env, leader["window_id"])
+    assert window_names(env)[0] == leader["window_id"] + " fixture-leader-exited-" + leader["run_id"][:8]
+    assert env.tmux.get_current("fixture", "leader")["run_id"] == again["run_id"]
+
+
+def test_the_most_recent_runs_window_is_the_one_a_slot_takes(session_env, monkeypatch):
+    import agent_session.lifecycle as lifecycle
+
+    env = session_env
+    cr = env.cr()
+    with monkeypatch.context() as quiet:
+        quiet.setattr(lifecycle.Manager, "_reusable", lambda self, target, ending=None: None)
+        quiet.setattr(lifecycle.Manager, "_sweep", lambda self, target, owner=None: {"closed": [], "kept": []})
+        first = env.manager().start(cr)
+        env.handoff("seat-0", "Continue the fixture change.")
+        second = env.manager().control("restart", job=cr)
+        env.manager().control("stop", job=cr)
+    assert first["window_id"] != second["window_id"] and len(windows(env)) == 2
+    env.finish(cr, state="done", outcome="waived", note="no change needed")
+    env.tmux.clear_current("fixture", "seat-0", second["run_id"])   # a release that left no pointer
+    chosen = env.manager()._reusable("seat-0")
+    assert chosen["window_id"] == second["window_id"]
+    # A window whose newer run is the one that ended is the choice; an older one is not tried.
+    os.utime(env.base / "agent/runs" / first["run_id"] / "launch.sh", (time.time() + 60, time.time() + 60))
+    assert env.manager()._reusable("seat-0")["window_id"] == first["window_id"]
+
+
+def test_a_run_of_the_retired_window_cannot_write_into_the_next_runs_values(session_env, monkeypatch):
+    from agent_session import internal
+    from agent_session.process import birth
+
+    env = session_env
+    first = env.manager().start("leader")
+    old = env.tmux.read_meta(first["window_id"])
+    env.handoff("leader", "Continue the Leader work.")
+    restarted = env.manager().control("restart", job="leader")
+    assert restarted["window_id"] == first["window_id"]
+    before = env.tmux.read_meta(first["window_id"])
+    project = env.manager().project
+    # The callbacks have already matched the old run to the window when the window is handed over.
+    monkeypatch.setattr(internal, "_run", lambda run_id, config_path, socket_path, cwd=None: (
+        project, env.tmux, dict(old)))
+    monkeypatch.setattr(env.tmux.__class__, "get_current", lambda self, project_id, target: dict(old))
+    pane_pid = env.tmux.pane_info(old["pane_id"])["pane_pid"]
+    with pytest.raises(SessionError) as error:
+        internal.mark_process(old["run_id"], str(env.config), old["socket_path"], pane_pid)
+    assert error.value.code == "target_changed"
+    monkeypatch.setattr("agent_session.process.alive", lambda pid, fingerprint=None: True)
+    with pytest.raises(SessionError) as error:
+        internal._register(old["run_id"], str(env.config), old["socket_path"], old["session_id"],
+                           old["endpoint"], cwd=old["cwd"])
+    assert error.value.code == "target_changed"
+    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(json.dumps({
+        "session_id": old["session_id"], "hook_event_name": "Stop", "cwd": old["cwd"]})))
+    with pytest.raises(SessionError) as error:
+        internal.register_from_hook(old["run_id"], str(env.config), old["socket_path"], old["session_id"])
+    assert error.value.code == "target_changed"
+    manager = env.manager()
+    manager.provider = type("Codex", (), {})()
+    with pytest.raises(SessionError) as error:
+        manager._record_background_clear({**old, "provider": "codex"}, {"known": True, "terminal": True,
+                                                                         "latest_turn_id": "turn"})
+    assert error.value.code == "target_changed"
+    stopping = SessionError("fixture", "The fixture error.")
+    manager._restore_stopping(old, stopping)
+    assert stopping.details["stopping_restored"] is False and stopping.details["stopping_kept"] == "target_changed"
+    assert env.tmux.read_meta(first["window_id"]) == before
