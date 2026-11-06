@@ -21,6 +21,7 @@ class MCPClient:
         self.pending = bytearray()
         self.counter = 0
         self.schemas = {}
+        self.unreaped_pid = None
 
     def __enter__(self):
         try:
@@ -45,15 +46,24 @@ class MCPClient:
             if not {"ListAgents", "SendMessage"}.issubset(self.schemas):
                 raise SessionError("provider_protocol_unsupported", "Claude MCP lacks cross-session tools.", 4)
             return self
-        except SessionError:
+        except SessionError as error:
             self.close()
+            self._note_unreaped(error)
             raise
         except OSError as error:
             self.close()
-            raise SessionError("provider_command_failed", "Cannot start Claude MCP.", 5) from error
+            failure = SessionError("provider_command_failed", "Cannot start Claude MCP.", 5)
+            self._note_unreaped(failure)
+            raise failure from error
 
-    def __exit__(self, *unused):
+    def __exit__(self, kind, error, trace):
         self.close()
+        if isinstance(error, SessionError):
+            self._note_unreaped(error)
+
+    def _note_unreaped(self, error):
+        if self.unreaped_pid is not None:
+            error.details.setdefault("unreaped_pid", self.unreaped_pid)
 
     def close(self):
         if self.selector is not None:
@@ -69,7 +79,11 @@ class MCPClient:
                     self.process.wait(timeout=1)
                 except subprocess.TimeoutExpired:
                     self.process.kill()
-                    self.process.wait(timeout=1)
+                    try:
+                        self.process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        # Cleanup must not replace the error that ended the call; keep the pid as evidence.
+                        self.unreaped_pid = self.process.pid
             if self.process.stdout:
                 self.process.stdout.close()
             self.process = None
