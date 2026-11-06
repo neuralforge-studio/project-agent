@@ -19,7 +19,7 @@ CR 항목은 각 저장소의 git CR 디렉토리(`open/`, `todo/`, `done/`, `de
 - `project-item new cr --project <project> --area <AREA> --title ...`: 다음 번호로 `open/`에 파일을 만듭니다.
 - `project-item ls [--project <project>]`: `open/`, `todo/`, `deferred/`의 항목과 상태별 개수를 보여 줍니다.
 - `project-item check cr`: 이 문서의 파일 형식을 검사합니다.
-- `project-item owner <project>`: 담당 session 이름을 보여 줍니다.
+- `project-item owner <project>`: 담당 session 이름을 보여 줍니다. 관리 Leader가 없는 project에 `SendMessage`로 알릴 때만 씁니다("다른 project에 요청할 때").
 - `project-item move <ID> <STATE>`: 허용 전이에 따라 상태를 옮깁니다.
 
 ## 상태와 소유권
@@ -175,16 +175,20 @@ CR은 project-team의 JOB을 겸합니다. 기능·리팩터링·조사 작업�
 - 파일명은 `<AREA>-<NNN>-<슬러그>.md`입니다. 번호는 AREA마다 3자리이고 그 저장소 안에서 재사용하지 않습니다. 새 번호는 `project-item new cr`가 정합니다. 병합된 항목의 번호와 파일은 살려둡니다.
 - 2026-10-20 이전의 ID와 파일은 바꾸지 않습니다. 이 형식은 새 항목과 2026-10-20 이관 항목(`- Migrated:` 헤더)에 적용합니다. 이관 항목은 작업할 때 이 형식으로 정리합니다.
 
-## 다른 프로그램에 결함을 요청할 때
+## 다른 project에 요청할 때
 
-다른 프로그램(`project-item projects`의 목록)의 결함은 해당 담당자가 수정합니다. 요청자는 그 프로그램을 직접 고치지 않습니다.
+다른 등록 project(`project-item projects`의 목록)가 소유한 파일의 결함 수정, 기능 추가, update(version·release 반영 등)는 그 project가 수행합니다. 요청자는 그 파일을 직접 고치지 않습니다.
 
-1. 최소 재현을 확인하십시오. 명령, 입력, 도구 경로와 version을 기록하십시오.
-2. `project-item new cr --project <project> --area <AREA> --title ... --body-file -`로 대상 프로그램의 `open/`에 CR을 여십시오. 본문 절은 `project-item new cr -h`를 따르십시오. `- Requester:`를 남기십시오. 요청자는 파일을 commit하지 않습니다. 담당 session이 판정과 함께 commit합니다.
-3. `project-item owner <project>`로 담당 session 이름을 찾으십시오. `SendMessage`로 프로그램, CR ID, 제목, 파일 경로만 한 줄로 알리십시오. 상세 내용은 CR 파일에만 쓰십시오. 담당 session이나 `SendMessage` 도구가 없으면 알림을 생략하십시오.
+담당 project는 고칠 파일이 들어 있는 등록 base의 project입니다. 설치본·runtime 경로만 알면 `inhouse-tool-registry`로 원본 저장소를 찾습니다. 등록 project가 아닌 도구에 수정이 필요하면 요청할 대상이 없으므로 자기 project의 결정 항목으로 사용자에게 알립니다.
+
+1. 최소 재현이나 필요한 동작을 확인하십시오. 명령, 입력, 도구 경로와 version을 기록하십시오.
+2. `project-item new cr --project <project> --area <AREA> --title ... --body-file -`로 대상 project의 `open/`에 CR을 여십시오. 본문 절은 `project-item new cr -h`를 따르십시오. `- Requester:`를 남기십시오. 요청자는 파일을 commit하지 않습니다. 담당 project가 판정과 함께 commit합니다.
+3. 대상 project의 Leader에게 `agent-session send --project <project> --job leader "<CR ID> <제목> <파일 경로>"`로 한 줄 알리십시오. 상세 내용은 CR 파일에만 쓰십시오. 관리 Leader가 없는 project(팀이 없는 project)에만 `project-item owner <project>`로 담당 session 이름을 찾아 `SendMessage`로 알리십시오. 둘 다 없으면 알림을 생략하십시오.
 4. 자기 작업은 우회 방법으로 계속하십시오. 막힌 항목에는 CR ID를 기록하고 다음 항목으로 넘어가십시오. 회신을 기다리며 멈추지 마십시오.
 
-요청자 쪽에 같은 CR 항목이 있으면 `deferred/`로 보내고 `Outcome: moved <program> <ID>`를 적습니다. 담당 session은 받은 요청을 현재 작업이 끝나는 시점에 확인합니다. Phase 2 판정은 사용자 결정 또는 위임 범위의 Leader 판정을 `## Disposition`에 기록합니다. 위임 범위는 project 운영 문서(팀이 있으면 project-team skill의 Leader 절)가 정합니다. 팀이 없는 project는 사용자와 합의한 뒤 기록합니다. 처리가 끝나면 요청자 session에 결과(commit, version)를 `SendMessage`로 알립니다. 도구가 없으면 알림을 생략합니다.
+Worker는 다른 project에 `agent-session send --project`를 보낼 수 없습니다(`role_denied`, [spec 6절](../../../../docs/project-team/spec.md#project-간-leader-협업)). Worker는 자기 Leader에게 보고하고, Leader가 2·3을 합니다.
+
+요청자 쪽에 같은 CR 항목이 있으면 `deferred/`로 보내고 `Outcome: moved <program> <ID>`를 적습니다. 받은 쪽 담당 session은 받은 요청을 현재 작업이 끝나는 시점에 확인합니다. Phase 2 판정은 사용자 결정 또는 위임 범위의 Leader 판정을 `## Disposition`에 기록합니다. 위임 범위는 project 운영 문서(팀이 있으면 project-team skill의 Leader 절)가 정합니다. 팀이 없는 project는 사용자와 합의한 뒤 기록합니다. 처리가 끝나면 요청 project의 Leader에게 `agent-session send --project <요청 project> --job leader`로 결과(commit, version)를 알립니다. 관리 Leader가 없는 요청 project에는 `SendMessage`를 쓰고, 둘 다 없으면 알림을 생략합니다. 이 협업 메시지는 동료 메시지이며 사용자 승인·읽음·작업 완료가 아닙니다([spec 6절](../../../../docs/project-team/spec.md#project-간-leader-협업)).
 
 ## 위임 규칙
 

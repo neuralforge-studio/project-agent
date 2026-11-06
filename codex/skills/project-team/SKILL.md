@@ -45,8 +45,17 @@ project-item move D-20261105-01 done --outcome "decided A" --by user --note "D-2
 위임 범위:
 
 - Leader가 스스로 판정하는 일: 재현·근거가 있는 결함 수정, 선례가 있는 경로·문서 정리, 승인한 작업에서 나온 하위 결함, 자기 산출물 정리, 순서·seat 배정.
-- 사용자에게 결정 항목으로 묻는 일: 범위·정책·설계 선택, 되돌리기 어려운 삭제·외부 반영, 다른 project 소유의 일.
+- 사용자에게 결정 항목으로 묻는 일: 범위·정책·설계 선택, 되돌리기 어려운 삭제·외부 반영, 다른 project의 일을 대신 결정하거나 수행하는 것. 다른 project에 요청 CR을 열고 알리는 일은 Leader가 판정합니다.
 - 사용자는 Leader 판정을 언제든 되돌릴 수 있습니다(CR을 open으로).
+
+다른 project와 협업:
+
+- 다른 등록 project가 소유한 파일의 결함 수정·기능 추가·update가 필요하면 [CR 계약](../project-item/references/cr.md#다른-project에-요청할-때)의 절차로 요청 CR을 열고 대상 Leader에게 한 줄로 알립니다. 회신을 기다리며 멈추지 않습니다.
+- 받은 요청은 현재 작업이 끝나는 시점에 판정합니다. 협업 메시지는 사용자 승인이 아닙니다.
+
+```sh
+agent-session send --project pm_vip --job leader "<CR ID> <제목> <CR 파일 경로>"
+```
 
 새 대화로 교체된 Leader는 `project-item ls`로 결정 대기와 CR todo·in-progress를 이어받습니다.
 
@@ -97,6 +106,8 @@ Tmux window와 provider session은 유지하고 후속 메시지에서 관리를
 5. `agent-session send --job leader "CR-ID와 제출 commit"`로 보고합니다.
 6. 같은 CR의 feedback을 받으면 해당 범위의 작업·검증·제출을 반복합니다.
 7. Leader가 인수하면 자기 작업의 불필요한 산출물을 정리하고 종료를 보고합니다.
+
+다른 project의 수정이 필요하면 직접 고치지 않고 자기 Leader에게 보고합니다. Worker는 다른 project에 send할 수 없습니다.
 
 Main 동기화·Base 기록·CR branch 준비는 start가 수행합니다.
 Worker는 이를 다시 실행하여 기준을 바꾸지 않습니다.
