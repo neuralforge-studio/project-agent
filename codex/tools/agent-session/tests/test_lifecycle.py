@@ -574,7 +574,7 @@ def test_stop_that_times_out_on_a_live_cli_lets_it_take_messages_again(session_e
     except SessionError as failure:
         delivered = failure.code
     assert (stopping, delivered) == (False, "accepted")
-    assert error.value.details == {"stopping_restored": True}
+    assert error.value.details["stopping_restored"] is True
     assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
 
 
@@ -604,6 +604,40 @@ def test_claude_stop_signals_its_cli_and_types_nothing_in_the_pane(session_env, 
     assert result["stopped"] is True and result["released"] is False
     assert recorded(record) == [{"signal": "SIGTERM"}]
     assert "/exit" not in env.tmux.capture_pane(worker["pane_id"])
+
+
+def test_claude_stop_that_times_out_on_a_background_shell_names_it_without_signalling(session_env, monkeypatch):
+    env = session_env
+    record = claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    (env.base / "agent" / "fixture-shell-seat-0").write_text("")
+    with pytest.raises(SessionError) as error:
+        env.manager(timeout=3).control("stop", job=worker["job_id"])
+    assert (error.value.code, error.value.exit_code) == ("timeout", 4)
+    details = error.value.details
+    assert details["stopping_restored"] is True
+    wait = details["exit_wait"]
+    assert wait["exit_requested"] is False and wait["observed"] is True
+    assert (wait["provider_status"], wait["idle"], wait["cli_alive"], wait["pane_dead"]) == ("shell", False, True, False)
+    assert wait["background"] == [{"id": "bz1mzn8iq", "type": "shell",
+                                   "command": "until ! pgrep -f x; do sleep 3; done"}]
+    assert recorded(record) == []                   # no signal to the CLI, and none to its shell
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
+
+
+def test_claude_stop_that_times_out_after_the_signal_tells_it_apart_from_the_unsignalled_wait(session_env, monkeypatch):
+    env = session_env
+    record = claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    (env.base / "agent" / "fixture-background-seat-0").write_text("")     # idle, but the Stop report keeps a task
+    with pytest.raises(SessionError) as error:
+        env.manager(timeout=5).control("stop", job=worker["job_id"])
+    assert error.value.code == "timeout"
+    wait = error.value.details["exit_wait"]
+    assert wait["exit_requested"] is True and wait["idle"] is True and wait["background"] == ["task"]
+    assert (wait["cli_alive"], wait["pane_dead"]) == (False, True)
+    assert recorded(record) == [{"signal": "SIGTERM"}]
+    assert error.value.details["stopping_restored"] is False
 
 
 def listing_drops_the_run(manager, monkeypatch, after_exit):
@@ -664,7 +698,9 @@ def test_claude_stop_does_not_signal_a_cli_whose_birth_differs(session_env, monk
         env.manager(timeout=5).control("stop", job=worker["job_id"])
     assert error.value.code == "target_changed"
     # The CLI that the run recorded is not confirmed alive, so stop leaves its block for the operator.
-    assert error.value.details == {"stopping_restored": False, "stopping_kept": "cli_unconfirmed"}
+    details = error.value.details
+    assert (details["stopping_restored"], details["stopping_kept"]) == (False, "cli_unconfirmed")
+    assert details["exit_wait"]["exit_requested"] is False       # the signal was refused, not sent
     assert env.tmux.get_current("fixture", "seat-0")["stopping"] is True
     assert recorded(record) == []
     assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False

@@ -784,6 +784,20 @@ Stop·restart가 실제 종료를 확인하기 전에 실패할 수 있습니다
 이때 공통 코드는 같은 cli_birth의 CLI가 살아 있음을 확인한 경우에만 stopping을 false로 되돌립니다.
 결과는 원래 오류 code와 exit를 유지하고 details의 `stopping_restored`에 복원 여부를 적습니다.
 생존을 확인하지 못하면 stopping을 유지하고 details의 `stopping_kept`에 이유를 적습니다. 이 unknown은 자동 처리하지 않습니다.
+종료 대기 중에 실패한 오류의 details에는 `exit_wait`도 적습니다. 마지막으로 성공한 관찰에서 종료를 막은 조건입니다. 대화 내용은 넣지 않습니다.
+
+| 필드 | 뜻 |
+| --- | --- |
+| `exit_requested` | 종료 요청(Claude는 SIGTERM)을 이미 보냈는지. false이면 CLI가 idle이 되기를 기다리던 중입니다. |
+| `observed` | 성공한 관찰이 있었는지. false이면 아래 필드가 없습니다. |
+| `provider_status` | provider가 보고한 상태. Claude는 background shell이 도는 동안 `idle`이 아니라 `shell`로 보고합니다. |
+| `idle` | provider 기준 idle 여부 |
+| `background` | provider가 보고한 남은 background 목록. 항목은 `id`·`type`과 120자로 줄인 `command`입니다. 보고가 없으면 null입니다. |
+| `cli_alive`·`pane_dead`·`group_alive`·`tracked_alive` | CLI, pane, process group, 추적한 background PID의 생존 |
+
+Claude Worker에 background 작업이 남으면 idle이 되지 않아 종료 요청을 보내지 않고 시간 초과가 납니다. 이때 `exit_requested`가 false이고 `background`가 그 작업을 보여 줍니다.
+이 상태에서 Worker가 그 작업을 멈추면 같은 stop이 끝납니다. stop은 background 작업에 신호를 보내지 않습니다.
+
 Worker는 아래 반납 검사를 추가로 확인합니다.
 
 - CR이 in-progress에 없습니다. Leader가 done·todo·open·deferred로 먼저 옮깁니다.

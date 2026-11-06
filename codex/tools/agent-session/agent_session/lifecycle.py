@@ -225,7 +225,8 @@ class Manager(SuspendMixin):
                        and observed.get("known") and observed.get("terminal")
                        and not observed.get("active_turn") and not observed.get("pending")
                        and not observed.get("background"))
-        return {**observed, "stopped": stopped, "pane": pane, "cli_alive": live}
+        return {**observed, "stopped": stopped, "pane": pane, "cli_alive": live,
+                "group_alive": group_live, "tracked_alive": extra_live}
 
     @staticmethod
     def _process_facts(meta, pane):
@@ -809,6 +810,7 @@ class Manager(SuspendMixin):
                 self._record_background_clear(meta, observed)
                 exit_sent = False
             self.tmux.write_meta(meta["window_id"], {"stopping": True})
+            last = None
             try:
                 while True:
                     try:
@@ -820,6 +822,7 @@ class Manager(SuspendMixin):
                             raise
                         observed = None
                     if observed is not None:
+                        last = observed
                         if observed["stopped"]:
                             break
                         if observed.get("idle") and not exit_sent:
@@ -828,6 +831,7 @@ class Manager(SuspendMixin):
                     time.sleep(min(0.1, self.remaining()))
             except BaseException as error:
                 self._restore_stopping(meta, error)
+                _note_exit_wait(error, exit_sent, last)
                 raise
             self._retire_name(meta)
             if operation == "restart":
@@ -924,6 +928,37 @@ class Manager(SuspendMixin):
                 write_json(result_file, {"ok": False, "data": {"completed": True}, "error": error.as_dict()})
                 raise
         return {"accepted": True, "completed": False, "result_file": str(result_file)}
+
+
+_COMMAND_SUMMARY = 120
+
+
+def _task_summary(item):
+    """A background task as the provider reported it, reduced to its identity and a short command."""
+    if not isinstance(item, dict):
+        return str(item)[:_COMMAND_SUMMARY]
+    entry = {key: item[key] for key in ("id", "processId", "type") if key in item}
+    if isinstance(item.get("command"), str):
+        entry["command"] = item["command"][:_COMMAND_SUMMARY]
+    return entry
+
+
+def _note_exit_wait(error, exit_requested, observed):
+    """Name in the error what the last observation still waited for; no conversation content.
+
+    Only a SessionError carries details. The facts are the provider's last report and the run's
+    process state, so the Leader can tell a Worker's own background task from a stuck CLI.
+    """
+    if not isinstance(error, SessionError):
+        return
+    wait = {"exit_requested": exit_requested, "observed": observed is not None}
+    if observed is not None:
+        tasks = [_task_summary(item) for item in observed.get("background") or []]
+        wait.update({"provider_status": observed.get("runtime_status"), "idle": observed.get("idle"),
+                     "background": tasks if observed.get("background") is not None else None,
+                     "cli_alive": observed.get("cli_alive"), "pane_dead": (observed.get("pane") or {}).get("pane_dead"),
+                     "group_alive": observed.get("group_alive"), "tracked_alive": observed.get("tracked_alive")})
+    error.details = {**error.details, "exit_wait": wait}
 
 
 def _handoff(value):
