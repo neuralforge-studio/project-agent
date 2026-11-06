@@ -123,6 +123,16 @@ def test_decisions_are_read_from_open_only_and_rendered_escaped(board):
     assert model.open_decision(model.find_project(board.config, "alpha"), "D-20261104-01") is None
 
 
+def test_decision_shows_project_sections_in_file_order_without_evidence(board):
+    base = board.project("alpha")
+    path = board.decide(base, "open", "D-20261106-01", "초안 승인")
+    path.write_text(path.read_text(encoding="utf-8") + "\n## Draft\n\n게시 <i>초안</i> 전문.\n\n## Empty\n\n## Disposition\n\n- 판정.\n"
+                    "\n## Result\n\n- 결과.\n", encoding="utf-8")
+    (item,) = model.snapshot(board.config, now=NOW)["projects"][0]["decide"]
+    assert [s["name"] for s in item["sections"]] == ["Background", "Options", "Recommendation", "Draft"]
+    assert "&lt;i&gt;" in item["sections"][3]["html"] or "<em>" in item["sections"][3]["html"]
+
+
 # ------------------------------------------------------------ plan 3 and 6.1 sources
 def test_a_project_without_item_paths_or_state_shows_an_empty_team(board):
     board.project("plain", seats=2, items=False)

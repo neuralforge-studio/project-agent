@@ -27,7 +27,7 @@ from project_item.store import item_files  # noqa: E402
 
 CR_STATES = ("open", "todo", "in-progress")           # done and deferred are not shown (plan 2)
 HASH_TOKEN = re.compile(r"\b[0-9a-f]{7,40}\b")
-DECIDE_SECTIONS = ("Background", "Options", "Recommendation")
+DECIDE_HIDDEN = ("Evidence", "Disposition", "Result")   # the Board shows the question body; the rest is for the decide page
 
 
 def _error(error: Exception) -> dict:
@@ -96,12 +96,12 @@ def decide_items(root: Path) -> list[dict]:
     items = []
     for path in item_files(DECIDE, root, "open"):
         parsed = DECIDE.fmt.parse(path, "open")
-        parts = dict(sections(path))
         items.append({
             "id": parsed.item_id or path.stem, "title": parsed.title or path.stem,
             "urgency": parsed.headers.get("Urgency", "normal"), "blocks": parsed.headers.get("Blocks"),
             "related": parsed.headers.get("Related"), "opened": parsed.headers.get("Opened"),
-            "sections": [{"name": name, "html": markdown(parts[name])} for name in DECIDE_SECTIONS if parts.get(name)],
+            "sections": [{"name": name, "html": markdown(body)} for name, body in sections(path)
+                         if body and name not in DECIDE_HIDDEN],
         })
     return items
 

@@ -32,7 +32,7 @@ Board는 원본을 복사하지 않습니다. 요청마다 아래 파일을 읽�
 | 배정·연결 | `<base>/agent/state.json` | seat별 JOB, session, `connected_at`, `leader.reviewing` |
 | CR 상태 | `path_cr`의 `open/`·`todo/`·`in-progress/` 파일 이름 | 화이트보드 숫자, CR 목록 |
 | CR 본문 | `in-progress/`의 CR 파일 | 제목, `- Base:` header, `## Result`, `## Disposition` |
-| 결정 대기 | `path_decide`의 `open/` 파일 | 결정 대기 숫자, 질문 본문 |
+| 결정 대기 | `path_decide`의 `open/` 파일 | 결정 대기 숫자, 질문 본문(Evidence·Disposition·Result를 뺀 비어 있지 않은 절을 파일 순서대로, project가 더한 절 포함) |
 
 - 등록 파일은 `agent_session.config.load_registry`로 읽습니다. 두 표준 경로 가운데 어느 파일을 쓰는지는 [spec 2절](project-team/spec.md#2-등록과-프로젝트-선택)의 선택 규칙을 따릅니다.
 - 등록에 `path_cr` 또는 `path_decide`가 없는 project는 그 종류를 쓰지 않습니다. 화이트보드에 해당 숫자를 표시하지 않습니다.
