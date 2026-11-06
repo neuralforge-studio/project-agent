@@ -56,7 +56,7 @@ def mark_process(run_id, config_path, socket_path, pid):
     if not fingerprint:
         raise SessionError("execution_unknown", "The launch process has exited.", 4)
     control.write_meta(context["window_id"], {
-        "cli_pid": pid, "cli_birth": fingerprint, "process_group": os.getpgid(pid),
+        "run_id": run_id, "cli_pid": pid, "cli_birth": fingerprint, "process_group": os.getpgid(pid),
         "provider_launch_attempted": True,
     })
 
@@ -90,9 +90,10 @@ def _register(run_id, config_path, socket_path, session_id, endpoint=None, cwd=N
         raise SessionError("target_changed", "A newer run replaced this registration.")
 
     # Only the controller that holds the target lock publishes canonical state.
-    # A late hook can update its old window, but cannot replace a newer owner.
+    # A late hook can update its old window, but cannot replace a newer owner. The window may be
+    # handed to a newer run (reuse_window); naming this run makes write_meta refuse such a write.
     control.write_meta(context["window_id"], {
-        "session_id": session_id, "registered": True,
+        "run_id": run_id, "session_id": session_id, "registered": True,
         **({"message_to": session["message_to"]} if project.provider == "claude" else {}),
     })
     return project, control, context, session
@@ -151,7 +152,7 @@ def register_from_hook(run_id, config_path, socket_path, expected_session_id=Non
     # Keep what the provider check reads; reply text such as last_assistant_message is not evidence.
     observed = {key: payload[key] for key in _HOOK_FIELDS if key in payload}
     observations[event] = {**observed, "observed_at": dt.datetime.now(dt.timezone.utc).isoformat()}
-    control.write_meta(context["window_id"], {"hook_observations": observations})
+    control.write_meta(context["window_id"], {"run_id": run_id, "hook_observations": observations})
     if event == "SessionStart":
         _wait_ready(control, context, {"session_id": session_id}, output=False)
 
@@ -172,7 +173,8 @@ def run_controller(request_file):
         metadata = control.read_meta(own_window)
         if metadata.get("run_id") != request["run_id"]:
             raise SessionError("target_changed", "The deferred controller no longer owns this window.")
-        control.write_meta(own_window, {"controller_pid": os.getpid(), "controller_birth": process.birth(os.getpid())})
+        control.write_meta(own_window, {"run_id": request["run_id"], "controller_pid": os.getpid(),
+                                        "controller_birth": process.birth(os.getpid())})
         while process.alive(request["requester_pid"], request["requester_birth"]):
             if time.monotonic() >= end:
                 raise SessionError("timeout", "The self-control caller did not return before the wait limit.", 4)
@@ -193,7 +195,7 @@ def run_controller(request_file):
     write_json(result_file, output)
     try:
         if control.read_meta(own_window).get("run_id") == request["run_id"]:
-            control.write_meta(own_window, {"control_pending": False})
+            control.write_meta(own_window, {"run_id": request["run_id"], "control_pending": False})
     except SessionError:
         # A removed window does not invalidate the persisted controller result.
         pass

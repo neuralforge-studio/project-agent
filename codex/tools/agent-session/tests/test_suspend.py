@@ -376,6 +376,7 @@ def test_resume_reopens_the_same_conversations_leader_first(session_env, monkeyp
     env.manager().review(job=cr)
     before = env.store.read()
     assert before["leader"]["reviewing"] == cr
+    user = env.tmux.command("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", leader["window_id"], "sleep", "86400")
     fleet(env).shutdown(project="fixture")
     first_runs = {slot: entry["run_id"] for slot, entry in records(env).items()}
     if restart:
@@ -404,10 +405,15 @@ def test_resume_reopens_the_same_conversations_leader_first(session_env, monkeyp
     assert all("재개" in item["text"] and "background" in item["text"] for item in sent)
     assert f"seat-0({cr})" in sent[1]["text"] and "강제 종료" not in sent[0]["text"]
     assert "로컬 operator 입력" in sent[0]["text"]
-    if not restart:
-        # The ended windows are retired and swept by the new runs.
-        names = env.tmux.command("list-windows", "-t", "fixture", "-F", "#{window_name}").splitlines()
-        assert not [name for name in names if "-exited-" in name]
+    names = env.tmux.command("list-windows", "-t", "fixture", "-F", "#{window_name}").splitlines()
+    assert not [name for name in names if "-exited-" in name]
+    windows_now = {slot: env.tmux.get_current("fixture", slot)["window_id"] for slot in ("leader", "seat-0")}
+    if not restart:                                 # after a server restart there is no ended window to hand over
+        # The ended windows are handed to the resumed runs, with the pane a person added beside the Leader.
+        assert windows_now == {"leader": leader["window_id"], "seat-0": worker["window_id"]}
+        assert env.tmux.command("list-panes", "-t", leader["window_id"], "-F", "#{pane_id}").splitlines() == [
+            leader["pane_id"], user]
+        assert sorted(names) == ["fixture-leader", f"fixture-seat0-{cr}"]
 
 
 def test_a_forced_shutdown_is_told_to_the_resumed_conversation(session_env, monkeypatch):

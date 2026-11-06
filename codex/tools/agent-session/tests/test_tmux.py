@@ -460,3 +460,120 @@ def test_bell_is_output_to_the_pane_tty_and_flags_only_that_window(tmux, tmp_pat
     with pytest.raises(SessionError) as error:
         tmux.ring_bell("%999999")
     assert error.value.code in ("tmux_command_failed", "tmux_unknown")
+
+
+def retired_window(tmux, tmp_path, run="run-one", target="seat-0", job="J-20261103-01", panes=1):
+    """A launched run that ended: a dead managed pane, optionally beside panes that a person added."""
+    meta = new_window(tmux, tmp_path, run=run, target=target, job=job)
+    tmux.set_current("demo", target, meta)
+    tmux.write_meta(meta["window_id"], {
+        "provider_launch_attempted": True, "registered": True, "ready": True, "session_id": "session-one",
+        "cli_pid": meta["placeholder_pid"], "cli_birth": meta["placeholder_birth"], "process_group": 1,
+        "hook_observations": {"Stop": {"observed_at": "then"}}, "message_to": "peer-one",
+        "controller_pid": 7, "controller_birth": "then", "control_pending": True, "control_operation": "restart",
+        "last_background_clear": {"run_id": run}, "launch_file": "launch-one.sh", "provider_name": "name-one",
+        "start_error": "old failure", "resume": True, "handoff_file": "handoff-one.md", "leader_request": "ask"})
+    for _ in range(panes - 1):
+        tmux.command("split-window", "-d", "-t", meta["window_id"], "sleep", "86400")
+    os.kill(meta["placeholder_pid"], 15)
+    assert wait_for(lambda: tmux.pane_info(meta["pane_id"])["pane_dead"])
+    return tmux.read_meta(meta["window_id"])
+
+
+def next_run(tmp_path, run="run-two", job="J-20261103-02", **extra):
+    return {"base": str(tmp_path), "run_id": run, "target": "seat-0", "job_id": job, **extra}
+
+
+def test_a_retired_window_goes_to_the_next_run_and_reads_like_a_new_window(tmp_path, tmux):
+    old = retired_window(tmux, tmp_path, panes=3)
+    people = [pane for pane in tmux.command("list-panes", "-t", old["window_id"], "-F", "#{pane_id}").splitlines()
+              if pane != old["pane_id"]]
+    assert len(people) == 2
+    metadata = next_run(tmp_path, session_id="session-two")
+    reused = tmux.reuse_window("demo", "demo-worker-0-J-20261103-02", tmp_path, metadata, old)
+    # The window, the managed pane's place, and the people's panes stay.
+    assert (reused["window_id"], reused["pane_id"]) == (old["window_id"], old["pane_id"])
+    assert tmux.command("list-panes", "-t", old["window_id"], "-F", "#{pane_id}").splitlines() == [old["pane_id"], *people]
+    assert tmux.command("display-message", "-p", "-t", old["window_id"], "#{window_name}") == "demo-worker-0-J-20261103-02"
+    pane = tmux.pane_info(old["pane_id"])
+    assert pane["pane_dead"] is False and pane["pane_pid"] == reused["placeholder_pid"] != old["placeholder_pid"]
+    assert alive(reused["placeholder_pid"], reused["placeholder_birth"])
+    assert tmux.get_current("demo", "seat-0")["run_id"] == "run-two"
+    # It reads as the window that the same call would have made: no value of the retired run is left.
+    fresh = tmux.create_window("other", "other-worker-0-J-20261103-02", tmp_path, {**metadata, "base": str(tmp_path)})
+    per_window = {"window_id", "pane_id", "project_id", "placeholder_pid", "placeholder_birth",
+                  "placeholder_process_group"}
+    assert {key: value for key, value in reused.items() if key in fresh and key not in per_window} == {
+        key: value for key, value in fresh.items() if key not in per_window}
+    assert {key: reused[key] for key in set(reused) - set(fresh)} == {
+        "cli_pid": None, "cli_birth": None, "process_group": None, "background_pids": [],
+        "last_background_clear": None, "hook_observations": {}, "controller_pid": None, "controller_birth": None,
+        "control_pending": False, "control_operation": None, "message_to": None, "start_error": None,
+        "launch_file": None, "provider_name": None, "resume": False, "expected_session_id": None,
+        "handoff_file": None, "leader_request": None}
+    assert reused["registered"] is reused["ready"] is reused["stopping"] is False
+    assert reused["provider_launch_attempted"] is False
+
+
+def test_a_window_is_not_handed_over_while_its_managed_pane_lives(tmp_path, tmux):
+    live = new_window(tmux, tmp_path)
+    tmux.set_current("demo", "seat-0", live)
+    before = tmux.read_meta(live["window_id"])
+    with pytest.raises(SessionError) as error:
+        tmux.reuse_window("demo", "demo-worker-0-J-20261103-02", tmp_path, next_run(tmp_path), live)
+    assert error.value.code == "target_running"
+    assert tmux.read_meta(live["window_id"]) == before
+    assert tmux.pane_info(live["pane_id"])["pane_pid"] == live["placeholder_pid"]
+    assert tmux.command("display-message", "-p", "-t", live["window_id"], "#{window_name}") == "demo-worker-0-J-20261103-01"
+    assert tmux.get_current("demo", "seat-0")["run_id"] == "run-one"
+
+
+@pytest.mark.parametrize("change", ["other_run", "server", "metadata_key", "other_target"])
+def test_a_refused_hand_over_changes_nothing(tmp_path, tmux, change):
+    old = retired_window(tmux, tmp_path)
+    expected, metadata = old, next_run(tmp_path)
+    if change == "other_run":
+        expected = {**old, "run_id": "another-run"}
+    elif change == "server":                       # a window that tmux-resurrect restored carries another server
+        tmux.command("set-option", "-w", "-t", old["window_id"], "@agent_session_server_pid", "1")
+    elif change == "metadata_key":                 # a value that no run of this version writes cannot be replaced
+        tmux.command("set-option", "-w", "-t", old["window_id"], "@agent_session_legacy_value", "1")
+    else:
+        metadata = {**metadata, "target": "seat-1"}
+    before = tmux.read_meta(old["window_id"])
+    with pytest.raises(SessionError) as error:
+        tmux.reuse_window("demo", "demo-worker-0-J-20261103-02", tmp_path, metadata, expected)
+    assert error.value.code in ("target_changed", "tmux_owner_mismatch", "window_unreusable")
+    assert tmux.read_meta(old["window_id"]) == before
+    assert tmux.pane_info(old["pane_id"])["pane_dead"] is True
+    assert tmux.command("display-message", "-p", "-t", old["window_id"], "#{window_name}") == "demo-worker-0-J-20261103-01"
+    if change != "server":                         # the doctored server value no longer matches the pointer
+        assert tmux.get_current("demo", "seat-0")["run_id"] == "run-one"
+
+
+def test_a_hand_over_that_fails_after_the_respawn_ends_its_own_waiting_process(tmp_path, tmux, monkeypatch):
+    old = retired_window(tmux, tmp_path)
+    before = tmux.read_meta(old["window_id"])
+
+    def refuse(window_id, updates):
+        raise SessionError("tmux_command_failed", "The fixture refused the metadata write.", 5)
+
+    monkeypatch.setattr(tmux, "_option_arguments", refuse)
+    with pytest.raises(SessionError) as error:
+        tmux.reuse_window("demo", "demo-worker-0-J-20261103-02", tmp_path, next_run(tmp_path), old)
+    assert error.value.code == "tmux_command_failed"
+    # The window is the retired run's evidence again: its old values, a dead pane, the old pointer.
+    assert wait_for(lambda: tmux.pane_info(old["pane_id"])["pane_dead"])
+    assert tmux.read_meta(old["window_id"]) == before
+    assert tmux.get_current("demo", "seat-0")["run_id"] == "run-one"
+
+
+def test_a_write_naming_the_retired_run_cannot_reach_the_window_of_the_next_run(tmp_path, tmux):
+    old = retired_window(tmux, tmp_path)
+    reused = tmux.reuse_window("demo", "demo-worker-0-J-20261103-02", tmp_path, next_run(tmp_path), old)
+    for updates in ({"hook_observations": {"Stop": {}}}, {"registered": True, "session_id": "session-one"},
+                    {"control_pending": False}, {"cli_pid": 1}):
+        with pytest.raises(SessionError) as error:
+            tmux.write_meta(old["window_id"], {"run_id": "run-one", **updates})
+        assert error.value.code == "target_changed"
+    assert tmux.read_meta(old["window_id"]) == reused

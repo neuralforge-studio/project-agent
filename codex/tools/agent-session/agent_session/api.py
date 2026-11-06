@@ -111,7 +111,7 @@ def _cli_alive(meta, pane):
     """Whether the run's CLI process (or the pane process before it marked one) still runs."""
     from . import process
 
-    pid = meta.get("cli_pid", pane.get("pane_pid"))
+    pid = meta.get("cli_pid") or pane.get("pane_pid")     # a window handed to a new run holds cli_pid null
     return bool(pid and process.alive(int(pid), meta.get("cli_birth")))
 
 

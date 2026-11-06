@@ -65,6 +65,7 @@ Restart는 이전 대화를 보존하고 그 인계 파일로 새 대화에 작�
 Seat·CR·Git 기준·branch는 유지합니다.
 Worker 반납은 CR이 in-progress를 떠나고 seat의 결과가 origin에 게시된 뒤에만 합니다.
 반납과 새 실행 뒤에는 종료가 확인된 옛 tmux window를 닫습니다. 반납 보류·pending·종료 미확인 window는 남깁니다.
+새 실행은 같은 대상의 종료가 확인된 window를 먼저 이어받아(사용자가 붙인 pane은 그대로 남습니다) `-exited-` window가 갈라져 남지 않게 합니다. 이어받을 수 없을 때만 새 window를 만듭니다.
 Review는 Leader가 지금 review 중인 JOB을 state에 표시합니다. Feedback 전송·stop·Leader 교체 때 자동으로 지워집니다.
 제어 예약이나 메시지 수락을 실제 종료·반납·작업 완료로 해석하지 않습니다.
 
