@@ -135,8 +135,8 @@ def load_registry(config_path=None):
             raise SessionError("registry_invalid", "Project names must be nonempty and unique.", 2)
         if provider not in ("claude", "codex"):
             raise SessionError("registry_invalid", "The provider must be claude or codex.", 2)
-        if not isinstance(seats, list) or len(seats) > 10 or not all(_text(seat) for seat in seats):
-            raise SessionError("registry_invalid", "Seats must be an array of at most ten nonempty paths.", 2)
+        if not isinstance(seats, list) or not all(_text(seat) for seat in seats):
+            raise SessionError("registry_invalid", "Seats must be an array of nonempty paths.", 2)
         base = Path(base_key).expanduser().resolve()
         resolved_seats = tuple(_path(seat, base) for seat in seats)
         for root in (base,) + resolved_seats:

@@ -79,6 +79,25 @@ def test_window_and_server_identity_are_exact_and_current(tmp_path, tmux):
     assert tmux.get_current("demo", "seat-0")["run_id"] == "run-one"
 
 
+def test_two_digit_seat_target_has_its_own_current_pointer(tmp_path, tmux):
+    meta = new_window(tmux, tmp_path, target="seat-10")
+    assert tmux.get_current("demo", "seat-10") is None
+    tmux.set_current("demo", "seat-10", meta)
+    assert tmux.get_current("demo", "seat-10")["run_id"] == "run-one"
+    assert tmux.get_current("demo", "seat-1") is None
+
+
+@pytest.mark.parametrize("target", ["seat-01", "seat-", "seat-1a", "seat--1"])
+def test_malformed_seat_target_is_rejected(tmp_path, tmux, target):
+    new_window(tmux, tmp_path)      # the session exists, so only the target is wrong
+    with pytest.raises(SessionError) as error:
+        new_window(tmux, tmp_path, run="run-two", target=target)
+    assert error.value.code == "tmux_input"
+    with pytest.raises(SessionError) as error:
+        tmux.get_current("demo", target)
+    assert error.value.code == "tmux_input"
+
+
 def test_bad_metadata_update_has_no_partial_side_effect(tmp_path, tmux):
     meta = new_window(tmux, tmp_path)
     with pytest.raises(SessionError):

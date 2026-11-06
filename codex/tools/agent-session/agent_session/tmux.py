@@ -43,6 +43,7 @@ def _json_value(value):
 
 
 _VALUES_MARK = "agent-session-values"
+_SEAT_TARGET = re.compile(r"seat-(0|[1-9][0-9]*)")
 
 
 def _meta_keys(lines):
@@ -165,7 +166,7 @@ class Tmux:
         values = _json_value(dict(metadata))
         for key in ("base", "run_id", "target"):
             _safe_text(values.get(key), "managed " + key)
-        if values["target"] != "leader" and re.fullmatch(r"seat-[0-9]", values["target"]) is None:
+        if values["target"] != "leader" and _SEAT_TARGET.fullmatch(values["target"]) is None:
             raise SessionError("tmux_input", "The managed target must be leader or seat-N.", 2)
         base = str(Path(values["base"]).resolve())
         if self.has_session(name):
@@ -255,7 +256,7 @@ class Tmux:
         return self.read_meta(window_id)
 
     def _current_option(self, target):
-        if target != "leader" and re.fullmatch(r"seat-[0-9]", target or "") is None:
+        if target != "leader" and _SEAT_TARGET.fullmatch(target or "") is None:
             raise SessionError("tmux_input", "The managed target must be leader or seat-N.", 2)
         return _PREFIX + "current_" + target.replace("-", "_")
 

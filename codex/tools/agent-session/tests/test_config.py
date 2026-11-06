@@ -6,6 +6,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_session.config import load_registry, registry_path, resolve_project
+from agent_session.state import empty_state
 from agent_session.errors import SessionError
 
 
@@ -80,7 +81,6 @@ def test_standard_paths_require_one_actual_file(tmp_path, monkeypatch):
     {"relative/base": entry()},
     {"/base": {"project": "demo", "provider": "codex", "seats": [], "model": "extra"}},
     {"/base": entry(provider="other")},
-    {"/base": entry(seats=["s"] * 11)},
     {"/base": entry(seats=[None])},
     {"/base": entry(name="")},
 ])
@@ -89,6 +89,16 @@ def test_invalid_registry_inputs(tmp_path, body):
     with pytest.raises(SessionError) as error:
         load_registry(config)
     assert error.value.exit_code == 2
+
+
+def test_seat_count_is_not_limited(tmp_path):
+    base = tmp_path / "demo.main"
+    base.mkdir()
+    seats = [f"../demo.seat{n}" for n in range(12)]
+    config = write_registry(tmp_path / "project.json", {str(base): entry(seats=seats)})
+    project = resolve_project(base, config)
+    assert project.seats == tuple((tmp_path / f"demo.seat{n}").resolve() for n in range(12))
+    assert list(empty_state(project)) == ["leader"] + [str(n) for n in range(12)]
 
 
 def test_duplicate_json_key_is_not_silently_replaced(tmp_path):
