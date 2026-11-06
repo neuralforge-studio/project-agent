@@ -211,3 +211,86 @@ def test_read_only_reassignment_recovers_a_lost_cr_base_without_syncing_again(tm
     assert git_ops.prepare(retry, project, store)["base_hash"] == updated
     assert calls[-1]["base_hash"] == updated
     assert git(seat, "rev-parse", "HEAD") == updated
+
+
+@pytest.fixture
+def submodule_repo(tmp_path, repo, monkeypatch):
+    """Origin main carries two submodules; the seat has initialized only the first at the old gitlink."""
+    for key, value in (("protocol.file.allow", "always"),):          # fixture-only: local path submodules
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+        monkeypatch.setenv("GIT_CONFIG_KEY_0", key)
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", value)
+    source, seat, _ = repo
+    libs = {}
+    for name in ("liba", "libb"):
+        lib = tmp_path / name
+        subprocess.run(["git", "init", "--initial-branch=main", str(lib)], check=True, capture_output=True)
+        identity(lib)
+        (lib / "lib.txt").write_text("v1\n")
+        git(lib, "add", "lib.txt")
+        git(lib, "commit", "-m", "Library v1")
+        git(source, "submodule", "add", str(lib), f"external/{name}")
+        libs[name] = lib
+    git(source, "commit", "-m", "Add submodules")
+    git(source, "push", "origin", "main")
+    git(seat, "pull", "--ff-only")
+    git(seat, "submodule", "update", "--init", "external/liba")
+    return source, seat, libs
+
+
+def bump(source, lib, name):
+    (lib / "lib.txt").write_text("v2\n")
+    git(lib, "commit", "-am", "Library v2")
+    git(source / "external" / name, "pull", "--ff-only", str(lib), "main")
+    git(source, "add", f"external/{name}")
+    git(source, "commit", "-m", f"Bump {name}")
+    git(source, "push", "origin", "main")
+    return git(lib, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("mode", ["write", "read-only"])
+def test_start_aligns_initialized_and_uninitialized_submodules_with_main(tmp_path, submodule_repo, cr_bases, mode):
+    source, seat, libs = submodule_repo
+    new = bump(source, libs["liba"], "liba")
+    context, store, project = setup_job(tmp_path, seat, mode)
+    git_ops.prepare(context, project, store)
+    assert git(seat, "-C", "external/liba", "rev-parse", "HEAD") == new
+    assert (seat / "external/libb/lib.txt").read_text() == "v1\n"       # was never initialized
+    assert git(seat, "status", "--porcelain", "--untracked-files=all") == ""
+
+
+def test_reassigned_write_cr_realigns_submodules_with_its_branch(tmp_path, submodule_repo, cr_bases):
+    source, seat, libs = submodule_repo
+    context, store, project = setup_job(tmp_path, seat)
+    first = git_ops.prepare(context, project, store)
+    git(seat, "switch", "main")                  # parked: the seat later returns to another HEAD
+    new = bump(source, libs["liba"], "liba")
+    git(seat, "pull", "--ff-only")               # main moved; the parked branch stays at Base
+    git(seat, "-C", "external/liba", "checkout", "--quiet", new)
+    context, store, project = setup_job(tmp_path, seat, base=first)
+    git_ops.prepare(context, project, store)
+    assert git(seat, "branch", "--show-current") == "cr/TOOL-001"
+    assert git(seat, "-C", "external/liba", "rev-parse", "HEAD") != new
+    assert git(seat, "status", "--porcelain", "--untracked-files=all") == ""
+
+
+def test_untouched_submodules_do_not_block_release(tmp_path, submodule_repo, cr_bases):
+    from agent_session import workspace
+    source, seat, libs = submodule_repo
+    bump(source, libs["liba"], "liba")
+    context, store, project = setup_job(tmp_path, seat)
+    git_ops.prepare(context, project, store)
+    meta = {"seat": 0, "seat_root": str(seat)}
+    assert workspace.check_release(project, meta, ("done", "fixed")) == {"allowed": True, "reasons": []}
+
+
+def test_submodule_failure_stops_the_preparation_as_git_failed(tmp_path, submodule_repo, cr_bases):
+    source, seat, libs = submodule_repo
+    bump(source, libs["liba"], "liba")
+    import shutil
+    shutil.rmtree(libs["liba"])
+    context, store, project = setup_job(tmp_path, seat)
+    with pytest.raises(SessionError) as error:
+        git_ops.prepare(context, project, store)
+    assert error.value.code == "git_failed"
+    assert store.read()["0"]["git_hash"] is not None             # Git baseline stays recorded for the retry

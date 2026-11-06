@@ -82,6 +82,13 @@ def _resume_branch(root, job, base_hash, published_first):
 
 
 def prepare(context, project, store):
+    """Prepare the seat's Git state, then align its submodules with the HEAD gitlinks."""
+    baseline = _prepare_git(context, project, store)
+    git(Path(context["seat_root"]), "submodule", "update", "--init", "--recursive", timeout=600)
+    return baseline
+
+
+def _prepare_git(context, project, store):
     """Git preparation of a Worker seat. The CR Base header is the preparation record:
 
     - no Base: first preparation (latest main, Base, branch)
