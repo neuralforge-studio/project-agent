@@ -345,7 +345,7 @@ CR mode·작업 경로는 배정과 Git 변경 전에 검사합니다.
 CR의 Cwd가 seat 밖으로 나가면 배정 전에 거절합니다. Cwd 디렉토리의 존재는 Git 준비 뒤 provider 시작 전에 확인합니다. 대기 pane은 seat root에서 시작합니다.
 시작 실패는 CR 배정과 이미 기록한 Git 기준을 유지합니다.
 
-Seat 생성: base가 Git 저장소이면 `git clone --no-recurse-submodules --reference <base> --dissociate <base origin URL> <seat>`을 실행합니다. 아니면 seat_unavailable입니다. 접속 인증은 사용자의 Git·SSH 설정을 그대로 따르며 공통 도구가 설정을 더하지 않습니다.
+Seat 생성: base가 Git 저장소이면 `git clone --no-recurse-submodules --reference <base> --dissociate <base origin URL> <seat>`을 실행합니다(생성 시에는 submodule을 받지 않고, start의 Git 준비가 초기화합니다). 아니면 seat_unavailable입니다. 접속 인증은 사용자의 Git·SSH 설정을 그대로 따르며 공통 도구가 설정을 더하지 않습니다.
 Claude provider는 이렇게 만든 seat의 workspace trust를 기록합니다(5절 Claude 실행·전송·관찰).
 
 공통 workspace 검사:
@@ -393,6 +393,7 @@ CR의 `- Base: <commit> <ISO 시각>` header가 준비 이력입니다. 이 head
 - 새 기준으로 다시 시작하려면 Leader가 CR의 Base를 지우고 Disposition에 이유를 적습니다.
 
 공통 Git 명령은 `-c submodule.recurse=false`로 하위 저장소를 자동 갱신하지 않습니다.
+Start의 Git 준비(첫 준비·재시도·재배정·read-only)는 마지막에 한 번 `git submodule update --init --recursive`(timeout 600초)를 실행해 seat의 모든 submodule을 초기화하고 현재 HEAD의 gitlink에 맞춥니다. 실패하면 git_failed로 start가 멈추고 기록한 Git 기준과 배정은 유지합니다. 반납 검사는 바꾸지 않으며, Worker가 건드리지 않은 submodule은 깨끗하므로 반납됩니다. Submodule의 원격 접속·인증·protocol 허용은 사용자 Git 설정을 따릅니다.
 Main 갱신은 `switch --no-overwrite-ignore main`, `fetch origin main`,
 `merge --ff-only --no-overwrite-ignore origin/main` 순서입니다.
 이는 origin/main의 fast-forward pull과 같은 갱신이며 ignored 파일 덮어쓰기도 거절합니다.
@@ -924,7 +925,7 @@ CR 형식·상태·전이는 project-item skill과 `codex/skills/project-item/re
 | Worker | 자기 CR이 in-progress인 동안 `## Result`에 제출 commit과 검증 결과만 추가 |
 | agent-session | todo→in-progress 이동, Base 기록 |
 
-역할 지침·읽을 문서·필요한 submodule 초기화는 CR 본문에 link와 문장으로 적습니다. 공통 형식은 이를 해석하지 않습니다.
+역할 지침·읽을 문서는 CR 본문에 link와 문장으로 적습니다. Submodule 초기화는 start의 Git 준비가 합니다. 공통 형식은 이를 해석하지 않습니다.
 팀 project에서 `project-item move`의 in-progress 이동은 agent_session_only로 거절합니다.
 in-progress에서 나가는 이동과 `--by Leader`는 현재 Leader와 operator(`--by Leader`는 Leader만)만 할 수 있고, 다른 호출자는 role_denied입니다. 호출자 판정은 이 명세의 호출자 규칙(`agent_session.api.caller`)을 `project-item`이 그대로 씁니다.
 Write CR의 in-progress→done(fixed)은 `## Result`의 마지막 제출 hash, `project-item accept`가 쓴 Leader의 인수 기록, base `origin/main`에 있는 그 hash가 모두 있어야 하며, 없으면 review_missing으로 거절합니다.
