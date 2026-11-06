@@ -49,7 +49,7 @@ def wait_for(predicate):
 
 def fixed_pane(pid, dead):
     instance = Tmux(socket_name="unused")
-    instance._run = lambda *arguments, **options: "\t".join(["@1", "%1", pid, "", "bash", dead, "", ""])
+    instance._run = lambda *arguments, **options: "\t".join(["@1", "%1", pid, dead, "", ""])
     return instance
 
 
@@ -63,6 +63,33 @@ def test_live_pane_without_pid_is_incomplete():
     with pytest.raises(SessionError) as error:
         fixed_pane("", "0").pane_info("%1")
     assert error.value.code == "tmux_unknown"
+    assert error.value.exit_code == 4
+    assert error.value.message == "The managed pane observation is incomplete."
+
+
+@pytest.mark.parametrize(("raw", "count"), [
+    ("@1\t%1\t\t0\t\t", 6),                   # no pid on a live pane
+    ("@1\t%1\t4242\t1", 4),                    # too few fields
+    ("@1\t%1\t42\t42\t0\t\t", 7),             # a tab inside a value
+    ("", 1),
+])
+def test_incomplete_observation_reports_what_tmux_returned(raw, count):
+    instance = Tmux(socket_name="unused")
+    instance._run = lambda *arguments, **options: raw
+    with pytest.raises(SessionError) as error:
+        instance.pane_info("%7")
+    assert error.value.details == {"pane": "%7", "raw": raw, "field_count": count}
+
+
+def test_pane_whose_directory_has_a_tab_is_still_observed(tmp_path, tmux):
+    # tmux prints a tab inside pane_current_path as is, which must not shift the other fields.
+    directory = tmp_path / "with\ttab"
+    directory.mkdir()
+    meta = tmux.create_window("demo", "demo-worker-0-J-20261103-01", directory,
+                              {"base": str(tmp_path), "run_id": "run-one", "target": "seat-0",
+                               "job_id": "J-20261103-01"})
+    pane = tmux.pane_info(meta["pane_id"])
+    assert pane["pane_pid"] == meta["placeholder_pid"] and pane["pane_dead"] is False
 
 
 def test_window_and_server_identity_are_exact_and_current(tmp_path, tmux):
