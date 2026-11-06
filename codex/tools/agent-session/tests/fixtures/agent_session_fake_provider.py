@@ -84,6 +84,12 @@ class FakeClaudeProvider(FakeProvider):
         agent = Path(context["base"]) / "agent"
         if (agent / ("fixture-busy-" + context["target"])).exists() and not (meta or context).get("pane_dead"):
             return {**observed, "terminal": False, "active_turn": True, "idle": False}
+        if (agent / ("fixture-shell-" + context["target"])).exists():
+            # Claude reports status "shell", not "idle", while a background shell runs, and the Stop
+            # report names that shell.
+            return {**observed, "terminal": False, "idle": False, "active_turn": True, "runtime_status": "shell",
+                    "background": [{"id": "bz1mzn8iq", "type": "shell", "status": "running",
+                                    "description": "watch", "command": "until ! pgrep -f x; do sleep 3; done"}]}
         if (agent / ("fixture-background-" + context["target"])).exists():
             # Idle, but the last Stop report named a background task; that report stays after the CLI dies.
             return {**observed, "terminal": False, "background": ["task"]}
