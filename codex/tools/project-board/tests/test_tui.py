@@ -7,6 +7,8 @@ import re
 import threading
 import uuid
 
+import pytest
+
 from board_testing import Board, leader, session
 from project_board import model
 from project_board.tui import CRPopupApp, CSVScreen, PopupApp, SidebarApp
@@ -309,6 +311,57 @@ def test_decision_count_color_tracks_open_count_and_missing_or_error_state(tmp_p
     asyncio.run(check())
 
 
+def test_answered_decision_remains_accessible_without_open_decisions(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.decide(base, "answered", "D-20261107-01", "접수된 질문")
+    app = SidebarApp(str(board.config), poll=False)
+
+    async def check():
+        async with app.run_test(size=(50, 20)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            button = app.query_one("#project-0-D", Button)
+            assert str(button.label) == "D:0"
+            assert not button.disabled
+            assert not button.has_class("decision-open")
+
+    asyncio.run(check())
+
+
+def test_popup_labels_stages_and_disables_answer_for_non_open_decisions(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.decide(base, "open", "D-20261107-01", "기다리는 질문")
+    board.decide(base, "answered", "D-20261107-02", "접수된 질문")
+    board.decide(base, "done", "D-20261107-03", "반영 중인 질문", related="SESSION-020")
+    board.decide(base, "done", "D-20261107-04", "완료된 질문")
+    board.cr(base, "in-progress", "SESSION-020")
+    sent = []
+    app = PopupApp(str(board.config), "Falcon2", load=False,
+                   answer_sender=lambda *args: sent.append(args))
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            assert [state in str(button.label) for button, state in zip(app.query("#decision-list Button"),
+                                                                          ("결정 대기", "답변 접수", "반영 중", "완료"))] == [True] * 4
+            editor = app.query_one("#answer", TextArea)
+            send = app.query_one("#send", Button)
+            assert not editor.disabled and not send.disabled
+            for index, stage in ((1, "답변 접수"), (2, "반영 중"), (3, "완료")):
+                await pilot.click(f"#decision-{index}")
+                assert stage in str(app.query_one("#popup-heading", Static).content)
+                assert editor.disabled and send.disabled
+                app.action_send()
+                assert sent == []
+            await pilot.click("#decision-0")
+            assert not editor.disabled and not send.disabled
+
+    asyncio.run(check())
+
+
 def test_sidebar_ignores_liveness_for_an_old_session(tmp_path):
     board = _make_sidebar_board(tmp_path)
     app = SidebarApp(str(board.config), poll=False)
@@ -366,7 +419,7 @@ def test_slow_refresh_keeps_clicks_responsive_and_does_not_overlap(tmp_path):
         release.set()
 
 
-def test_popup_renders_markdown_and_csv_and_preserves_a_new_draft(tmp_path):
+def test_popup_renders_markdown_and_csv_and_closes_editor_after_acceptance(tmp_path):
     board = Board(tmp_path)
     base = board.project("Falcon2", seats=1)
     decision_path = board.decide(base, "open", "D-20261107-01", "설계를 선택하세요")
@@ -383,7 +436,8 @@ def test_popup_renders_markdown_and_csv_and_preserves_a_new_draft(tmp_path):
         sent.append((project, decision, draft))
         started.set()
         release.wait(timeout=5)
-        return {"ok": True, "data": {}, "error": None}
+        decision_path.rename(base / "agent/decide/answered" / decision_path.name)
+        return {"ok": True, "data": {"accepted": True, "notification": {"status": "sent"}}, "error": None}
 
     app = PopupApp(str(board.config), "Falcon2", load=False, answer_sender=sender)
 
@@ -407,13 +461,70 @@ def test_popup_renders_markdown_and_csv_and_preserves_a_new_draft(tmp_path):
             release.set()
             await pilot.pause(0.1)
             assert sent == [("Falcon2", "D-20261107-01", "처음 보낸 답")]
-            assert editor.text == "새 초안"
-            assert "전송했습니다" in str(app.query_one("#popup-message", Static).content)
+            assert editor.text == "" and editor.disabled
+            assert "답변 접수" in str(app.query_one("#popup-message", Static).content)
 
     try:
         asyncio.run(check())
     finally:
         release.set()
+
+
+@pytest.mark.parametrize("notification, page_error, phrase", [
+    ("sent", None, "알림 완료"), ("failed", None, "알림 실패"),
+    ("unconfirmed", None, "결과 불명"), ("sent", "render failed", "결정 페이지 갱신에 실패"),
+])
+def test_accepted_answer_closes_editor_even_when_notification_is_uncertain(tmp_path, notification, page_error, phrase):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    source = board.decide(base, "open", "D-20261107-01")
+    sent = []
+
+    def sender(config, project, decision, draft):
+        sent.append(draft)
+        source.rename(base / "agent/decide/answered" / source.name)
+        return {"ok": True, "data": {"accepted": True, "notification": {"status": notification},
+                                      "page_error": page_error},
+                "error": None}
+
+    app = PopupApp(str(board.config), "Falcon2", load=False, answer_sender=sender)
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            editor = app.query_one("#answer", TextArea)
+            editor.text = "A\n두 번째 줄"
+            await pilot.click("#send")
+            await pilot.pause(0.2)
+            assert sent == ["A\n두 번째 줄"]
+            assert editor.text == "" and editor.disabled
+            assert app.query_one("#send", Button).disabled
+            assert "답변 접수" in str(app.query_one("#popup-heading", Static).content)
+            assert phrase in str(app.query_one("#popup-message", Static).content)
+            app.action_send()
+            assert sent == ["A\n두 번째 줄"]
+
+    asyncio.run(check())
+
+
+def test_unconfirmed_acceptance_response_keeps_the_draft(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.decide(base, "open", "D-20261107-01")
+    app = PopupApp(str(board.config), "Falcon2", load=False,
+                   answer_sender=lambda *_: {"ok": True, "data": {}, "error": None})
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            editor = app.query_one("#answer", TextArea)
+            editor.text = "검증되지 않은 답"
+            await pilot.click("#send")
+            await pilot.pause(0.1)
+            assert editor.text == "검증되지 않은 답" and not editor.disabled
+            assert "접수를 확인하지 못했습니다" in str(app.query_one("#popup-message", Static).content)
+
+    asyncio.run(check())
 
 
 def test_percent_encoded_local_csv_link_opens_a_table(tmp_path):

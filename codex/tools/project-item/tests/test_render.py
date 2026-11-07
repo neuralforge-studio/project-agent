@@ -15,7 +15,7 @@ def test_open_items_sorted_by_urgency_and_done_items_folded():
                                 item("D-20261103-01", "normal", state="done", Outcome="decided B")],
                        now=dt.datetime(2026, 11, 4, 12, 0))
     assert html.index('href="#D-20261104-02"') < html.index('href="#D-20261104-01"')
-    assert "결정 대기 2건 · 결정됨 1건 · 갱신 2026-11-04 12:00" in html
+    assert "결정 대기 2건 · 답변 접수 0건 · 반영 중 0건 · 완료 1건 · 갱신 2026-11-04 12:00" in html
     folded = html.split('<details class="closed">')[1]
     assert "D-20261103-01" in folded and "decided B" in folded
     assert "<td>A를 추천합니다.</td>" in html
@@ -29,7 +29,22 @@ def test_every_text_is_escaped():
     assert "<b>x</b>" not in html and "&lt;b&gt;x&lt;/b&gt;" in html
     assert "<img" not in html and "<i>" not in html and "<script>" not in html
     assert "<code>&lt;code&gt;</code>" in html
-    assert "<title>&lt;demo&gt; 결정 대기</title>" in html
+    assert "<title>&lt;demo&gt; 결정 현황</title>" in html
+
+
+def test_decision_stages_follow_related_cr_without_copying_its_state():
+    waiting = item("D-20261107-01", "high", Related="SESSION-020")
+    received = item("D-20261107-02", "normal", state="answered", Related="SESSION-020")
+    confirmed = item("D-20261107-03", "normal", state="done", Related="SESSION-020")
+    assert render.decision_stage(waiting, {"SESSION-020": "open"}) == "결정 대기"
+    assert render.decision_stage(received, {"SESSION-020": "todo"}) == "답변 접수"
+    for cr_state in ("open", "todo", "in-progress"):
+        assert render.decision_stage(confirmed, {"SESSION-020": cr_state}) == "반영 중"
+    assert render.decision_stage(confirmed, {"SESSION-020": "done"}) == "완료"
+    assert render.decision_stage(confirmed, {}) == "반영 중"
+    assert render.decision_stage(item("D-20261107-04", "low", state="done"), {}) == "완료"
+    assert render.decision_stage(item("D-20261107-05", "low", state="done",
+                                      Related="D-20261107-01"), {}) == "완료"
 
 
 def test_markdown_subset():

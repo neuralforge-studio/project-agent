@@ -63,6 +63,19 @@ def test_done_decision_needs_outcome_and_disposition(tmp_path):
     assert decide.check(decide.parse(path, "done")) == []
 
 
+def test_answered_decision_needs_json_answer_and_legacy_done_is_valid(tmp_path):
+    path = write(tmp_path, "answered", "D-20261104-01.md", DECISION)
+    assert "answered/ needs a non-empty JSON-string Answer header" in decide.check(decide.parse(path, "answered"))
+    path.write_text(DECISION.replace("- Urgency: high", '- Urgency: high\n- Answer: "A\\n이유"'))
+    parsed = decide.parse(path, "answered")
+    assert decide.check(parsed) == []
+    assert decide.answer_text(parsed) == "A\n이유"
+    legacy = write(tmp_path, "done", "D-20261104-01.md", DECISION.replace(
+        "- Urgency: high", "- Urgency: high\n- Outcome: decided A") +
+        "\n## Disposition\n- 2026-11-04 user: 선택 A\n")
+    assert decide.check(decide.parse(legacy, "done")) == []
+
+
 @pytest.mark.parametrize("change, message", [
     (("- Urgency: high", "- Urgency: urgent"), "Urgency 'urgent' is not high, normal or low"),
     (("- Opened: 2026-11-04 10:30", "- Opened: 2026-11-04"), "Opened is not 'YYYY-MM-DD HH:MM'"),

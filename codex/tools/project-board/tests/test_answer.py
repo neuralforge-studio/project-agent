@@ -2,6 +2,7 @@
 import json
 import stat
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -55,11 +56,14 @@ def test_missing_registry_is_reported_without_sending(tmp_path):
     assert result["ok"] is False and result["error"]["code"] == "registry_not_found"
 
 
-def test_no_leader_is_not_sent(board, monkeypatch):
+def test_no_leader_is_recorded_without_sending(board, monkeypatch):
     data, base = board
     data.state(base, {"leader": None, "0": {"job_id": None, "git_hash": None, "session": None}})
     monkeypatch.setattr(answer, "send_answer", lambda *_: pytest.fail("must not send"))
-    assert answer.submit_answer(data.config, "alpha", DECIDE, "A")["error"]["code"] == "leader_unavailable"
+    result = answer.submit_answer(data.config, "alpha", DECIDE, "A")
+    assert result["ok"] is True
+    assert result["data"]["notification"]["error"]["code"] == "leader_unavailable"
+    assert (base / "agent/decide/answered" / f"{DECIDE}.md").exists()
 
 
 @pytest.mark.parametrize("actor, code", [("seat-0", "role_denied"), ("leader", "role_denied"),
@@ -71,12 +75,15 @@ def test_only_the_operator_can_approve(board, monkeypatch, actor, code):
     assert answer.submit_answer(data.config, "alpha", DECIDE, "A")["error"]["code"] == code
 
 
-def test_stopped_current_leader_is_not_sent(board, monkeypatch):
-    data, _ = board
+def test_stopped_current_leader_is_recorded_without_sending(board, monkeypatch):
+    data, base = board
     monkeypatch.setattr(answer.model.api, "liveness", lambda cwd, config_path=None:
                         {"leader": {"session_id": LEADER_ID, "state": "stopped"}})
     monkeypatch.setattr(answer, "send_answer", lambda *_: pytest.fail("must not send"))
-    assert answer.submit_answer(data.config, "alpha", DECIDE, "A")["error"]["code"] == "leader_stopped"
+    result = answer.submit_answer(data.config, "alpha", DECIDE, "A")
+    assert result["ok"] is True
+    assert result["data"]["notification"]["error"]["code"] == "leader_stopped"
+    assert (base / "agent/decide/answered" / f"{DECIDE}.md").exists()
 
 
 def test_old_stopped_verdict_cannot_block_a_new_leader(board, monkeypatch):
@@ -101,7 +108,7 @@ def test_answer_reaches_agent_session_with_the_user_text(board, tmp_path, monkey
     monkeypatch.setattr(answer, "AGENT_SESSION", stub)
 
     result = answer.submit_answer(data.config, "alpha", DECIDE, "A로 진행합니다.\n둘째 줄")
-    assert result == {"ok": True, "data": {"disposition": "accepted"}, "error": None}
+    assert result == {"ok": True, "data": {"accepted": True, "notification": {"status": "sent"}}, "error": None}
     seen = json.loads(record.read_text(encoding="utf-8"))
     assert seen["cwd"] == str(base)
     args = seen["args"]
@@ -111,24 +118,73 @@ def test_answer_reaches_agent_session_with_the_user_text(board, tmp_path, monkey
     assert seen["body"].endswith("\n답변:\nA로 진행합니다.\n둘째 줄")
 
 
+def test_answer_is_recorded_once_before_notifying(board, monkeypatch):
+    data, base = board
+    sent = []
+    monkeypatch.setattr(answer, "send_answer", lambda _project, body:
+                        sent.append(body) or {"ok": True, "data": {}, "error": None})
+    first = answer.submit_answer(data.config, "alpha", DECIDE, "A\n둘째 줄")
+    second = answer.submit_answer(data.config, "alpha", DECIDE, "B")
+    assert first["ok"] is True and first["data"]["accepted"] is True
+    assert second["error"]["code"] == "decide_not_open"
+    assert len(sent) == 1
+    path = base / "agent/decide/answered" / f"{DECIDE}.md"
+    assert path.exists()
+    assert 'Answer: "A\\n둘째 줄"' in path.read_text(encoding="utf-8")
+    assert "답변 접수" in (base / "agent/decide/decide.html").read_text(encoding="utf-8")
+
+
+def test_concurrent_answers_accept_only_one(board, monkeypatch):
+    data, base = board
+    sent = []
+    monkeypatch.setattr(answer, "send_answer", lambda _project, body:
+                        sent.append(body) or {"ok": True, "data": {}, "error": None})
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda text: answer.submit_answer(data.config, "alpha", DECIDE, text),
+                                ("A", "B")))
+    assert sum(item["ok"] for item in results) == 1
+    assert len(sent) == 1
+    path = base / "agent/decide/answered" / f"{DECIDE}.md"
+    assert path.exists()
+    assert path.read_text(encoding="utf-8").count("- Answer:") == 1
+
+
+def test_page_write_failure_does_not_lose_an_accepted_answer(board, monkeypatch):
+    data, base = board
+
+    def fail_page(*_args, **_kwargs):
+        raise OSError("page is read-only")
+
+    monkeypatch.setattr(answer.render, "render", fail_page)
+    monkeypatch.setattr(answer, "send_answer", lambda *_: {"ok": True, "data": {}, "error": None})
+    result = answer.submit_answer(data.config, "alpha", DECIDE, "A")
+    assert result["ok"] is True and result["data"]["page_error"]["code"] == "OSError"
+    assert (base / "agent/decide/answered" / f"{DECIDE}.md").exists()
+
+
 def test_agent_session_refusal_preserves_its_error(board, tmp_path, monkeypatch):
-    data, _ = board
+    data, base = board
     stub = tmp_path / "agent-session"
     stub.write_text("#!/bin/sh\necho '{\"ok\": false, \"data\": null, \"error\": {\"code\": \"caller_unbound\", "
                     "\"message\": \"This agent is not the operator.\", \"details\": {}}}'\nexit 3\n")
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setattr(answer, "AGENT_SESSION", stub)
     result = answer.submit_answer(data.config, "alpha", DECIDE, "A")
-    assert result["ok"] is False and result["error"]["code"] == "caller_unbound"
+    assert result["ok"] is True
+    assert result["data"]["notification"]["error"]["code"] == "caller_unbound"
+    assert (base / "agent/decide/answered" / f"{DECIDE}.md").exists()
 
 
 def test_unknown_send_result_is_not_reported_as_a_failure(board, monkeypatch):
-    data, _ = board
+    data, base = board
     monkeypatch.setattr(answer.subprocess, "run", lambda *_args, **_kwargs:
                         subprocess.CompletedProcess([], 5, stdout="", stderr="broken"))
     result = answer.submit_answer(data.config, "alpha", DECIDE, "A")
-    assert result["ok"] is False and result["error"]["code"] == "send_unconfirmed"
-    assert result["error"]["details"]["exit"] == 5
+    assert result["ok"] is True
+    assert result["data"]["notification"]["status"] == "unconfirmed"
+    assert result["data"]["notification"]["error"]["details"]["exit"] == 5
+    assert (base / "agent/decide/answered" / f"{DECIDE}.md").exists()
+    assert answer.submit_answer(data.config, "alpha", DECIDE, "A")["error"]["code"] == "decide_not_open"
 
 
 @pytest.mark.parametrize("failure, code", [
@@ -136,11 +192,17 @@ def test_unknown_send_result_is_not_reported_as_a_failure(board, monkeypatch):
     (OSError("missing executable"), "send_unavailable"),
 ])
 def test_send_timeout_and_start_failure_are_distinct(board, monkeypatch, failure, code):
-    data, _ = board
+    data, base = board
 
     def fail(*_args, **_kwargs):
         raise failure
 
-    monkeypatch.setattr(answer.subprocess, "run", fail)
+    project = answer.model.find_project(data.config, "alpha")
+    with monkeypatch.context() as patcher:
+        patcher.setattr(answer.subprocess, "run", fail)
+        delivery = answer.send_answer(project, "saved answer")
+    monkeypatch.setattr(answer, "send_answer", lambda *_: delivery)
     result = answer.submit_answer(data.config, "alpha", DECIDE, "A")
-    assert result["ok"] is False and result["error"]["code"] == code
+    assert result["ok"] is True
+    assert result["data"]["notification"]["error"]["code"] == code
+    assert (base / "agent/decide/answered" / f"{DECIDE}.md").exists()

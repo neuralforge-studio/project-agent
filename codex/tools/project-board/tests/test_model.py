@@ -111,18 +111,42 @@ def test_feedback_returns_a_seat_to_working_until_a_new_submission(board):
     assert "재제출" in seat["cr"]["result_markdown"] and SUBMIT not in seat["cr"]["result_markdown"]
 
 
-def test_decisions_are_read_from_open_only_with_markdown_source(board):
+def test_decisions_include_each_stage_with_markdown_source(board):
     base = board.project("alpha")
     path = board.decide(base, "open", "D-20261105-01", "질문 하나")
-    board.decide(base, "done", "D-20261104-01", "끝난 질문")
+    board.decide(base, "answered", "D-20261104-01", "접수된 질문")
+    board.decide(base, "done", "D-20261103-01", "진행 중인 질문", related="TOOL-002")
+    board.decide(base, "done", "D-20261102-01", "끝난 질문")
+    board.cr(base, "in-progress", "TOOL-002")
     (alpha,) = model.snapshot(board.config, now=NOW)["projects"]
-    (item,) = alpha["decide"]
+    items = {item["id"]: item for item in alpha["decide"]}
+    item = items["D-20261105-01"]
     assert (item["id"], item["title"], item["urgency"], item["blocks"]) == ("D-20261105-01", "질문 하나", "high", "TOOL-002")
     assert item["path"] == str(path.resolve())
     assert [s["name"] for s in item["sections"]] == ["Background", "Options", "Recommendation", "Evidence"]
     assert "<b>" in item["sections"][0]["body"] and "| 선택지 | 내용 |" in item["sections"][1]["body"]
     assert "`b.py:2`" in item["sections"][3]["body"]
+    assert {key: value["display_state"] for key, value in items.items()} == {
+        "D-20261105-01": "결정 대기", "D-20261104-01": "답변 접수",
+        "D-20261103-01": "반영 중", "D-20261102-01": "완료",
+    }
+    (base / "agent/cr/in-progress/TOOL-002-item.md").rename(base / "agent/cr/done/TOOL-002-item.md")
+    items = {item["id"]: item for item in model.snapshot(board.config, now=NOW)["projects"][0]["decide"]}
+    assert items["D-20261103-01"]["display_state"] == "완료"
+    assert items["D-20261102-01"]["display_state"] == "완료"
     assert model.open_decision(model.find_project(board.config, "alpha"), "D-20261104-01") is None
+
+
+@pytest.mark.parametrize("cr_state, expected", [
+    ("open", "반영 중"), ("todo", "반영 중"), ("in-progress", "반영 중"),
+    ("done", "완료"), ("deferred", "완료"),
+])
+def test_confirmed_decision_tracks_related_cr_state(board, cr_state, expected):
+    base = board.project("alpha")
+    board.decide(base, "done", "D-20261105-01", related="SESSION-020")
+    board.cr(base, cr_state, "SESSION-020")
+    (item,) = model.snapshot(board.config, now=NOW)["projects"][0]["decide"]
+    assert item["display_state"] == expected
 
 
 def test_decision_shows_project_sections_in_file_order_including_evidence(board):

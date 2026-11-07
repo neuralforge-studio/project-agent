@@ -80,7 +80,13 @@ def _decide_count(project: dict) -> str:
     decisions = project.get("decide")
     if decisions is None:
         return "!" if any(error.get("source") == "decide" for error in project.get("errors", [])) else "-"
-    return str(len(decisions))
+    return str(sum(item.get("state") == "open" for item in decisions))
+
+
+def _decide_stages(project: dict) -> tuple[int, int, int, int]:
+    decisions = project.get("decide") or []
+    return tuple(sum(item.get("display_state") == stage for item in decisions)
+                 for stage in ("결정 대기", "답변 접수", "반영 중", "완료"))
 
 
 def _seat_text(seat: dict) -> str:
@@ -307,7 +313,7 @@ class SidebarApp(App):
                           for seat in project.get("seats", []))
             errors = tuple((error.get("source"), error.get("message")) for error in project.get("errors", []))
             projects.append((project["id"], tuple(_count(project, state) for state in model.CR_STATES),
-                             _decide_count(project), seats, errors))
+                             _decide_count(project), _decide_stages(project), seats, errors))
         error = self.snapshot_data.get("error")
         return (tuple(projects), error.get("message") if error else None)
 
@@ -336,9 +342,12 @@ class SidebarApp(App):
             decision_id = f"project-{number}-D"
             decision_count = _decide_count(project)
             decision = Button(f"D:{decision_count}", id=decision_id, classes="decision")
-            decision.disabled = decision_count in ("-", "!", "0")
-            if not decision.disabled:
+            decision.disabled = not project.get("decide")
+            if decision_count not in ("-", "!", "0"):
                 decision.add_class("decision-open")
+            stages = _decide_stages(project)
+            decision.tooltip = " · ".join(f"{stage} {count}" for stage, count in
+                                          zip(("결정 대기", "답변 접수", "반영 중", "완료"), stages))
             self._actions[decision_id] = ("decision", project["id"])
             name_id = f"project-{number}-name"
             name = Button(project["id"], id=name_id, classes="project-name")
@@ -511,7 +520,7 @@ class PopupApp(App):
     #answer { height: 5; border: solid #536474; }
     #popup-actions { height: 2; }
     #popup-actions Button { height: 1; min-width: 0; width: auto; border: none; margin-right: 1; }
-    #popup-message { height: 1; color: #ffcb84; }
+    #popup-message { height: auto; min-height: 1; max-height: 3; color: #ffcb84; }
     .narrow #decision-list { display: none; }
     .narrow.list-open #decision-list { display: block; width: 100%; }
     .narrow.list-open #decision-detail { display: none; }
@@ -595,11 +604,18 @@ class PopupApp(App):
         listing = self.query_one("#decision-list", VerticalScroll)
         await listing.remove_children()
         if items:
-            await listing.mount(*[Button(f"{item['id']}\n{item['title']}", id=f"decision-{index}")
+            await listing.mount(*[Button(f"{item['id']} · {item['display_state']}\n{item['title']}",
+                                         id=f"decision-{index}")
                                   for index, item in enumerate(items)])
         else:
-            await listing.mount(Static("열린 결정 항목이 없습니다."))
+            await listing.mount(Static("결정 항목이 없습니다."))
         await self._show_decision()
+
+    def _sync_answer_controls(self) -> None:
+        item = self.decisions.get(self.decide_id)
+        editable = item is not None and item.get("state") == "open"
+        self.query_one("#answer", TextArea).disabled = not editable
+        self.query_one("#send", Button).disabled = not editable or self._sending
 
     async def _show_decision(self) -> None:
         detail = self.query_one("#decision-detail", VerticalScroll)
@@ -607,12 +623,14 @@ class PopupApp(App):
         item = self.decisions.get(self.decide_id)
         if item is None:
             self.query_one("#popup-heading", Static).update(f"{self.project_id} · 결정 없음")
+            self._sync_answer_controls()
             return
         position = list(self.decisions).index(item["id"]) + 1
         self.query_one("#popup-heading", Static).update(
-            f"{self.project_id} · 결정 {position}/{len(self.decisions)} · {item['id']}")
+            f"{self.project_id} · 결정 {position}/{len(self.decisions)} · {item['id']} · {item['display_state']}")
         meta = "\n".join(filter(None, [
             item["title"],
+            f"상태: {item['display_state']}",
             f"긴급도: {item.get('urgency', 'normal')}",
             f"막는 일: {item['blocks']}" if item.get("blocks") else "",
             f"관련: {item['related']}" if item.get("related") else "",
@@ -631,15 +649,18 @@ class PopupApp(App):
                 widgets.extend(_body_widgets(section["body"]))
         await detail.mount(*widgets)
         detail.scroll_home(animate=False)
+        self._sync_answer_controls()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id.startswith("decision-"):
             index = int(button_id.removeprefix("decision-"))
-            if self.decide_id is not None:
+            if self.decide_id is not None and self.decisions[self.decide_id].get("state") == "open":
                 self._drafts[self.decide_id] = self.query_one("#answer", TextArea).text
             self.decide_id = list(self.decisions)[index]
-            self.query_one("#answer", TextArea).text = self._drafts.get(self.decide_id, "")
+            self.query_one("#answer", TextArea).text = (
+                self._drafts.get(self.decide_id, "")
+                if self.decisions[self.decide_id].get("state") == "open" else "")
             self._evidence_open = False
             await self._show_decision()
             self.remove_class("list-open")
@@ -659,7 +680,8 @@ class PopupApp(App):
         self.set_class(self.size.width < 70, "narrow")
 
     def action_send(self) -> None:
-        if self._sending or self.decide_id is None or isinstance(self.screen, CSVScreen):
+        item = self.decisions.get(self.decide_id)
+        if self._sending or item is None or item.get("state") != "open" or isinstance(self.screen, CSVScreen):
             return
         draft = self.query_one("#answer", TextArea).text
         self._sending = True
@@ -673,16 +695,32 @@ class PopupApp(App):
             result = await asyncio.to_thread(self.answer_sender, self.config, self.project_id, decide_id, draft)
             if self._closing:
                 return
-            if result.get("ok"):
-                self.query_one("#popup-message", Static).update("Leader에게 답변을 전송했습니다.")
+            accepted = result.get("ok") and (result.get("data") or {}).get("accepted")
+            if accepted:
+                item = self.decisions.get(decide_id)
+                if item is not None:
+                    item["state"] = "answered"
+                    item["display_state"] = "답변 접수"
+                self._drafts.pop(decide_id, None)
                 editor = self.query_one("#answer", TextArea)
-                if self.decide_id == decide_id and editor.text == draft:
+                if self.decide_id == decide_id:
                     editor.text = ""
-                if self._drafts.get(decide_id) == draft:
-                    self._drafts[decide_id] = ""
+                await self.refresh_decisions()
+                notification = (result.get("data") or {}).get("notification") or {}
+                status = notification.get("status")
+                if status == "sent":
+                    message = "답변 접수 · Leader 알림 완료"
+                elif status == "unconfirmed":
+                    message = "답변 접수 · Leader 알림 결과 불명. 접수 기록은 저장됐습니다."
+                else:
+                    message = "답변 접수 · Leader 알림 실패. 접수 기록은 저장됐습니다."
+                if (result.get("data") or {}).get("page_error"):
+                    message += " 결정 페이지 갱신에 실패했습니다."
+                self.query_one("#popup-message", Static).update(message)
             else:
                 error = result.get("error") or {}
-                self.query_one("#popup-message", Static).update(error.get("message") or error.get("code") or "전송 실패")
+                self.query_one("#popup-message", Static).update(
+                    error.get("message") or error.get("code") or "답변 접수를 확인하지 못했습니다.")
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -691,7 +729,7 @@ class PopupApp(App):
         finally:
             self._sending = False
             if not self._closing:
-                send.disabled = False
+                self._sync_answer_controls()
 
     def on_markdown_link_clicked(self, event: Markdown.LinkClicked) -> None:
         href = event.href

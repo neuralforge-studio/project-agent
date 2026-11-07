@@ -1,8 +1,4 @@
-"""Validate and deliver a user's answer to an open project decision.
-
-This service has no HTTP or terminal dependency. The decision file remains owned by its
-Leader; an accepted send does not move or edit it.
-"""
+"""Record a user's decision answer, then notify the project's Leader."""
 from __future__ import annotations
 
 import json
@@ -11,9 +7,11 @@ import tempfile
 from pathlib import Path
 
 from . import model
+from project_item import render, store
+from project_item.registry import ItemError
 
 AGENT_SESSION = model.TOOLS / "agent-session" / "bin" / "agent-session"
-MAX_ANSWER = 16384                       # UTF-8 bytes; agent-session also receives the message header
+MAX_ANSWER = store.MAX_DECISION_ANSWER_BYTES
 SEND_TIMEOUT = 30                        # agent-session send --timeout
 
 
@@ -27,7 +25,7 @@ def answer_message(project_id: str, decide_id: str, title: str, answer: str) -> 
     return (f"결정 답변: {decide_id}\n"
             f"Project: {project_id}\n"
             f"질문: {title}\n"
-            "사용자가 Project Board에서 입력한 답입니다. 결정 항목 절차에 따라 기록하고 항목을 옮기십시오. "
+            "사용자가 Project Board에서 입력한 답을 Decision에 접수했습니다. 결정 항목 절차에 따라 확인하고 항목을 옮기십시오. "
             "`답변:` 다음 줄부터 끝까지가 답변 원문입니다.\n"
             "답변:\n"
             f"{answer}")
@@ -57,8 +55,30 @@ def send_answer(project, text: str) -> dict:
                      {"exit": run.returncode, "stderr": run.stderr[-2000:]})
 
 
+def _notification(project, text: str) -> dict:
+    """Delivery is advisory: the saved answer remains accepted if delivery fails."""
+    try:
+        state = model._read_state(project)
+        if not state or not state.get("leader"):
+            result = _fail("leader_unavailable", "The project Leader is not running.")
+        else:
+            live = model.api.liveness(project.base, config_path=project.config_path).get("leader", {})
+            if live.get("session_id") == state["leader"]["session_id"] and live.get("state") == "stopped":
+                result = _fail("leader_stopped", "The project Leader has stopped.")
+            else:
+                result = send_answer(project, text)
+    except Exception as error:
+        issue = model._error(error)
+        result = _fail(issue["code"], issue["message"])
+    if result.get("ok"):
+        return {"status": "sent"}
+    error = result.get("error") or {}
+    return {"status": "unconfirmed" if error.get("code") == "send_unconfirmed" else "failed",
+            "error": error}
+
+
 def submit_answer(config, project_id: str, decide_id: str, answer: str) -> dict:
-    """Check a still-open decision, then send its answer without changing any item file."""
+    """Accept one answer under the decision root lock before attempting delivery."""
     if not all(isinstance(value, str) for value in (project_id, decide_id, answer)):
         return _fail("invalid_request", "Project, decision ID and answer must be text.")
     if not answer.strip() or "\x00" in answer:
@@ -76,18 +96,28 @@ def submit_answer(config, project_id: str, decide_id: str, answer: str) -> dict:
     if decision is None:
         return _fail("decide_not_open", "The decision is no longer waiting for an answer.")
     try:
-        state = model._read_state(project)
-        if not state or not state.get("leader"):
-            return _fail("leader_unavailable", "The project Leader is not running.")
         actor, _ = model.api.caller(project)
         if actor == "unmanaged-agent":
             return _fail("caller_unbound", "This agent is not a registered member of this project.")
         if actor != "operator":
             return _fail("role_denied", "Only the operator may answer a decision.")
-        live = model.api.liveness(project.base, config_path=project.config_path).get("leader", {})
     except Exception as error:
         issue = model._error(error)
         return _fail(issue["code"], issue["message"])
-    if live.get("session_id") == state["leader"]["session_id"] and live.get("state") == "stopped":
-        return _fail("leader_stopped", "The project Leader has stopped.")
-    return send_answer(project, answer_message(project.project_id, decide_id, decision["title"], answer))
+    try:
+        store.answer_decide(project.path_decide, decide_id, answer)
+    except ItemError as error:
+        return _fail(error.code, error.message)
+    except Exception as error:
+        issue = model._error(error)
+        return _fail(issue["code"], issue["message"])
+    page_error = None
+    try:
+        render.render(project.project_id, project.path_decide, cr_root=project.path_cr)
+    except Exception as error:
+        page_error = model._error(error)
+    delivery = _notification(project, answer_message(project.project_id, decide_id, decision["title"], answer))
+    data = {"accepted": True, "notification": delivery}
+    if page_error:
+        data["page_error"] = page_error
+    return {"ok": True, "data": data, "error": None}

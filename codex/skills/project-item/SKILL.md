@@ -50,12 +50,14 @@ CR은 JOB을 겸합니다. project-team의 `agent-session start --job <CR-ID>`�
 | 종류 | 상태 디렉토리 | 허용 전이 |
 | --- | --- | --- |
 | `cr` | `open`, `todo`, `in-progress`, `done`, `deferred` | open→todo, open→done, open→deferred, todo→in-progress, todo→done, todo→deferred, todo→open, in-progress→done, in-progress→todo, in-progress→open, in-progress→deferred, done→open, deferred→open |
-| `decide` | `open`, `done` | open→done, done→open |
+| `decide` | `open`, `answered`, `done` | open→answered, open→done(철회·병합), answered→done, answered→open, done→open |
 
 - 상태를 더 늘리지 않습니다.
 - `in-progress`는 CR이 seat에서 실행 중이라는 뜻입니다. 팀 project(seat가 있는 project)에서는 `agent-session start`만 CR을 in-progress로 옮깁니다. `project-item move`는 `agent_session_only`로 거절합니다. 팀이 없는 project는 담당자가 `project-item move`로 옮깁니다.
 - `cr`의 `Outcome: fixed`는 todo 또는 in-progress에서만 done으로 갈 수 있습니다.
 - Open으로 되돌리는 전이에는 `--by`와 `--note`가 필요합니다. 도구가 Disposition 항목을 쓰고 Outcome을 지웁니다.
+- 결정 답변은 `answer`가 open/에서만 받습니다. 같은 항목의 두 번째 답변은 거절합니다. 답변 원문을 파일에 기록하고 answered/로 옮긴 뒤 알림을 보냅니다. `answered → done`은 Leader가 확인합니다. `decided` 결론은 open/에서 바로 done/으로 옮길 수 없습니다. 기존 done/ 파일은 답변 기록이 없어도 유효합니다.
+- `answered → done`에서 도구는 저장한 답변 원문을 Disposition에 기록합니다. `answered → open`은 원문을 Disposition에 남긴 뒤 Answer header를 제거합니다. `done → open`도 Answer header를 제거하고 이전 Disposition은 보존합니다.
 - 항목을 옮기는 주체는 담당 session입니다. 팀 project에서는 Leader입니다.
   도구가 팀 project(seat가 있는 project)에서 이를 확인합니다. 호출자 판정은 agent-session의 규칙(`agent_session.api.caller`)을 씁니다.
   - in-progress의 CR을 done·todo·open·deferred로 옮기는 호출자는 그 project의 현재 Leader(실제 실행 대조 통과)나 operator(관리 session·agent가 아닌 CLI)입니다. Worker와 다른 agent session은 `role_denied`로 거절합니다.
@@ -84,9 +86,10 @@ Project는 현재 경로의 등록 base·seat로 선택합니다. 다른 project
 | 명령 | 동작 |
 | --- | --- |
 | `project-item projects` | 등록 project, 종류별 경로, 상태별 개수 |
-| `project-item ls [cr\|decide] [--state S] [--all]` | 항목 목록. 기본은 cr의 open·todo·deferred와 decide의 open |
+| `project-item ls [cr\|decide] [--state S] [--all]` | 항목 목록. 기본은 cr의 open·todo·deferred와 decide의 open·answered |
 | `project-item new cr --area A --title T [--severity S] [--body-file F]` | cr open에 생성 |
 | `project-item new decide --title T [--urgency U] [--blocks B] [--related R] [--body-file F]` | decide open에 생성하고 결정 페이지를 다시 씀 |
+| `project-item answer ID (--text T\|--body-file F)` | 열린 결정의 답변 원문을 기록하고 answered로 옮김. 팀 project에서는 현재 Leader의 직접 답변 기록에 사용 |
 | `project-item move ID STATE [--outcome O] [--by B] [--note N]` | 위 절차로 이동 |
 | `project-item accept ID --commit HASH [--note N]` | 팀 project의 현재 Leader만. Disposition에 `- <날짜> Leader: 제출 <HASH>를 인수합니다. <N>`을 씀 |
 | `project-item check [cr\|decide] [paths]` | 형식과 ID 중복 검사. 위반이 있으면 exit 1 |
@@ -97,6 +100,6 @@ Project는 현재 경로의 등록 base·seat로 선택합니다. 다른 project
 
 ## 동시 실행
 
-- `new`, `move`, 결정 페이지 쓰기는 항목 루트마다 잠금 하나를 잡고 실행합니다. 잠금 파일은 `~/.cache/project-item/locks/`에 있습니다.
+- `new`, `answer`, `move`, 결정 페이지 쓰기는 항목 루트마다 잠금 하나를 잡고 실행합니다. 잠금 파일은 `~/.cache/project-item/locks/`에 있습니다.
 - 이 잠금은 같은 머신의 session끼리만 순서를 정합니다.
 - 다른 머신이 같은 network 경로에 동시에 발급할 수 있습니다. `check`가 모든 상태의 ID 중복을 위반으로 보고합니다.

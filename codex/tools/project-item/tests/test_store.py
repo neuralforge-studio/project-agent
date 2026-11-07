@@ -97,6 +97,59 @@ def test_decision_ids_count_per_day(tmp_path):
         "D-20261104-01.md", "D-20261104-02.md", "D-20261105-01.md"]
 
 
+def test_answer_is_recorded_once_and_preserves_exact_words(tmp_path):
+    root = tmp_path / "decide"
+    item_id = "D-20261104-01"
+    store.new_decide(root, decision_text, dt.date(2026, 11, 4))
+    words = "A\n이유: 첫째\n\n## 사용자 메모\n끝\n"
+    answered = store.answer_decide(root, item_id, words)
+    assert answered == root / "answered" / f"{item_id}.md"
+    assert DECIDE.fmt.answer_text(DECIDE.fmt.parse(answered, "answered")) == words
+    before = answered.read_text()
+    with pytest.raises(ItemError) as error:
+        store.answer_decide(root, item_id, words)
+    assert error.value.code == "decide_not_open"
+    assert answered.read_text() == before
+
+
+def test_concurrent_decision_answers_accept_only_one(tmp_path):
+    root = tmp_path / "decide"
+    item_id = "D-20261104-01"
+    store.new_decide(root, decision_text, dt.date(2026, 11, 4))
+    outcomes = []
+
+    def answer(words):
+        try:
+            store.answer_decide(root, item_id, words)
+            outcomes.append(("accepted", words))
+        except ItemError as error:
+            outcomes.append((error.code, words))
+
+    threads = [threading.Thread(target=answer, args=(words,)) for words in ("A", "B")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(code for code, _ in outcomes) == ["accepted", "decide_not_open"]
+    answered = root / "answered" / f"{item_id}.md"
+    assert DECIDE.fmt.answer_text(DECIDE.fmt.parse(answered, "answered")) == next(
+        words for code, words in outcomes if code == "accepted")
+
+
+@pytest.mark.parametrize("answer, code", [(None, "answer_invalid"), (" ", "answer_empty"),
+                                          ("A\x00B", "answer_invalid"),
+                                          ("가" * 5462, "answer_too_large")])
+def test_invalid_answer_does_not_change_open_decision(tmp_path, answer, code):
+    root = tmp_path / "decide"
+    source = store.new_decide(root, decision_text, dt.date(2026, 11, 4))
+    before = source.read_text()
+    with pytest.raises(ItemError) as error:
+        store.answer_decide(root, "D-20261104-01", answer)
+    assert error.value.code == code
+    assert source.read_text() == before
+    assert not (root / "answered").exists()
+
+
 @pytest.mark.parametrize("source, target", [("open", "open"), ("done", "deferred")])
 def test_transitions_outside_the_table_change_nothing(tmp_path, source, target):
     root = tmp_path / "cr"
@@ -133,19 +186,35 @@ def test_destination_format_is_checked_before_the_move(tmp_path):
 def test_decision_round_trip_writes_outcome_and_disposition(tmp_path):
     root = tmp_path / "decide"
     store.new_decide(root, decision_text, dt.date(2026, 11, 4))
-    done = store.move(DECIDE, root, "D-20261104-01", "done", outcome="decided A", by="user",
-                      note='"D-20261104-01 A"', today=dt.date(2026, 11, 4))
+    store.answer_decide(root, "D-20261104-01", "D-20261104-01 A")
+    done = store.move(DECIDE, root, "D-20261104-01", "done", outcome="decided A", by="Leader",
+                      today=dt.date(2026, 11, 4))
     text = done.read_text()
     assert "- Outcome: decided A" in text.split("## Background")[0]
-    assert text.rstrip().endswith('- 2026-11-04 user: open -> done, Outcome decided A. "D-20261104-01 A"')
+    assert text.rstrip().endswith('- 2026-11-04 Leader: answered -> done, Outcome decided A. '
+                                    '사용자 답변 원문: "D-20261104-01 A"')
     assert DECIDE.fmt.check(DECIDE.fmt.parse(done, "done")) == []
     reopened = store.move(DECIDE, root, "D-20261104-01", "open", by="user", note="선택을 바꿈",
                           today=dt.date(2026, 11, 5))
     text = reopened.read_text()
     assert "Outcome" not in text.split("## Background")[0]
+    assert "Answer" not in text.split("## Background")[0]
     assert "- 2026-11-05 user: done -> open. 선택을 바꿈" in text
     assert text.index("## Disposition") > text.index("## Evidence")
     assert DECIDE.fmt.check(DECIDE.fmt.parse(reopened, "open")) == []
+
+
+def test_answered_decision_can_reopen_for_changed_answer(tmp_path):
+    root = tmp_path / "decide"
+    item_id = "D-20261104-01"
+    store.new_decide(root, decision_text, dt.date(2026, 11, 4))
+    store.answer_decide(root, item_id, "A\n이유")
+    reopened = store.move(DECIDE, root, item_id, "open", by="user", note="B로 변경")
+    assert DECIDE.fmt.answer_text(DECIDE.fmt.parse(reopened, "open")) is None
+    assert "open -> answered" in reopened.read_text()
+    assert 'answered -> open. B로 변경 이전 답변 원문: "A\\n이유"' in reopened.read_text()
+    answered = store.answer_decide(root, item_id, "B")
+    assert DECIDE.fmt.answer_text(DECIDE.fmt.parse(answered, "answered")) == "B"
 
 
 def test_reopen_needs_a_reason(tmp_path):
@@ -396,6 +465,7 @@ def test_late_render_does_not_restore_an_old_page(tmp_path, monkeypatch):
     first_read.wait(5)
 
     def move_and_render():
+        store.answer_decide(root, "D-20261104-01", "A")
         store.move(DECIDE, root, "D-20261104-01", "done", outcome="decided A", by="user", note="A")
         render.render("demo", root)
 
@@ -404,7 +474,7 @@ def test_late_render_does_not_restore_an_old_page(tmp_path, monkeypatch):
     late.join()
     newer.join()
     page = (root / render.PAGE_NAME).read_text()
-    assert "결정 대기 0건 · 결정됨 1건" in page
+    assert "결정 대기 0건 · 답변 접수 0건 · 반영 중 0건 · 완료 1건" in page
 
 
 def _index_write_fails(monkeypatch):

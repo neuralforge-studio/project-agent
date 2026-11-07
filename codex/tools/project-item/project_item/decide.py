@@ -6,12 +6,13 @@ only executable copy; keep the two in step.
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .cr import HEADER_RE, SECTION_RE, STATUS_LINE_RE, files, outside_fence
 
-STATES = ("open", "done")
+STATES = ("open", "answered", "done")
 URGENCIES = ("high", "normal", "low")
 
 ID_RE = r"D-\d{8}-\d{2,}"
@@ -24,6 +25,7 @@ BODY_SECTIONS = ("Background", "Options", "Recommendation", "Evidence")
 SECTION_ORDER = ("Background", "Options", "Recommendation", "Evidence", "Disposition", "Result")
 
 __all__ = ["STATES", "URGENCIES", "ID_RE", "TITLE_RE", "SECTION_ORDER", "Decision",
+           "answer_text",
            "parse", "parse_text", "check", "files", "TEMPLATE", "EMPTY_BODY"]
 
 
@@ -73,6 +75,18 @@ def parse_text(text: str, path: Path, state: str) -> Decision:
     return item
 
 
+def answer_text(item: Decision) -> str | None:
+    """Return the exact submitted answer, or None for a legacy decision without one."""
+    encoded = item.headers.get("Answer")
+    if encoded is None:
+        return None
+    try:
+        answer = json.loads(encoded)
+    except (TypeError, ValueError):
+        return None
+    return answer if isinstance(answer, str) else None
+
+
 def check(item: Decision) -> list[str]:
     """Format violations of one decision file. Empty list = the file follows the format."""
     bad = []
@@ -91,8 +105,15 @@ def check(item: Decision) -> list[str]:
     if item.status_line or "Status" in item.headers:
         bad.append("status line in the body; the directory owns the state")
     outcome = item.headers.get("Outcome")
-    if item.state == "open" and outcome:
-        bad.append("Outcome in open/; only done/ has it")
+    if item.state != "done" and outcome:
+        bad.append(f"Outcome in {item.state}/; only done/ has it")
+    answer = answer_text(item)
+    if item.state == "open" and "Answer" in item.headers:
+        bad.append("Answer in open/; only answered/ or done/ has it")
+    if item.state == "answered" and (answer is None or not answer.strip()):
+        bad.append("answered/ needs a non-empty JSON-string Answer header")
+    if "Answer" in item.headers and answer is None:
+        bad.append("Answer is not a JSON string")
     if item.state == "done":
         if not outcome:
             bad.append("header '- Outcome:' missing")

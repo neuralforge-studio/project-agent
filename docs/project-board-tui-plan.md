@@ -6,9 +6,9 @@
 
 ## 1. 목표와 범위
 
-사용자는 tmux sidebar **하나에 모든 등록 project**의 CR, 결정 대기, Worker seat를 연속해서 봅니다. 현재 tmux session의 project만 표시하지 않습니다. 사용자는 키와 마우스 클릭으로 sidebar를 켜고 끕니다. 사용자는 큰 popup에서 결정 항목을 읽고 답을 Leader에게 보냅니다.
+사용자는 tmux sidebar **하나에 모든 등록 project**의 CR, 결정 대기, Worker seat를 연속해서 봅니다. 현재 tmux session의 project만 표시하지 않습니다. 사용자는 키와 마우스 클릭으로 sidebar를 켜고 끕니다. 사용자는 큰 popup에서 결정 항목을 읽고 답을 접수합니다.
 
-TUI는 CR, 결정 항목, 배정을 직접 고치지 않습니다. 기존 HTML server와 브라우저 화면은 TUI로 교체합니다. 최종 상태에는 Board HTTP server, 포트, API, HTML 화면이 없습니다. 결정 알림은 이미 있는 `tmux_decide_status.py`가 맡습니다. TUI는 같은 알림을 다시 만들지 않습니다.
+TUI는 답변 접수에만 `project_item`의 Decision 기록 경로를 사용합니다. CR과 배정은 고치지 않습니다. 기존 HTML server와 브라우저 화면은 TUI로 교체합니다. 최종 상태에는 Board HTTP server, 포트, API, HTML 화면이 없습니다. 결정 대기 알림은 이미 있는 `tmux_decide_status.py`가 맡습니다. TUI는 같은 알림을 다시 만들지 않습니다.
 
 ## 2. 데이터 원본과 책임
 
@@ -18,18 +18,19 @@ TUI는 CR, 결정 항목, 배정을 직접 고치지 않습니다. 기존 HTML s
 | 배정과 검토 대상 | `<base>/agent/state.json`, `agent_session.api` | seat 행의 CR ID와 `R` 표시 |
 | 실행 확인 | `agent_session.api.liveness` | 멈춤·확인 불가를 색과 설명으로 표시 |
 | CR 개수 | `project_item`이 읽는 `path_cr/open`, `todo`, `in-progress` | `O`, `T`, `I`에 표시 |
-| 결정 대기 | `project_item`이 읽는 `path_decide/open` | `D`와 popup 목록에 표시 |
-| 결정 답변 | `agent-session send --job leader` | 사용자 답을 전송하고 결과를 표시 |
+| 결정 상태와 답변 | `project_item`이 읽는 `path_decide/open`, `answered`, `done` | `D`와 popup에 표시하고 `open → answered` 접수를 기록 |
+| 반영 진행 | Decision의 `Related`가 가리키는 `path_cr` 상태 | `반영 중`과 `완료`를 계산 |
+| Leader 알림 | `agent-session send --job leader` | 저장한 사용자 답을 알리고 결과를 표시 |
 
 기존 [`project_board.model`](../codex/tools/project-board/project_board/model.py)의 `snapshot()`과 `liveness()`를 재사용합니다. TUI는 개수나 상태의 별도 원본을 만들지 않습니다. Sidebar의 켜짐 상태와 선택 위치만 tmux UI 상태로 유지합니다.
 
 ### 갱신과 실행 단위
 
-Sidebar가 표시되는 tmux window마다 TUI 프로세스 하나를 둡니다. 같은 window를 보는 client는 같은 pane과 화면을 봅니다. 각 프로세스의 이벤트 루프가 화면과 마우스·키보드 입력을 처리합니다. 별도 상주 HTTP server나 project별 감시 프로세스를 두지 않습니다. 결정 popup을 열 때만 별도의 단기 TUI 프로세스를 실행합니다. Popup은 같은 파일 원본을 직접 읽고 전송 직전에 결정 상태를 다시 확인합니다.
+Sidebar가 표시되는 tmux window마다 TUI 프로세스 하나를 둡니다. 같은 window를 보는 client는 같은 pane과 화면을 봅니다. 각 프로세스의 이벤트 루프가 화면과 마우스·키보드 입력을 처리합니다. 별도 상주 HTTP server나 project별 감시 프로세스를 두지 않습니다. 결정 popup을 열 때만 별도의 단기 TUI 프로세스를 실행합니다. Popup은 같은 파일 원본을 직접 읽습니다. 제출 경로는 Decision root 잠금 안에서 `open`을 다시 확인합니다.
 
 Sidebar TUI는 파일 상태를 2초마다, 실행 상태를 10초마다 다시 읽습니다. 파일 조회와 `agent_session.api.liveness`처럼 대기할 수 있는 호출은 최대 2개의 조회 worker thread에서 실행합니다. 화면 갱신은 UI 이벤트 루프에서만 합니다. 이전 조회가 끝나지 않았으면 같은 조회를 중복 시작하지 않습니다. 새 배정의 session ID와 맞지 않는 실행 결과는 버립니다. 닫힌 popup이나 sidebar에 늦게 도착한 결과도 버립니다.
 
-답변 전송의 `agent-session send`는 오래 걸릴 수 있습니다. Popup은 전송 중에도 화면과 스크롤이 멈추지 않게 이 명령을 백그라운드에서 실행합니다. 전송 버튼을 다시 누르면 중복 전송하지 않습니다.
+답변 알림의 `agent-session send`는 오래 걸릴 수 있습니다. Popup은 접수와 알림 중에도 화면과 스크롤이 멈추지 않게 이 동작을 백그라운드에서 실행합니다. 잠금 안에서 첫 답변만 접수하므로 다시 누르거나 다른 client에서 동시에 제출해도 중복 전송하지 않습니다.
 
 ## 3. Sidebar 화면
 
@@ -50,7 +51,7 @@ D:1
 
 - 모든 등록 project를 하나의 목록에 순서대로 표시합니다. Project를 바꾸는 탭이나 필터를 두지 않습니다. 화면 높이가 부족하면 목록 전체를 세로로 스크롤합니다.
 - `O/T/I`는 CR의 `open/todo/in-progress` 개수입니다. `D`는 열린 결정 항목 개수입니다. 두 종류를 합산하지 않습니다.
-- 열린 결정 항목이 하나 이상이면 `D`를 빨간색으로 표시합니다. `D:0`, 미설정 `D:-`, 읽기 오류 `D:!`는 기존 노란색으로 표시합니다.
+- 열린 결정 항목이 하나 이상이면 `D`를 빨간색으로 표시합니다. `D:0`, 미설정 `D:-`, 읽기 오류 `D:!`는 기존 노란색으로 표시합니다. `D:0`이어도 답변 접수·반영 중·완료 항목이 있으면 popup을 열 수 있습니다.
 - Seat 번호는 등록 순서의 0부터 시작합니다. 빈 seat는 `SeatN`을 회색으로 표시합니다. 배정된 seat는 같은 행에 CR ID를 표시합니다. Worker session이 없는 배정은 `대기`를 붙여 시작 대기를 표시합니다.
 - `R`은 Leader의 `reviewing` 값이 그 seat의 CR ID와 같을 때만 붙입니다. Review 행을 별도로 만들거나 CR ID를 중복 표시하지 않습니다.
 - 제출 후 검토 대기(`review_wait`)는 `R`이 아닙니다. 필요하면 행의 색과 도움말로 구분합니다.
@@ -70,7 +71,7 @@ D:1
 | Sidebar의 휠 | 모든 project가 들어 있는 목록 스크롤 |
 
 위 클릭은 CR과 결정 항목의 상태를 바꾸지 않습니다. 키보드에서도 같은 화면을 열 수 있게 합니다.
-`O/T/I`나 `D`가 `0`, `-`, `!`이면 클릭해도 popup이나 오류 알림을 열지 않습니다.
+`O/T/I`가 `0`, `-`, `!`이면 클릭해도 popup이나 오류 알림을 열지 않습니다. `D`는 조회할 결정이 없거나 `-`, `!`일 때만 열지 않습니다.
 
 `review_wait`는 `in-progress` CR에서만 판정합니다. Write CR은 `Result`의 마지막 유효한 제출 commit을 `Disposition`이 앞 7자리 이상으로 인용하지 않았을 때 대기입니다. 제출 행의 문법은 [CR 계약](../codex/skills/project-item/references/cr.md)이 소유합니다. Read-only CR은 `Result`에 내용이 있으면 대기입니다. 이 표시는 `R` 표시와 별개입니다.
 
@@ -91,11 +92,11 @@ D:1
 ```
 
 1. 위쪽에 결정 ID, 질문, 긴급도, 막는 일, 관련 ID를 표시합니다.
-2. 왼쪽에 그 project의 열린 결정 목록을 표시합니다. 오른쪽에 선택한 결정의 본문을 넓게 표시합니다. 목록은 접을 수 있습니다. 화면이 좁으면 목록과 본문을 전환합니다.
-3. 본문은 파일의 절 순서를 유지합니다. `Background`, `Options`, `Recommendation`, `Evidence`와 project가 추가한 절을 표시합니다. `Disposition`과 `Result`는 열린 결정의 기본 보기에서 제외합니다. `Evidence`는 접을 수 있는 절로 제공합니다.
+2. 왼쪽에 그 project의 결정 목록과 결정 대기·답변 접수·반영 중·완료 상태를 표시합니다. 오른쪽에 선택한 결정의 본문을 넓게 표시합니다. 목록은 접을 수 있습니다. 화면이 좁으면 목록과 본문을 전환합니다.
+3. 본문은 파일의 절 순서를 유지합니다. `Background`, `Options`, `Recommendation`, `Evidence`와 project가 추가한 절을 표시합니다. `Disposition`과 `Result`는 popup의 기본 보기에서 제외합니다. `Evidence`는 접을 수 있는 절로 제공합니다.
 4. 본문에 제목, 문단, 목록, 인용, 코드 블록, 링크와 Markdown 표를 표시합니다. 넓은 표는 가로로 스크롤합니다. `csv` 코드 블록이나 결정 항목에서 가리키는 같은 project 아래의 로컬 CSV 파일은 별도 표 보기로 엽니다. 외부 URL의 CSV는 자동으로 받지 않습니다.
-5. 아래쪽에 답변 입력란과 전송 결과를 둡니다. 답변은 여러 줄을 지원합니다. 전송 전에 결정 항목이 아직 `open`인지 다시 확인합니다.
-6. Leader가 없거나 `stopped`이면 전송을 막고 이유를 표시합니다. 전송 호출자가 `agent_session.api.caller(project)`에서 `operator`가 아니면 승인 답변을 보내지 않습니다. `send_unconfirmed`이면 입력을 보존합니다. 자동 재전송은 하지 않습니다.
+5. 아래쪽에 답변 입력란과 접수·알림 결과를 둡니다. 답변은 여러 줄을 지원합니다. `open`인 결정만 입력과 전송을 허용합니다. 접수한 답변 원문은 Decision에 보존합니다.
+6. 전송 호출자가 `agent_session.api.caller(project)`에서 `operator`가 아니면 접수를 거절합니다. 접수 후 Leader가 없거나 `stopped`인 경우와 알림 실패·결과 불명은 접수 상태와 함께 표시합니다. 사용자는 같은 답변을 다시 입력하지 않습니다.
 
 결정 목록, 접기/펼치기, 본문 스크롤, 답변 입력란, 전송 버튼을 마우스로 조작할 수 있게 합니다. 키보드 조작도 제공합니다.
 
