@@ -85,6 +85,10 @@ def _decide_count(project: dict) -> str:
     return str(sum(item.get("state") == "open" for item in decisions))
 
 
+def _visible_decisions(project: dict) -> list[dict]:
+    return [item for item in project.get("decide") or [] if item.get("display_state") != "완료"]
+
+
 def _decide_stages(project: dict) -> tuple[int, int, int, int]:
     decisions = project.get("decide") or []
     return tuple(sum(item.get("display_state") == stage for item in decisions)
@@ -355,7 +359,7 @@ class SidebarApp(App):
             decision_id = f"project-{number}-D"
             decision_count = _decide_count(project)
             decision = Button(f"D:{decision_count}", id=decision_id, classes="decision")
-            decision.disabled = not project.get("decide")
+            decision.disabled = not _visible_decisions(project)
             if decision_count not in ("-", "!", "0"):
                 decision.add_class("decision-open")
             stages = _decide_stages(project)
@@ -503,6 +507,8 @@ class CRPopupApp(App):
     #cr-detail { width: 1fr; padding: 0 1; }
     #cr-actions { height: 2; }
     #cr-actions Button { height: 1; width: auto; min-width: 0; border: none; margin-right: 1; }
+    #cr-show-list { display: none; }
+    .narrow #cr-show-list { display: block; }
     .narrow #cr-items { display: none; }
     .narrow.list-open #cr-items { display: block; width: 100%; }
     .narrow.list-open #cr-detail { display: none; }
@@ -609,7 +615,10 @@ class CRPopupApp(App):
             self.exit()
 
     def on_resize(self, event) -> None:
-        self.set_class(self.size.width < 70, "narrow")
+        narrow = event.size.width < 70
+        self.set_class(narrow, "narrow")
+        if not narrow:
+            self.remove_class("list-open")
 
 
 class PopupApp(App):
@@ -631,6 +640,8 @@ class PopupApp(App):
     #answer { height: 5; border: solid #536474; }
     #popup-actions { height: 2; }
     #popup-actions Button { height: 1; min-width: 0; width: auto; border: none; margin-right: 1; }
+    #show-list { display: none; }
+    .narrow #show-list { display: block; }
     #popup-message { height: auto; min-height: 1; max-height: 3; color: #ffcb84; }
     .narrow #decision-list { display: none; }
     .narrow.list-open #decision-list { display: block; width: 100%; }
@@ -708,10 +719,14 @@ class PopupApp(App):
         if self.project is None:
             self.query_one("#popup-heading", Static).update(f"{self.project_id}: project를 찾을 수 없습니다.")
             return
-        items = self.project.get("decide") or []
+        items = _visible_decisions(self.project)
         self.decisions = {item["id"]: item for item in items}
         if self.decide_id not in self.decisions:
             self.decide_id = items[0]["id"] if items else None
+            self.query_one("#answer", TextArea).text = (
+                self._drafts.get(self.decide_id, "")
+                if self.decisions.get(self.decide_id, {}).get("state") == "open" else "")
+            self._evidence_open = False
         listing = self.query_one("#decision-list", VerticalScroll)
         await listing.remove_children()
         if items:
@@ -788,7 +803,10 @@ class PopupApp(App):
             self.exit()
 
     def on_resize(self, event) -> None:
-        self.set_class(self.size.width < 70, "narrow")
+        narrow = event.size.width < 70
+        self.set_class(narrow, "narrow")
+        if not narrow:
+            self.remove_class("list-open")
 
     def action_send(self) -> None:
         item = self.decisions.get(self.decide_id)

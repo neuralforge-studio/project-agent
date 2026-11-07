@@ -35,7 +35,7 @@ instead of creating a virtual environment.
 project-board toggle                          # show or hide the tmux sidebar
 project-board --config PATH toggle            # use a specific project registry
 project-board sidebar                         # run the TUI in the current pane
-project-board popup --project PROJECT_ID      # show that project's open decisions
+project-board popup --project PROJECT_ID      # show that project's unfinished decisions
 project-board cr --project PROJECT_ID --state open  # show a CR list
 ```
 
@@ -64,13 +64,19 @@ the clicking client to its Worker window. A seat with a CR but no Worker session
 `대기` and ignores clicks, as does an empty seat. The decision popup uses 90% of that client's
 terminal; the CR popup uses 80%. Press `Esc` or the popup's close button to close it.
 In the CR popup, click a CR row or focus it with Tab and press Enter to read its full
-Markdown. Select another row to change CRs. In a narrow popup, use `목록` to switch between
-the list and the selected CR. If a listed file moves, is deleted, or cannot be read, the
+Markdown. Select another row to change CRs. In either popup, `목록` is shown only below
+70 columns. Use it to switch between the list and the selected item. Wider popups show
+both panes and hide the button. After a popup grows and shrinks again, it shows the selected
+item's body. If a listed CR file moves, is deleted, or cannot be read, the
 popup shows an error for that row and stays open.
 
 `D` is red when one or more decisions are open. `D:0`, unconfigured `D:-`, and read-error
-`D:!` keep the yellow color. CR and decision counts of `0`, `-`, or `!` ignore clicks without
-opening a popup or showing an error.
+`D:!` keep the yellow color. The count includes only open decisions. The decision popup
+shows decisions whose display stage is not `완료`, including answered decisions and decisions
+whose related CRs are still in progress. These items remain accessible at `D:0`. If all
+decisions are complete, `D:0` ignores clicks. A completed selection moves to the first
+remaining item, or an empty view when none remain. CR counts of `0`, `-`, or `!`, and
+decision counts of `-` or `!`, ignore clicks without opening a popup or showing an error.
 tmux keeps an open popup running if an external command changes the client's window.
 If a managed pane is respawned while its client stays on the same window, run
 `project-board sync` to restore that window's Board pane immediately.

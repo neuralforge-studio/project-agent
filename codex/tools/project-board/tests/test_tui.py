@@ -591,11 +591,16 @@ def test_decision_count_color_tracks_open_count_and_missing_or_error_state(tmp_p
     asyncio.run(check())
 
 
-def test_answered_decision_remains_accessible_without_open_decisions(tmp_path):
+@pytest.mark.parametrize("state, related", (("answered", None), ("done", "SESSION-020")))
+def test_unfinished_decision_remains_accessible_without_open_decisions(tmp_path, state, related):
     board = Board(tmp_path)
     base = board.project("Falcon2", seats=0)
-    board.decide(base, "answered", "D-20261107-01", "접수된 질문")
-    app = SidebarApp(str(board.config), poll=False)
+    decision = board.decide(base, state, "D-20261107-01", "진행 중인 질문", related=related)
+    if related:
+        cr = board.cr(base, "in-progress", related)
+    calls = []
+    app = SidebarApp(str(board.config), poll=False,
+                     on_decision=lambda project, item: calls.append((project, item)))
 
     async def check():
         async with app.run_test(size=(50, 20)) as pilot:
@@ -605,6 +610,63 @@ def test_answered_decision_remains_accessible_without_open_decisions(tmp_path):
             assert str(button.label) == "D:0"
             assert not button.disabled
             assert not button.has_class("decision-open")
+            await pilot.click("#project-0-D")
+            await pilot.pause()
+            assert calls == [("Falcon2", None)]
+            if related:
+                cr.rename(base / "agent/cr/done" / cr.name)
+            else:
+                decision.rename(base / "agent/decide/done" / decision.name)
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            button = app.query_one("#project-0-D", Button)
+            assert str(button.label) == "D:0" and button.disabled
+
+    asyncio.run(check())
+
+
+def test_sidebar_completed_decisions_do_not_open_popup(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.decide(base, "done", "D-20261107-01", "완료된 질문")
+    calls = []
+    app = SidebarApp(str(board.config), poll=False,
+                     on_decision=lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    async def check():
+        async with app.run_test(size=(50, 20)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            button = app.query_one("#project-0-D", Button)
+            assert str(button.label) == "D:0"
+            assert button.disabled
+            await pilot.click("#project-0-D")
+            assert app.dispatch_client_click("client-a", button.region.x + 1, button.region.y)["ok"]
+            await pilot.pause()
+            assert calls == []
+
+    asyncio.run(check())
+
+
+def test_popup_completed_decisions_show_empty_view(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.decide(base, "done", "D-20261107-01", "완료된 질문")
+    app = PopupApp(str(board.config), "Falcon2", "D-20261107-01", load=False)
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            snapshot = model.snapshot(board.config)
+            assert len(snapshot["projects"][0]["decide"]) == 1
+            await app.apply_snapshot(snapshot)
+            await pilot.pause()
+            assert app.decisions == {} and app.decide_id is None
+            assert not app.query("#decision-list Button")
+            assert "결정 없음" in str(app.query_one("#popup-heading", Static).content)
+            assert not app.query_one("#decision-detail").children
+            assert app.query_one("#answer", TextArea).disabled
+            assert app.query_one("#send", Button).disabled
+            await pilot.press("escape")
 
     asyncio.run(check())
 
@@ -617,20 +679,32 @@ def test_popup_labels_stages_and_disables_answer_for_non_open_decisions(tmp_path
     board.decide(base, "done", "D-20261107-03", "반영 중인 질문", related="SESSION-020")
     board.decide(base, "done", "D-20261107-04", "완료된 질문")
     board.cr(base, "in-progress", "SESSION-020")
+    sidebar = SidebarApp(str(board.config), poll=False)
     sent = []
     app = PopupApp(str(board.config), "Falcon2", load=False,
                    answer_sender=lambda *args: sent.append(args))
 
     async def check():
-        async with app.run_test(size=(100, 36)) as pilot:
-            await app.apply_snapshot(model.snapshot(board.config))
+        snapshot = model.snapshot(board.config)
+        assert len(snapshot["projects"][0]["decide"]) == 4
+        async with sidebar.run_test(size=(50, 20)) as pilot:
+            await sidebar.apply_snapshot(snapshot)
             await pilot.pause()
-            assert [state in str(button.label) for button, state in zip(app.query("#decision-list Button"),
-                                                                          ("결정 대기", "답변 접수", "반영 중", "완료"))] == [True] * 4
+            button = sidebar.query_one("#project-0-D", Button)
+            assert str(button.label) == "D:1" and not button.disabled
+        async with app.run_test(size=(100, 36)) as pilot:
+            await app.apply_snapshot(snapshot)
+            await pilot.pause()
+            assert [str(button.label) for button in app.query("#decision-list Button")] == [
+                "D-20261107-01 · 결정 대기\n기다리는 질문",
+                "D-20261107-02 · 답변 접수\n접수된 질문",
+                "D-20261107-03 · 반영 중\n반영 중인 질문",
+            ]
+            assert "D-20261107-04" not in app.decisions
             editor = app.query_one("#answer", TextArea)
             send = app.query_one("#send", Button)
             assert not editor.disabled and not send.disabled
-            for index, stage in ((1, "답변 접수"), (2, "반영 중"), (3, "완료")):
+            for index, stage in ((1, "답변 접수"), (2, "반영 중")):
                 await pilot.click(f"#decision-{index}")
                 assert stage in str(app.query_one("#popup-heading", Static).content)
                 assert editor.disabled and send.disabled
@@ -638,6 +712,98 @@ def test_popup_labels_stages_and_disables_answer_for_non_open_decisions(tmp_path
                 assert sent == []
             await pilot.click("#decision-0")
             assert not editor.disabled and not send.disabled
+
+    asyncio.run(check())
+
+
+def test_popup_refresh_replaces_completed_selection_and_clears_empty_view(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    first = board.decide(base, "open", "D-20261107-01", "첫 질문")
+    selected = board.decide(base, "open", "D-20261107-02", "선택한 질문")
+    board.decide(base, "done", "D-20261107-03", "반영 중인 질문", related="SESSION-020")
+    related = board.cr(base, "in-progress", "SESSION-020")
+    app = PopupApp(str(board.config), "Falcon2", "D-20261107-02", load=False)
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            editor = app.query_one("#answer", TextArea)
+            editor.text = "완료된 질문의 초안"
+            selected.rename(base / "agent/decide/done" / selected.name)
+            await app.apply_snapshot(model.snapshot(board.config))
+            assert list(app.decisions) == ["D-20261107-01", "D-20261107-03"]
+            assert app.decide_id == "D-20261107-01"
+            assert editor.text == "" and not editor.disabled
+            assert "첫 질문" in str(app.query_one(".decision-meta", Static).content)
+            first.rename(base / "agent/decide/done" / first.name)
+            await app.apply_snapshot(model.snapshot(board.config))
+            assert app.decide_id == "D-20261107-03"
+            assert editor.disabled
+            related.rename(base / "agent/cr/done" / related.name)
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            assert app.decisions == {} and app.decide_id is None
+            assert not app.query_one("#decision-detail").children
+            assert editor.text == "" and editor.disabled
+            assert app.query_one("#send", Button).disabled
+            assert "결정 없음" in str(app.query_one("#popup-heading", Static).content)
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("kind", ("cr", "decision"))
+@pytest.mark.parametrize("initial_width", (69, 70))
+def test_popup_list_button_tracks_width_and_resize(tmp_path, kind, initial_width):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    if kind == "cr":
+        board.cr(base, "open", "CPU-001", "첫 CR")
+        board.cr(base, "open", "CPU-002", "둘째 CR")
+        app = CRPopupApp(str(board.config), "Falcon2", "open", load=False)
+        button, listing, detail, second = "#cr-show-list", "#cr-items", "#cr-detail", "#cr-item-1"
+    else:
+        board.decide(base, "open", "D-20261107-01", "첫 질문")
+        board.decide(base, "open", "D-20261107-02", "둘째 질문")
+        app = PopupApp(str(board.config), "Falcon2", load=False)
+        button, listing, detail, second = "#show-list", "#decision-list", "#decision-detail", "#decision-1"
+
+    async def check():
+        async with app.run_test(size=(initial_width, 28)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            assert app.query_one(button).display is (initial_width < 70)
+            assert app.query_one(listing).display is (initial_width >= 70)
+            assert app.query_one(detail).display
+            await pilot.resize_terminal(69, 28)
+            await pilot.pause()
+            assert app.query_one(button).display
+            await pilot.click(button)
+            assert app.query_one(listing).display and not app.query_one(detail).display
+            await pilot.resize_terminal(70, 28)
+            await pilot.pause()
+            assert not app.query_one(button).display
+            assert app.query_one(listing).display and app.query_one(detail).display
+            await pilot.resize_terminal(69, 28)
+            await pilot.pause()
+            assert app.query_one(button).display
+            assert not app.query_one(listing).display and app.query_one(detail).display
+            await pilot.click(button)
+            app.query_one(second, Button).focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert not app.query_one(listing).display and app.query_one(detail).display
+            if kind == "cr":
+                assert app.selected_id == "CPU-002"
+            else:
+                assert app.decide_id == "D-20261107-02"
+                assert not app.query_one("#answer", TextArea).disabled
+            await pilot.click(button)
+            assert app.query_one(listing).display
+            await pilot.pause(app.query_one(button, Button).active_effect_duration)
+            await pilot.click(button)
+            assert app.query_one(detail).display
+            await pilot.click("#cr-close" if kind == "cr" else "#close")
 
     asyncio.run(check())
 
