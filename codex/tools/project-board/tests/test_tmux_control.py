@@ -75,6 +75,33 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
         result = tmux_control.toggle_sidebar(socket=socket_path)
         assert result["ok"] is True
         assert set(result["data"]["created"]) == {first_window, second_window}
+        assert tmux_control.expanded_projects(socket_path) == set()
+        assert tmux_control.toggle_expanded_project("one", socket_path) == {"one"}
+        assert tmux_control.toggle_expanded_project("two", socket_path) == {"one", "two"}
+        assert tmux_control.toggle_expanded_project("two", socket_path) == {"one"}
+        assert json.loads(_tmux(name, "show-options", "-sqv", "@project_board_expanded")) == ["one"]
+        barrier = threading.Barrier(3)
+        failures = []
+
+        def toggle_from_client(project_id):
+            try:
+                barrier.wait(timeout=5)
+                tmux_control.toggle_expanded_project(project_id, socket_path)
+            except Exception as error:
+                failures.append(error)
+
+        workers = [threading.Thread(target=toggle_from_client, args=(project_id,))
+                   for project_id in ("two", "three")]
+        for worker in workers:
+            worker.start()
+        barrier.wait(timeout=5)
+        for worker in workers:
+            worker.join(timeout=5)
+        assert not failures
+        assert not any(worker.is_alive() for worker in workers)
+        assert tmux_control.expanded_projects(socket_path) == {"one", "two", "three"}
+        tmux_control.toggle_expanded_project("two", socket_path)
+        tmux_control.toggle_expanded_project("three", socket_path)
         assert len(_tmux(name, "list-panes", "-a", "-F", "#{pane_id}").splitlines()) == 4
         for window, before in ((first_window, first_geometry), (second_window, second_geometry)):
             after = _pane_geometry(name, window)
@@ -103,10 +130,19 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
         assert _tmux(name, "show-options", "-wqv", "-t", first_window,
                      "@project_board_restore") == ""
         assert _pane_geometry(name, first_window) == first_geometry
+        assert tmux_control.expanded_projects(socket_path) == {"one"}
+
+        _tmux(name, "switch-client", "-c", clients[0][2], "-t", "one")
+        assert tmux_control.reconcile(socket=socket_path)["ok"] is True
+        assert tmux_control.expanded_projects(socket_path) == {"one"}
 
         result = tmux_control.toggle_sidebar(socket=socket_path)
         assert result["ok"] is True
         assert result["data"]["enabled"] is False
+        assert tmux_control.expanded_projects(socket_path) == {"one"}
+        assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+        assert tmux_control.expanded_projects(socket_path) == {"one"}
+        assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
         assert set(_tmux(name, "list-panes", "-a", "-F", "#{pane_id}").splitlines()) == original
         assert _pane_geometry(name, second_window) == second_geometry
         assert _tmux(name, "show-options", "-wqv", "-t", second_window,

@@ -31,6 +31,8 @@ DecisionCallback = Callable[..., object]
 CrCallback = Callable[..., object]
 SeatCallback = Callable[..., object]
 ProjectCallback = Callable[..., object]
+ExpandedReader = Callable[[], set[str]]
+ExpandedToggler = Callable[[str], set[str]]
 
 CSV_FENCE = re.compile(r"(?ms)^\s*```csv\s*\n(.*?)^\s*```\s*$")
 
@@ -139,6 +141,8 @@ class SidebarApp(App):
         liveness_reader: LivenessReader | None = None,
         poll: bool = True,
         click_socket: str | None = None,
+        expanded_reader: ExpandedReader | None = None,
+        expanded_toggler: ExpandedToggler | None = None,
     ):
         super().__init__()
         self.config = config
@@ -150,10 +154,13 @@ class SidebarApp(App):
         self.liveness_reader = liveness_reader or model.liveness
         self.poll = poll
         self.click_socket = click_socket
+        self.expanded_reader = expanded_reader
+        self.expanded_toggler = expanded_toggler
         self.snapshot_data: dict = {"projects": [], "error": None}
         self.live_data: dict = {}
         self._actions: dict[str, tuple] = {}
         self._expanded_projects: set[str] = set()
+        self._expansion_lock = asyncio.Lock()
         self._signature = None
         self._pool: ThreadPoolExecutor | None = None
         self._tasks: set[asyncio.Task] = set()
@@ -295,6 +302,9 @@ class SidebarApp(App):
 
     async def apply_snapshot(self, data: dict) -> None:
         self.snapshot_data = data
+        if self.expanded_reader is not None:
+            async with self._expansion_lock:
+                self._expanded_projects = await asyncio.to_thread(self.expanded_reader)
         await self._render_projects()
 
     async def apply_liveness(self, data: dict) -> None:
@@ -359,7 +369,7 @@ class SidebarApp(App):
             self._actions[name_id] = ("project", project["id"])
             fold_id = f"project-{number}-seats"
             expanded = project["id"] in self._expanded_projects
-            fold = Button("좌석▾" if expanded else "좌석▸", id=fold_id)
+            fold = Button("▾" if expanded else "▸", id=fold_id)
             fold.tooltip = "좌석 접기" if expanded else "좌석 펼치기"
             counters.append(fold)
             self._actions[fold_id] = ("seats", project["id"])
@@ -408,11 +418,14 @@ class SidebarApp(App):
         kind = target[0]
         if kind == "seats":
             _, project_id = target
-            if project_id in self._expanded_projects:
-                self._expanded_projects.remove(project_id)
+            if self.expanded_toggler is not None:
+                self._queue(self._toggle_expanded(project_id))
             else:
-                self._expanded_projects.add(project_id)
-            self._queue(self._render_projects())
+                if project_id in self._expanded_projects:
+                    self._expanded_projects.remove(project_id)
+                else:
+                    self._expanded_projects.add(project_id)
+                self._queue(self._render_projects())
         elif kind == "project" and self.on_project is not None:
             _, project_id = target
             self._queue(self._call_external(self.on_project, project_id,
@@ -429,6 +442,16 @@ class SidebarApp(App):
             _, project_id, seat_index = target
             self._queue(self._call_external(self.on_seat, project_id, seat_index,
                                             **({"client": client} if client else {})))
+
+    async def _toggle_expanded(self, project_id: str) -> None:
+        try:
+            async with self._expansion_lock:
+                self._expanded_projects = await asyncio.to_thread(self.expanded_toggler, project_id)
+            if not self._stopping:
+                await self._render_projects()
+        except Exception as error:
+            if not self._stopping:
+                self.notify(str(error), severity="error")
 
     async def _call_external(self, callback, *args, **kwargs) -> None:
         try:
@@ -785,9 +808,12 @@ def run_sidebar(
     on_cr: CrCallback | None = None,
     on_seat: SeatCallback | None = None,
     click_socket: str | None = None,
+    expanded_reader: ExpandedReader | None = None,
+    expanded_toggler: ExpandedToggler | None = None,
 ) -> int:
     SidebarApp(config, on_project=on_project, on_decision=on_decision, on_cr=on_cr, on_seat=on_seat,
-               click_socket=click_socket or os.environ.get("PROJECT_BOARD_CLICK_SOCKET")).run()
+               click_socket=click_socket or os.environ.get("PROJECT_BOARD_CLICK_SOCKET"),
+               expanded_reader=expanded_reader, expanded_toggler=expanded_toggler).run()
     return 0
 
 

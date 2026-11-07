@@ -26,6 +26,7 @@ from agent_session.tmux import Tmux
 ENABLED = "@project_board_enabled"
 CONFIG = "@project_board_config"
 WIDTH = "@project_board_width"
+EXPANDED = "@project_board_expanded"
 WINDOW_PANE = "@project_board_pane"
 WINDOW_RESTORE = "@project_board_restore"
 PANE_MARK = "@project_board_managed"
@@ -113,6 +114,39 @@ def _client_window(control: Tmux, client: str) -> str | None:
 
 def _options(control: Tmux, *args) -> str:
     return control.command("show-options", "-qv", *args)
+
+
+def _expanded(control: Tmux) -> set[str]:
+    raw = _options(control, "-s", EXPANDED)
+    if not raw:
+        return set()
+    values = json.loads(raw)
+    if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+        raise ValueError("Project Board's expanded project option is invalid")
+    return set(values)
+
+
+def expanded_projects(socket=None) -> set[str]:
+    """Read the project folds shared by every Board pane in this tmux server."""
+    control = _control(socket)
+    with _locked(control):
+        return _expanded(control)
+
+
+def toggle_expanded_project(project_id: str, socket=None) -> set[str]:
+    """Atomically toggle one project in the server-wide Board fold state."""
+    if not isinstance(project_id, str) or not project_id:
+        raise ValueError("project ID is required")
+    control = _control(socket)
+    with _locked(control):
+        expanded = _expanded(control)
+        if project_id in expanded:
+            expanded.remove(project_id)
+        else:
+            expanded.add(project_id)
+        control.command("set-option", "-s", EXPANDED,
+                        json.dumps(sorted(expanded), ensure_ascii=False))
+        return expanded
 
 
 def _panes(control: Tmux, window: str) -> dict[str, bool]:

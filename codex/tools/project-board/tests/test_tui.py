@@ -85,7 +85,8 @@ def test_sidebar_shows_every_project_and_mouse_opens_the_right_project(tmp_path)
             assert str(app.query_one("#project-0-D", Button).label) == "D:2"
             await pilot.click("#project-0-seats")
             await pilot.pause()
-            assert str(app.query_one("#project-0-seats", Button).label) == "좌석▾"
+            assert str(app.query_one("#project-0-seats", Button).label) == "▾"
+            assert app.query_one("#project-0-seats", Button).tooltip == "좌석 접기"
             assert not app.query("#project-1-seat-0")
             assert str(app.query_one("#project-0-seat-0", Button).label) == "R 0 CPU-012"
             empty = app.query_one("#project-0-seat-1", Button)
@@ -136,7 +137,57 @@ def test_seat_fold_keeps_each_project_state_through_refresh_and_keyboard(tmp_pat
             await pilot.press("enter")
             await pilot.pause()
             assert not app.query("#project-0-seat-0")
-            assert str(app.query_one("#project-0-seats", Button).label) == "좌석▸"
+            assert str(app.query_one("#project-0-seats", Button).label) == "▸"
+            assert app.query_one("#project-0-seats", Button).tooltip == "좌석 펼치기"
+
+    asyncio.run(check())
+
+
+def test_seat_fold_survives_sidebar_recreation_and_syncs_other_pane(tmp_path):
+    board = _make_sidebar_board(tmp_path)
+    expanded = set()
+
+    def read_expanded():
+        return set(expanded)
+
+    def toggle_expanded(project_id):
+        if project_id in expanded:
+            expanded.remove(project_id)
+        else:
+            expanded.add(project_id)
+        return set(expanded)
+
+    def app():
+        return SidebarApp(str(board.config), poll=False,
+                          expanded_reader=read_expanded, expanded_toggler=toggle_expanded)
+
+    async def check():
+        first = app()
+        async with first.run_test(size=(25, 18)) as pilot:
+            await first.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            await pilot.click("#project-0-seats")
+            await pilot.pause(0.1)
+            assert first.query("#project-0-seat-0")
+            assert not first.query("#project-1-seat-0")
+
+            second = app()
+            async with second.run_test(size=(25, 18)) as other_pilot:
+                await second.apply_snapshot(model.snapshot(board.config))
+                await other_pilot.pause()
+                assert second.query("#project-0-seat-0")
+                assert not second.query("#project-1-seat-0")
+                await other_pilot.click("#project-1-seats")
+                await other_pilot.pause(0.1)
+                await first.apply_snapshot(model.snapshot(board.config))
+                assert first.query("#project-0-seat-0")
+                assert first.query("#project-1-seat-0")
+
+        recreated = app()
+        async with recreated.run_test(size=(25, 18)):
+            await recreated.apply_snapshot(model.snapshot(board.config))
+            assert recreated.query("#project-0-seat-0")
+            assert recreated.query("#project-1-seat-0")
 
     asyncio.run(check())
 

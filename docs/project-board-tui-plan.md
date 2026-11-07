@@ -22,7 +22,7 @@ TUI는 답변 접수에만 `project_item`의 Decision 기록 경로를 사용합
 | 반영 진행 | Decision의 `Related`가 가리키는 `path_cr` 상태 | `반영 중`과 `완료`를 계산 |
 | Leader 알림 | `agent-session send --job leader` | 저장한 사용자 답을 알리고 결과를 표시 |
 
-기존 [`project_board.model`](../codex/tools/project-board/project_board/model.py)의 `snapshot()`과 `liveness()`를 재사용합니다. TUI는 개수나 상태의 별도 원본을 만들지 않습니다. Sidebar의 켜짐 상태, 폭, 선택 위치만 tmux UI 상태로 유지합니다. 좌석 접힘 상태는 각 Sidebar TUI가 표시 중인 project별로 유지합니다.
+기존 [`project_board.model`](../codex/tools/project-board/project_board/model.py)의 `snapshot()`과 `liveness()`를 재사용합니다. TUI는 개수나 상태의 별도 원본을 만들지 않습니다. Sidebar의 켜짐 상태, 폭, 선택 위치를 tmux UI 상태로 유지합니다. 좌석 펼침 상태의 원본은 tmux server option 하나입니다. Board pane은 project별 상태를 공유하며 새 pane도 이를 읽습니다.
 
 ### 갱신과 실행 단위
 
@@ -37,17 +37,17 @@ Sidebar TUI는 파일 상태를 2초마다, 실행 상태를 10초마다 다시 
 ```text
 Falcon2
 D:2
-O:2 T:1 I:1 좌석▸
+O:2 T:1 I:1 ▸
 
 ProjectB
 D:1
-O:0 T:3 I:0 좌석▾
+O:0 T:3 I:0 ▾
 R 0 GPU-007
   1 -
 ```
 
 - 모든 등록 project를 하나의 목록에 순서대로 표시합니다. Project를 바꾸는 탭이나 필터를 두지 않습니다. 화면 높이가 부족하면 목록 전체를 세로로 스크롤합니다.
-- 각 project는 이름, `D`, `O/T/I`와 좌석 버튼 순서로 표시합니다. 좌석은 기본으로 접습니다. 버튼으로 project별 좌석을 펼치거나 접습니다. 갱신 뒤에도 펼친 project를 유지합니다.
+- 각 project는 이름, `D`, `O/T/I`와 좌석 버튼 순서로 표시합니다. 좌석은 기본으로 접습니다. `▸`와 `▾` 버튼으로 project별 좌석을 펼치거나 접습니다. 창 전환과 Board OFF/ON 뒤에도 상태를 유지합니다. 다른 Board pane에서 바꾼 상태는 다음 snapshot 갱신 때 반영합니다.
 - `O/T/I`는 CR의 `open/todo/in-progress` 개수입니다. `D`는 열린 결정 항목 개수입니다. 두 종류를 합산하지 않습니다.
 - 열린 결정 항목이 하나 이상이면 `D`를 빨간색으로 표시합니다. `D:0`, 미설정 `D:-`, 읽기 오류 `D:!`는 기존 노란색으로 표시합니다. `D:0`이어도 답변 접수·반영 중·완료 항목이 있으면 popup을 열 수 있습니다.
 - Seat 번호는 등록 순서의 0부터 시작합니다. 빈 seat는 번호 뒤에 `-`를 회색으로 표시합니다. 배정된 seat는 같은 행에 CR ID를 표시합니다. Worker session이 없는 배정은 `대기`를 붙여 시작 대기를 표시합니다.

@@ -51,8 +51,10 @@ tmux is used when the Board pane moves to another window or is created again. Tu
 Board off restores the previous pane layout and focus. A window with too little space for
 the chosen width shows a smaller Board pane; another window with room restores that width.
 Each project shows its decision count above the CR counts. Seats start folded. Click
-`좌석▸` to expand one project's seats, or `좌석▾` to fold them. Use Tab and Enter for the
-same action from the keyboard. The list scrolls vertically when many projects are present;
+`▸` to expand one project's seats, or `▾` to fold them. The fold state is shared by
+Board panes in the same tmux server and survives window changes and Board off/on. Use Tab
+and Enter for the same action from the keyboard. The list scrolls vertically when many
+projects are present;
 long names and CR IDs can be read in tooltips and by scrolling horizontally. An empty seat
 shows its number followed by `-`.
 Click a project name to switch the clicking client to that project's tmux session and
