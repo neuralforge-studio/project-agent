@@ -10,6 +10,7 @@
 ```sh
 agent-session start --job leader
 agent-session start --job TOOL-012
+agent-session start --job TOOL-012 --seat 3
 agent-session send --job leader "작업 결과를 보고합니다."
 agent-session send --job TOOL-012 --file FEEDBACK.md
 agent-session send --project other --job leader "협업 요청입니다."
@@ -22,13 +23,14 @@ agent-session shutdown --project agent --timeout 300 --force
 agent-session resume --all
 ```
 
-Start는 --job 하나가 필수입니다.
+Start는 --job이 필수입니다. Worker의 --seat N은 선택이며 지정한 자리만 검사합니다.
+Leader의 start는 --seat를 받지 않습니다.
 Review는 --job과 --clear 중 정확히 하나가 필수입니다(7절 Review).
 Shutdown과 resume은 --project와 --all 중 정확히 하나가 필수입니다(7절 shutdown·resume).
 나머지 대상 지정 명령은 --job과 --seat 중 정확히 하나가 필수입니다.
 둘 다 입력하면 같은 대상을 가리켜도 오류입니다.
 Leader는 등록 base에서 시작합니다.
-Worker는 자동 배정한 seat에서 시작합니다.
+Worker는 기본 자동 배정 또는 --seat로 지정한 seat에서 시작합니다.
 JOB의 하위 작업 경로 기본은 seat 자체입니다.
 작업 디렉토리·provider·run 값을 사용자가 다시 입력하지 않습니다.
 
@@ -153,7 +155,10 @@ SSH seat는 Codex Worker에만 사용합니다. Leader와 Claude seat는 로컬�
 원격 경로는 Leader 호스트의 프로젝트 선택 후보에 넣지 않습니다.
 서로 다른 호스트의 같은 경로는 서로 다른 seat입니다.
 동일 호스트를 여러 SSH alias로 등록한 경우의 동일성은 사용자 등록이 소유합니다.
-기존처럼 미배정 seat를 배열 순서로 검사하며 별도의 원격 seat 선택 옵션을 두지 않습니다.
+기본 동작은 미배정 seat를 배열 순서로 검사합니다.
+`start --job <CR-ID> --seat N`은 앞의 로컬 seat가 비어 있어도 지정한 SSH seat만 검사합니다.
+지정한 seat가 사용 중이거나 안전 검사를 통과하지 못하면 다른 seat로 넘어가지 않습니다.
+이미 배정한 CR의 --seat는 현재 배정과 같아야 합니다. 생략한 재시도도 기존 배정을 유지합니다.
 활성 실행의 host·path·python은 바꾸지 않습니다. 실행 근거와 등록이 다르면 제어를 거절합니다.
 
 Leader 호스트는 사용자 SSH 설정으로 비대화형 접속이 가능해야 합니다.
@@ -305,6 +310,8 @@ Leader 호스트의 관리 window는 SSH 표시 창이며 `remote_seat`와 `remo
 Leader 호스트의 SSH PID나 동명 로컬 경로로 원격 생존·Git 상태를 대신 판정하지 않습니다.
 
 원격 `~/.cache/agent-session/runtime/<source-hash>/`는 전송한 Python helper cache입니다.
+런타임이 설치한 project-team·project-item skill link는 다음 bundle에서도 현재 지침을 가리키도록 갱신합니다.
+기존 사용자 설치와 다른 대상의 link는 덮어쓰지 않습니다.
 원격 `~/.cache/agent-session/runs/<run_id>/`는 실행 capsule입니다.
 Capsule의 등록 파일·state·CR snapshot은 native 등록과 관찰을 위한 실행 cache입니다.
 이 cache는 새 배정을 만들거나 원본 CR의 상태·Base·review를 결정하지 않습니다.
@@ -313,6 +320,10 @@ Capsule의 등록 파일·state·CR snapshot은 native 등록과 관찰을 위�
 시작 dialog에서 대기한 뒤 native 등록이 늦게 끝나면 poll이 같은 run의 cache 게시를 마칩니다.
 이 비동기 cache 게시만으로 Leader 호스트의 배정이나 시작 성공을 확정하지 않습니다.
 같은 run의 SSH 재연결은 원격 실행을 새로 만들지 않습니다.
+Provider 준비 실패를 고친 뒤 같은 start로 재시도할 수 있습니다.
+이전 controller 종료와 provider 실행 전임을 확인한 경우만 같은 run에서 controller를 다시 시작합니다.
+기존 waiting window가 있으면 같은 실행을 재사용합니다. 이미 실행을 시도했거나 근거가 불명확하면 다시 launch하지 않습니다.
+재시도는 기존 배정·Base·Git branch를 유지합니다.
 
 원격 Worker는 capsule의 CR snapshot에서 Result를 작성하고 기존 `agent-session send --job leader`로 보고합니다.
 SSH 표시 연결의 private reverse Unix socket은 run별 credential과 현재 thread를 대조합니다.

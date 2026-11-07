@@ -53,7 +53,7 @@ JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자�
 
 | 명령 | 예 |
 | --- | --- |
-| start | `agent-session start --job leader` 또는 `agent-session start --job TOOL-012` |
+| start | `agent-session start --job leader`, `agent-session start --job TOOL-012`, 지정 시 `agent-session start --job TOOL-012 --seat 3` |
 | send | `agent-session send --job leader "제출 commit과 CR ID"`. 다른 project의 Leader에게는 `agent-session send --project <project> --job leader "..."` |
 | stop | `agent-session stop --job TOOL-012` |
 | restart | `agent-session restart --job TOOL-012` |
@@ -62,6 +62,8 @@ JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자�
 | resume | `agent-session resume --all` 또는 `--project NAME`. 서버가 뜬 뒤 운영자가 실행합니다 |
 
 Start는 todo의 CR을 in-progress로 옮기고 Worker seat를 자동 배정합니다.
+`--seat N`을 지정하면 해당 Worker seat만 검사합니다. 지정한 seat가 비어 있지 않거나 안전 검사를 통과하지 못하면 배정을 거절합니다.
+이미 배정한 CR의 재시도는 같은 seat만 지정할 수 있습니다. Leader에는 `--seat`를 사용할 수 없습니다.
 Claude seat를 새로 clone하면 그 seat의 workspace trust를 기록합니다.
 시작이 trust·login·권한 dialog에서 멈추면 `needs_user_action`(exit 3)과 `dialog`를 반환합니다. 사용자가 그 창에서 답한 뒤 같은 start를 다시 실행합니다.
 다른 명령은 CR ID 대신 `--seat N`으로 현재 배정 대상을 지정할 수 있습니다.
@@ -91,6 +93,7 @@ Launcher의 cd만으로 remote daemon의 작업 경로를 추측하지 않습니
 Board는 seat의 호스트를 표시하고 Leader 호스트의 SSH 표시 창으로 전환합니다.
 SSH 표시 창이 끊겨도 원격 실행을 종료로 판정하지 않습니다.
 연결을 복구한 뒤 같은 `start --job <CR-ID>`를 실행하면 같은 배정의 실행을 대조하고 표시 창을 다시 연결합니다.
+Provider 실행 전 준비 실패는 원인을 고친 뒤 같은 start로 재시도합니다. 이전 controller 종료와 실행 전 근거를 확인할 수 있어야 합니다.
 관찰할 수 없으면 `remote_unknown`(exit 4)과 기존 배정을 보존합니다.
 원격 Worker가 `send --job leader`를 실행하면 CR snapshot의 Result만 원본에 돌려보냅니다.
 원본 Result와 충돌하면 `remote_result_conflict`로 거절합니다. 원격 파일과 원본을 보존한 뒤 내용을 조정합니다.

@@ -573,8 +573,13 @@ class Manager(SuspendMixin):
             self._prepare_launch(meta, request)
         return self._launch(meta, request)
 
-    def start(self, job, prompt_file=None):
+    def start(self, job, prompt_file=None, seat=None):
         leader = job == "leader"
+        if leader and seat is not None:
+            raise SessionError("invalid_input", "--seat is only valid for a Worker JOB.", 2)
+        if seat is not None and (isinstance(seat, bool) or not isinstance(seat, int)
+                                 or not 0 <= seat < len(self.project.seats)):
+            raise SessionError("seat_invalid", "The seat number is outside the registry.", 2)
         if prompt_file is not None and not leader:
             raise SessionError("invalid_input", "--prompt-file is only valid for the Leader.", 2)
         request = Path(prompt_file).read_text(encoding="utf-8") if prompt_file else None
@@ -614,6 +619,9 @@ class Manager(SuspendMixin):
                 if item["state"] not in ("todo", "in-progress"):
                     raise SessionError("assignment_mismatch", "A reserved CR must be in todo or in-progress.", 3)
                 number = int(assigned[0])
+                if seat is not None and seat != number:
+                    raise SessionError("assignment_mismatch", "The JOB is already reserved on another seat.", 3,
+                                       {"seat": number, "requested_seat": seat})
                 slot = f"seat-{number}"
                 context = self.tmux.get_current(self.project.project_id, slot)
                 # A shutdown's record is the evidence that a slot without a run was ended on purpose.
@@ -627,7 +635,8 @@ class Manager(SuspendMixin):
                 number = None
                 guard = None
                 reasons = {}
-                for index, root in enumerate(self.project.seats):
+                candidates = enumerate(self.project.seats) if seat is None else ((seat, self.project.seats[seat]),)
+                for index, root in candidates:
                     if state[str(index)]["job_id"] is not None:
                         reasons[str(index)] = ["JOB assigned"]
                         continue

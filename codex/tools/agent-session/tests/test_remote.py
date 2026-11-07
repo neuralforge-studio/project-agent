@@ -460,3 +460,259 @@ def test_native_controller_includes_the_transferred_handoff_in_the_new_run_promp
     assert text in captured["prompt"] and run_id in captured["prompt"]
     assert "배정 CR: TOOL-001" in captured["prompt"]
     assert not (directory / "start-error.json").exists()
+
+
+@pytest.fixture
+def remote_launch_files(tmp_path, monkeypatch):
+    import hashlib
+    from agent_session import process
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    spawned = []
+
+    def spawn(*args, **kwargs):
+        child = SimpleNamespace(pid=100 + len(spawned), env=kwargs["env"])
+        spawned.append(child)
+        return child
+
+    monkeypatch.setattr(remote_runtime.subprocess, "Popen", spawn)
+    monkeypatch.setattr(process, "birth", lambda pid: "birth-" + str(pid))
+    monkeypatch.setattr(process, "alive", lambda pid, birth=None: pid == 700)
+
+    def bundle(name):
+        source = home / ".cache/agent-session/runtime" / hashlib.sha256(name.encode()).hexdigest()
+        source.mkdir(parents=True)
+        (source / "ready").touch()
+        for skill in ("project-team", "project-item"):
+            target = source / "guidance/codex/skills" / skill
+            target.mkdir(parents=True)
+            (target / "SKILL.md").write_text(name + " " + skill)
+        return source
+
+    def request(run_id="1" * 32):
+        return {"run_id": run_id, "args": [], "job": {"job_id": "TOOL-001", "mode": "write", "cwd": ".",
+                "base": {"base_hash": "a" * 40}}, "cr_text": "# TOOL-001: Example\n\n## Result\n", "uplink": {}}
+
+    return SimpleNamespace(home=home, spawned=spawned, bundle=bundle, request=request)
+
+
+def test_runtime_owned_skill_links_follow_the_next_source_bundle(remote_launch_files):
+    env = remote_launch_files
+    first, second = env.bundle("first"), env.bundle("second")
+    remote_runtime.dispatch("/remote/seat", "launch", env.request("1" * 32), first)
+    remote_runtime.dispatch("/remote/seat", "launch", env.request("2" * 32), second)
+    for name in ("project-team", "project-item"):
+        link = env.home / ".codex/skills" / name
+        assert link.is_symlink()
+        assert link.resolve() == second / "guidance/codex/skills" / name
+
+
+def test_skill_refresh_preserves_user_installs_and_user_replaced_links(remote_launch_files):
+    env = remote_launch_files
+    first, second = env.bundle("first"), env.bundle("second")
+    skills = env.home / ".codex/skills"
+    skills.mkdir(parents=True)
+    user_install = skills / "project-team"
+    user_install.mkdir()
+    (user_install / "SKILL.md").write_text("User-maintained skill.")
+    remote_runtime.dispatch("/remote/seat", "launch", env.request("1" * 32), first)
+    user_target = env.home / "user-project-item"
+    user_target.mkdir()
+    (skills / "project-item").unlink()
+    (skills / "project-item").symlink_to(user_target, target_is_directory=True)
+    remote_runtime.dispatch("/remote/seat", "launch", env.request("2" * 32), second)
+    assert not user_install.is_symlink()
+    assert (user_install / "SKILL.md").read_text() == "User-maintained skill."
+    assert (skills / "project-item").resolve() == user_target
+
+
+def test_legacy_runtime_skill_links_can_refresh_without_claiming_other_links(remote_launch_files):
+    env = remote_launch_files
+    first, second = env.bundle("first"), env.bundle("second")
+    skills = env.home / ".codex/skills"
+    skills.mkdir(parents=True)
+    (skills / "project-team").symlink_to(first / "guidance/codex/skills/project-team", target_is_directory=True)
+    user_target = env.home / "user-project-item"
+    user_target.mkdir()
+    (skills / "project-item").symlink_to(user_target, target_is_directory=True)
+    remote_runtime.dispatch("/remote/seat", "launch", env.request("2" * 32), second)
+    assert (skills / "project-team").resolve() == second / "guidance/codex/skills/project-team"
+    assert (skills / "project-item").resolve() == user_target
+
+
+@pytest.fixture
+def failed_remote_controller(remote_launch_files, monkeypatch):
+    from contextlib import nullcontext
+
+    env = remote_launch_files
+    source = env.bundle("retry")
+    payload = env.request()
+    saved = remote_runtime.dispatch("/remote/seat", "launch", payload, source)
+    directory = remote_runtime._directory(payload["run_id"])
+    state = {"0": {}}
+    observed = {"native": None, "fail": "prepare", "windows": 0, "launches": 0}
+
+    def current(*args):
+        return observed["native"]
+
+    def window(context):
+        observed["windows"] += 1
+        if observed["fail"] == "prepare":
+            raise SessionError("provider_unavailable", "Install the provider CLI.", 3)
+        observed["native"] = {**context, "job_id": "TOOL-001", "window_id": "@1", "pane_id": "%1",
+                              "provider_launch_attempted": False, "registered": False, "ready": False,
+                              "placeholder_pid": 700, "placeholder_birth": "birth-700", "placeholder_process_group": 700}
+        return observed["native"]
+
+    def launch(context, request=None):
+        observed["launches"] += 1
+        if observed["fail"] == "config":
+            raise SessionError("unsupported_sandbox", "Correct the provider configuration.", 3)
+        observed["native"].update(provider_launch_attempted=True, registered=True, ready=True, session_id="thread-1")
+
+    manager = SimpleNamespace(project=SimpleNamespace(project_id="remote-example", base=directory / "control"),
+                              store=SimpleNamespace(update=lambda change: change(state)),
+                              _context=lambda *args, **kwargs: {"run_id": payload["run_id"], "target": "seat-0", "job": payload["job"],
+                                  "endpoint": "unix:///tmp/original-provider.sock",
+                                  "library_path": str(Path(json.loads((directory / "request.json").read_text())["source"]) / "agent-session")},
+                              _new_window=window, _launch=launch, _handoff_path=lambda context: directory / "handoff.md",
+                              _lock=lambda slot: nullcontext(), _adopted=lambda native, slot: native,
+                              provider=SimpleNamespace(prepare_context=lambda context: context),
+                              tmux=SimpleNamespace(get_current=current, has_session=lambda name: observed["native"] is not None,
+                                  managed_windows=lambda *args: ["@1"] if observed["native"] else [],
+                                  pane_info=lambda pane: {"pane_pid": 700, "pane_dead": False}))
+    manager.tmux.write_meta = lambda window, update: observed["native"].update(update) or observed["native"]
+    monkeypatch.setattr(remote_runtime, "_manager", lambda path: (manager, json.loads((directory / "execution.json").read_text())))
+    return SimpleNamespace(env=env, source=source, payload=payload, saved=saved, directory=directory,
+                           state=state, observed=observed, manager=manager)
+
+
+@pytest.mark.parametrize("failure", ["prepare", "config"])
+def test_failed_provider_preparation_retries_the_same_run_after_the_cause_is_fixed(failed_remote_controller, failure):
+    case = failed_remote_controller
+    case.observed["fail"] = failure
+    with pytest.raises(SessionError):
+        remote_runtime.controller(case.directory)
+    assert (case.directory / "start-error.json").is_file()
+    case.observed["fail"] = None
+    corrected_source = case.env.bundle("corrected")
+    retried = remote_runtime.dispatch("/remote/seat", "launch", case.payload, corrected_source)
+    assert len(case.env.spawned) == 2
+    assert retried["run_id"] == case.saved["run_id"]
+    remote_runtime.controller(case.directory)
+    assert case.observed["native"]["ready"] is True
+    assert case.observed["native"]["window_id"] == "@1"
+    assert case.observed["native"]["library_path"] == str(corrected_source / "agent-session")
+    assert case.env.spawned[-1].env["PYTHONPATH"] == str(corrected_source / "agent-session")
+    assert case.observed["windows"] == (2 if failure == "prepare" else 1)
+    assert case.state["0"] == {"job_id": "TOOL-001", "git_hash": "a" * 40}
+    assert not (case.directory / "start-error.json").exists()
+
+
+@pytest.mark.parametrize("uncertain", ["controller_alive", "missing_controller_birth", "launch_attempted", "attempt_missing",
+                                       "registered", "missing_native", "placeholder_changed", "server_changed", "placeholder_dead"])
+def test_retry_preserves_uncertain_or_already_started_native_execution(failed_remote_controller, monkeypatch, uncertain):
+    from agent_session import process
+
+    case = failed_remote_controller
+    case.observed["fail"] = "config"
+    with pytest.raises(SessionError):
+        remote_runtime.controller(case.directory)
+    original_error = (case.directory / "start-error.json").read_text()
+    record = case.directory / "execution.json"
+    if uncertain == "controller_alive":
+        monkeypatch.setattr(process, "alive", lambda *args: True)
+    elif uncertain == "missing_controller_birth":
+        saved = json.loads(record.read_text())
+        saved.pop("controller_birth")
+        record.write_text(json.dumps(saved))
+    elif uncertain == "launch_attempted":
+        case.observed["native"]["provider_launch_attempted"] = True
+    elif uncertain == "attempt_missing":
+        case.observed["native"].pop("provider_launch_attempted")
+    elif uncertain == "registered":
+        case.observed["native"]["registered"] = True
+    elif uncertain == "missing_native":
+        case.observed["native"] = None
+    elif uncertain == "server_changed":
+        case.observed["native"]["server_birth"] = "changed-server"
+    elif uncertain == "placeholder_dead":
+        monkeypatch.setattr(process, "alive", lambda *args: False)
+    else:
+        case.manager.tmux.pane_info = lambda pane: {"pane_pid": 701, "pane_dead": False}
+    try:
+        remote_runtime.dispatch("/remote/seat", "launch", case.payload, case.source)
+    except SessionError as error:
+        assert error.exit_code == 4
+    assert len(case.env.spawned) == 1
+    assert (case.directory / "start-error.json").read_text() == original_error
+
+
+def test_retry_cannot_treat_lost_native_evidence_as_a_first_preparation_failure(failed_remote_controller):
+    case = failed_remote_controller
+    with pytest.raises(SessionError):
+        remote_runtime.controller(case.directory)
+    path = case.directory / "start-error.json"
+    error = json.loads(path.read_text())
+    error.pop("before_window", None)
+    path.write_text(json.dumps(error))
+    before = path.read_text()
+    with pytest.raises(SessionError) as caught:
+        remote_runtime.dispatch("/remote/seat", "launch", case.payload, case.source)
+    assert caught.value.code == "remote_unknown" and caught.value.exit_code == 4
+    assert len(case.env.spawned) == 1 and path.read_text() == before
+
+
+def test_read_only_remote_controller_preserves_the_read_only_instruction(tmp_path, monkeypatch):
+    directory = tmp_path / "read-only-run"
+    directory.mkdir()
+    job = {"job_id": "TOOL-001", "mode": "read-only", "base": {"base_hash": "a" * 40}}
+    (directory / "request.json").write_text(json.dumps({"run_id": "f" * 32, "job": job}))
+    captured = {}
+    manager = SimpleNamespace(store=SimpleNamespace(update=lambda change: change({"0": {}})),
+                              _context=lambda *args, **kwargs: {}, _new_window=lambda context: context,
+                              _launch=lambda context, request: captured.update(request=request),
+                              _handoff_path=lambda context: directory / "handoff.md")
+    monkeypatch.setattr(remote_runtime, "_manager", lambda path: (manager, {"seat": "/remote/seat"}))
+    remote_runtime.controller(directory)
+    assert "읽기 전용 조사·검증" in captured["request"]
+    assert "commit·push하십시오" not in captured["request"]
+    assert "업무 파일 수정·commit·push는 금지합니다" in captured["request"]
+
+
+def test_safe_prelaunch_retry_can_refresh_an_unbound_endpoint_and_then_pins_the_bound_session(failed_remote_controller):
+    case = failed_remote_controller
+    case.observed["fail"] = "config"
+    with pytest.raises(SessionError):
+        remote_runtime.controller(case.directory)
+    waiting = dict(case.observed["native"])
+    original_endpoint = waiting["endpoint"]
+    refreshed_endpoint = "unix:///tmp/restarted-provider.sock"
+    case.manager.provider.prepare_context = lambda context: {**context, "endpoint": refreshed_endpoint}
+    case.observed["fail"] = None
+    remote_runtime.dispatch("/remote/seat", "launch", case.payload, case.source)
+    remote_runtime.controller(case.directory)
+    case.manager._observe = lambda current: {"endpoint": current["endpoint"], "session_id": current["session_id"]}
+    observed = remote_runtime.dispatch("/remote/seat", "observe", {"run_id": case.payload["run_id"], "native": waiting}, case.source)
+    assert observed == {"endpoint": refreshed_endpoint, "session_id": "thread-1"}
+    bound = {**case.observed["native"], "endpoint": original_endpoint}
+    with pytest.raises(SessionError) as caught:
+        remote_runtime.dispatch("/remote/seat", "observe", {"run_id": case.payload["run_id"], "native": bound}, case.source)
+    assert caught.value.code == "owner_mismatch" and caught.value.exit_code == 4
+
+
+def test_unbound_endpoint_change_requires_a_proven_safe_prelaunch_retry(monkeypatch):
+    run_id = "a" * 32
+    original = {"run_id": run_id, "job_id": "TOOL-001", "project_id": "remote-example", "window_id": "@1",
+                "pane_id": "%1", "server_pid": 123, "server_birth": "birth-1", "socket_path": "/tmp/native.sock",
+                "session_id": None, "endpoint": "unix:///tmp/original-provider.sock"}
+    changed = {**original, "provider_launch_attempted": True, "endpoint": "unix:///tmp/unexplained-provider.sock"}
+    manager = SimpleNamespace(project=SimpleNamespace(project_id="remote-example"),
+                              tmux=SimpleNamespace(get_current=lambda *args: changed),
+                              _observe=lambda *args: pytest.fail("An unproven endpoint must not be used"))
+    monkeypatch.setattr(remote_runtime, "_manager", lambda directory: (manager, {"seat": "/remote/seat", "job_id": "TOOL-001"}))
+    with pytest.raises(SessionError) as caught:
+        remote_runtime.dispatch("/remote/seat", "observe", {"run_id": run_id, "native": original}, Path("/runtime"))
+    assert caught.value.code == "owner_mismatch" and caught.value.exit_code == 4

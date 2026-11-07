@@ -79,7 +79,15 @@ def launch(manager, context):
         context = poll(manager, context, check_dialog=False)
         if not context.get("remote_native"):
             time.sleep(min(0.2, manager.remaining()))
-    context = attach(manager, context)
+    if context.get("cli_pid") and not manager.tmux.pane_info(context["pane_id"])["pane_dead"]:
+        pane = manager.tmux.pane_info(context["pane_id"])
+        if (pane["pane_pid"] != context["cli_pid"] or not context.get("cli_birth")
+                or not process.alive(context["cli_pid"], context["cli_birth"])):
+            raise SessionError("execution_unknown", "The existing SSH display process is unconfirmed.", 4)
+        if not remote.run_call(context, "display_clients", timeout=manager.remaining()):
+            raise SessionError("remote_display_failed", "The existing SSH display is not connected.", 4)
+    else:
+        context = attach(manager, context)
     return {**manager._wait_ready(context), "cleanup": manager._sweep(context["target"])}
 
 

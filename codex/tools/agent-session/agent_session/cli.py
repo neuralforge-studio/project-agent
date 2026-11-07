@@ -59,6 +59,7 @@ def build_parser():
 
     start = commands.add_parser("start", help="Start a Leader or assign a Worker to a free seat.")
     start.add_argument("--job", required=True, type=_nonempty, metavar="LEADER_OR_CR_ID")
+    start.add_argument("--seat", type=_seat, metavar="N", help="Choose one Worker seat instead of automatic allocation.")
     start.add_argument("--prompt-file", type=_nonempty, metavar="FILE")
     start.add_argument("--timeout", type=_seconds, default=600, metavar="SECONDS")
 
@@ -146,6 +147,8 @@ def main(argv=None, manager_factory=None, fleet_factory=None):
             return 0
         if operation == "start" and arguments.prompt_file is not None and arguments.job != "leader":
             raise SessionError("invalid_arguments", "--prompt-file is only valid for --job leader.", 2)
+        if operation == "start" and arguments.job == "leader" and arguments.seat is not None:
+            raise SessionError("invalid_arguments", "--seat is only valid for a Worker JOB.", 2)
         with redirect_stdout(sys.stderr):
             effects_possible = True
             if operation in ("shutdown", "resume"):
@@ -161,7 +164,7 @@ def main(argv=None, manager_factory=None, fleet_factory=None):
                     cwd=None, config_path=arguments.config, socket_name=arguments.socket_name,
                     socket_path=arguments.socket_path, timeout=getattr(arguments, "timeout", 600))
                 if operation == "start":
-                    result = manager.start(arguments.job, prompt_file=arguments.prompt_file)
+                    result = manager.start(arguments.job, prompt_file=arguments.prompt_file, seat=arguments.seat)
                 elif operation == "send":
                     result = manager.send(job=arguments.job, seat=arguments.seat,
                                           message=arguments.message, file=arguments.file,
