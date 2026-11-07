@@ -26,6 +26,7 @@ from agent_session.tmux import Tmux
 ENABLED = "@project_board_enabled"
 CONFIG = "@project_board_config"
 WINDOW_PANE = "@project_board_pane"
+WINDOW_RESTORE = "@project_board_restore"
 PANE_MARK = "@project_board_managed"
 PANE_SOCKET = "@project_board_click_socket"
 SIDEBAR_WIDTH = "30%"
@@ -140,18 +141,40 @@ def _board_pane(control: Tmux, window: str, panes: dict[str, bool]) -> str | Non
         return None
     if pane in panes and _options(control, "-p", "-t", pane, PANE_MARK) == "1":
         return pane
-    control.command("set-option", "-wu", "-t", window, WINDOW_PANE)
+    try:
+        if pane not in panes:
+            _restore(control, window)
+    finally:
+        control.command("set-option", "-wu", "-t", window, WINDOW_PANE)
+        control.command("set-option", "-wu", "-t", window, WINDOW_RESTORE)
     return None
+
+
+def _restore(control: Tmux, window: str) -> None:
+    raw = _options(control, "-w", "-t", window, WINDOW_RESTORE)
+    if not raw:
+        return
+    saved = json.loads(raw)
+    control.command("select-layout", "-t", window, saved["layout"])
+    if saved["focus"] in _panes(control, window):
+        control.command("select-pane", "-t", saved["focus"])
 
 
 def _remove(control: Tmux, window: str, pane: str) -> None:
     control.command("kill-pane", "-t", pane)
     try:
-        control.command("set-option", "-wu", "-t", window, WINDOW_PANE)
+        _restore(control, window)
     except SessionError:
         # Killing a sole remaining pane can close its window as well.
         if window in _lines(control, "list-windows", "-a", "-F", "#{window_id}"):
             raise
+    finally:
+        try:
+            control.command("set-option", "-wu", "-t", window, WINDOW_PANE)
+            control.command("set-option", "-wu", "-t", window, WINDOW_RESTORE)
+        except SessionError:
+            if window in _lines(control, "list-windows", "-a", "-F", "#{window_id}"):
+                raise
 
 
 def _sidebar_command(config: str | None) -> list[str]:
@@ -164,13 +187,17 @@ def _sidebar_command(config: str | None) -> list[str]:
 
 def _create(control: Tmux, window: str, config: str | None) -> str:
     click_path = _private_dir(control) / (uuid.uuid4().hex[:16] + ".sock")
-    command = ["new-pane", "-d", "-A", "-P", "-F", "#{pane_id}", "-t", window,
-               "-x", SIDEBAR_WIDTH, "-y", "100%", "-X", "0", "-Y", "0",
+    layout = control.command("display-message", "-p", "-t", window, "#{window_layout}")
+    focus = control.command("display-message", "-p", "-t", window, "#{pane_id}")
+    command = ["split-window", "-d", "-f", "-h", "-b", "-l", SIDEBAR_WIDTH,
+               "-P", "-F", "#{pane_id}", "-t", window,
                "-e", f"PROJECT_BOARD_CLICK_SOCKET={click_path}", *_sidebar_command(config)]
     pane = control.command(*command).strip()
     if not pane.startswith("%"):
         raise ValueError("tmux did not return the Board pane handle")
     try:
+        control.command("set-option", "-w", "-t", window, WINDOW_RESTORE,
+                        json.dumps({"layout": layout, "focus": focus}))
         control.command("set-option", "-p", "-t", pane, PANE_MARK, "1")
         control.command("set-option", "-p", "-t", pane, PANE_SOCKET, str(click_path))
         control.command("set-option", "-w", "-t", window, WINDOW_PANE, pane)
@@ -179,6 +206,16 @@ def _create(control: Tmux, window: str, config: str | None) -> str:
             control.command("kill-pane", "-t", pane)
         except SessionError:
             pass
+        try:
+            control.command("select-layout", "-t", window, layout)
+            control.command("select-pane", "-t", focus)
+        except SessionError:
+            pass
+        for option in (WINDOW_PANE, WINDOW_RESTORE):
+            try:
+                control.command("set-option", "-wu", "-t", window, option)
+            except SessionError:
+                pass
         raise
     return pane
 

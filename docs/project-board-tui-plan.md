@@ -105,7 +105,7 @@ TUI는 Textual 8.2.8의 [Markdown](https://textual.textualize.io/widgets/markdow
 
 사용자가 선택한 표시 범위는 **모든 tmux client 공통**입니다. Sidebar 내용은 항상 모든 등록 project입니다. 사용자가 어느 client에서 켜거나 끄든 같은 tmux server의 client에 적용합니다. 각 client가 session과 window를 바꿔도 같은 전체 목록을 볼 수 있어야 합니다. tmux pane은 window에 속하므로, client가 현재 보는 window를 추적하는 controller가 필요합니다.
 
-tmux `next-3.9`의 floating pane을 사용합니다. Controller는 전역 `@project_board_enabled` 옵션을 관리합니다. Sidebar가 켜지면 현재 client가 보는 window마다 왼쪽 30%에 Board pane을 하나 만듭니다. 같은 window를 보는 client는 그 pane을 공유합니다. 마지막 client가 다른 window로 이동하면 기존 Board pane을 정리합니다. Floating pane은 기존 pane의 크기와 배치를 바꾸지 않습니다. 대신 본문 왼쪽 30%를 가립니다.
+tmux `next-3.9`의 전체 높이 일반 pane을 사용합니다. Controller는 전역 `@project_board_enabled` 옵션을 관리합니다. Sidebar가 켜지면 현재 client가 보는 window마다 왼쪽 30%를 Board pane에 할당합니다. 기존 pane은 오른쪽의 남은 공간에 표시합니다. 같은 window를 보는 client는 Board pane을 공유합니다. 마지막 client가 다른 window로 이동하면 Board pane을 정리합니다. Controller는 Board를 만들기 전의 pane 배치와 선택 pane을 저장합니다. Board를 끄거나 window에서 제거하면 기존 pane의 배치, 크기, 선택 상태를 복원합니다.
 
 tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합니다. Controller는 보이는 window와 Board pane을 동기화합니다. 관리된 `agent-session` pane이 종료되면 Board pane도 먼저 제거해 종료 window의 정리를 방해하지 않습니다. 이 구조에는 별도의 서버나 상주 감시 프로세스가 없습니다.
 
@@ -119,7 +119,7 @@ tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합
 | 2 | Board 읽기·답변 경로 | 모델이 Markdown 원문을 제공함. 답변 검증·전송이 HTTP 없이 동작함 |
 | 3 | TUI Sidebar | 모든 project가 한 목록에 표시됨. 3절의 개수, 빈 seat, 단일 `R` 행, 오류와 마우스 스크롤·클릭이 동작함 |
 | 4 | 결정 popup | 실제 결정 문서의 Markdown·표·CSV를 읽고 마우스로 목록·본문·답변·전송을 조작함 |
-| 5 | tmux 토글과 설치 진입점 | 같은 키 또는 상태줄 `Board` 클릭으로 켜고 끔. 종료 시 Board 소유 pane만 정리. 다른 pane의 크기와 포커스를 복원 |
+| 5 | tmux 토글과 설치 진입점 | 같은 키 또는 상태줄 `Board` 클릭으로 켜고 끔. Board가 왼쪽 공간을 차지함. 종료 시 Board 소유 pane만 정리하고 기존 pane의 배치, 크기, 포커스를 복원 |
 | 6 | HTML server 제거 | `project-board`가 TUI를 시작함. `server.py`, `static/board.html`, HTTP 전용 테스트·옵션을 제거하고 README와 현행 계획을 갱신함 |
 
 `project-board` 테스트 61건과 `project-item` 테스트 83건이 통과했습니다. 실제 tmux 화면에서 두 project의 개수와 seat, 결정 Markdown 표와 CSV 표를 확인했습니다. 두 client의 다른 window에 같은 전체 목록이 표시됐습니다. 마우스 클릭은 해당 client의 CR popup을 열었고, seat 클릭은 해당 client만 Worker window로 이동했습니다. 느린 조회 중 클릭과 중복 조회 방지도 TUI 테스트로 확인했습니다. 실제 사용 중인 tmux server에는 테스트 동작을 적용하지 않았습니다.

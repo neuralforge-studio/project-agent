@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import pty
 import shutil
+import signal
 import socket
 import stat
 import struct
@@ -24,6 +25,16 @@ from project_board import tmux_control
 def _tmux(name, *args):
     return subprocess.run(["tmux", "-L", name, *args], capture_output=True, text=True,
                           check=True, timeout=5).stdout.strip()
+
+
+def _pane_geometry(name, window):
+    rows = _tmux(name, "list-panes", "-t", window,
+                 "-F", "#{pane_id}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_top}\t#{pane_active}")
+    geometry = {}
+    for row in rows.splitlines():
+        parts = row.split("\t")
+        geometry[parts[0]] = tuple(map(int, parts[1:]))
+    return geometry
 
 
 def _attached(name, session):
@@ -56,6 +67,8 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
         original = set(_tmux(name, "list-panes", "-a", "-F", "#{pane_id}").splitlines())
         clients.append(_attached(name, "one"))
         clients.append(_attached(name, "two"))
+        first_geometry = _pane_geometry(name, first_window)
+        second_geometry = _pane_geometry(name, second_window)
         socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
         monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
 
@@ -63,6 +76,14 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
         assert result["ok"] is True
         assert set(result["data"]["created"]) == {first_window, second_window}
         assert len(_tmux(name, "list-panes", "-a", "-F", "#{pane_id}").splitlines()) == 4
+        for window, before in ((first_window, first_geometry), (second_window, second_geometry)):
+            after = _pane_geometry(name, window)
+            board = _tmux(name, "show-options", "-wqv", "-t", window, "@project_board_pane")
+            board_width, board_height, board_left, board_top, _ = after[board]
+            assert (board_left, board_top, board_height) == (0, 0, next(iter(before.values()))[1])
+            assert board_width > 0
+            for pane, (width, height, left, top, active) in before.items():
+                assert after[pane] == (width - board_width - 1, height, left + board_width + 1, top, active)
 
         _tmux(name, "switch-client", "-c", clients[0][2], "-t", "two")
         result = tmux_control.reconcile(socket=socket_path)
@@ -70,11 +91,101 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
         assert result["data"]["removed"] == [first_window]
         assert _tmux(name, "show-options", "-wqv", "-t", first_window,
                      "@project_board_pane") == ""
+        assert _tmux(name, "show-options", "-wqv", "-t", first_window,
+                     "@project_board_restore") == ""
+        assert _pane_geometry(name, first_window) == first_geometry
 
         result = tmux_control.toggle_sidebar(socket=socket_path)
         assert result["ok"] is True
         assert result["data"]["enabled"] is False
         assert set(_tmux(name, "list-panes", "-a", "-F", "#{pane_id}").splitlines()) == original
+        assert _pane_geometry(name, second_window) == second_geometry
+        assert _tmux(name, "show-options", "-wqv", "-t", second_window,
+                     "@project_board_restore") == ""
+    finally:
+        for process, master, _client in clients:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+            os.close(master)
+        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_sidebar_restores_split_layout_and_focus_after_selecting_board(monkeypatch):
+    name = "board-test-" + uuid.uuid4().hex[:12]
+    clients = []
+    try:
+        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-x", "101", "-y", "31",
+              "-s", "one", "sleep", "60")
+        first = _tmux(name, "display-message", "-p", "-t", "one", "#{pane_id}")
+        right = _tmux(name, "split-window", "-d", "-h", "-l", "24", "-P", "-F", "#{pane_id}",
+                      "-t", first, "sleep", "60")
+        _tmux(name, "split-window", "-d", "-v", "-l", "10", "-t", first, "sleep", "60")
+        _tmux(name, "select-pane", "-t", right)
+        clients.append(_attached(name, "one"))
+        window = _tmux(name, "display-message", "-p", "-t", "one", "#{window_id}")
+        before = _pane_geometry(name, window)
+        socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
+        monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
+
+        assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+        after = _pane_geometry(name, window)
+        board = _tmux(name, "show-options", "-wqv", "-t", window, "@project_board_pane")
+        board_width, board_height, board_left, board_top, _ = after[board]
+        original_height = max(row[1] + row[3] for row in before.values())
+        assert (board_left, board_top, board_height) == (0, 0, original_height)
+        assert board_width > 0
+        assert all(after[pane][2] >= board_width + 1 for pane in before)
+        assert after[right][4] == 1
+
+        _tmux(name, "select-pane", "-t", board)
+        assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+        assert _pane_geometry(name, window) == before
+    finally:
+        for process, master, _client in clients:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+            os.close(master)
+        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_managed_pane_death_removes_board_and_restore_state(monkeypatch):
+    name = "board-test-" + uuid.uuid4().hex[:12]
+    clients = []
+    try:
+        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "one", "sleep", "60")
+        _tmux(name, "set-option", "-g", "remain-on-exit", "on")
+        clients.append(_attached(name, "one"))
+        _tmux(name, "source-file", str(Path(__file__).resolve().parents[4] /
+                                       "tmux/scripts/project_board.conf"))
+        window = _tmux(name, "display-message", "-p", "-t", "one", "#{window_id}")
+        managed = _tmux(name, "display-message", "-p", "-t", "one", "#{pane_id}")
+        _tmux(name, "set-option", "-w", "-t", window, "@agent_session_pane_id",
+              json.dumps(managed))
+        socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
+        monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
+
+        assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+        board = _tmux(name, "show-options", "-wqv", "-t", window, "@project_board_pane")
+        assert board in _pane_geometry(name, window)
+        pid = int(_tmux(name, "display-message", "-p", "-t", managed, "#{pane_pid}"))
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(50):
+            if board not in _pane_geometry(name, window):
+                break
+            time.sleep(0.05)
+        assert board not in _pane_geometry(name, window)
+        assert _tmux(name, "show-options", "-wqv", "-t", window, "@project_board_pane") == ""
+        assert _tmux(name, "show-options", "-wqv", "-t", window, "@project_board_restore") == ""
     finally:
         for process, master, _client in clients:
             process.terminate()

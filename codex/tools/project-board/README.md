@@ -45,8 +45,9 @@ answers require the `operator` caller classification from `agent-session`; a man
 unmanaged agent session cannot submit an approval.
 
 In tmux, prefix `B` or click `Board` in the status line to toggle the sidebar for every
-attached client. The same window shares one Board pane. Each visible window has its own
-floating Board pane over the left 30% of the window, so existing panes keep their size.
+attached client. The same window shares one Board pane. Each visible window gives the Board
+the left 30% of its width and shows existing panes in the remaining space. Turning the Board
+off restores the previous pane layout and focus.
 Click a project name to switch the clicking client to that project's tmux session and
 current window. If that session is unavailable, the Board shows an error. Click a CR
 count to read its list, `D` to read decisions, or an assigned seat to switch the clicking
