@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_session.errors import SessionError
 from agent_session.providers.codex import CodexProvider, _arguments
 from agent_session.providers.common import deadline
+from agent_session import remote
 
 
 class FakeRPC:
@@ -81,6 +82,58 @@ def codex(tmp_path):
     prompt.write_text("Register, then perform the assigned JOB.")
     prepared = {"prompt_file": str(prompt), "settings_file": None, "provider_args": [], "env": {}, "unset_env": []}
     return provider, rpc, context, prepared
+
+
+@pytest.mark.parametrize("method, operation", [
+    ("verify_binding", "check_binding"), ("observe", "observe"), ("send", "send"),
+    ("request_stop", "request_stop"), ("request_exit", "request_exit"),
+])
+@pytest.mark.parametrize("disconnected", [False, True])
+def test_ssh_seat_control_uses_the_remote_native_run_without_local_fallback(
+        codex, monkeypatch, method, operation, disconnected):
+    provider, _, context, _ = codex
+    session = {"session_id": "thread-one", "endpoint": context["endpoint"]}
+    context.update(session_id=session["session_id"], run_id="a" * 32,
+                   remote_seat={"host": "macbook-worker", "path": "/Users/swain/seat"},
+                   remote_native={"session_id": session["session_id"]})
+    observed = {"known": True, "terminal": True, "active_turn": False, "pending": [], "background": []}
+    remote_result = ({"disposition": "accepted", "session": {**session, "endpoint": "unix:///remote/native.sock"}}
+                     if method == "send" else observed)
+    calls = []
+
+    def local_rpc(*args):
+        pytest.fail("an SSH seat must not access a local Codex socket")
+
+    def run_call(meta, action, payload=None, timeout=30):
+        calls.append((action, payload, timeout))
+        assert meta["remote_seat"] == context["remote_seat"] and meta["run_id"] == context["run_id"]
+        if disconnected:
+            raise SessionError("remote_unknown", "SSH connection lost.", 4)
+        return remote_result
+
+    monkeypatch.setattr(remote, "run_call", run_call)
+    provider.rpc_factory = local_rpc
+    if method == "send":
+        invoke = lambda: provider.send(session, "Leader feedback", context, timeout=11)
+    elif method == "request_exit":
+        invoke = lambda: provider.request_exit(context, object())
+    else:
+        invoke = lambda: getattr(provider, method)(session, context, context, timeout=11)
+    if disconnected:
+        with pytest.raises(SessionError) as caught:
+            invoke()
+        assert caught.value.code == "remote_unknown"
+    else:
+        result = invoke()
+        if method == "verify_binding":
+            assert result == session
+        elif method == "send":
+            assert result["disposition"] == "accepted" and result["session"] == session
+        elif method != "request_exit":
+            assert result == observed
+    assert len(calls) == 1 and calls[0][0] == operation
+    assert calls[0][1] == ({"message": "Leader feedback"} if method == "send" else None)
+    assert calls[0][2] == (30 if method == "request_exit" else 11)
 
 
 def config_layer(kind, config, *, profile=None, disabled_reason=None):

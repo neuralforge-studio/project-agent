@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import api, git_ops, jobs, process, workspace
 from .api import _check_owner, _project, _unlaunched_observation
-from .config import load_registry
+from .config import RemoteSeat, load_registry
 from .errors import SessionError
 from .providers import get_provider
 from .state import StateStore, locked, utc_now
@@ -81,10 +81,13 @@ class Manager(SuspendMixin):
     def _context(self, slot, job=None, run_id=None):
         seat = None if slot == "leader" else int(slot[5:])
         root = self.project.base if seat is None else self.project.seats[seat]
-        cwd = root if job is None else (root / job["cwd"]).resolve()
-        if not cwd.is_relative_to(root):
+        remote = isinstance(root, RemoteSeat)
+        path = root.path if remote else root
+        cwd = path if job is None else (path / job["cwd"])
+        cwd = cwd if remote else cwd.resolve()
+        if not cwd.is_relative_to(path) or (remote and ".." in cwd.parts):
             raise SessionError("cwd_unavailable", "The JOB directory must be inside its seat.", 2)
-        return {
+        context = {
             "base": str(self.project.base), "project_id": self.project.project_id,
             "provider": self.project.provider, "config_path": str(self.project.config_path),
             "target": slot, "seat": seat, "seat_root": str(root), "cwd": str(cwd),
@@ -93,6 +96,9 @@ class Manager(SuspendMixin):
             "python": sys.executable, "library_path": str(Path(__file__).resolve().parents[1]),
             "timeout": self.remaining(), "allow_daemon_start": True,
         }
+        if remote:
+            context["remote_seat"] = {"host": root.host, "path": str(root.path), "python": root.python}
+        return context
 
     def _window_name(self, meta):
         if meta["seat"] is None:
@@ -106,22 +112,23 @@ class Manager(SuspendMixin):
         person added stay beside the new CLI. `ending` is the run that this restart's own controller just
         ended; it is the one run whose pending control does not keep its window from the new run.
         """
-        context = self.provider.prepare_context(context)
+        context = context if context.get("remote_seat") else self.provider.prepare_context(context)
         if resume:
             context.update(session_id=resume, expected_session_id=resume, resume=True)
         name = self._window_name(context)
         context["window_name"] = name
         # The waiting pane starts in the seat root; the launch script enters the CR's Cwd after Git preparation.
         cwd = context["cwd"]
+        physical_root = str(self.project.base) if context.get("remote_seat") else context["seat_root"]
         retired = self._reusable(context["target"], ending)
         reused = None
         if retired is not None:
             try:
-                reused = self.tmux.reuse_window(self.project.project_id, name, context["seat_root"], context, retired)
+                reused = self.tmux.reuse_window(self.project.project_id, name, physical_root, context, retired)
             except SessionError as error:
                 if error.code not in REUSE_REFUSED:
                     raise                          # the window may have changed; its state is the caller's to read
-        context = reused or self.tmux.create_window(self.project.project_id, name, context["seat_root"], context)
+        context = reused or self.tmux.create_window(self.project.project_id, name, physical_root, context)
         if context["cwd"] != cwd:
             context = self.tmux.write_meta(context["window_id"], {"cwd": cwd})
         self.tmux.set_current(self.project.project_id, context["target"], context)
@@ -182,7 +189,7 @@ class Manager(SuspendMixin):
     def _same(self, selected, published=True):
         """Re-read the selected run under its control lock. Before publication, compare only its base and slot."""
         current = self.tmux.get_current(self.project.project_id, selected["target"])
-        keys = ("run_id", "window_id", "pane_id", "job_id", "session_id")
+        keys = ("run_id", "window_id", "pane_id", "job_id", "session_id", "remote_seat", "remote_native")
         if not current or any(current.get(key) != selected.get(key) for key in keys):
             raise SessionError("target_changed", "The command target changed before control.")
         return self._owned(current, selected["target"], self.store.read() if published else None)
@@ -213,6 +220,9 @@ class Manager(SuspendMixin):
         return {"session_id": meta["session_id"], "message_to": meta["message_to"]}
 
     def _observe(self, meta):
+        if meta.get("remote_seat") and meta.get("provider_launch_attempted") is not False:
+            from .remote import observe
+            return observe(meta, timeout=self.remaining())
         pane = self.tmux.pane_info(meta["pane_id"])
         if not meta.get("registered"):
             return _unlaunched_observation(meta, pane)
@@ -294,6 +304,8 @@ class Manager(SuspendMixin):
         return text
 
     def _prepare_launch(self, context, request=None):
+        if context.get("remote_seat"):
+            return {}, {}
         context["timeout"] = self.remaining()
         directory = self.project.runtime_path / "runs" / context["run_id"]
         directory.mkdir(parents=True, exist_ok=True)
@@ -304,6 +316,10 @@ class Manager(SuspendMixin):
             "AGENT_SESSION_SOCKET": context["socket_path"],
             "AGENT_SESSION_BASE": context["base"],
         })
+        if context.get("upstream"):
+            prepared["env"].update(AGENT_SESSION_UPLINK=context["upstream"],
+                                   PYTHONPATH=context["library_path"],
+                                   PATH=context["upstream_bin"] + os.pathsep + os.environ.get("PATH", ""))
         launch = self.provider.launch_spec(context, prepared)
         return prepared, launch
 
@@ -327,6 +343,15 @@ class Manager(SuspendMixin):
 
     def _fresh_handoff(self, meta):
         """The slot's handoff file when it changed after this run's launch, else None."""
+        if meta.get("remote_seat"):
+            from .remote import run_call
+            handoff = run_call(meta, "handoff", timeout=self.remaining())
+            if handoff.get("fresh"):
+                path = self._handoff_path(meta)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(handoff["text"], encoding="utf-8")
+                return str(path)
+            return None
         path = self._handoff_path(meta)
         launched = self.project.runtime_path / "runs" / meta["run_id"] / "launch.sh"
         if path.is_file() and launched.is_file() and path.stat().st_mtime > launched.stat().st_mtime:
@@ -352,6 +377,9 @@ class Manager(SuspendMixin):
             pass                                   # the original failure is the result
 
     def _launch(self, context, request=None):
+        if context.get("remote_seat"):
+            from .remote_lifecycle import launch
+            return launch(self, context)
         if not Path(context["cwd"]).is_dir():
             raise SessionError("cwd_unavailable", "The CR Cwd does not exist in the prepared seat.", 2,
                                {"cwd": context["cwd"]})
@@ -461,6 +489,9 @@ class Manager(SuspendMixin):
             meta = self.tmux.get_current(self.project.project_id, context["target"])
             if not meta or meta.get("run_id") != context["run_id"]:
                 raise SessionError("target_changed", "Another execution replaced this startup.")
+            if meta.get("remote_seat"):
+                from .remote_lifecycle import poll
+                meta = poll(self, meta)
             if meta.get("registered"):
                 if not meta.get("ready"):
                     session = self._session(meta)
@@ -476,7 +507,7 @@ class Manager(SuspendMixin):
                     self.store.update(publish)
                     meta = self.tmux.write_meta(meta["window_id"], {"ready": True, "start_error": None})
                 return self._result(meta, ready=True)
-            if self.tmux.pane_info(meta["pane_id"])["pane_dead"]:
+            if not meta.get("remote_seat") and self.tmux.pane_info(meta["pane_id"])["pane_dead"]:
                 raise SessionError("provider_exited", "The CLI exited before registering its conversation.", 4,
                                    self._result(meta))
             if time.monotonic() - screened >= DIALOG_SCREEN_SECONDS:
@@ -492,7 +523,9 @@ class Manager(SuspendMixin):
         return {"project": self.project.project_id, "seat": meta.get("seat"), "job_id": meta.get("job_id"),
                 "run_id": meta.get("run_id"), "window_id": meta.get("window_id"),
                 "pane_id": meta.get("pane_id"), "cwd": meta.get("cwd"),
-                "session": self._session(meta) if meta.get("registered") else None, **extra}
+                "session": self._session(meta) if meta.get("registered") else None,
+                **({"host": meta["remote_seat"]["host"], "remote_native": meta.get("remote_native")}
+                   if meta.get("remote_seat") else {}), **extra}
 
     def _retire_name(self, meta):
         self.tmux.command("rename-window", "-t", meta["window_id"],
@@ -511,6 +544,9 @@ class Manager(SuspendMixin):
                     raise SessionError("target_stopping", "This execution is stopping.")
                 if parked:
                     raise SessionError("assignment_mismatch", PARKED_ALIVE, 3)
+                if meta.get("remote_seat") and self.tmux.pane_info(meta["pane_id"])["pane_dead"]:
+                    from .remote_lifecycle import attach
+                    meta = attach(self, meta)
                 return self._wait_ready(meta)
             job = jobs.claim(self.project, meta["job_id"]) if meta.get("job_id") else None
             handoff = self._fresh_handoff(meta)
@@ -522,6 +558,9 @@ class Manager(SuspendMixin):
         if meta.get("provider_launch_attempted") is not False:
             if parked:
                 raise SessionError("assignment_mismatch", PARKED_ALIVE, 3)
+            if meta.get("remote_seat"):
+                from .remote_lifecycle import launch
+                return launch(self, meta)
             return self._wait_ready(meta)
         if meta.get("job"):
             meta["job"] = jobs.claim(self.project, meta["job_id"])
@@ -604,7 +643,7 @@ class Manager(SuspendMixin):
                         continue
                     selected_guard = False
                     try:
-                        if workspace.ensure_seat(self.project, root):
+                        if workspace.ensure_seat(self.project, root) and not isinstance(root, RemoteSeat):
                             self.provider.trust_new_seat(root)
                         checked = workspace.check_seat(self.project, root, item)
                         if not checked.get("allowed"):
@@ -696,7 +735,7 @@ class Manager(SuspendMixin):
         with recipient._lock(selected["target"]):
             meta = recipient._same(selected)
             if (meta.get("stopping") or meta.get("control_pending") or not meta.get("ready")
-                    or recipient.tmux.pane_info(meta["pane_id"])["pane_dead"]):
+                    or (not meta.get("remote_seat") and recipient.tmux.pane_info(meta["pane_id"])["pane_dead"])):
                 raise SessionError("target_not_running", "The recipient is not ready for input.")
             reply_job, sender_run = None, None
             if actor == "leader" or actor.startswith("seat-"):
@@ -834,6 +873,9 @@ class Manager(SuspendMixin):
                 _note_exit_wait(error, exit_sent, last)
                 raise
             self._retire_name(meta)
+            if meta.get("remote_native"):
+                from .remote_lifecycle import detach
+                detach(self, meta)
             if operation == "restart":
                 current_job = jobs.lookup(self.project, meta["job_id"], ("in-progress",)) if meta.get("job_id") else None
                 context = self._context(meta["target"], current_job)

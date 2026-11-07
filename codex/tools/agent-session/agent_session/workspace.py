@@ -3,6 +3,7 @@
 import shutil
 from pathlib import Path
 
+from .config import RemoteSeat
 from .errors import SessionError
 from .git_ops import git, is_git
 
@@ -14,6 +15,9 @@ def _origin(root):
 def ensure_seat(project, root):
     """Clone the base's origin into a missing seat. Git and SSH settings of the user apply as for
     any clone; the tool adds none."""
+    if isinstance(root, RemoteSeat):
+        from . import remote
+        return remote.call(root, "ensure_seat", {"origin": _origin(project.base)}, timeout=3600)
     root = Path(root)
     if root.exists():
         return False
@@ -58,7 +62,7 @@ def _contained_in_origin(root, commit="HEAD"):
 def check_seat(project, root, job):
     """A seat may take the JOB when it is a clean clone of the same origin, its HEAD is
     published, and a local CR branch (if any) equals the published one."""
-    root = Path(root)
+    root = root if isinstance(root, RemoteSeat) else Path(root)
     reasons = []
     try:
         if not is_git(root):
@@ -89,7 +93,8 @@ def check_release(project, meta, cr_state):
     if meta.get("seat") is None:
         return {"allowed": True, "reasons": []}
     state, outcome = cr_state
-    root = Path(meta["seat_root"])
+    seat = project.seats[meta["seat"]]
+    root = seat if isinstance(seat, RemoteSeat) else Path(meta["seat_root"])
     reasons = []
     if state == "in-progress":
         reasons.append("the CR is still in-progress; move it to done, todo, open or deferred first")

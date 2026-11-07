@@ -339,7 +339,7 @@ def test_unlaunched_placeholder_stops_with_term_and_retains_runtime_evidence(tmp
             return None
         return pane["pane_dead_signal"] or zombie_signal(meta["placeholder_pid"])
 
-    assert wait_for(exit_signal) == "15"
+    assert wait_for(exit_signal) in ("15", "term")  # tmux uses a signal name on macOS
     current = tmux.get_current("demo", "seat-0")
     assert current["run_id"] == meta["run_id"]
     assert current["provider_launch_attempted"] is False
@@ -510,7 +510,8 @@ def test_a_retired_window_goes_to_the_next_run_and_reads_like_a_new_window(tmp_p
         "last_background_clear": None, "hook_observations": {}, "controller_pid": None, "controller_birth": None,
         "control_pending": False, "control_operation": None, "message_to": None, "start_error": None,
         "launch_file": None, "provider_name": None, "resume": False, "expected_session_id": None,
-        "handoff_file": None, "leader_request": None}
+        "handoff_file": None, "leader_request": None, "remote_seat": None, "remote_native": None,
+        "upstream": None, "upstream_bin": None}
     assert reused["registered"] is reused["ready"] is reused["stopping"] is False
     assert reused["provider_launch_attempted"] is False
 

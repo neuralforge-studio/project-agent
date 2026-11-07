@@ -102,7 +102,8 @@ def _seat_text(seat: dict) -> str:
         prefix = "대기 "
     else:
         prefix = "  "
-    return f"{prefix}{seat['index']} {seat.get('job_id') or '-'}"
+    host = "@" + seat["host"] if seat.get("host") else ""
+    return f"{prefix}{seat['index']}{host} {seat.get('job_id') or '-'}"
 
 
 class SidebarApp(App):
@@ -325,7 +326,8 @@ class SidebarApp(App):
         projects = []
         for project in self.snapshot_data.get("projects", []):
             seats = tuple((seat.get("index"), seat.get("job_id"), seat.get("status"),
-                           seat.get("session_id"), self._seat_liveness(project, seat))
+                           seat.get("session_id"), seat.get("host"), seat.get("path"),
+                           self._seat_liveness(project, seat))
                           for seat in project.get("seats", []))
             errors = tuple((error.get("source"), error.get("message")) for error in project.get("errors", []))
             projects.append((project["id"], project["id"] in self._expanded_projects,
@@ -392,8 +394,14 @@ class SidebarApp(App):
                 button.disabled = seat.get("job_id") is None or seat.get("session_id") is None
                 button.tooltip = (f"{seat['job_id']}: {seat['title']}" if seat.get("title") else
                                   seat.get("job_id") or f"{seat['index']} -")
+                if seat.get("host"):
+                    button.tooltip += f" · 호스트: {seat['host']} · {seat['path']}"
                 if seat.get("status") == "pending":
                     button.tooltip += " · 시작 대기"
+                if live == "stopped":
+                    button.tooltip += " · 실행 종료"
+                elif live == "unknown":
+                    button.tooltip += " · 실행 확인 불가"
                 children.append(button)
                 self._actions[button_id] = ("seat", project["id"], seat["index"])
             for item in project.get("errors", []):

@@ -1,5 +1,6 @@
 """Project facts and review state from files in a temporary registry."""
 import datetime as dt
+import json
 
 import pytest
 
@@ -109,6 +110,25 @@ def test_feedback_returns_a_seat_to_working_until_a_new_submission(board):
     seat = model.snapshot(board.config, now=NOW)["projects"][0]["seats"][0]
     assert seat["status"] == "review_wait" and seat["cr"]["submitted"] == OTHER
     assert "재제출" in seat["cr"]["result_markdown"] and SUBMIT not in seat["cr"]["result_markdown"]
+
+
+def test_snapshot_keeps_remote_host_and_path_distinct_from_local_paths(board):
+    base = board.project("alpha", seats=2)
+    board.registry[str(base)]["seats"][1] = {
+        "host": "macbook-worker", "path": "/Users/swain/Agent/remote-seat"}
+    board.config.write_text(json.dumps(board.registry), encoding="utf-8")
+    board.state(base, {
+        "leader": leader(),
+        "0": {"job_id": None, "git_hash": None, "session": None},
+        "1": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)},
+    })
+    snapshot = model.snapshot(board.config, now=NOW)
+    assert snapshot["error"] is None
+    local, remote = snapshot["projects"][0]["seats"]
+    assert local["host"] is None and local["path"] == str((base / "../seat0").resolve())
+    assert remote["host"] == "macbook-worker"
+    assert remote["path"] == "/Users/swain/Agent/remote-seat"
+    assert remote["job_id"] == "TOOL-001" and remote["session_id"] == session(0)["session_id"]
 
 
 def test_decisions_include_each_stage_with_markdown_source(board):

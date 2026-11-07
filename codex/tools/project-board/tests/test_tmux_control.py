@@ -20,6 +20,8 @@ import pytest
 
 import board_testing  # noqa: F401  (adds the Board tool to sys.path)
 from project_board import tmux_control
+from board_testing import Board, session
+from agent_session.tmux import Tmux
 
 
 def _tmux(name, *args):
@@ -52,6 +54,49 @@ def _attached(name, session):
     process.terminate()
     os.close(master)
     pytest.fail("tmux client did not attach")
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_remote_seat_switch_uses_its_local_display_window_for_only_clicking_client(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("remote-project", seats=1)
+    board.registry[str(base)]["seats"][0] = {
+        "host": "macbook-worker", "path": "/Users/swain/Agent/remote-seat"}
+    board.config.write_text(json.dumps(board.registry), encoding="utf-8")
+    board.state(base, {"leader": None,
+                       "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)}})
+    name = "board-test-" + uuid.uuid4().hex[:12]
+    clients = []
+    try:
+        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "home", "sleep", "60")
+        control = Tmux(socket_name=name)
+        display = control.create_window("remote-project", "remote-worker", base, {
+            "base": str(base), "target": "seat-0", "run_id": uuid.uuid4().hex,
+            "session_id": session(0)["session_id"], "host": "macbook-worker",
+        })
+        control.set_current("remote-project", "seat-0", display)
+        clients.append(_attached(name, "home"))
+        clients.append(_attached(name, "home"))
+        selected, other = clients[0][2], clients[1][2]
+        socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
+
+        result = tmux_control.switch_seat(str(board.config), "remote-project", 0, selected, socket_path)
+        assert result["ok"] is True
+        assert result["data"]["pane"] == display["pane_id"]
+        rows = dict(row.split("\t", 1) for row in _tmux(
+            name, "list-clients", "-F", "#{client_name}\t#{session_name}\t#{pane_id}").splitlines())
+        assert rows[selected] == f"remote-project\t{display['pane_id']}"
+        assert rows[other].startswith("home\t")
+    finally:
+        for process, master, _client in clients:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+            os.close(master)
+        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None,

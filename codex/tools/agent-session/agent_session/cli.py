@@ -140,6 +140,10 @@ def main(argv=None, manager_factory=None, fleet_factory=None):
         arguments = build_parser().parse_args(argv)
         parsing = False
         operation = arguments.command
+        if os.environ.get("AGENT_SESSION_UPLINK") and manager_factory is None:
+            from .remote_bridge import forward
+            _emit(True, data=forward(arguments))
+            return 0
         if operation == "start" and arguments.prompt_file is not None and arguments.job != "leader":
             raise SessionError("invalid_arguments", "--prompt-file is only valid for --job leader.", 2)
         with redirect_stdout(sys.stderr):

@@ -57,11 +57,16 @@ and Enter for the same action from the keyboard. The list scrolls vertically whe
 projects are present;
 long names and CR IDs can be read in tooltips and by scrolling horizontally. An empty seat
 shows its number followed by `-`.
+An SSH seat shows `number@host` before its CR ID. Its tooltip shows the registered
+host and remote path. An unavailable execution check keeps the seat assigned and shows
+`실행 확인 불가` with the unknown-state color.
 Click a project name to switch the clicking client to that project's tmux session and
 current window. If that session is unavailable, the Board shows an error. Click a CR
 count to open its CR list, `D` to read decisions, or a seat with a Worker session to switch
-the clicking client to its Worker window. A seat with a CR but no Worker session shows
-`대기` and ignores clicks, as does an empty seat. The decision popup uses 90% of that client's
+the clicking client to its Worker window. For an SSH seat, that window contains the SSH
+connection to the remote Worker's tmux screen. The Board uses the same local window switch
+as for a local seat. A seat with a CR but no Worker session shows `대기` and ignores clicks,
+as does an empty seat. The decision popup uses 90% of that client's
 terminal; the CR popup uses 80%. Press `Esc` or the popup's close button to close it.
 In the CR popup, click a CR row or focus it with Tab and press Enter to read its full
 Markdown. Select another row to change CRs. In either popup, `목록` is shown only below

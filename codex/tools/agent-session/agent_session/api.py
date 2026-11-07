@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from .config import resolve_project
+from .config import RemoteSeat, resolve_project
 from .errors import SessionError
 from .state import StateStore, binding_identity
 
@@ -60,8 +60,15 @@ def require_live(project, slot, identity, tmux=None):
     from . import process
 
     own = (tmux or _tmux()).get_current(project.project_id, slot)
-    if (not own or own.get("session_id") != identity or not own.get("ready")
-            or not own.get("cli_pid") or not process.alive(int(own["cli_pid"]), own.get("cli_birth"))):
+    if not own or own.get("session_id") != identity or not own.get("ready"):
+        raise SessionError("caller_not_running", "The sender no longer owns a live managed CLI.")
+    if own.get("remote_seat"):
+        from . import remote
+        _check_owner(project, slot, {"session_id": identity}, own)
+        alive = remote.liveness(own) == "alive"
+    else:
+        alive = bool(own.get("cli_pid") and process.alive(int(own["cli_pid"]), own.get("cli_birth")))
+    if not alive:
         raise SessionError("caller_not_running", "The sender no longer owns a live managed CLI.")
 
 
@@ -90,6 +97,13 @@ def _check_owner(project, slot, session, meta):
         raise SessionError("owner_mismatch", "The tmux window belongs to another project.")
     if meta.get("target") != slot or (session and meta.get("session_id") != session["session_id"]):
         raise SessionError("owner_mismatch", "The native conversation does not match this slot.")
+    if slot.startswith("seat-"):
+        seat = project.seats[int(slot[5:])]
+        expected = {"host": seat.host, "path": str(seat.path), "python": seat.python} if isinstance(seat, RemoteSeat) else None
+        if meta.get("remote_seat") != expected:
+            raise SessionError("owner_mismatch", "The execution host differs from the registered seat.")
+        if expected and session and "endpoint" in session and session["endpoint"] != meta.get("endpoint"):
+            raise SessionError("owner_mismatch", "The remote provider endpoint differs from the published binding.")
 
 
 def _unlaunched_observation(meta, pane):
@@ -136,8 +150,13 @@ def liveness(cwd=None, config_path=None, socket=None):
         try:
             meta = control.get_current(project.project_id, slot)
             if meta and meta.get("session_id") == session["session_id"]:
-                pane = control.pane_info(meta["pane_id"])
-                verdict = "alive" if _cli_alive(meta, pane) and not pane["pane_dead"] else "stopped"
+                if meta.get("remote_seat"):
+                    from . import remote
+                    _check_owner(project, slot, session, meta)
+                    verdict = remote.liveness(meta)
+                else:
+                    pane = control.pane_info(meta["pane_id"])
+                    verdict = "alive" if _cli_alive(meta, pane) and not pane["pane_dead"] else "stopped"
         except SessionError:
             pass
         result[key] = {"session_id": session["session_id"], "state": verdict}
@@ -165,8 +184,6 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
         if pointer.get(field) != meta.get(field):
             raise SessionError("owner_mismatch", "The tmux execution has changed.")
     _check_owner(project, slot, session, meta)
-    info = control.pane_info(meta["pane_id"])
-    cli_alive = _cli_alive(meta, info)
     context = {
         "base": str(project.base), "project_id": project.project_id,
         "provider": project.provider, "target": slot, "seat": seat,
@@ -177,28 +194,44 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
         "window_id": meta["window_id"], "pane_id": meta["pane_id"],
         "endpoint": (session or {}).get("endpoint", meta.get("endpoint")),
     }
-    meta = {**meta, "pane_dead": info["pane_dead"]}
-    if session:
-        provider = get_provider(project.provider)
-        if not info["pane_dead"]:
-            provider.verify_binding(session, context, meta, timeout=15)
-        elif not meta.get("registered"):
-            raise SessionError("execution_unknown", "The dead pane never established its conversation.", 4)
-        observation = provider.observe(session, context, meta, timeout=15)
+    ready = bool(meta.get("ready"))
+    if meta.get("remote_seat") and meta.get("provider_launch_attempted") is not False:
+        from . import remote
+        native = remote.run_call(meta, "check_binding", timeout=15)
+        if (not isinstance(native, dict) or not isinstance(native.get("observation"), dict)
+                or any(type(native.get(key)) is not bool for key in ("alive", "ready", "termination_confirmed"))):
+            raise SessionError("remote_unknown", "The remote binding observation is incomplete.", 4)
+        observation = native["observation"]
+        alive = bool(native["alive"])
+        terminated = bool(native["termination_confirmed"])
+        ready = ready and bool(native["ready"])
+        context.update(remote_seat=meta["remote_seat"], remote_native=meta.get("remote_native"))
     else:
-        observation = _unlaunched_observation(meta, info)
-        cli_alive = False
-    group = meta.get("process_group")
-    group_alive = bool(group and process.group_alive(int(group)))
-    backgrounds = meta.get("background_pids", [])
-    background_alive = any(process.alive(int(item["pid"]), item.get("birth"))
-                           for item in backgrounds)
-    terminated = observation.get("stopped") if session is None else bool(info["pane_dead"] and not cli_alive and not group_alive
-                      and not background_alive and observation.get("known")
-                      and observation.get("terminal")
-                      and not observation.get("active_turn")
-                      and not observation.get("pending")
-                      and not observation.get("background"))
+        info = control.pane_info(meta["pane_id"])
+        cli_alive = _cli_alive(meta, info)
+        meta = {**meta, "pane_dead": info["pane_dead"]}
+        if session:
+            provider = get_provider(project.provider)
+            if not info["pane_dead"]:
+                provider.verify_binding(session, context, meta, timeout=15)
+            elif not meta.get("registered"):
+                raise SessionError("execution_unknown", "The dead pane never established its conversation.", 4)
+            observation = provider.observe(session, context, meta, timeout=15)
+        else:
+            observation = _unlaunched_observation(meta, info)
+            cli_alive = False
+        group = meta.get("process_group")
+        group_alive = bool(group and process.group_alive(int(group)))
+        backgrounds = meta.get("background_pids", [])
+        background_alive = any(process.alive(int(item["pid"]), item.get("birth"))
+                               for item in backgrounds)
+        terminated = observation.get("stopped") if session is None else bool(info["pane_dead"] and not cli_alive and not group_alive
+                          and not background_alive and observation.get("known")
+                          and observation.get("terminal")
+                          and not observation.get("active_turn")
+                          and not observation.get("pending")
+                          and not observation.get("background"))
+        alive = bool(cli_alive and not info["pane_dead"])
     after = store.read()
     after_pointer = control.get_current(project.project_id, slot)
     try:
@@ -208,13 +241,14 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
                            == binding_identity(session, project.provider))
     except SessionError:
         same_assignment = False
-    identity = ("run_id", "window_id", "pane_id", "server_pid", "server_started", "session_id")
+    identity = ("run_id", "window_id", "pane_id", "server_pid", "server_started", "session_id",
+                "remote_seat", "remote_native")
     same_run = after_pointer and all(after_pointer.get(key) == pointer.get(key) for key in identity)
     if not same_assignment or not same_run:
         raise SessionError("target_changed", "The target changed during observation.")
     return {
-        **context, "session": session, "ready": bool(meta.get("ready")),
-        "alive": bool(cli_alive and not info["pane_dead"]),
+        **context, "session": session, "ready": ready,
+        "alive": alive,
         "termination_confirmed": terminated, "metadata": meta,
         "observation": observation,
     }

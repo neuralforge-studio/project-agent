@@ -294,3 +294,33 @@ def test_submodule_failure_stops_the_preparation_as_git_failed(tmp_path, submodu
         git_ops.prepare(context, project, store)
     assert error.value.code == "git_failed"
     assert store.read()["0"]["git_hash"] is not None             # Git baseline stays recorded for the retry
+
+
+def test_remote_preparation_runs_git_in_the_remote_tree_and_keeps_canonical_base(tmp_path, repo, cr_bases, monkeypatch):
+    from pathlib import PurePosixPath
+    from agent_session.config import RemoteSeat
+    from agent_session import remote
+
+    source, local_fixture, _ = repo
+    expected = advance(source)
+    seat = RemoteSeat("macbook-worker", PurePosixPath(str(tmp_path / "remote-seat")))
+    context, store, project = setup_job(tmp_path, seat)
+    calls = []
+    local_git = git_ops.git
+
+    def remote_git(target, operation, payload, timeout=120):
+        assert target == seat
+        calls.append((operation, payload))
+        if operation == "is_git":
+            return True
+        assert operation == "git"
+        return local_git(local_fixture, *payload["args"], timeout=timeout)
+
+    monkeypatch.setattr(remote, "call", remote_git)
+    baseline = git_ops.prepare(context, project, store)
+    assert baseline["base_hash"] == expected
+    assert cr_bases == [baseline]
+    assert store.read()["0"]["git_hash"] == expected
+    assert git(local_fixture, "branch", "--show-current") == "cr/TOOL-001"
+    assert ("git", {"args": ["submodule", "update", "--init", "--recursive"]}) in calls
+    assert not Path(str(seat)).exists()

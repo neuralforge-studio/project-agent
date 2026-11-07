@@ -35,6 +35,12 @@ CR 형식과 in-progress 이동은 같은 저장소의 `codex/tools/project-item
 Tmux 제어 권한은 host 명령 실행 권한입니다.
 V1은 기존에 승인한 비sandbox 실행만 지원합니다.
 
+Codex SSH Worker를 사용할 때는 원격 호스트에도 Python 3.11 이상·Git·tmux·로그인한 Codex CLI를 준비합니다.
+Leader 호스트에서 등록한 SSH alias로 비대화형 접속과 원격 origin 접근이 가능해야 합니다.
+SSH 서버는 Unix socket reverse forwarding을 허용해야 합니다.
+원격 실행에 필요한 Python helper는 start가 전송합니다. 원격 project clone은 seat 준비가 수행합니다.
+등록 형식과 원본·cache 경계는 [SSH Worker 계약](../../../docs/project-team/spec.md#codex-ssh-worker-seat)을 따릅니다.
+
 ## 등록과 실행
 
 등록 원본은 `~/.codex/project.json` 또는 `~/.claude/project.json` 하나입니다.
@@ -81,6 +87,14 @@ Binary를 직접 실행하므로 shell function·alias가 붙이던 인자는 �
 Codex TUI는 공용 daemon에 연결할 때도 `--cd <배정한 실제 cwd>`를 명시합니다.
 Launcher의 cd만으로 remote daemon의 작업 경로를 추측하지 않습니다.
 
+원격 Worker의 작업 파일·셸·검증과 Codex daemon은 등록한 호스트에서 실행됩니다.
+Board는 seat의 호스트를 표시하고 Leader 호스트의 SSH 표시 창으로 전환합니다.
+SSH 표시 창이 끊겨도 원격 실행을 종료로 판정하지 않습니다.
+연결을 복구한 뒤 같은 `start --job <CR-ID>`를 실행하면 같은 배정의 실행을 대조하고 표시 창을 다시 연결합니다.
+관찰할 수 없으면 `remote_unknown`(exit 4)과 기존 배정을 보존합니다.
+원격 Worker가 `send --job leader`를 실행하면 CR snapshot의 Result만 원본에 돌려보냅니다.
+원본 Result와 충돌하면 `remote_result_conflict`로 거절합니다. 원격 파일과 원본을 보존한 뒤 내용을 조정합니다.
+
 ## 프로젝트 API와 검사
 
 프로젝트 consumer는 `~/.local/lib/agent-session`을 import 경로로 사용합니다.
@@ -107,5 +121,6 @@ pytest 프로세스(xdist worker)마다 한 번 만들고, 테스트마다 그 �
 Machine load가 높으면 `AGENT_SESSION_TEST_TIMEOUT`(초, 기본 15)으로 fixture의 명령당 대기 한도를
 늘립니다. `codex/tools/conftest.py`는 `--basetemp`가 없을 때 실행마다 `TMPDIR` 아래 전용 임시
 디렉터리를 쓰고, 통과하면 지웁니다. 실패하면 조사를 위해 남깁니다.
+macOS의 Unix socket 경로 제한에 걸리면 `--basetemp=/tmp/as-test`처럼 짧은 임시 경로를 지정합니다.
 
 이 검사는 실제 provider 연결과 실제 project의 인수 결과를 대신하지 않습니다.

@@ -111,6 +111,49 @@ def test_empty_seat_shows_index_and_dash():
     assert _seat_text({"index": 1, "job_id": None}) == "  1 -"
 
 
+def test_remote_seat_names_its_host_before_the_job():
+    assert _seat_text({"index": 2, "job_id": "TOOL-001", "host": "macbook-worker"}) == (
+        "  2@macbook-worker TOOL-001")
+
+
+def test_remote_seat_keeps_its_host_and_click_target_when_execution_is_unknown(tmp_path):
+    board = _make_sidebar_board(tmp_path)
+    calls = []
+    app = SidebarApp(str(board.config), poll=False,
+                     on_seat=lambda project, seat: calls.append((project, seat)))
+
+    async def check():
+        async with app.run_test(size=(50, 25)) as pilot:
+            snapshot = model.snapshot(board.config)
+            seat = snapshot["projects"][0]["seats"][0]
+            seat.update(host="macbook-worker", path="/Users/swain/Agent/remote-seat")
+            await app.apply_snapshot(snapshot)
+            await pilot.pause()
+            await pilot.click("#project-0-seats")
+            await pilot.pause()
+            await app.apply_liveness({
+                "Falcon2": {"0": {"session_id": seat["session_id"], "state": "unknown"}}
+            })
+            await pilot.pause()
+            button = app.query_one("#project-0-seat-0", Button)
+            assert "0@macbook-worker" in str(button.label)
+            assert "macbook-worker" in str(button.tooltip)
+            assert "/Users/swain/Agent/remote-seat" in str(button.tooltip)
+            assert "실행 확인 불가" in str(button.tooltip)
+            assert button.has_class("seat-unknown")
+            assert not button.disabled
+            await pilot.click("#project-0-seat-0")
+            await pilot.pause()
+            assert calls == [("Falcon2", 0)]
+
+            seat["host"] = "replacement-worker"
+            await app.apply_snapshot(snapshot)
+            await pilot.pause()
+            assert "replacement-worker" in str(app.query_one("#project-0-seat-0", Button).label)
+
+    asyncio.run(check())
+
+
 def test_seat_fold_keeps_each_project_state_through_refresh_and_keyboard(tmp_path):
     board = _make_sidebar_board(tmp_path)
     app = SidebarApp(str(board.config), poll=False)

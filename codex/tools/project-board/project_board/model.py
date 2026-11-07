@@ -18,7 +18,7 @@ for _name in ("agent-session", "project-item"):
         sys.path.insert(0, _path)
 
 from agent_session import api  # noqa: E402
-from agent_session.config import load_registry  # noqa: E402
+from agent_session.config import RemoteSeat, load_registry  # noqa: E402
 from agent_session.errors import SessionError  # noqa: E402
 from project_item.cr import submitted_hash  # noqa: E402  (the CR format owns the submission row)
 from project_item.kinds import CR, DECIDE  # noqa: E402
@@ -161,7 +161,7 @@ def project_view(project, now: dt.datetime) -> dict:
     in_progress = {item["id"]: item for item in (view["crs"] or {}).get("in-progress", [])}
     leader = state["leader"] if state else None
     reviewing = leader.get("reviewing") if leader else None
-    for index in range(len(project.seats)):
+    for index, root in enumerate(project.seats):
         entry = state[str(index)] if state else {"job_id": None, "git_hash": None, "session": None}
         session = entry["session"]
         job = entry["job_id"]
@@ -178,6 +178,8 @@ def project_view(project, now: dt.datetime) -> dict:
             status = "working"
         view["seats"].append({
             "index": index, "job_id": job, "status": status, "session": session is not None,
+            "host": root.host if isinstance(root, RemoteSeat) else None,
+            "path": str(root.path if isinstance(root, RemoteSeat) else root),
             "session_id": session["session_id"] if session else None,
             "elapsed": _elapsed(session.get("connected_at"), now) if session else None,
             "title": cr["title"] if cr else None, "cr": cr,

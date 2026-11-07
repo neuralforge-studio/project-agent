@@ -76,10 +76,12 @@ Skill은 JOB·검증·review·commit message 작성 절차를 안내합니다.
 
 등록 파일은 `~/.codex/project.json` 또는 `~/.claude/project.json`입니다.
 [등록 예제](project-registry.example.json)는 base key와 project·provider·seats·항목 경로·launch를 보여 줍니다.
-Project는 유일한 문자열, provider는 claude 또는 codex, seats는 경로 문자열 배열입니다.
+Project는 유일한 문자열, provider는 claude 또는 codex입니다.
+Seats는 로컬 경로 문자열 배열입니다. Codex project는 아래 SSH seat 객체를 함께 등록할 수 있습니다.
 Project·경로는 비어 있지 않아야 합니다.
 Base key는 절대 경로 또는 ~/로 시작하는 경로입니다.
-Seats의 개수에는 상한이 없으며 같은 실제 base·seat 경로를 중복 등록하지 않습니다.
+Seats의 개수에는 상한이 없으며 같은 실제 로컬 base·seat 경로를 중복 등록하지 않습니다.
+SSH seat의 중복은 등록한 host와 원격 path 쌍으로 검사합니다.
 선택 key `path_cr`·`path_decide`는 project-item skill의 항목 루트입니다.
 두 key의 값은 seats와 같이 절대 경로, `~/` 경로, 또는 base 기준 상대 경로입니다.
 Key가 없으면 그 종류의 항목을 쓰지 않는 project입니다. 도구는 기본 위치를 만들지 않습니다.
@@ -128,6 +130,43 @@ Seat 번호는 배열 순서의 0부터입니다.
 운영은 사용자 기본 tmux server를 사용합니다.
 격리 시험용 `--socket-name NAME`과 `--socket-path PATH`는 상호 배타적입니다.
 이 옵션을 사용한 후속 제어도 같은 socket을 지정합니다.
+
+### Codex SSH Worker seat
+
+기존 로컬 seat 문자열은 그대로 사용합니다. SSH seat는 다음 객체로 등록합니다.
+
+```json
+{
+  "host": "macbook-worker",
+  "path": "/Users/worker/Agent/project.seat0",
+  "python": "/opt/homebrew/bin/python3"
+}
+```
+
+| Key | 계약 |
+| --- | --- |
+| host | 필수 SSH alias 또는 접속 대상. `[A-Za-z0-9][A-Za-z0-9_.@-]*` 형식 |
+| path | 필수 원격 절대 경로. `..`와 제어 문자를 허용하지 않음 |
+| python | 선택 원격 Python 실행 파일. 기본값 `python3`. Python 3.11 이상 필요 |
+
+SSH seat는 Codex Worker에만 사용합니다. Leader와 Claude seat는 로컬에서 실행합니다.
+원격 경로는 Leader 호스트의 프로젝트 선택 후보에 넣지 않습니다.
+서로 다른 호스트의 같은 경로는 서로 다른 seat입니다.
+동일 호스트를 여러 SSH alias로 등록한 경우의 동일성은 사용자 등록이 소유합니다.
+기존처럼 미배정 seat를 배열 순서로 검사하며 별도의 원격 seat 선택 옵션을 두지 않습니다.
+활성 실행의 host·path·python은 바꾸지 않습니다. 실행 근거와 등록이 다르면 제어를 거절합니다.
+
+Leader 호스트는 사용자 SSH 설정으로 비대화형 접속이 가능해야 합니다.
+원격 호스트는 Python 3.11 이상·Git·tmux·로그인한 Codex CLI와 origin 접근 권한이 필요합니다.
+SSH 서버는 Unix socket reverse forwarding을 허용해야 합니다.
+공통 도구는 SSH 인증·승인·호스트 신뢰 설정을 변경하지 않습니다.
+이미 승인한 provider 실행 인자는 기존 `launch`에서 읽습니다.
+SSH 명령은 검증한 host와 인자별 quoting을 사용합니다. 작업 경로·Git 인자는 JSON 표준 입력으로 전달합니다.
+
+원격 seat의 clone·Git 준비·작업 파일·셸·빌드·검증·tmux·provider daemon은 원격 호스트가 소유합니다.
+원격 clone은 base의 origin URL을 사용하며 로컬 `--reference` 경로를 전달하지 않습니다.
+원격 clone이 실패하면 새 디렉토리를 진단용으로 보존합니다. 기존 원격 파일은 지우지 않습니다.
+Git 기준·branch 준비와 반납 판정은 기존 규칙을 적용하며 해당 Git 명령은 원격 호스트에서 실행합니다.
 
 ## 3. state.json
 
@@ -260,6 +299,29 @@ Tmux server를 다시 시작하면 예약 seat의 현재 실행 포인터와 실
 `agent/diagnostics/`에는 예상하지 못한 예외의 traceback을 둡니다.
 이 파일도 배정의 원본이 아닙니다.
 
+SSH Worker의 배정·Base·review·반납과 CR의 원본은 Leader 호스트에만 둡니다.
+Leader 호스트의 관리 window는 SSH 표시 창이며 `remote_seat`와 `remote_native`로 원격 실행을 연결합니다.
+원격 native 근거는 run·JOB·thread·원격 tmux socket과 server·window·pane·process 생성 정보를 대조합니다.
+Leader 호스트의 SSH PID나 동명 로컬 경로로 원격 생존·Git 상태를 대신 판정하지 않습니다.
+
+원격 `~/.cache/agent-session/runtime/<source-hash>/`는 전송한 Python helper cache입니다.
+원격 `~/.cache/agent-session/runs/<run_id>/`는 실행 capsule입니다.
+Capsule의 등록 파일·state·CR snapshot은 native 등록과 관찰을 위한 실행 cache입니다.
+이 cache는 새 배정을 만들거나 원본 CR의 상태·Base·review를 결정하지 않습니다.
+원격 native 등록을 확인한 Leader 호스트의 controller가 현재 run·JOB과 대조한 뒤 원본 state에 session을 게시합니다.
+원격 controller는 SSH 응답과 독립적으로 native binding을 실행 cache에 게시할 수 있습니다.
+시작 dialog에서 대기한 뒤 native 등록이 늦게 끝나면 poll이 같은 run의 cache 게시를 마칩니다.
+이 비동기 cache 게시만으로 Leader 호스트의 배정이나 시작 성공을 확정하지 않습니다.
+같은 run의 SSH 재연결은 원격 실행을 새로 만들지 않습니다.
+
+원격 Worker는 capsule의 CR snapshot에서 Result를 작성하고 기존 `agent-session send --job leader`로 보고합니다.
+SSH 표시 연결의 private reverse Unix socket은 run별 credential과 현재 thread를 대조합니다.
+Leader 호스트의 bridge는 CR 항목 루트 잠금 아래 Result만 원본에 반영합니다.
+원본의 Disposition과 다른 절에서 Leader가 추가한 내용은 보존합니다.
+Worker가 snapshot의 다른 절을 바꾸면 `remote_result_invalid`입니다.
+원본 Result가 마지막 반영값과도 Worker의 새 결과와도 다르면 `remote_result_conflict`(exit 4)이며 덮어쓰지 않습니다.
+Result 반영과 메시지 수락은 별도 결과입니다. 전송 확인 실패를 자동 재전송하지 않습니다.
+
 잠금 파일은 삭제로 해제하지 않고 열린 파일의 OS 잠금을 사용합니다.
 
 | 잠금 | 경로·범위 |
@@ -386,7 +448,7 @@ CR mode·작업 경로는 배정과 Git 변경 전에 검사합니다.
 CR의 Cwd가 seat 밖으로 나가면 배정 전에 거절합니다. Cwd 디렉토리의 존재는 Git 준비 뒤 provider 시작 전에 확인합니다. 대기 pane은 seat root에서 시작합니다.
 시작 실패는 CR 배정과 이미 기록한 Git 기준을 유지합니다.
 
-Seat 생성: base가 Git 저장소이면 `git clone --no-recurse-submodules --reference <base> --dissociate <base origin URL> <seat>`을 실행합니다(생성 시에는 submodule을 받지 않고, start의 Git 준비가 초기화합니다). 아니면 seat_unavailable입니다. 접속 인증은 사용자의 Git·SSH 설정을 그대로 따르며 공통 도구가 설정을 더하지 않습니다.
+로컬 seat 생성: base가 Git 저장소이면 `git clone --no-recurse-submodules --reference <base> --dissociate <base origin URL> <seat>`을 실행합니다(생성 시에는 submodule을 받지 않고, start의 Git 준비가 초기화합니다). 아니면 seat_unavailable입니다. 접속 인증은 사용자의 Git·SSH 설정을 그대로 따르며 공통 도구가 설정을 더하지 않습니다.
 Claude provider는 이렇게 만든 seat의 workspace trust를 기록합니다(5절 Claude 실행·전송·관찰).
 
 공통 workspace 검사:
@@ -398,6 +460,7 @@ Claude provider는 이렇게 만든 seat의 workspace trust를 기록합니다(5
 
 같은 CR이 이미 배정돼 있으면 다른 seat를 배정하지 않습니다.
 현재 실행 중이며 session 등록과 시작 완료를 확인했으면 현재 배정을 성공으로 반환합니다.
+SSH Worker의 표시 연결이 끝났으면 같은 원격 run을 대조한 뒤 표시 창과 보고 연결만 다시 엽니다.
 CLI 프로세스가 존재한다는 이유만으로 시작 성공을 반환하지 않습니다.
 초기 등록이 아직 진행 중이면 남은 timeout 안에서 확인합니다.
 Provider 실행 전 실패한 예약이면 같은 run에서 Git 준비부터 재개합니다.
@@ -780,6 +843,9 @@ Codex는 SIGTERM 종료 동작을 확인하기 전까지 관리 pane에 /exit와
 이 키 입력은 Codex 종료 요청에만 사용하며 JOB 메시지·dialog 승인에 사용하지 않습니다.
 현재 turn을 확인하지 못하면 종료 요청을 반복하지 않고 timeout 오류를 반환합니다.
 실제 종료는 PID·process group·pane·provider 관찰로 확인합니다. Hook만으로 종료 완료를 판정하지 않습니다.
+SSH Worker는 이 근거를 원격 호스트에서 관찰합니다. 로컬 SSH 표시 창의 종료는 Worker 종료 근거가 아닙니다.
+SSH 장애·불완전한 응답은 `remote_unknown`(exit 4)입니다. Liveness는 `unknown`이며 배정·현재 run·session을 보존합니다.
+원격 실행 근거가 바뀌거나 사라졌으면 임의 실행을 채택하거나 반납하지 않습니다.
 실제 종료를 확인한 뒤 결과를 반환합니다.
 Stop·restart가 실제 종료를 확인하기 전에 실패할 수 있습니다. Timeout도 이 실패에 포함합니다.
 이때 공통 코드는 같은 cli_birth의 CLI가 살아 있음을 확인한 경우에만 stopping을 false로 되돌립니다.

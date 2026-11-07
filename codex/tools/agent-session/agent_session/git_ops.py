@@ -3,10 +3,14 @@
 import subprocess
 from pathlib import Path
 
+from .config import RemoteSeat
 from .errors import SessionError
 
 
 def git(root, *args, timeout=120):
+    if isinstance(root, RemoteSeat):
+        from . import remote
+        return remote.call(root, "git", {"args": list(args)}, timeout=timeout)
     try:
         result = subprocess.run(
             ["git", "-c", "submodule.recurse=false", "-C", str(root), *args],
@@ -21,6 +25,9 @@ def git(root, *args, timeout=120):
 
 
 def is_git(root):
+    if isinstance(root, RemoteSeat):
+        from . import remote
+        return remote.call(root, "is_git", {})
     return (Path(root) / ".git").exists()
 
 
@@ -84,8 +91,13 @@ def _resume_branch(root, job, base_hash, published_first):
 def prepare(context, project, store):
     """Prepare the seat's Git state, then align its submodules with the HEAD gitlinks."""
     baseline = _prepare_git(context, project, store)
-    git(Path(context["seat_root"]), "submodule", "update", "--init", "--recursive", timeout=600)
+    git(_root(context, project), "submodule", "update", "--init", "--recursive", timeout=600)
     return baseline
+
+
+def _root(context, project):
+    seat = project.seats[context["seat"]]
+    return seat if isinstance(seat, RemoteSeat) else Path(context["seat_root"])
 
 
 def _prepare_git(context, project, store):
@@ -97,7 +109,7 @@ def _prepare_git(context, project, store):
       cr/<ID> branch from Base; read-only prepares again from the latest main
     """
     from . import jobs
-    root = Path(context["seat_root"])
+    root = _root(context, project)
     job = context["job"]
     seat = str(context["seat"])
     if not is_git(root):

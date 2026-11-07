@@ -9,6 +9,7 @@ import time
 import tomllib
 
 from ..errors import SessionError
+from .. import remote
 from .common import clean_env, context_timeout, deadline, executable, json_result, run, session_id, text_file
 from .websocket import WebSocketRPC
 
@@ -415,6 +416,9 @@ class CodexProvider:
         recorded = meta.get("session_id")
         if recorded and recorded != session_id(session):
             raise SessionError("session_mismatch", "The Codex thread differs from the recorded run.", 3)
+        if meta.get("remote_seat") or context.get("remote_seat"):
+            remote.run_call({**context, **meta}, "check_binding", timeout=timeout)
+            return dict(session)
         with self.rpc_factory(endpoint, timeout) as rpc:
             self._thread(rpc, session, context)
         return {"session_id": session_id(session), "endpoint": endpoint}
@@ -422,6 +426,9 @@ class CodexProvider:
     def send(self, session, text, context, timeout=30):
         limit = deadline(timeout)
         endpoint = self._endpoint(session, context)
+        if context.get("remote_seat"):
+            result = remote.run_call(context, "send", {"message": text}, timeout=timeout)
+            return {**result, "session": dict(session)}
         with self.rpc_factory(endpoint, limit) as rpc:
             thread = self._thread(rpc, session, context)
             if thread["status"]["type"] == "notLoaded":
@@ -488,12 +495,18 @@ class CodexProvider:
                 "runtime_status": thread["status"]["type"]}
 
     def observe(self, session, context, meta=None, timeout=30):
+        if context.get("remote_seat") or (meta or {}).get("remote_seat"):
+            self._endpoint(session, context)
+            return remote.run_call({**context, **(meta or {})}, "observe", timeout=timeout)
         with self.rpc_factory(self._endpoint(session, context), timeout) as rpc:
             return self._observe(rpc, session, context, meta)
 
     def request_stop(self, session, context, meta=None, timeout=30):
         limit = deadline(timeout)
         identity = session_id(session)
+        if context.get("remote_seat") or (meta or {}).get("remote_seat"):
+            self._endpoint(session, context)
+            return remote.run_call({**context, **(meta or {})}, "request_stop", timeout=timeout)
         with self.rpc_factory(self._endpoint(session, context), limit) as rpc:
             observed = self._observe(rpc, session, context, meta)
             for item in observed["pending"]:
@@ -514,5 +527,7 @@ class CodexProvider:
             return self._observe(rpc, session, context, meta)
 
     def request_exit(self, meta, tmux):
+        if meta.get("remote_seat"):
+            return remote.run_call(meta, "request_exit")
         # The idle TUI gets /exit and Enter in its owned pane until its SIGTERM exit is verified.
         tmux.send_exit(meta["pane_id"])

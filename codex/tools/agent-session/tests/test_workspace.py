@@ -106,3 +106,43 @@ def test_failed_new_seat_reports_phase_and_can_retry(tmp_path, project, monkeypa
     assert workspace.ensure_seat(project, seat) is True
     assert git(seat, "rev-parse", "HEAD") == git(origin, "rev-parse", "refs/heads/main")
     assert git(seat, "status", "--porcelain", "--untracked-files=all") == ""
+
+
+def test_ssh_loss_never_allows_remote_seat_release(project, monkeypatch):
+    from pathlib import PurePosixPath
+    from agent_session.config import RemoteSeat
+    from agent_session import remote
+
+    project, _ = project
+    # The same path is a clean published local clone. Its facts cannot release a remote seat.
+    seat = RemoteSeat("macbook-worker", PurePosixPath(str(project.base)))
+    project.seats = (seat,)
+    calls = []
+
+    def disconnected(target, operation, payload, timeout=120):
+        calls.append((target, operation))
+        raise SessionError("remote_unavailable", "SSH transport disconnected.", 4)
+
+    monkeypatch.setattr(remote, "call", disconnected)
+    result = workspace.check_release(project, {"seat": 0, "seat_root": str(seat)}, ("done", "fixed"))
+    assert result["allowed"] is False
+    assert any("remote_unavailable" in reason for reason in result["reasons"])
+    assert calls == [(seat, "git")]
+
+
+def test_remote_clone_uses_the_base_origin_without_a_local_reference(tmp_path, project, monkeypatch):
+    from pathlib import PurePosixPath
+    from agent_session.config import RemoteSeat
+    from agent_session import remote
+
+    project, origin = project
+    seat = RemoteSeat("macbook-worker", PurePosixPath("/Users/worker/seat"))
+    calls = []
+
+    def create_remote(target, operation, payload, timeout=120):
+        calls.append((target, operation, payload, timeout))
+        return True
+
+    monkeypatch.setattr(remote, "call", create_remote)
+    assert workspace.ensure_seat(project, seat) is True
+    assert calls == [(seat, "ensure_seat", {"origin": str(origin)}, 3600)]

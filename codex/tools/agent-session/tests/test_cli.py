@@ -290,7 +290,13 @@ def test_entry_points_work_outside_the_source_tree_without_pythonpath(tmp_path):
 
 
 def test_launcher_missing_wsl_interpreter_returns_structured_error(tmp_path):
-    env = dict(os.environ, HOME=str(tmp_path), WSL_DISTRO_NAME="test-wsl")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    uname = binary / "uname"
+    uname.write_text("#!/bin/sh\nprintf '%s\\n' Linux\n")
+    uname.chmod(0o755)
+    env = dict(os.environ, HOME=str(tmp_path), WSL_DISTRO_NAME="test-wsl",
+               PATH=str(binary) + os.pathsep + os.environ["PATH"])
     result = subprocess.run([str(TOOL / "bin/agent-session"), "--help"],
                             env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 5

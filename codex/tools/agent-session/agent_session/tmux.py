@@ -50,6 +50,7 @@ _RUN_VALUES = {
     "controller_birth": None, "control_pending": False, "control_operation": None,
     "session_id": None, "message_to": None, "start_error": None, "launch_file": None, "provider_name": None,
     "resume": False, "expected_session_id": None, "handoff_file": None, "leader_request": None,
+    "remote_seat": None, "remote_native": None, "upstream": None, "upstream_bin": None,
 }
 _VALUES_MARK = "agent-session-values"
 _SEAT_TARGET = re.compile(r"seat-(0|[1-9][0-9]*)")
@@ -505,7 +506,8 @@ class Tmux:
         current = self.get_current(meta["project_id"], meta["target"])
         if current is None or current.get("run_id") != meta.get("run_id") or current.get("window_id") != window_id:
             raise SessionError("target_changed", "This window is no longer the current execution.")
-        if meta.get("provider_launch_attempted") is not False:
+        if (meta.get("provider_launch_attempted") is not False
+                and not (meta.get("remote_seat") and not meta.get("cli_pid"))):
             raise SessionError("launch_already_attempted", "The provider launch was already attempted or is unknown.")
         pane = self.pane_info(meta["pane_id"])
         if (pane["pane_dead"] or pane["pane_pid"] != meta.get("placeholder_pid")
@@ -513,7 +515,8 @@ class Tmux:
             raise SessionError("target_changed", "The waiting pane process no longer matches this run.")
         cwd = Path(cwd).expanduser().resolve()
         script = Path(script_path).expanduser().resolve()
-        if str(cwd) != meta.get("cwd") or not script.is_file():
+        expected_cwd = meta.get("base") if meta.get("remote_seat") else meta.get("cwd")
+        if str(cwd) != expected_cwd or not script.is_file():
             raise SessionError("tmux_input", "The launch script or working directory does not match this run.", 2)
         self.write_meta(window_id, {"provider_launch_attempted": True})
         self._run("respawn-pane", "-k", "-t", meta["pane_id"], "-c", cwd, "/bin/bash", script)
@@ -526,6 +529,19 @@ class Tmux:
         except ProcessLookupError:
             group = None
         return self.write_meta(window_id, {"cli_pid": pid, "cli_birth": process.birth(pid), "process_group": group})
+
+    def reconnect_remote(self, meta, cwd, script):
+        """Reconnect only a dead SSH display of the exact current remote run."""
+        current = self.get_current(meta["project_id"], meta["target"])
+        if (not current or not current.get("remote_seat") or current["run_id"] != meta["run_id"]
+                or current["pane_id"] != meta["pane_id"] or not self.pane_info(meta["pane_id"])["pane_dead"]):
+            raise SessionError("target_changed", "The remote display changed before reconnecting.")
+        self._run("respawn-pane", "-t", meta["pane_id"], "-c", cwd, "/bin/bash", script)
+        pane = self.pane_info(meta["pane_id"])
+        pid = pane["pane_pid"]
+        return self.write_meta(meta["window_id"], {"run_id": meta["run_id"], "cli_pid": pid,
+                               "cli_birth": process.birth(pid) if pid else None,
+                               "process_group": os.getpgid(pid) if pid else None})
 
     def send_exit(self, pane_id):
         pane = self.pane_info(pane_id)
