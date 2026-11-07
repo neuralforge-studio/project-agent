@@ -81,9 +81,18 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
             board = _tmux(name, "show-options", "-wqv", "-t", window, "@project_board_pane")
             board_width, board_height, board_left, board_top, _ = after[board]
             assert (board_left, board_top, board_height) == (0, 0, next(iter(before.values()))[1])
-            assert board_width > 0
+            assert board_width == 25
             for pane, (width, height, left, top, active) in before.items():
                 assert after[pane] == (width - board_width - 1, height, left + board_width + 1, top, active)
+
+        first_board = _tmux(name, "show-options", "-wqv", "-t", first_window,
+                            "@project_board_pane")
+        _tmux(name, "resize-pane", "-t", first_board, "-x", "33")
+        _tmux(name, "set-option", "-g", "@project_board_width", "33")
+        assert tmux_control.reconcile(socket=socket_path)["ok"] is True
+        second_board = _tmux(name, "show-options", "-wqv", "-t", second_window,
+                             "@project_board_pane")
+        assert _pane_geometry(name, second_window)[second_board][0] == 33
 
         _tmux(name, "switch-client", "-c", clients[0][2], "-t", "two")
         result = tmux_control.reconcile(socket=socket_path)
@@ -154,6 +163,73 @@ def test_sidebar_restores_split_layout_and_focus_after_selecting_board(monkeypat
                 process.kill()
                 process.wait(timeout=2)
             os.close(master)
+        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_sidebar_keeps_resized_width_across_window_changes(monkeypatch):
+    name = "board-test-" + uuid.uuid4().hex[:12]
+    clients = []
+    try:
+        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "one", "sleep", "60")
+        _tmux(name, "new-session", "-d", "-s", "two", "sleep", "60")
+        first = _tmux(name, "display-message", "-p", "-t", "one", "#{window_id}")
+        second = _tmux(name, "display-message", "-p", "-t", "two", "#{window_id}")
+        clients.append(_attached(name, "two"))
+        original = {window: set(_pane_geometry(name, window)) for window in (first, second)}
+        socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
+        monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
+
+        assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+        board = _tmux(name, "show-options", "-wqv", "-t", second, "@project_board_pane")
+        _tmux(name, "resize-pane", "-t", board, "-x", "33")
+        assert _pane_geometry(name, second)[board][0] == 33
+
+        _tmux(name, "switch-client", "-c", clients[0][2], "-t", "one")
+        assert tmux_control.reconcile(socket=socket_path)["ok"] is True
+        board = _tmux(name, "show-options", "-wqv", "-t", first, "@project_board_pane")
+        assert _pane_geometry(name, first)[board][0] == 33
+        assert set(_pane_geometry(name, second)) == original[second]
+
+        _tmux(name, "switch-client", "-c", clients[0][2], "-t", "two")
+        assert tmux_control.reconcile(socket=socket_path)["ok"] is True
+        board = _tmux(name, "show-options", "-wqv", "-t", second, "@project_board_pane")
+        assert _pane_geometry(name, second)[board][0] == 33
+        assert set(_pane_geometry(name, first)) == original[first]
+
+        assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+        assert set(_pane_geometry(name, second)) == original[second]
+    finally:
+        for process, master, _client in clients:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+            os.close(master)
+        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_resize_hook_records_only_board_pane_width():
+    name = "board-test-" + uuid.uuid4().hex[:12]
+    try:
+        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-x", "100", "-y", "30",
+              "sleep", "60")
+        _tmux(name, "source-file", str(Path(__file__).resolve().parents[4] /
+                                       "tmux/scripts/project_board.conf"))
+        board = _tmux(name, "split-window", "-h", "-b", "-l", "25", "-P", "-F", "#{pane_id}",
+                      "sleep", "60")
+        window = _tmux(name, "display-message", "-p", "#{window_id}")
+        other = next(pane for pane in _pane_geometry(name, window) if pane != board)
+        _tmux(name, "set-option", "-p", "-t", board, "@project_board_managed", "1")
+
+        _tmux(name, "resize-pane", "-t", board, "-x", "33")
+        assert _tmux(name, "show-options", "-gqv", "@project_board_width") == "33"
+        _tmux(name, "resize-pane", "-t", other, "-x", "60")
+        assert _tmux(name, "show-options", "-gqv", "@project_board_width") == "33"
+    finally:
         subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
 
 

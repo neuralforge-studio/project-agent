@@ -68,22 +68,29 @@ def test_sidebar_shows_every_project_and_mouse_opens_the_right_project(tmp_path)
     )
 
     async def check():
-        async with app.run_test(size=(50, 25)) as pilot:
+        async with app.run_test(size=(25, 25)) as pilot:
             await app.apply_snapshot(model.snapshot(board.config))
             await pilot.pause()
             assert [str(item.label) for item in app.query(".project-name")] == ["Falcon2", "ProjectB"]
             svg = app.export_screenshot()
             assert _rendered_left_column(svg, "Falcon2") == 0
-            for label in ("O:2", "D:2", "R 0 CPU-012"):
+            for label in ("O:2", "D:2"):
                 assert _rendered_left_column(svg, label) <= 1
-            assert _rendered_left_column(svg, "1 Seat1") <= 3
+            assert app.query_one("#project-0-seats", Button).region.right <= 25
+            assert app.query_one("#project-0-D", Button).region.y < app.query_one("#project-0-O", Button).region.y
+            assert not app.query("#project-0-seat-0")
             assert str(app.query_one("#project-0-O", Button).label) == "O:2"
             assert str(app.query_one("#project-0-T", Button).label) == "T:1"
             assert str(app.query_one("#project-0-I", Button).label) == "I:1"
             assert str(app.query_one("#project-0-D", Button).label) == "D:2"
+            await pilot.click("#project-0-seats")
+            await pilot.pause()
+            assert str(app.query_one("#project-0-seats", Button).label) == "좌석▾"
+            assert not app.query("#project-1-seat-0")
             assert str(app.query_one("#project-0-seat-0", Button).label) == "R 0 CPU-012"
             empty = app.query_one("#project-0-seat-1", Button)
-            assert str(empty.label) == "  1 Seat1" and empty.disabled
+            assert str(empty.label) == "  1 -" and empty.disabled
+            assert empty.tooltip == "1 -"
             await pilot.click("#project-1-name")
             await pilot.click("#project-1-D")
             await pilot.click("#project-0-seat-0")
@@ -95,6 +102,99 @@ def test_sidebar_shows_every_project_and_mouse_opens_the_right_project(tmp_path)
             await pilot.pause()
             assert crs == [("Falcon2", "open")]
             assert [str(item.label) for item in app.query(".project-name")] == ["Falcon2", "ProjectB"]
+
+    asyncio.run(check())
+
+
+def test_seat_fold_keeps_each_project_state_through_refresh_and_keyboard(tmp_path):
+    board = _make_sidebar_board(tmp_path)
+    app = SidebarApp(str(board.config), poll=False)
+
+    async def check():
+        async with app.run_test(size=(25, 18)) as pilot:
+            snapshot = model.snapshot(board.config)
+            await app.apply_snapshot(snapshot)
+            await pilot.pause()
+            assert not app.query(".seat")
+            await pilot.click("#project-0-seats")
+            await pilot.pause()
+            assert len(app.query("#project-0-seat-0")) == 1
+            assert not app.query("#project-1-seat-0")
+            await app.apply_snapshot(model.snapshot(board.config))
+            await app.apply_liveness({
+                "Falcon2": {"0": {"session_id": snapshot["projects"][0]["seats"][0]["session_id"],
+                                   "state": "stopped"}}
+            })
+            await pilot.pause()
+            assert app.query_one("#project-0-seat-0", Button).has_class("seat-stopped")
+            assert not app.query("#project-1-seat-0")
+            app.query_one("#project-0-seats", Button).focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert not app.query("#project-0-seat-0")
+            assert str(app.query_one("#project-0-seats", Button).label) == "좌석▸"
+
+    asyncio.run(check())
+
+
+def test_many_projects_scroll_and_ipc_fold_the_clicked_project(tmp_path):
+    board = Board(tmp_path)
+    for number in range(12):
+        board.project(f"Project{number:02d}", seats=1)
+    app = SidebarApp(str(board.config), poll=False)
+
+    async def check():
+        async with app.run_test(size=(25, 12)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause(0.1)
+            scroll = app.query_one("#projects")
+            assert scroll.max_scroll_y > 0
+            assert len(app.query(".project-name")) == 12
+            target = app.query_one("#project-11-seats", Button)
+            scroll.scroll_to(y=scroll.max_scroll_y, animate=False)
+            await pilot.pause()
+            assert 0 <= target.region.y < 12
+            result = app.dispatch_client_click("client-b", target.region.x + 1, target.region.y)
+            assert result["ok"], (result, target.region, scroll.scroll_y)
+            await pilot.pause()
+            assert len(app.query("#project-11-seat-0")) == 1
+            assert not app.query("#project-10-seat-0")
+            await pilot.click("#project-11-seats")
+            await pilot.pause()
+            assert not app.query("#project-11-seat-0")
+
+    asyncio.run(check())
+
+
+def test_long_project_name_has_tooltip_and_horizontal_scroll(tmp_path):
+    board = Board(tmp_path)
+    project_id = "VeryLongProjectNameThatExceedsTwentyFiveColumns"
+    board.project(project_id, seats=1)
+    short_base = board.project("Short", seats=1)
+    long_job_id = "JOB-VERY-LONG-IDENTIFIER-001"
+    board.cr(short_base, "in-progress", long_job_id)
+    board.state(short_base, {
+        "leader": None,
+        "0": {"job_id": long_job_id, "git_hash": None, "session": session(0)},
+    })
+    app = SidebarApp(str(board.config), poll=False)
+
+    async def check():
+        async with app.run_test(size=(25, 12)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            name = app.query_one("#project-0-name", Button)
+            assert name.tooltip == project_id
+            scroll = app.query_one("#projects")
+            assert scroll.max_scroll_x > 0
+            await pilot.click("#project-1-seats")
+            await pilot.pause()
+            seat = app.query_one("#project-1-seat-0", Button)
+            assert long_job_id in str(seat.tooltip)
+            assert seat.region.width > 25
+            scroll.scroll_to(x=scroll.max_scroll_x, animate=False)
+            await pilot.pause()
+            assert scroll.scroll_x == scroll.max_scroll_x
 
     asyncio.run(check())
 
@@ -173,6 +273,8 @@ def test_empty_cr_and_decision_clicks_do_nothing_for_mouse_and_ipc(tmp_path):
         async with app.run_test(size=(50, 20)) as pilot:
             await app.apply_snapshot(model.snapshot(board.config))
             await pilot.pause()
+            await pilot.click("#project-0-seats")
+            await pilot.pause()
             for selector in ("#project-0-O", "#project-0-T", "#project-0-I", "#project-0-D",
                              "#project-0-seat-0"):
                 button = app.query_one(selector, Button)
@@ -241,6 +343,9 @@ def test_pending_seats_wait_without_clicking_and_running_seat_still_opens(tmp_pa
             assert [seat["status"] for seat in snapshot["projects"][0]["seats"]] == ["pending"] * 3
             assert snapshot["projects"][1]["seats"][0]["status"] == "working"
             await app.apply_snapshot(snapshot)
+            await pilot.pause()
+            await pilot.click("#project-0-seats")
+            await pilot.click("#project-1-seats")
             await pilot.pause()
             for index in range(3):
                 selector = f"#project-0-seat-{index}"
@@ -369,6 +474,9 @@ def test_sidebar_ignores_liveness_for_an_old_session(tmp_path):
     async def check():
         async with app.run_test() as pilot:
             await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            await pilot.click("#project-0-seats")
+            await pilot.pause()
             await app.apply_liveness({
                 "Falcon2": {"0": {"session_id": "old-session", "state": "stopped"}}
             })

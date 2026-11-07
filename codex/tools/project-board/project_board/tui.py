@@ -96,7 +96,7 @@ def _seat_text(seat: dict) -> str:
         prefix = "대기 "
     else:
         prefix = "  "
-    return f"{prefix}{seat['index']} {seat.get('job_id') or 'Seat' + str(seat['index'])}"
+    return f"{prefix}{seat['index']} {seat.get('job_id') or '-'}"
 
 
 class SidebarApp(App):
@@ -106,15 +106,16 @@ class SidebarApp(App):
     Screen { background: #111c28; }
     #projects { height: 1fr; width: 100%; overflow-x: auto; }
     #board-error { height: auto; color: #ffb86c; }
-    .project { width: 100%; height: auto; margin-bottom: 1; }
-    .project-name { height: 1; width: 100%; min-width: 0; border: none; padding: 0;
+    .project { width: auto; min-width: 100%; height: auto; margin-bottom: 1; }
+    .project-name { height: 1; width: auto; min-width: 100%; border: none; padding: 0;
                     text-align: left; content-align: left middle; background: transparent;
                     text-style: bold; color: #e6f0ff; }
-    .counts { height: 1; width: 100%; }
-    .counts Button { width: auto; min-width: 0; height: 1; border: none; padding: 0 1 0 0;
+    .counts { height: 1; width: auto; min-width: 100%; }
+    .counts Button { width: auto; min-width: 0; height: 1; border: none; padding: 0;
                      background: transparent; color: #d6e5f5; }
+    .counts .cr-count { padding-right: 1; }
     .project-name:hover, .counts Button:hover, .decision:hover, .seat:hover { background: #34506d; }
-    .decision, .seat { width: 100%; height: 1; min-width: 0; border: none;
+    .decision, .seat { width: auto; min-width: 100%; height: 1; border: none;
                        padding: 0; text-align: left;
                        content-align: left middle; background: transparent; }
     .decision { color: #ffd479; }
@@ -152,6 +153,7 @@ class SidebarApp(App):
         self.snapshot_data: dict = {"projects": [], "error": None}
         self.live_data: dict = {}
         self._actions: dict[str, tuple] = {}
+        self._expanded_projects: set[str] = set()
         self._signature = None
         self._pool: ThreadPoolExecutor | None = None
         self._tasks: set[asyncio.Task] = set()
@@ -312,7 +314,8 @@ class SidebarApp(App):
                            seat.get("session_id"), self._seat_liveness(project, seat))
                           for seat in project.get("seats", []))
             errors = tuple((error.get("source"), error.get("message")) for error in project.get("errors", []))
-            projects.append((project["id"], tuple(_count(project, state) for state in model.CR_STATES),
+            projects.append((project["id"], project["id"] in self._expanded_projects,
+                             tuple(_count(project, state) for state in model.CR_STATES),
                              _decide_count(project), _decide_stages(project), seats, errors))
         error = self.snapshot_data.get("error")
         return (tuple(projects), error.get("message") if error else None)
@@ -335,7 +338,7 @@ class SidebarApp(App):
             for short, state in (("O", "open"), ("T", "todo"), ("I", "in-progress")):
                 label = _count(project, state)
                 button_id = f"project-{number}-{short}"
-                button = Button(f"{short}:{label}", id=button_id)
+                button = Button(f"{short}:{label}", id=button_id, classes="cr-count")
                 button.disabled = label in ("-", "!", "0")
                 counters.append(button)
                 self._actions[button_id] = ("cr", project, state)
@@ -354,8 +357,14 @@ class SidebarApp(App):
             name.styles.line_pad = 0
             name.tooltip = project["id"]
             self._actions[name_id] = ("project", project["id"])
-            children = [name, Horizontal(*counters, classes="counts"), decision]
-            for seat in project.get("seats", []):
+            fold_id = f"project-{number}-seats"
+            expanded = project["id"] in self._expanded_projects
+            fold = Button("좌석▾" if expanded else "좌석▸", id=fold_id)
+            fold.tooltip = "좌석 접기" if expanded else "좌석 펼치기"
+            counters.append(fold)
+            self._actions[fold_id] = ("seats", project["id"])
+            children = [name, decision, Horizontal(*counters, classes="counts")]
+            for seat in (project.get("seats", []) if expanded else []):
                 button_id = f"project-{number}-seat-{seat['index']}"
                 classes = "seat"
                 if seat.get("job_id") is None:
@@ -368,7 +377,7 @@ class SidebarApp(App):
                 button = Button(_seat_text(seat), id=button_id, classes=classes)
                 button.disabled = seat.get("job_id") is None or seat.get("session_id") is None
                 button.tooltip = (f"{seat['job_id']}: {seat['title']}" if seat.get("title") else
-                                  seat.get("job_id") or f"Seat{seat['index']}")
+                                  seat.get("job_id") or f"{seat['index']} -")
                 if seat.get("status") == "pending":
                     button.tooltip += " · 시작 대기"
                 children.append(button)
@@ -397,7 +406,14 @@ class SidebarApp(App):
 
     def _activate(self, target: tuple, *, client: str | None = None) -> None:
         kind = target[0]
-        if kind == "project" and self.on_project is not None:
+        if kind == "seats":
+            _, project_id = target
+            if project_id in self._expanded_projects:
+                self._expanded_projects.remove(project_id)
+            else:
+                self._expanded_projects.add(project_id)
+            self._queue(self._render_projects())
+        elif kind == "project" and self.on_project is not None:
             _, project_id = target
             self._queue(self._call_external(self.on_project, project_id,
                                             **({"client": client} if client else {})))

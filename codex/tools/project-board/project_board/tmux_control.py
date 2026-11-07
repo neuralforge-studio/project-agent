@@ -25,11 +25,12 @@ from agent_session.tmux import Tmux
 
 ENABLED = "@project_board_enabled"
 CONFIG = "@project_board_config"
+WIDTH = "@project_board_width"
 WINDOW_PANE = "@project_board_pane"
 WINDOW_RESTORE = "@project_board_restore"
 PANE_MARK = "@project_board_managed"
 PANE_SOCKET = "@project_board_click_socket"
-SIDEBAR_WIDTH = "30%"
+SIDEBAR_WIDTH = 25
 CLICK_TIMEOUT = 2
 LAUNCHER = Path(__file__).resolve().parents[1] / "bin" / "project-board"
 
@@ -185,11 +186,11 @@ def _sidebar_command(config: str | None) -> list[str]:
     return command
 
 
-def _create(control: Tmux, window: str, config: str | None) -> str:
+def _create(control: Tmux, window: str, config: str | None, width: int) -> str:
     click_path = _private_dir(control) / (uuid.uuid4().hex[:16] + ".sock")
     layout = control.command("display-message", "-p", "-t", window, "#{window_layout}")
     focus = control.command("display-message", "-p", "-t", window, "#{pane_id}")
-    command = ["split-window", "-d", "-f", "-h", "-b", "-l", SIDEBAR_WIDTH,
+    command = ["split-window", "-d", "-f", "-h", "-b", "-l", str(width),
                "-P", "-F", "#{pane_id}", "-t", window,
                "-e", f"PROJECT_BOARD_CLICK_SOCKET={click_path}", *_sidebar_command(config)]
     pane = control.command(*command).strip()
@@ -226,18 +227,48 @@ def _reconcile(control: Tmux) -> dict:
     visible = set(_lines(control, "list-clients", "-F", "#{window_id}")) if enabled else set()
     windows = dict.fromkeys(_lines(control, "list-windows", "-a", "-F", "#{window_id}"))
     created, removed, failures = [], [], []
+    to_remove, to_create, to_keep = [], [], []
     for window in windows:
         try:
             panes = _panes(control, window)
             board = _board_pane(control, window, panes)
             show = enabled and window in visible and not _managed_pane_dead(control, window, panes)
             if board and (not show or panes[board]):
-                _remove(control, window, board)
-                removed.append(window)
+                to_remove.append((window, board))
                 board = None
             if show and board is None and panes:
-                _create(control, window, config)
-                created.append(window)
+                to_create.append(window)
+            elif show and board:
+                to_keep.append((window, board))
+        except (SessionError, OSError, ValueError) as error:
+            failures.append({"window": window, "reason": str(error)})
+
+    saved_width = _options(control, "-g", WIDTH)
+    saved_width_valid = saved_width.isdecimal() and int(saved_width) > 0
+    width = int(saved_width) if saved_width_valid else SIDEBAR_WIDTH
+    board_count = len(to_remove) + len(to_keep)
+    for window, board in to_remove:
+        try:
+            pane_width = int(control.command("display-message", "-p", "-t", board, "#{pane_width}"))
+            _remove(control, window, board)
+            removed.append(window)
+            if not saved_width_valid or board_count == 1:
+                width = pane_width
+                saved_width_valid = True
+                control.command("set-option", "-g", WIDTH, str(width))
+        except (SessionError, OSError, ValueError) as error:
+            failures.append({"window": window, "reason": str(error)})
+    for window, board in to_keep:
+        try:
+            pane_width = int(control.command("display-message", "-p", "-t", board, "#{pane_width}"))
+            if pane_width != width:
+                control.command("resize-pane", "-t", board, "-x", str(width))
+        except (SessionError, OSError, ValueError) as error:
+            failures.append({"window": window, "reason": str(error)})
+    for window in to_create:
+        try:
+            _create(control, window, config, width)
+            created.append(window)
         except (SessionError, OSError, ValueError) as error:
             failures.append({"window": window, "reason": str(error)})
     return {"enabled": enabled, "visible_windows": sorted(visible),

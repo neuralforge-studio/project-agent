@@ -46,8 +46,14 @@ unmanaged agent session cannot submit an approval.
 
 In tmux, prefix `B` or click `Board` in the status line to toggle the sidebar for every
 attached client. The same window shares one Board pane. Each visible window gives the Board
-the left 30% of its width and shows existing panes in the remaining space. Turning the Board
-off restores the previous pane layout and focus.
+25 columns by default and shows existing panes in the remaining space. A width adjusted in
+tmux is used when the Board pane moves to another window or is created again. Turning the
+Board off restores the previous pane layout and focus.
+Each project shows its decision count above the CR counts. Seats start folded. Click
+`좌석▸` to expand one project's seats, or `좌석▾` to fold them. Use Tab and Enter for the
+same action from the keyboard. The list scrolls vertically when many projects are present;
+long names and CR IDs can be read in tooltips and by scrolling horizontally. An empty seat
+shows its number followed by `-`.
 Click a project name to switch the clicking client to that project's tmux session and
 current window. If that session is unavailable, the Board shows an error. Click a CR
 count to read its list, `D` to read decisions, or a seat with a Worker session to switch
