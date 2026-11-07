@@ -50,8 +50,9 @@ the left 30% of its width and shows existing panes in the remaining space. Turni
 off restores the previous pane layout and focus.
 Click a project name to switch the clicking client to that project's tmux session and
 current window. If that session is unavailable, the Board shows an error. Click a CR
-count to read its list, `D` to read decisions, or an assigned seat to switch the clicking
-client to its Worker window. The decision popup uses 90% of that client's
+count to read its list, `D` to read decisions, or a seat with a Worker session to switch
+the clicking client to its Worker window. A seat with a CR but no Worker session shows
+`대기` and ignores clicks, as does an empty seat. The decision popup uses 90% of that client's
 terminal; the CR popup uses 80%. Press `Esc` or the popup's close button to close it.
 `D` is red when one or more decisions are open. `D:0`, unconfigured `D:-`, and read-error
 `D:!` keep the yellow color. CR and decision counts of `0`, `-`, or `!` ignore clicks without

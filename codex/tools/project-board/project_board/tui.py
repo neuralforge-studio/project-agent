@@ -84,7 +84,12 @@ def _decide_count(project: dict) -> str:
 
 
 def _seat_text(seat: dict) -> str:
-    prefix = "R " if seat.get("status") == "reviewing" else "  "
+    if seat.get("status") == "reviewing":
+        prefix = "R "
+    elif seat.get("status") == "pending":
+        prefix = "대기 "
+    else:
+        prefix = "  "
     return f"{prefix}{seat['index']} {seat.get('job_id') or 'Seat' + str(seat['index'])}"
 
 
@@ -110,6 +115,7 @@ class SidebarApp(App):
     .decision-open { color: #ff8f8f; }
     .seat { color: #c7dbf1; }
     .seat-empty { color: #778596; }
+    .seat-pending { color: #ffcb84; }
     .seat-stopped { color: #ff8f8f; }
     .seat-unknown { color: #ffcb84; }
     .project-error { height: auto; color: #ff8f8f; }
@@ -235,7 +241,7 @@ class SidebarApp(App):
                     "error": {"code": "not_clickable", "message": "이 항목은 클릭할 수 없습니다."}}
         target = self._actions.get(widget.id or "")
         if widget.disabled:
-            if target is not None and target[0] in ("cr", "decision"):
+            if target is not None and target[0] in ("cr", "decision", "seat"):
                 return {"ok": True, "data": {"widget": widget.id}, "error": None}
             return {"ok": False, "data": None,
                     "error": {"code": "not_clickable", "message": "이 항목은 클릭할 수 없습니다."}}
@@ -345,13 +351,17 @@ class SidebarApp(App):
                 classes = "seat"
                 if seat.get("job_id") is None:
                     classes += " seat-empty"
+                elif seat.get("status") == "pending":
+                    classes += " seat-pending"
                 live = self._seat_liveness(project, seat)
                 if live in ("stopped", "unknown"):
                     classes += f" seat-{live}"
                 button = Button(_seat_text(seat), id=button_id, classes=classes)
-                button.disabled = seat.get("job_id") is None
+                button.disabled = seat.get("job_id") is None or seat.get("session_id") is None
                 button.tooltip = (f"{seat['job_id']}: {seat['title']}" if seat.get("title") else
                                   seat.get("job_id") or f"Seat{seat['index']}")
+                if seat.get("status") == "pending":
+                    button.tooltip += " · 시작 대기"
                 children.append(button)
                 self._actions[button_id] = ("seat", project["id"], seat["index"])
             for item in project.get("errors", []):

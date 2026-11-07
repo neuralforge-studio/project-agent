@@ -51,7 +51,7 @@ D:1
 - 모든 등록 project를 하나의 목록에 순서대로 표시합니다. Project를 바꾸는 탭이나 필터를 두지 않습니다. 화면 높이가 부족하면 목록 전체를 세로로 스크롤합니다.
 - `O/T/I`는 CR의 `open/todo/in-progress` 개수입니다. `D`는 열린 결정 항목 개수입니다. 두 종류를 합산하지 않습니다.
 - 열린 결정 항목이 하나 이상이면 `D`를 빨간색으로 표시합니다. `D:0`, 미설정 `D:-`, 읽기 오류 `D:!`는 기존 노란색으로 표시합니다.
-- Seat 번호는 등록 순서의 0부터 시작합니다. 빈 seat는 `SeatN`을 회색으로 표시합니다. 배정된 seat는 같은 행에 CR ID를 표시합니다.
+- Seat 번호는 등록 순서의 0부터 시작합니다. 빈 seat는 `SeatN`을 회색으로 표시합니다. 배정된 seat는 같은 행에 CR ID를 표시합니다. Worker session이 없는 배정은 `대기`를 붙여 시작 대기를 표시합니다.
 - `R`은 Leader의 `reviewing` 값이 그 seat의 CR ID와 같을 때만 붙입니다. Review 행을 별도로 만들거나 CR ID를 중복 표시하지 않습니다.
 - 제출 후 검토 대기(`review_wait`)는 `R`이 아닙니다. 필요하면 행의 색과 도움말로 구분합니다.
 - `path_cr` 또는 `path_decide`가 없는 project는 해당 개수를 `-`로 표시합니다. 읽기 오류도 `0`으로 바꾸지 않습니다.
@@ -65,8 +65,8 @@ D:1
 | Project 이름 | 클릭한 client를 해당 project tmux session의 현재 window로 이동. 대상 session이 없으면 오류 표시 |
 | 각 project의 `O/T/I` | 클릭한 client에 해당 CR 목록과 제목을 읽는 popup 열기 |
 | 각 project의 `D` | 클릭한 client에 그 project의 결정 popup 열기 |
-| 배정된 seat의 CR ID | 클릭한 client를 해당 Worker의 tmux window로 이동. 대상 window가 없으면 오류 표시 |
-| 빈 seat | 이동하지 않음 |
+| Worker session이 있는 seat의 CR ID | 클릭한 client를 해당 Worker의 tmux window로 이동. 대상 window가 없으면 오류 표시 |
+| 빈 seat 또는 시작 대기 seat | 이동하지 않음. Popup이나 오류 알림을 열지 않음 |
 | Sidebar의 휠 | 모든 project가 들어 있는 목록 스크롤 |
 
 위 클릭은 CR과 결정 항목의 상태를 바꾸지 않습니다. 키보드에서도 같은 화면을 열 수 있게 합니다.

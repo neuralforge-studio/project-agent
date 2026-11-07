@@ -144,7 +144,7 @@ def test_ipc_click_routes_the_originating_client(tmp_path):
 
 def test_empty_cr_and_decision_clicks_do_nothing_for_mouse_and_ipc(tmp_path):
     board = Board(tmp_path)
-    base = board.project("Falcon2", seats=0)
+    base = board.project("Falcon2", seats=1)
     calls = []
     notifications = []
     socket = f"/tmp/project-board-ui-{os.getpid()}-{uuid.uuid4().hex[:8]}.sock"
@@ -152,6 +152,7 @@ def test_empty_cr_and_decision_clicks_do_nothing_for_mouse_and_ipc(tmp_path):
         str(board.config), poll=False, click_socket=socket,
         on_cr=lambda project, state, client=None: calls.append((project, state, client)),
         on_decision=lambda project, item, client=None: calls.append((project, item, client)),
+        on_seat=lambda project, seat, client=None: calls.append((project, seat, client)),
     )
     app.notify = lambda message, **kwargs: notifications.append((message, kwargs))
 
@@ -170,7 +171,8 @@ def test_empty_cr_and_decision_clicks_do_nothing_for_mouse_and_ipc(tmp_path):
         async with app.run_test(size=(50, 20)) as pilot:
             await app.apply_snapshot(model.snapshot(board.config))
             await pilot.pause()
-            for selector in ("#project-0-O", "#project-0-T", "#project-0-I", "#project-0-D"):
+            for selector in ("#project-0-O", "#project-0-T", "#project-0-I", "#project-0-D",
+                             "#project-0-seat-0"):
                 button = app.query_one(selector, Button)
                 assert button.disabled
                 await pilot.click(selector)
@@ -191,6 +193,70 @@ def test_empty_cr_and_decision_clicks_do_nothing_for_mouse_and_ipc(tmp_path):
             ]
             assert notifications == []
             assert app.dispatch_client_click("client-a", 1000, 1000)["error"]["code"] == "no_widget"
+
+    asyncio.run(check())
+
+
+def test_pending_seats_wait_without_clicking_and_running_seat_still_opens(tmp_path):
+    board = Board(tmp_path)
+    haroo = board.project("haroo", seats=3)
+    agent = board.project("agent", seats=1)
+    for index in range(3):
+        board.cr(haroo, "in-progress", f"HAR-{index + 1:03d}")
+    board.state(haroo, {
+        "leader": None,
+        **{str(index): {"job_id": f"HAR-{index + 1:03d}", "git_hash": None,
+                        "session": None} for index in range(3)},
+    })
+    board.cr(agent, "in-progress", "AG-001")
+    board.state(agent, {
+        "leader": None,
+        "0": {"job_id": "AG-001", "git_hash": None, "session": session(0)},
+    })
+    calls = []
+    notifications = []
+    socket = f"/tmp/project-board-ui-{os.getpid()}-{uuid.uuid4().hex[:8]}.sock"
+    app = SidebarApp(
+        str(board.config), poll=False, click_socket=socket,
+        on_seat=lambda project, seat, client=None: calls.append((project, seat, client)),
+    )
+    app.notify = lambda message, **kwargs: notifications.append((message, kwargs))
+
+    async def send_click(button):
+        reader, writer = await asyncio.open_unix_connection(socket)
+        writer.write((json.dumps({
+            "client": "client-a", "x": button.region.x + 1, "y": button.region.y,
+        }) + "\n").encode())
+        await writer.drain()
+        result = json.loads(await reader.readline())
+        writer.close()
+        await writer.wait_closed()
+        return result
+
+    async def check():
+        async with app.run_test(size=(50, 25)) as pilot:
+            snapshot = model.snapshot(board.config)
+            assert [seat["status"] for seat in snapshot["projects"][0]["seats"]] == ["pending"] * 3
+            assert snapshot["projects"][1]["seats"][0]["status"] == "working"
+            await app.apply_snapshot(snapshot)
+            await pilot.pause()
+            for index in range(3):
+                selector = f"#project-0-seat-{index}"
+                button = app.query_one(selector, Button)
+                assert str(button.label) == f"대기 {index} HAR-{index + 1:03d}"
+                assert button.disabled
+                await pilot.click(selector)
+                result = await send_click(button)
+                assert result["ok"] and result["error"] is None
+            assert calls == [] and notifications == []
+
+            running = app.query_one("#project-1-seat-0", Button)
+            assert str(running.label) == "  0 AG-001" and not running.disabled
+            await pilot.click("#project-1-seat-0")
+            result = await send_click(running)
+            await pilot.pause()
+            assert result["ok"] and calls == [("agent", 0, None), ("agent", 0, "client-a")]
+            assert notifications == []
 
     asyncio.run(check())
 
