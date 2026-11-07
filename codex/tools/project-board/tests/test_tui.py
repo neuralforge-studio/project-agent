@@ -158,8 +158,10 @@ def test_seat_fold_survives_sidebar_recreation_and_syncs_other_pane(tmp_path):
         return set(expanded)
 
     def app():
-        return SidebarApp(str(board.config), poll=False,
-                          expanded_reader=read_expanded, expanded_toggler=toggle_expanded)
+        sidebar = SidebarApp(str(board.config), poll=False)
+        sidebar.expanded_reader = read_expanded
+        sidebar.expanded_toggler = toggle_expanded
+        return sidebar
 
     async def check():
         first = app()
