@@ -149,6 +149,16 @@ def test_confirmed_decision_tracks_related_cr_state(board, cr_state, expected):
     assert item["display_state"] == expected
 
 
+def test_withdrawn_decision_is_complete_on_board_while_related_cr_is_todo(board):
+    base = board.project("alpha")
+    path = board.decide(base, "done", "D-20261105-01", related="TOOL-001")
+    path.write_text(path.read_text(encoding="utf-8").replace("Outcome: decided A", "Outcome: withdrawn"),
+                    encoding="utf-8")
+    board.cr(base, "todo", "TOOL-001")
+    (item,) = model.snapshot(board.config, now=NOW)["projects"][0]["decide"]
+    assert item["display_state"] == "완료"
+
+
 def test_decision_shows_project_sections_in_file_order_including_evidence(board):
     base = board.project("alpha")
     path = board.decide(base, "open", "D-20261106-01", "초안 승인")

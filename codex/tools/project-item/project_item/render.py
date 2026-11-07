@@ -147,6 +147,8 @@ def decision_stage(item: dict, states: Mapping[str, str]) -> str:
         return "결정 대기"
     if item["state"] == "answered":
         return "답변 접수"
+    if item["headers"].get("Outcome", "").split()[:1] == ["withdrawn"]:
+        return "완료"
     related = RELATED_CR_RE.findall(item["headers"].get("Related", ""))
     return ("반영 중" if any(states.get(item_id) not in ("done", "deferred") for item_id in related)
             else "완료")

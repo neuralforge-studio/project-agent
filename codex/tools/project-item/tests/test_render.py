@@ -47,6 +47,18 @@ def test_decision_stages_follow_related_cr_without_copying_its_state():
                                       Related="D-20261107-01"), {}) == "완료"
 
 
+def test_withdrawn_decision_is_complete_while_related_cr_waits():
+    withdrawn = item("D-20261107-06", "normal", state="done", Outcome="withdrawn", Related="TOOL-001")
+    merged = item("D-20261107-07", "normal", state="done", Outcome="merged D-20261107-08",
+                  Related="TOOL-001")
+    states = {"TOOL-001": "todo"}
+    assert render.decision_stage(withdrawn, states) == "완료"
+    assert render.decision_stage(merged, states) == "반영 중"
+    html = render.page("demo", [withdrawn], states=states)
+    assert "반영 중 0건 · 완료 1건" in html
+    assert "<dt>결론</dt><dd>withdrawn</dd>" in html
+
+
 def test_markdown_subset():
     out = render.markdown("p1\np2\n\n- a\n  - b\n- c\n\n1. x\n\n```\n<raw>\n```\n\n| h |\n| --- |\n| v |")
     assert "<p>p1 p2</p>" in out
