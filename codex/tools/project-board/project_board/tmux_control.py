@@ -257,11 +257,17 @@ def _reconcile(control: Tmux) -> dict:
     board_count = len(to_remove) + len(to_keep)
     for window, board in to_remove:
         try:
-            can_fit = board_count == 1 and _can_fit_width(control, window, width)
             pane_width = int(control.command("display-message", "-p", "-t", board, "#{pane_width}"))
+            capture_width = False
+            if board_count == 1 and pane_width != width and _can_fit_width(control, window, width):
+                control.command("resize-pane", "-t", board, "-x", str(width))
+                fitted_width = int(control.command("display-message", "-p", "-t", board,
+                                                   "#{pane_width}"))
+                capture_width = fitted_width == width
+                control.command("set-option", "-g", WIDTH, str(width))
             _remove(control, window, board)
             removed.append(window)
-            if can_fit:
+            if capture_width:
                 width = pane_width
                 control.command("set-option", "-g", WIDTH, str(width))
         except (SessionError, OSError, ValueError) as error:
@@ -279,6 +285,8 @@ def _reconcile(control: Tmux) -> dict:
             created.append(window)
         except (SessionError, OSError, ValueError) as error:
             failures.append({"window": window, "reason": str(error)})
+    if to_remove or to_keep or to_create:
+        control.command("set-option", "-g", WIDTH, str(width))
     return {"enabled": enabled, "visible_windows": sorted(visible),
             "created": created, "removed": removed, "failures": failures}
 

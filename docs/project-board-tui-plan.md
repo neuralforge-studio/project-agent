@@ -107,7 +107,7 @@ TUI는 Textual 8.2.8의 [Markdown](https://textual.textualize.io/widgets/markdow
 
 사용자가 선택한 표시 범위는 **모든 tmux client 공통**입니다. Sidebar 내용은 항상 모든 등록 project입니다. 사용자가 어느 client에서 켜거나 끄든 같은 tmux server의 client에 적용합니다. 각 client가 session과 window를 바꿔도 같은 전체 목록을 볼 수 있어야 합니다. tmux pane은 window에 속하므로, client가 현재 보는 window를 추적하는 controller가 필요합니다.
 
-tmux `next-3.9`의 전체 높이 일반 pane을 사용합니다. Controller는 전역 `@project_board_enabled` 옵션을 관리합니다. Sidebar가 켜지면 현재 client가 보는 window마다 왼쪽 25 column을 Board pane에 할당합니다. 사용자가 Board pane의 폭을 조정하면 다음 window에서 Board pane을 만들 때 실제 폭을 적용합니다. 좁은 window에서 pane 폭이 제한되어도 저장한 폭은 유지하고 넓은 window로 돌아오면 다시 적용합니다. 폭은 tmux pane과 서버 option에 유지합니다. 기존 pane은 오른쪽의 남은 공간에 표시합니다. 같은 window를 보는 client는 Board pane을 공유합니다. 마지막 client가 다른 window로 이동하면 Board pane을 정리합니다. Controller는 Board를 만들기 전의 pane 배치와 선택 pane을 저장합니다. Board를 끄거나 window에서 제거하면 기존 pane의 배치, 크기, 선택 상태를 복원합니다.
+tmux `next-3.9`의 전체 높이 일반 pane을 사용합니다. Controller는 전역 `@project_board_enabled` 옵션을 관리합니다. Sidebar가 켜지면 현재 client가 보는 window마다 왼쪽 25 column을 Board pane에 할당합니다. 사용자가 Board pane의 폭을 조정하면 다음 window에서 Board pane을 만들 때 실제 폭을 적용합니다. 창 크기나 다른 pane의 최소 폭 때문에 Board pane 폭이 제한되어도 저장한 폭은 유지합니다. 충분한 공간이 있는 window로 돌아오면 저장한 폭을 다시 적용합니다. 폭은 tmux pane과 서버 option에 유지합니다. 기존 pane은 오른쪽의 남은 공간에 표시합니다. 같은 window를 보는 client는 Board pane을 공유합니다. 마지막 client가 다른 window로 이동하면 Board pane을 정리합니다. Controller는 Board를 만들기 전의 pane 배치와 선택 pane을 저장합니다. Board를 끄거나 window에서 제거하면 기존 pane의 배치, 크기, 선택 상태를 복원합니다.
 
 tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합니다. Controller는 보이는 window와 Board pane을 동기화합니다. 관리된 `agent-session` pane이 종료되면 Board pane도 먼저 제거해 종료 window의 정리를 방해하지 않습니다. 이 구조에는 별도의 서버나 상주 감시 프로세스가 없습니다.
 
