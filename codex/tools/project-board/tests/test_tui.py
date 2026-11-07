@@ -11,7 +11,7 @@ import pytest
 
 from board_testing import Board, leader, session
 from project_board import model
-from project_board.tui import CRPopupApp, CSVScreen, PopupApp, SidebarApp
+from project_board.tui import CRPopupApp, CSVScreen, PopupApp, SidebarApp, _seat_text
 from textual.widgets import Button, DataTable, Markdown, Static, TextArea
 
 
@@ -76,8 +76,8 @@ def test_sidebar_shows_every_project_and_mouse_opens_the_right_project(tmp_path)
             assert _rendered_left_column(svg, "Falcon2") == 0
             for label in ("O:2", "D:2"):
                 assert _rendered_left_column(svg, label) <= 1
-            assert app.query_one("#project-0-seats", Button).region.right <= 25
             assert app.query_one("#project-0-D", Button).region.y < app.query_one("#project-0-O", Button).region.y
+            assert app.query_one("#project-0-seats", Button).region.right <= 25
             assert not app.query("#project-0-seat-0")
             assert str(app.query_one("#project-0-O", Button).label) == "O:2"
             assert str(app.query_one("#project-0-T", Button).label) == "T:1"
@@ -104,6 +104,10 @@ def test_sidebar_shows_every_project_and_mouse_opens_the_right_project(tmp_path)
             assert [str(item.label) for item in app.query(".project-name")] == ["Falcon2", "ProjectB"]
 
     asyncio.run(check())
+
+
+def test_empty_seat_shows_index_and_dash():
+    assert _seat_text({"index": 1, "job_id": None}) == "  1 -"
 
 
 def test_seat_fold_keeps_each_project_state_through_refresh_and_keyboard(tmp_path):
@@ -150,6 +154,7 @@ def test_many_projects_scroll_and_ipc_fold_the_clicked_project(tmp_path):
             scroll = app.query_one("#projects")
             assert scroll.max_scroll_y > 0
             assert len(app.query(".project-name")) == 12
+            assert len(app.query("#project-11-seats")) == 1
             target = app.query_one("#project-11-seats", Button)
             scroll.scroll_to(y=scroll.max_scroll_y, animate=False)
             await pilot.pause()
