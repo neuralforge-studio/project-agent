@@ -6,18 +6,71 @@ from pathlib import Path
 from .errors import SessionError
 
 
-def git(root, *args, timeout=120):
+GIT_TIMEOUT = 600      # merge, checkout, status and fetch alike: seats are large NFS work trees
+TERM_GRACE = 10        # seconds a timed-out Git gets to release its locks after SIGTERM
+
+
+def _argv(root, *args):
+    return ["git", "-c", "submodule.recurse=false", "-C", str(root), *args]
+
+
+def _interrupt(proc):
+    """Stop a timed-out Git. SIGTERM lets it remove its own lock files; SIGKILL only if it stays."""
+    proc.terminate()
     try:
-        result = subprocess.run(
-            ["git", "-c", "submodule.recurse=false", "-C", str(root), *args],
-            capture_output=True, text=True, timeout=timeout,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        proc.wait(TERM_GRACE)
+        return "SIGTERM"
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        return "SIGKILL"
+
+
+def index_lock(root):
+    """Path of the seat's index.lock when it exists, else None."""
+    try:
+        found = subprocess.run(_argv(root, "rev-parse", "--git-path", "index.lock"),
+                               capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if found.returncode or not found.stdout.strip():
+        return None
+    path = Path(root) / found.stdout.strip()
+    return path if path.exists() else None
+
+
+def lock_reason(root):
+    """Why a seat is unusable when an interrupted Git command left index.lock, else None."""
+    path = index_lock(root)
+    if path is None:
+        return None
+    return (f"seat has {path} left by an interrupted Git command; "
+            "clear it by the operator procedure for interrupted Git steps (spec section 7)")
+
+
+def git(root, *args, timeout=GIT_TIMEOUT):
+    try:
+        proc = subprocess.Popen(_argv(root, *args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except OSError as exc:
         raise SessionError("git_failed", str(exc), 5) from exc
-    if result.returncode:
-        raise SessionError("git_failed", result.stderr.strip() or result.stdout.strip(), 3,
-                           {"operation": list(args), "returncode": result.returncode})
-    return result.stdout.strip()
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        interrupted = _interrupt(proc)
+        proc.stdout.close()
+        proc.stderr.close()
+        lock = index_lock(root)
+        message = (f"git {' '.join(args)} timed out after {timeout} s and was stopped with {interrupted}; "
+                   "its work tree may be half applied")
+        if lock:
+            message += f"; {lock} was left behind"
+        raise SessionError("git_failed", message, 5,
+                           {"operation": list(args), "timeout_seconds": timeout, "interrupted": interrupted,
+                            "index_lock": str(lock) if lock else None, "index_lock_left": lock is not None}) from exc
+    if proc.returncode:
+        raise SessionError("git_failed", err.strip() or out.strip(), 3,
+                           {"operation": list(args), "returncode": proc.returncode})
+    return out.strip()
 
 
 def is_git(root):
@@ -62,7 +115,7 @@ def _resume_branch(root, job, base_hash, published_first):
     remote = None
     if published_first:
         try:
-            git(root, "fetch", "--quiet", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", timeout=600)
+            git(root, "fetch", "--quiet", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
             remote = git(root, "rev-parse", "--verify", f"refs/remotes/origin/{branch}")
         except SessionError:
             remote = None
@@ -75,7 +128,7 @@ def _resume_branch(root, job, base_hash, published_first):
     else:
         if dirty(root):
             raise SessionError("baseline_mismatch", "Cannot create the CR branch over local changes.")
-        git(root, "fetch", "--quiet", "origin", timeout=600)
+        git(root, "fetch", "--quiet", "origin")
         git(root, "cat-file", "-e", f"{base_hash}^{{commit}}")
         git(root, "switch", "--no-overwrite-ignore", "-c", branch, base_hash)
     git(root, "merge-base", "--is-ancestor", base_hash, "HEAD")
@@ -84,7 +137,7 @@ def _resume_branch(root, job, base_hash, published_first):
 def prepare(context, project, store):
     """Prepare the seat's Git state, then align its submodules with the HEAD gitlinks."""
     baseline = _prepare_git(context, project, store)
-    git(Path(context["seat_root"]), "submodule", "update", "--init", "--recursive", timeout=600)
+    git(Path(context["seat_root"]), "submodule", "update", "--init", "--recursive")
     return baseline
 
 
@@ -102,6 +155,9 @@ def _prepare_git(context, project, store):
     seat = str(context["seat"])
     if not is_git(root):
         raise SessionError("seat_unavailable", "A Worker seat must be a Git work tree.", 2)
+    locked = lock_reason(root)
+    if locked:
+        raise SessionError("workspace_dirty", locked, 3, {"index_lock": str(index_lock(root))})
     state_hash = store.read()[seat]["git_hash"]
     base = job.get("base")
     if base is None and state_hash:

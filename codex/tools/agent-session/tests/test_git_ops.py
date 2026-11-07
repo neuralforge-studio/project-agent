@@ -294,3 +294,77 @@ def test_submodule_failure_stops_the_preparation_as_git_failed(tmp_path, submodu
         git_ops.prepare(context, project, store)
     assert error.value.code == "git_failed"
     assert store.read()["0"]["git_hash"] is not None             # Git baseline stays recorded for the retry
+
+
+def hold_index_lock_hook(seat, tmp_path):
+    """A pre-commit hook that keeps `git commit <path>` holding .git/index.lock; returns the files it writes."""
+    seen, pid = tmp_path / "lock-seen", tmp_path / "hook.pid"
+    hook = seat / ".git/hooks/pre-commit"
+    hook.write_text(f'#!/bin/sh\n[ -e "$GIT_DIR/index.lock" ] || [ -e .git/index.lock ] && echo held > {seen}\n'
+                    f"echo $$ > {pid}\nexec sleep 30\n")
+    hook.chmod(0o755)
+    return seen, pid
+
+
+def test_timed_out_git_releases_its_lock_and_reports_the_interruption(tmp_path, repo):
+    import os
+    import signal
+    _, seat, _ = repo
+    seen, pid = hold_index_lock_hook(seat, tmp_path)
+    (seat / "data.txt").write_text("edited\n")
+    try:
+        with pytest.raises(SessionError) as error:
+            git_ops.git(seat, "commit", "-m", "slow", "data.txt", timeout=2)
+    finally:
+        if pid.exists():
+            try:
+                os.kill(int(pid.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    assert seen.exists(), "the hook must have run while Git held index.lock"
+    assert not (seat / ".git/index.lock").exists()
+    assert git_ops.index_lock(seat) is None
+    err = error.value
+    assert (err.code, err.exit_code) == ("git_failed", 5)
+    assert err.details == {"operation": ["commit", "-m", "slow", "data.txt"], "timeout_seconds": 2,
+                           "interrupted": "SIGTERM", "index_lock": None, "index_lock_left": False}
+    assert "timed out after 2 s" in err.message and "SIGTERM" in err.message
+
+
+def test_git_that_ignores_sigterm_is_killed_and_a_left_lock_is_reported(tmp_path, repo, monkeypatch):
+    import shutil
+    _, seat, _ = repo
+    real = shutil.which("git")
+    fake = tmp_path / "bin/git"
+    fake.parent.mkdir()
+    fake.write_text(f'#!/bin/sh\ncase "$*" in *rev-parse*) exec {real} "$@";; esac\ntrap "" TERM\nsleep 3\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake.parent}:/usr/bin:/bin")
+    monkeypatch.setattr(git_ops, "TERM_GRACE", 0.5)
+    (seat / ".git/index.lock").write_text("")
+    with pytest.raises(SessionError) as error:
+        git_ops.git(seat, "status", timeout=1)
+    details = error.value.details
+    assert details["interrupted"] == "SIGKILL"
+    assert details["index_lock_left"] is True and details["index_lock"] == str(seat / ".git/index.lock")
+    assert f"{seat / '.git/index.lock'} was left behind" in error.value.message
+
+
+def test_left_index_lock_is_named_by_the_checks_and_the_preparation(tmp_path, repo, cr_bases):
+    from agent_session import workspace
+    source, seat, _ = repo
+    lock = seat / ".git/index.lock"
+    lock.write_text("")
+    project = SimpleNamespace(base=source)
+    reasons = workspace.check_seat(project, seat, {"branch": None})["reasons"]
+    assert any("index.lock left by an interrupted Git command" in reason for reason in reasons)
+    released = workspace.check_release(project, {"seat": 0, "seat_root": str(seat)}, ("done", "fixed"))
+    assert released["allowed"] is False
+    assert any("index.lock left by an interrupted Git command" in reason for reason in released["reasons"])
+    context, store, prep_project = setup_job(tmp_path, seat)
+    with pytest.raises(SessionError) as error:
+        git_ops.prepare(context, prep_project, store)
+    assert error.value.code == "workspace_dirty"
+    assert str(lock) in error.value.message and "interrupted Git command" in error.value.message
+    assert lock.exists()                                  # the tool never clears it
+    assert cr_bases == []

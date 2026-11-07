@@ -434,6 +434,11 @@ CR의 `- Base: <commit> <ISO 시각>` header가 준비 이력입니다. 이 head
 - 새 기준으로 다시 시작하려면 Leader가 CR의 Base를 지우고 Disposition에 이유를 적습니다.
 
 공통 Git 명령은 `-c submodule.recurse=false`로 하위 저장소를 자동 갱신하지 않습니다.
+Git 준비와 seat 검사(배정·반납)의 Git 명령은 모두 timeout 600초를 씁니다. Seat 생성 clone만 3600초입니다.
+Timeout이 나면 git에 먼저 SIGTERM을 보내 최대 10초 기다립니다. git은 SIGTERM을 받으면 자기 `index.lock`을 지웁니다. 그래도 살아 있을 때만 SIGKILL을 보냅니다.
+중단한 명령의 작업 tree는 반쯤 바뀐 채 남을 수 있습니다. 도구는 lock이나 변경을 지우지 않습니다.
+Timeout은 `git_failed`(exit 5)로 보고하며 message에 중단 사실과 반쯤 적용됐을 수 있다는 점을 적습니다. details는 `operation`, `timeout_seconds`, `interrupted`(`SIGTERM` 또는 `SIGKILL`), `index_lock`(경로 또는 null), `index_lock_left`입니다. 경로는 `git rev-parse --git-path index.lock`으로 확인합니다.
+Seat에 `index.lock`이 있으면 배정 검사·반납 검사의 reason에 "seat has <경로> left by an interrupted Git command"를 더하고, Git 준비는 같은 문장으로 `workspace_dirty`를 반환합니다. 운영자 정리는 7절 "중단된 Git 단계의 정리"를 따릅니다.
 Start의 Git 준비(첫 준비·재시도·재배정·read-only)는 마지막에 한 번 `git submodule update --init --recursive`(timeout 600초)를 실행해 seat의 모든 submodule을 초기화하고 현재 HEAD의 gitlink에 맞춥니다. 실패하면 git_failed로 start가 멈추고 기록한 Git 기준과 배정은 유지합니다. 반납 검사는 바꾸지 않으며, Worker가 건드리지 않은 submodule은 깨끗하므로 반납됩니다. Submodule의 원격 접속·인증·protocol 허용은 사용자 Git 설정을 따릅니다.
 Main 갱신은 `switch --no-overwrite-ignore main`, `fetch origin main`,
 `merge --ff-only --no-overwrite-ignore origin/main` 순서입니다.
@@ -964,6 +969,18 @@ Codex의 종료 확인 오류 뒤 입력란에 원래 /exit가 남으면 전체 
 운영자는 같은 run·pane·idle과 원래 입력을 확인한 뒤 Enter 한 번으로 그 요청만 마칩니다.
 그 뒤 기존 제어 결과와 실제 종료를 확인합니다.
 입력이나 실제 실행을 확인하지 못하면 추가 키를 보내지 않습니다.
+
+### 중단된 Git 단계의 정리
+
+Git 명령이 timeout이나 외부 종료로 끊기면 seat에 `index.lock`과 반쯤 적용된 작업 tree가 남을 수 있습니다(4절 "Git 준비").
+도구는 이를 지우지 않고 보고합니다. 운영자가 다음 순서로 정리합니다.
+
+1. 그 seat를 쓰는 git process가 없음을 확인하십시오(`ps`로 해당 seat 경로의 git과 그 hook·하위 process).
+2. Reason이나 `git_failed` details의 `index_lock` 경로를 확인하고 그 파일을 지우십시오.
+3. Start의 Git 단계는 깨끗한 tree에서 시작합니다. `git status`의 변경이 중단된 단계(예: origin/main으로의 fast-forward)의 것뿐인지 확인한 뒤 되돌리십시오. 작업 내용이 섞여 있으면 먼저 보존하십시오.
+4. 같은 `start --job <CR>`를 다시 실행하십시오.
+
+Process가 남았거나 변경의 출처를 확인하지 못하면 lock과 tree를 그대로 두십시오.
 
 ### 자기 종료·자기 재시작
 

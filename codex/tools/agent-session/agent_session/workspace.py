@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from .errors import SessionError
-from .git_ops import git, is_git
+from .git_ops import git, is_git, lock_reason
 
 
 def _origin(root):
@@ -30,6 +30,14 @@ def _contained_in_origin(root, commit="HEAD"):
     return bool(git(root, "for-each-ref", "--contains", commit, "--format=%(refname)", "refs/remotes/origin/"))
 
 
+def _status_reasons(root, reasons):
+    locked = lock_reason(root)
+    if locked:
+        reasons.append(locked)
+    if git(root, "status", "--porcelain", "--untracked-files=all"):
+        reasons.append("seat has uncommitted or untracked files")
+
+
 def check_seat(project, root, job):
     """A seat may take the JOB when it is a clean clone of the same origin, its HEAD is
     published, and a local CR branch (if any) equals the published one."""
@@ -40,8 +48,7 @@ def check_seat(project, root, job):
             return {"allowed": False, "reasons": ["seat is not a Git work tree"]}
         if _origin(root) != _origin(project.base):
             reasons.append("seat origin differs from the base")
-        if git(root, "status", "--porcelain", "--untracked-files=all"):
-            reasons.append("seat has uncommitted or untracked files")
+        _status_reasons(root, reasons)
         if not _contained_in_origin(root):
             reasons.append("seat HEAD has commits that are not on origin")
         branch = job.get("branch")
@@ -69,10 +76,9 @@ def check_release(project, meta, cr_state):
     if state == "in-progress":
         reasons.append("the CR is still in-progress; move it to done, todo, open or deferred first")
     try:
-        if git(root, "status", "--porcelain", "--untracked-files=all"):
-            reasons.append("seat has uncommitted or untracked files")
+        _status_reasons(root, reasons)
         if state == "done" and outcome == "fixed":
-            git(root, "fetch", "--quiet", "origin", "main", timeout=600)
+            git(root, "fetch", "--quiet", "origin", "main")
             try:
                 git(root, "merge-base", "--is-ancestor", "HEAD", "refs/remotes/origin/main")
             except SessionError:
