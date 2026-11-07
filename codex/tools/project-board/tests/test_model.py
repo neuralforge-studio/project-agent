@@ -1,4 +1,4 @@
-"""Snapshot rules of docs/project-board-plan.md sections 3, 4.3 and 7.1 on files in a temporary registry."""
+"""Project facts and review state from files in a temporary registry."""
 import datetime as dt
 
 import pytest
@@ -92,7 +92,7 @@ def test_snapshot_derives_each_seat_state_and_the_leader_position(board):
                                "reviewing": "TOOL-003", "reviewing_seat": 2}
     seat1 = alpha["seats"][1]["cr"]
     assert seat1["branch"] == "cr/TOOL-002" and seat1["base"] == BASE_HASH and seat1["submitted"] == SUBMIT
-    assert "<strong>contract</strong>" in seat1["contract_html"]
+    assert "**contract**" in seat1["contract_markdown"]
     crs = alpha["crs"]
     assert [i["id"] for i in crs["open"]] == ["TOOL-010"] and [i["id"] for i in crs["todo"]] == ["TOOL-011"]
     assert [i["id"] for i in crs["in-progress"]] == ["TOOL-001", "TOOL-002", "TOOL-003", "TOOL-004"]
@@ -108,29 +108,31 @@ def test_feedback_returns_a_seat_to_working_until_a_new_submission(board):
     path.write_text(path.read_text(encoding="utf-8") + f"\n### 재제출\n\n- 제출 commit: `{OTHER}`\n", encoding="utf-8")
     seat = model.snapshot(board.config, now=NOW)["projects"][0]["seats"][0]
     assert seat["status"] == "review_wait" and seat["cr"]["submitted"] == OTHER
-    assert "재제출" in seat["cr"]["result_html"] and SUBMIT not in seat["cr"]["result_html"]
+    assert "재제출" in seat["cr"]["result_markdown"] and SUBMIT not in seat["cr"]["result_markdown"]
 
 
-def test_decisions_are_read_from_open_only_and_rendered_escaped(board):
+def test_decisions_are_read_from_open_only_with_markdown_source(board):
     base = board.project("alpha")
-    board.decide(base, "open", "D-20261105-01", "질문 하나")
+    path = board.decide(base, "open", "D-20261105-01", "질문 하나")
     board.decide(base, "done", "D-20261104-01", "끝난 질문")
     (alpha,) = model.snapshot(board.config, now=NOW)["projects"]
     (item,) = alpha["decide"]
     assert (item["id"], item["title"], item["urgency"], item["blocks"]) == ("D-20261105-01", "질문 하나", "high", "TOOL-002")
-    assert [s["name"] for s in item["sections"]] == ["Background", "Options", "Recommendation"]
-    assert "&lt;b&gt;" in item["sections"][0]["html"] and "<table>" in item["sections"][1]["html"]
+    assert item["path"] == str(path.resolve())
+    assert [s["name"] for s in item["sections"]] == ["Background", "Options", "Recommendation", "Evidence"]
+    assert "<b>" in item["sections"][0]["body"] and "| 선택지 | 내용 |" in item["sections"][1]["body"]
+    assert "`b.py:2`" in item["sections"][3]["body"]
     assert model.open_decision(model.find_project(board.config, "alpha"), "D-20261104-01") is None
 
 
-def test_decision_shows_project_sections_in_file_order_without_evidence(board):
+def test_decision_shows_project_sections_in_file_order_including_evidence(board):
     base = board.project("alpha")
     path = board.decide(base, "open", "D-20261106-01", "초안 승인")
     path.write_text(path.read_text(encoding="utf-8") + "\n## Draft\n\n게시 <i>초안</i> 전문.\n\n## Empty\n\n## Disposition\n\n- 판정.\n"
                     "\n## Result\n\n- 결과.\n", encoding="utf-8")
     (item,) = model.snapshot(board.config, now=NOW)["projects"][0]["decide"]
-    assert [s["name"] for s in item["sections"]] == ["Background", "Options", "Recommendation", "Draft"]
-    assert "&lt;i&gt;" in item["sections"][3]["html"] or "<em>" in item["sections"][3]["html"]
+    assert [s["name"] for s in item["sections"]] == ["Background", "Options", "Recommendation", "Evidence", "Draft"]
+    assert "<i>초안</i>" in item["sections"][4]["body"]
 
 
 # ------------------------------------------------------------ plan 3 and 6.1 sources

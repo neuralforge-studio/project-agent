@@ -36,6 +36,16 @@ def ident(session):
     return {key: session[key] for key in ("session_id", "endpoint")}
 
 
+def test_launch_records_the_managed_pane_pid(session_env):
+    env = session_env
+    started = env.manager().start("leader")
+    meta = env.tmux.get_current("fixture", "leader")
+    pane = env.tmux.pane_info(meta["pane_id"])
+    assert meta["cli_pid"] == pane["pane_pid"]
+    assert env.store.read()["leader"]["session_id"] == started["session"]["session_id"]
+    assert env.manager().control("stop", job="leader")["released"] is True
+
+
 def windows(env):
     if not env.tmux.has_session("fixture"):
         return []

@@ -1,8 +1,8 @@
-"""Board snapshot: what the page shows, read fresh from the source files on every request.
+"""Board snapshot: read current project facts from their source files.
 
-The plan (docs/project-board-plan.md) owns the rules: sources in section 3, screen states in
-section 4.3, the review-wait rule in section 7.1. The registry, state.json and run liveness
-come from agent_session; CR and decision files are read with project_item. Nothing is cached.
+The TUI plan (docs/project-board-tui-plan.md) owns the display contract. The registry,
+state.json and run liveness come from agent_session; CR and decision files are read with
+project_item. Nothing is cached.
 """
 from __future__ import annotations
 
@@ -22,12 +22,12 @@ from agent_session.config import load_registry  # noqa: E402
 from agent_session.errors import SessionError  # noqa: E402
 from project_item.cr import submitted_hash  # noqa: E402  (the CR format owns the submission row)
 from project_item.kinds import CR, DECIDE  # noqa: E402
-from project_item.render import markdown, sections  # noqa: E402
+from project_item.render import sections  # noqa: E402
 from project_item.store import item_files  # noqa: E402
 
-CR_STATES = ("open", "todo", "in-progress")           # done and deferred are not shown (plan 2)
+CR_STATES = ("open", "todo", "in-progress")           # done and deferred are not shown
 HASH_TOKEN = re.compile(r"\b[0-9a-f]{7,40}\b")
-DECIDE_HIDDEN = ("Evidence", "Disposition", "Result")   # the Board shows the question body; the rest is for the decide page
+DECIDE_HIDDEN = ("Disposition", "Result")
 
 
 def _error(error: Exception) -> dict:
@@ -84,8 +84,8 @@ def cr_items(root: Path) -> dict:
                     "branch": f"cr/{item['id']}" if mode == "write" else None,
                     "submitted": submitted_hash(result) if mode == "write" else None,
                     "review_wait": review_wait(state, parsed.headers, parts),
-                    "result_html": markdown(_last_entry(result)) if result.strip() else "",
-                    "contract_html": markdown(parts.get("Contract", "")),
+                    "result_markdown": _last_entry(result) if result.strip() else "",
+                    "contract_markdown": parts.get("Contract", ""),
                 })
             rows.append(item)
         out[state] = rows
@@ -97,10 +97,10 @@ def decide_items(root: Path) -> list[dict]:
     for path in item_files(DECIDE, root, "open"):
         parsed = DECIDE.fmt.parse(path, "open")
         items.append({
-            "id": parsed.item_id or path.stem, "title": parsed.title or path.stem,
+            "id": parsed.item_id or path.stem, "title": parsed.title or path.stem, "path": str(path.resolve()),
             "urgency": parsed.headers.get("Urgency", "normal"), "blocks": parsed.headers.get("Blocks"),
             "related": parsed.headers.get("Related"), "opened": parsed.headers.get("Opened"),
-            "sections": [{"name": name, "html": markdown(body)} for name, body in sections(path)
+            "sections": [{"name": name, "body": body} for name, body in sections(path)
                          if body and name not in DECIDE_HIDDEN],
         })
     return items

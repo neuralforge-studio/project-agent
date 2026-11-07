@@ -364,7 +364,7 @@ class Manager(SuspendMixin):
         code = ("import sys;sys.path.insert(0,sys.argv[1]);from agent_session.internal import mark_process;"
                 "mark_process(sys.argv[2],sys.argv[3],sys.argv[4],int(sys.argv[5]))")
         marker = shlex.join([context["python"], "-c", code, context["library_path"], context["run_id"],
-                             context["config_path"], context["socket_path"]]) + ' "$BASHPID"'
+                             context["config_path"], context["socket_path"]]) + ' "$$"'
         clean = [key for key in os.environ if key.startswith("CLAUDE_CODE_MESSAGING_") or key.startswith("AGENT_SESSION_")]
         clean += ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"] + launch.get("unset_env", [])
         lines = ["#!/bin/bash", "set -e",

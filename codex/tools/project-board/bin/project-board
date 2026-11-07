@@ -1,5 +1,5 @@
 #!/bin/bash
-# Entry point of project-board: a local page of every registered project team.
+# Entry point of project-board: a tmux TUI of every registered project team.
 # Source: agent repo codex/tools/project-board. Install: ln -s <this file> ~/.local/bin/project-board
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 IH=/primehome/tools/Inhouse

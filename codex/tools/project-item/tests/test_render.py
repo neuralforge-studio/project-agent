@@ -49,3 +49,16 @@ def test_markdown_blockquote():
     assert "<p>끝</p>" in inner
     assert "&gt;" not in out.replace("&lt;b&gt;", "")
     assert out.startswith("<p>앞</p>") and out.endswith("<p>뒤</p>")
+
+
+def test_sections_keep_fenced_markdown_headings_in_their_body(tmp_path):
+    path = tmp_path / "D-20261107-01.md"
+    path.write_text("# D-20261107-01: 질문\n\n"
+                    "## Background\n실제 배경.\n\n"
+                    "~~~md\n## Disposition\n예시입니다.\n~~~\n\n"
+                    "````md\n## Recommendation\n```\n## Result\n````\n\n"
+                    "## Options\n실제 선택지.\n", encoding="utf-8")
+    parts = render.sections(path)
+    assert [name for name, _ in parts] == ["Background", "Options"]
+    assert "## Disposition" in parts[0][1] and "## Result" in parts[0][1]
+    assert parts[1][1] == "실제 선택지."

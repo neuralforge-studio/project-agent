@@ -10,6 +10,7 @@ import os
 import re
 from pathlib import Path
 
+from .cr import section_heads
 from .kinds import DECIDE
 from . import store
 from .store import item_files
@@ -108,16 +109,13 @@ def markdown(text: str) -> str:
 
 # ---------------------------------------------------------------- items
 def sections(path: Path) -> list[tuple[str, str]]:
-    out: list[tuple[str, list[str]]] = []
-    in_fence = False
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("```"):
-            in_fence = not in_fence
-        if not in_fence and line.startswith("## "):
-            out.append((line[3:].strip(), []))
-        elif out:
-            out[-1][1].append(line)
-    return [(name, "\n".join(body).strip()) for name, body in out]
+    lines = path.read_text(encoding="utf-8").splitlines()
+    heads = section_heads(lines)
+    out = []
+    for index, (start, name) in enumerate(heads):
+        end = heads[index + 1][0] if index + 1 < len(heads) else len(lines)
+        out.append((name, "\n".join(lines[start + 1:end]).strip()))
+    return out
 
 
 def load(root: Path) -> list[dict]:

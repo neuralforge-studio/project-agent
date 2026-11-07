@@ -1,5 +1,7 @@
 # Project Board 계획
 
+> 이전 HTML server의 계획입니다. 현재 Board의 TUI 계약은 [Project Board TUI 계획](project-board-tui-plan.md)이 소유합니다.
+
 등록된 모든 project의 팀 상황을 한 화면에 보여 주는 local HTML server입니다.
 화면 시안은 [project-board-mockup.html](project-board-mockup.html)입니다. 시안의 값은 예시 데이터입니다.
 
