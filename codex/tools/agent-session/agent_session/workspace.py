@@ -1,5 +1,6 @@
 """Seat creation and the common workspace and release checks (no project code)."""
 
+import shutil
 from pathlib import Path
 
 from .errors import SessionError
@@ -20,8 +21,32 @@ def ensure_seat(project, root):
         raise SessionError("seat_unavailable", "Only a Git base can create a missing seat.", 2,
                            {"seat": str(root)})
     root.parent.mkdir(parents=True, exist_ok=True)
-    git(project.base, "clone", "--no-recurse-submodules", "--reference", str(project.base), "--dissociate",
-        _origin(project.base), str(root), timeout=3600)
+    # Claim only a new path, so failure cleanup cannot remove an existing seat.
+    try:
+        root.mkdir()
+    except FileExistsError:
+        return False
+    phase = "clone"
+    try:
+        git(project.base, "clone", "--no-recurse-submodules", "--no-checkout", "--reference",
+            str(project.base), "--dissociate", _origin(project.base), str(root), timeout=3600)
+        phase = "checkout"
+        git(root, "restore", "--source=HEAD", "--staged", "--worktree", ":/")
+        phase = "verify"
+        status = git(root, "status", "--porcelain", "--untracked-files=all")
+        if status:
+            raise SessionError("seat_dirty", "The new seat checkout is not clean.", 3,
+                               {"status": status})
+    except SessionError as error:
+        details = {"seat": str(root), "phase": phase, "cause": error.as_dict()}
+        try:
+            shutil.rmtree(root)
+        except OSError as cleanup_error:
+            details["cleanup_error"] = str(cleanup_error)
+            raise SessionError("seat_clone_failed", f"New seat {phase} failed: {error.message}; "
+                               f"cleanup failed: {cleanup_error}", 5, details) from error
+        raise SessionError("seat_clone_failed", f"New seat {phase} failed: {error.message}",
+                           error.exit_code, details) from error
     return True
 
 
