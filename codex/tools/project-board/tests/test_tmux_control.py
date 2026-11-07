@@ -212,6 +212,51 @@ def test_sidebar_keeps_resized_width_across_window_changes(monkeypatch):
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_sidebar_keeps_requested_width_after_a_narrow_window(monkeypatch):
+    name = "board-test-" + uuid.uuid4().hex[:12]
+    clients = []
+    try:
+        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-x", "80", "-y", "24",
+              "-s", "wide", "sleep", "60")
+        _tmux(name, "set-option", "-g", "window-size", "manual")
+        _tmux(name, "new-session", "-d", "-x", "20", "-y", "24", "-s", "narrow",
+              "sleep", "60")
+        wide = _tmux(name, "display-message", "-p", "-t", "wide", "#{window_id}")
+        narrow = _tmux(name, "display-message", "-p", "-t", "narrow", "#{window_id}")
+        clients.append(_attached(name, "wide"))
+        assert _tmux(name, "display-message", "-p", "-t", wide, "#{window_width}") == "80"
+        assert _tmux(name, "display-message", "-p", "-t", narrow, "#{window_width}") == "20"
+        socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
+        monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
+
+        assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+        board = _tmux(name, "show-options", "-wqv", "-t", wide, "@project_board_pane")
+        _tmux(name, "resize-pane", "-t", board, "-x", "33")
+        assert _pane_geometry(name, wide)[board][0] == 33
+
+        _tmux(name, "switch-client", "-c", clients[0][2], "-t", "narrow")
+        assert tmux_control.reconcile(socket=socket_path)["ok"] is True
+        board = _tmux(name, "show-options", "-wqv", "-t", narrow, "@project_board_pane")
+        assert _pane_geometry(name, narrow)[board][0] < 33
+
+        _tmux(name, "switch-client", "-c", clients[0][2], "-t", "wide")
+        assert tmux_control.reconcile(socket=socket_path)["ok"] is True
+        board = _tmux(name, "show-options", "-wqv", "-t", wide, "@project_board_pane")
+        assert _pane_geometry(name, wide)[board][0] == 33
+        assert _tmux(name, "show-options", "-gqv", "@project_board_width") == "33"
+    finally:
+        for process, master, _client in clients:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+            os.close(master)
+        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_resize_hook_records_only_board_pane_width():
     name = "board-test-" + uuid.uuid4().hex[:12]
     try:

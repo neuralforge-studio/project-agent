@@ -48,7 +48,8 @@ In tmux, prefix `B` or click `Board` in the status line to toggle the sidebar fo
 attached client. The same window shares one Board pane. Each visible window gives the Board
 25 columns by default and shows existing panes in the remaining space. A width adjusted in
 tmux is used when the Board pane moves to another window or is created again. Turning the
-Board off restores the previous pane layout and focus.
+Board off restores the previous pane layout and focus. A narrow window may show a smaller
+Board pane; returning to a wide window restores the chosen width.
 Each project shows its decision count above the CR counts. Seats start folded. Click
 `좌석▸` to expand one project's seats, or `좌석▾` to fold them. Use Tab and Enter for the
 same action from the keyboard. The list scrolls vertically when many projects are present;

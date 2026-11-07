@@ -221,6 +221,12 @@ def _create(control: Tmux, window: str, config: str | None, width: int) -> str:
     return pane
 
 
+def _can_fit_width(control: Tmux, window: str, width: int) -> bool:
+    window_width = int(control.command("display-message", "-p", "-t", window,
+                                       "#{window_width}"))
+    return window_width > width + 1
+
+
 def _reconcile(control: Tmux) -> dict:
     enabled = _options(control, "-g", ENABLED) == "1"
     config = _options(control, "-g", CONFIG) or None
@@ -246,22 +252,24 @@ def _reconcile(control: Tmux) -> dict:
     saved_width = _options(control, "-g", WIDTH)
     saved_width_valid = saved_width.isdecimal() and int(saved_width) > 0
     width = int(saved_width) if saved_width_valid else SIDEBAR_WIDTH
+    if not saved_width_valid and (to_remove or to_create or to_keep):
+        control.command("set-option", "-g", WIDTH, str(width))
     board_count = len(to_remove) + len(to_keep)
     for window, board in to_remove:
         try:
+            can_fit = board_count == 1 and _can_fit_width(control, window, width)
             pane_width = int(control.command("display-message", "-p", "-t", board, "#{pane_width}"))
             _remove(control, window, board)
             removed.append(window)
-            if not saved_width_valid or board_count == 1:
+            if can_fit:
                 width = pane_width
-                saved_width_valid = True
                 control.command("set-option", "-g", WIDTH, str(width))
         except (SessionError, OSError, ValueError) as error:
             failures.append({"window": window, "reason": str(error)})
     for window, board in to_keep:
         try:
             pane_width = int(control.command("display-message", "-p", "-t", board, "#{pane_width}"))
-            if pane_width != width:
+            if pane_width != width and _can_fit_width(control, window, width):
                 control.command("resize-pane", "-t", board, "-x", str(width))
         except (SessionError, OSError, ValueError) as error:
             failures.append({"window": window, "reason": str(error)})
