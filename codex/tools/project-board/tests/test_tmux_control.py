@@ -242,8 +242,9 @@ def test_sidebar_keeps_requested_width_after_a_narrow_window(monkeypatch):
         _tmux(name, "switch-client", "-c", clients[0][2], "-t", "wide")
         assert tmux_control.reconcile(socket=socket_path)["ok"] is True
         board = _tmux(name, "show-options", "-wqv", "-t", wide, "@project_board_pane")
-        assert _pane_geometry(name, wide)[board][0] == 33
-        assert _tmux(name, "show-options", "-gqv", "@project_board_width") == "33"
+        actual = (_pane_geometry(name, wide)[board][0],
+                  int(_tmux(name, "show-options", "-gqv", "@project_board_width")))
+        assert actual == (33, 33)
     finally:
         for process, master, _client in clients:
             process.terminate()
