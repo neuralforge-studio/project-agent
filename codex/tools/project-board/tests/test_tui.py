@@ -264,12 +264,129 @@ def test_cr_list_opens_in_its_own_popup(tmp_path):
     async def check():
         async with app.run_test(size=(70, 20)) as pilot:
             await app.apply_snapshot(model.snapshot(board.config))
-            assert [str(item.content) for item in app.query(".cr-item")] == [
+            assert [str(item.label) for item in app.query(".cr-item")] == [
                 "CPU-001\nCR title", "CPU-002\nCR title",
             ]
+            assert any("The **contract** of CPU-001." in widget.source for widget in app.query(Markdown))
             await pilot.click("#cr-close")
 
     asyncio.run(check())
+
+
+def test_cr_popup_opens_selected_cr_markdown(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    first = board.cr(base, "open", "CPU-001")
+    second = board.cr(base, "open", "CPU-002")
+    app = CRPopupApp(str(board.config), "Falcon2", "open", load=False)
+
+    async def check():
+        async with app.run_test(size=(90, 24)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.click("#cr-item-0")
+            await pilot.pause()
+            assert any(first.read_text(encoding="utf-8") == widget.source for widget in app.query(Markdown))
+            await pilot.click("#cr-item-1")
+            await pilot.pause(0.1)
+            assert any(second.read_text(encoding="utf-8") == widget.source for widget in app.query(Markdown))
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("state", ("open", "todo", "in-progress"))
+def test_cr_popup_keyboard_selection_and_narrow_list_return(tmp_path, state):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.cr(base, state, "CPU-001")
+    second = board.cr(base, state, "CPU-002")
+    app = CRPopupApp(str(board.config), "Falcon2", state, load=False)
+
+    async def check():
+        async with app.run_test(size=(55, 20)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            assert app.has_class("narrow")
+            assert not app.query_one("#cr-items").display
+            assert app.query_one("#cr-detail").display
+            await pilot.click("#cr-show-list")
+            assert app.query_one("#cr-items").display
+            assert not app.query_one("#cr-detail").display
+            app.query_one("#cr-item-1", Button).focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.query_one("#cr-detail").display
+            assert not app.query_one("#cr-items").display
+            assert [widget.source for widget in app.query(Markdown)] == [second.read_text(encoding="utf-8")]
+            await pilot.click("#cr-show-list")
+            assert app.query_one("#cr-items").display
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("change", ("move", "delete"))
+def test_cr_popup_keeps_open_when_selected_file_disappears(tmp_path, change):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.cr(base, "open", "CPU-001")
+    second = board.cr(base, "open", "CPU-002")
+    app = CRPopupApp(str(board.config), "Falcon2", "open", load=False)
+
+    async def check():
+        async with app.run_test(size=(90, 20)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            if change == "move":
+                second.rename(base / "agent/cr/todo" / second.name)
+            else:
+                second.unlink()
+            await pilot.click("#cr-item-1")
+            await pilot.pause()
+            assert "CPU-002 파일을 읽을 수 없습니다" in str(app.query_one("#cr-detail > Static").content)
+            await pilot.click("#cr-item-0")
+            await pilot.pause()
+            assert "The **contract** of CPU-001." in app.query_one("#cr-detail Markdown", Markdown).source
+
+    asyncio.run(check())
+
+
+def test_cr_popup_shows_read_error_and_empty_list(tmp_path, monkeypatch):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.cr(base, "open", "CPU-001")
+    app = CRPopupApp(str(board.config), "Falcon2", "open", load=False)
+
+    async def check():
+        async with app.run_test(size=(90, 20)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            with monkeypatch.context() as patch:
+                patch.setattr(model, "read_cr_markdown", lambda *_: (_ for _ in ()).throw(PermissionError("denied")))
+                await pilot.click("#cr-item-0")
+                await pilot.pause()
+                assert "denied" in str(app.query_one("#cr-detail > Static").content)
+            await app.apply_snapshot({"projects": [{"id": "Falcon2", "crs": {"open": []}}]})
+            assert "CR이 없습니다." in str(app.query_one("#cr-detail > Static").content)
+            assert app.query_one("#cr-close", Button)
+
+    asyncio.run(check())
+
+
+def test_cr_markdown_reader_rejects_unlisted_paths(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    listed = board.cr(base, "open", "CPU-001")
+    outside = tmp_path / "CPU-001-secret.md"
+    outside.write_text("private", encoding="utf-8")
+    project = model.snapshot(board.config)["projects"][0]
+    item = project["crs"]["open"][0]
+    with pytest.raises(ValueError, match="목록 밖"):
+        model.read_cr_markdown(project, {**item, "path": str(outside)}, "open")
+    with pytest.raises(ValueError, match="유효하지"):
+        model.read_cr_markdown(project, item, "todo")
+    listed.unlink()
+    listed.symlink_to(outside)
+    with pytest.raises(ValueError, match="목록 밖"):
+        model.read_cr_markdown(project, item, "open")
 
 
 def test_ipc_click_routes_the_originating_client(tmp_path):

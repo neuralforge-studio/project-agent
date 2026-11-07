@@ -62,7 +62,7 @@ R 0 GPU-007
 | --- | --- |
 | 상태줄 `Board` | 같은 tmux server의 모든 client에 sidebar 켜기·끄기 |
 | Project 이름 | 클릭한 client를 해당 project tmux session의 현재 window로 이동. 대상 session이 없으면 오류 표시 |
-| 각 project의 `O/T/I` | 클릭한 client에 해당 CR 목록과 제목을 읽는 popup 열기 |
+| 각 project의 `O/T/I` | 클릭한 client에 해당 CR 목록과 선택한 CR의 전체 Markdown을 읽는 popup 열기 |
 | 각 project의 `D` | 클릭한 client에 그 project의 결정 popup 열기 |
 | 각 project의 좌석 버튼 | 해당 project의 좌석 목록을 펼치거나 접기 |
 | Worker session이 있는 seat의 CR ID | 클릭한 client를 해당 Worker의 tmux window로 이동. 대상 window가 없으면 오류 표시 |
@@ -71,6 +71,13 @@ R 0 GPU-007
 
 위 클릭은 CR과 결정 항목의 상태를 바꾸지 않습니다. 키보드에서도 같은 화면을 열 수 있게 합니다.
 `O/T/I`가 `0`, `-`, `!`이면 클릭해도 popup이나 오류 알림을 열지 않습니다. `D`는 조회할 결정이 없거나 `-`, `!`일 때만 열지 않습니다.
+
+CR popup은 왼쪽 목록에서 선택한 항목의 전체 Markdown 원본을 오른쪽에 표시합니다.
+마우스로 CR 행을 클릭하거나 키보드로 행에 초점을 맞춘 뒤 Enter를 눌러 선택합니다.
+좁은 popup에서는 `목록` 버튼으로 목록과 본문을 전환합니다.
+선택 뒤 파일이 이동·삭제되거나 읽기에 실패하면 해당 항목의 오류를 표시합니다.
+오류가 나도 popup은 열린 상태를 유지합니다.
+원본 경로는 등록한 CR root의 해당 상태에서 열거한 항목으로 제한합니다.
 
 `review_wait`는 `in-progress` CR에서만 판정합니다. Write CR은 `Result`의 마지막 유효한 제출 commit을 `Disposition`이 앞 7자리 이상으로 인용하지 않았을 때 대기입니다. 제출 행의 문법은 [CR 계약](../codex/skills/project-item/references/cr.md)이 소유합니다. Read-only CR은 `Result`에 내용이 있으면 대기입니다. 이 표시는 `R` 표시와 별개입니다.
 

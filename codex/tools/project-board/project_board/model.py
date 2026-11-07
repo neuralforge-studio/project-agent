@@ -23,7 +23,7 @@ from agent_session.errors import SessionError  # noqa: E402
 from project_item.cr import submitted_hash  # noqa: E402  (the CR format owns the submission row)
 from project_item.kinds import CR, DECIDE  # noqa: E402
 from project_item.render import cr_states, decision_stage, sections  # noqa: E402
-from project_item.store import item_files  # noqa: E402
+from project_item.store import file_id, item_files  # noqa: E402
 
 CR_STATES = ("open", "todo", "in-progress")           # done and deferred are not shown
 HASH_TOKEN = re.compile(r"\b[0-9a-f]{7,40}\b")
@@ -73,7 +73,8 @@ def cr_items(root: Path) -> dict:
         rows = []
         for path in item_files(CR, root, state):
             parsed = CR.fmt.parse(path, state)
-            item = {"id": parsed.cr_id or path.stem, "title": parsed.title or path.stem, "state": state}
+            item = {"id": parsed.cr_id or path.stem, "title": parsed.title or path.stem,
+                    "state": state, "path": str(path)}
             if state == "in-progress":
                 parts = dict(sections(path))
                 base = parsed.headers.get("Base")
@@ -90,6 +91,17 @@ def cr_items(root: Path) -> dict:
             rows.append(item)
         out[state] = rows
     return out
+
+
+def read_cr_markdown(project: dict, item: dict, state: str) -> str:
+    """Read a listed CR only from its registered root and state directory."""
+    root = project.get("cr_root")
+    if state not in CR_STATES or not root or item.get("state") != state or not item.get("path"):
+        raise ValueError("CR 목록 경로가 유효하지 않습니다.")
+    path = Path(item["path"]).resolve(strict=True)
+    if not path.is_relative_to(Path(root).resolve() / state) or file_id(CR, path) != item.get("id"):
+        raise ValueError("CR 목록 밖의 파일은 읽을 수 없습니다.")
+    return path.read_text(encoding="utf-8")
 
 
 def decide_items(root: Path, cr_root: Path | None = None) -> list[dict]:
@@ -127,6 +139,7 @@ def _read_state(project):
 
 def project_view(project, now: dt.datetime) -> dict:
     view = {"id": project.project_id, "base": str(project.base), "base_display": _display(project.base),
+            "cr_root": str(project.path_cr.resolve()) if project.path_cr is not None else None,
             "provider": project.provider,
             "seat_count": len(project.seats), "leader": None, "seats": [], "crs": None, "decide": None,
             "errors": []}

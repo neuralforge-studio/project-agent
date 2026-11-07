@@ -491,14 +491,21 @@ class CSVScreen(Screen):
 
 
 class CRPopupApp(App):
-    """A read-only CR list in a client-local tmux popup."""
+    """A read-only CR reader in a client-local tmux popup."""
 
     CSS = """
     Screen { background: #111c28; }
     #cr-title { height: 2; padding: 0 1; text-style: bold; }
-    #cr-items { height: 1fr; padding: 0 1; }
-    .cr-item { height: auto; margin-bottom: 1; }
-    #cr-close { height: 1; min-width: 0; border: none; }
+    #cr-main { height: 1fr; }
+    #cr-items { width: 28%; min-width: 18; border-right: solid #536474; }
+    .cr-item { width: 100%; height: auto; min-width: 0; border: none; padding: 0 1;
+               content-align: left middle; text-align: left; }
+    #cr-detail { width: 1fr; padding: 0 1; }
+    #cr-actions { height: 2; }
+    #cr-actions Button { height: 1; width: auto; min-width: 0; border: none; margin-right: 1; }
+    .narrow #cr-items { display: none; }
+    .narrow.list-open #cr-items { display: block; width: 100%; }
+    .narrow.list-open #cr-detail { display: none; }
     """
     BINDINGS = [("escape", "quit", "닫기")]
 
@@ -508,36 +515,101 @@ class CRPopupApp(App):
         self.project_id = project_id
         self.state = state
         self.load = load
+        self.project: dict | None = None
+        self.items: list[dict] = []
+        self.selected_id: str | None = None
+        self._load_generation = 0
+        self._closing = False
 
     def compose(self) -> ComposeResult:
         yield Static(f"{self.project_id} · {self.state}", id="cr-title")
-        yield VerticalScroll(id="cr-items")
-        yield Button("닫기", id="cr-close")
+        with Horizontal(id="cr-main"):
+            yield VerticalScroll(id="cr-items")
+            yield VerticalScroll(id="cr-detail")
+        with Horizontal(id="cr-actions"):
+            yield Button("목록", id="cr-show-list")
+            yield Button("닫기", id="cr-close")
 
     def on_mount(self) -> None:
         if self.load:
             asyncio.create_task(self.refresh_items())
 
+    def on_unmount(self) -> None:
+        self._closing = True
+        self._load_generation += 1
+
     async def refresh_items(self) -> None:
-        data = await asyncio.to_thread(model.snapshot, self.config)
-        await self.apply_snapshot(data)
+        try:
+            data = await asyncio.to_thread(model.snapshot, self.config)
+            if not self._closing:
+                await self.apply_snapshot(data)
+        except Exception as error:
+            if not self._closing:
+                await self._show_message(f"CR 목록을 읽을 수 없습니다: {error}")
 
     async def apply_snapshot(self, data: dict) -> None:
-        project = next((item for item in data.get("projects", []) if item["id"] == self.project_id), None)
+        self.project = next((item for item in data.get("projects", []) if item["id"] == self.project_id), None)
         listing = self.query_one("#cr-items", VerticalScroll)
         await listing.remove_children()
-        if project is None:
+        if self.project is None:
+            self.items = []
             await listing.mount(Static("Project를 찾을 수 없습니다."))
+            await self._show_message("Project를 찾을 수 없습니다.")
             return
-        items = (project.get("crs") or {}).get(self.state, [])
-        if items:
-            await listing.mount(*[Static(f"{item['id']}\n{item['title']}", classes="cr-item") for item in items])
+        self.items = (self.project.get("crs") or {}).get(self.state, [])
+        if self.items:
+            await listing.mount(*[Button(f"{item['id']}\n{item['title']}", id=f"cr-item-{index}",
+                                         classes="cr-item") for index, item in enumerate(self.items)])
+            if not any(item["id"] == self.selected_id for item in self.items):
+                self.selected_id = self.items[0]["id"]
+            await self._show_cr()
         else:
             await listing.mount(Static("CR이 없습니다."))
+            self.selected_id = None
+            await self._show_message("CR이 없습니다.")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "cr-close":
+    async def _show_message(self, message: str) -> None:
+        self._load_generation += 1
+        detail = self.query_one("#cr-detail", VerticalScroll)
+        await detail.remove_children()
+        await detail.mount(Static(message))
+        self.query_one("#cr-title", Static).update(f"{self.project_id} · {self.state}")
+
+    async def _show_cr(self) -> None:
+        item = next((row for row in self.items if row["id"] == self.selected_id), None)
+        if item is None or self.project is None:
+            return
+        self._load_generation += 1
+        generation = self._load_generation
+        position = self.items.index(item) + 1
+        self.query_one("#cr-title", Static).update(
+            f"{self.project_id} · {self.state} {position}/{len(self.items)} · {item['id']}")
+        try:
+            source = await asyncio.to_thread(model.read_cr_markdown, self.project, item, self.state)
+        except (OSError, UnicodeError, ValueError) as error:
+            source = None
+            message = f"{item['id']} 파일을 읽을 수 없습니다: {error}"
+        if self._closing or generation != self._load_generation:
+            return
+        detail = self.query_one("#cr-detail", VerticalScroll)
+        await detail.remove_children()
+        await detail.mount(Markdown(source, open_links=False) if source is not None else Static(message))
+        detail.scroll_home(animate=False)
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        if button_id.startswith("cr-item-"):
+            index = int(button_id.removeprefix("cr-item-"))
+            self.selected_id = self.items[index]["id"]
+            await self._show_cr()
+            self.remove_class("list-open")
+        elif button_id == "cr-show-list":
+            self.toggle_class("list-open")
+        elif button_id == "cr-close":
             self.exit()
+
+    def on_resize(self, event) -> None:
+        self.set_class(self.size.width < 70, "narrow")
 
 
 class PopupApp(App):

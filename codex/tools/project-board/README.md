@@ -2,8 +2,8 @@
 
 `project-board` is the tmux text interface for every registered project. One sidebar lists
 each project's open, todo and in-progress CR counts, open decisions and Worker seats. A large
-popup shows a decision's Markdown and accepts the operator's answer. The Board has no HTTP
-server or browser page.
+popup shows a decision's Markdown and accepts the operator's answer. A CR popup shows the
+selected CR's full Markdown. The Board has no HTTP server or browser page.
 
 The current behavior is specified in `docs/project-board-tui-plan.md`. The registry and
 team state are read through `agent_session`; CR and decision files are read through
@@ -59,10 +59,15 @@ long names and CR IDs can be read in tooltips and by scrolling horizontally. An 
 shows its number followed by `-`.
 Click a project name to switch the clicking client to that project's tmux session and
 current window. If that session is unavailable, the Board shows an error. Click a CR
-count to read its list, `D` to read decisions, or a seat with a Worker session to switch
+count to open its CR list, `D` to read decisions, or a seat with a Worker session to switch
 the clicking client to its Worker window. A seat with a CR but no Worker session shows
 `대기` and ignores clicks, as does an empty seat. The decision popup uses 90% of that client's
 terminal; the CR popup uses 80%. Press `Esc` or the popup's close button to close it.
+In the CR popup, click a CR row or focus it with Tab and press Enter to read its full
+Markdown. Select another row to change CRs. In a narrow popup, use `목록` to switch between
+the list and the selected CR. If a listed file moves, is deleted, or cannot be read, the
+popup shows an error for that row and stays open.
+
 `D` is red when one or more decisions are open. `D:0`, unconfigured `D:-`, and read-error
 `D:!` keep the yellow color. CR and decision counts of `0`, `-`, or `!` ignore clicks without
 opening a popup or showing an error.
