@@ -142,6 +142,107 @@ def test_ipc_click_routes_the_originating_client(tmp_path):
     asyncio.run(check())
 
 
+def test_empty_cr_and_decision_clicks_do_nothing_for_mouse_and_ipc(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    calls = []
+    notifications = []
+    socket = f"/tmp/project-board-ui-{os.getpid()}-{uuid.uuid4().hex[:8]}.sock"
+    app = SidebarApp(
+        str(board.config), poll=False, click_socket=socket,
+        on_cr=lambda project, state, client=None: calls.append((project, state, client)),
+        on_decision=lambda project, item, client=None: calls.append((project, item, client)),
+    )
+    app.notify = lambda message, **kwargs: notifications.append((message, kwargs))
+
+    async def send_click(button):
+        reader, writer = await asyncio.open_unix_connection(socket)
+        writer.write((json.dumps({
+            "client": "client-a", "x": button.region.x + 1, "y": button.region.y,
+        }) + "\n").encode())
+        await writer.drain()
+        result = json.loads(await reader.readline())
+        writer.close()
+        await writer.wait_closed()
+        return result
+
+    async def check():
+        async with app.run_test(size=(50, 20)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            for selector in ("#project-0-O", "#project-0-T", "#project-0-I", "#project-0-D"):
+                button = app.query_one(selector, Button)
+                assert button.disabled
+                await pilot.click(selector)
+                result = await send_click(button)
+                assert result["ok"] and result["error"] is None
+            await pilot.pause()
+            assert calls == [] and notifications == []
+
+            board.cr(base, "open", "CPU-001")
+            board.decide(base, "open", "D-20261107-01")
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            await pilot.click("#project-0-O")
+            result = await send_click(app.query_one("#project-0-D", Button))
+            await pilot.pause()
+            assert result["ok"] and calls == [
+                ("Falcon2", "open", None), ("Falcon2", None, "client-a"),
+            ]
+            assert notifications == []
+            assert app.dispatch_client_click("client-a", 1000, 1000)["error"]["code"] == "no_widget"
+
+    asyncio.run(check())
+
+
+def test_decision_count_color_tracks_open_count_and_missing_or_error_state(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    app = SidebarApp(str(board.config), poll=False)
+
+    async def check():
+        async with app.run_test(size=(50, 20)) as pilot:
+            async def verify(label, color, disabled):
+                await app.apply_snapshot(model.snapshot(board.config))
+                await pilot.pause()
+                button = app.query_one("#project-0-D", Button)
+                assert str(button.label) == label
+                assert button.styles.color.hex.lower() == color
+                assert color in str(button.rich_style).lower()
+                assert button.disabled is disabled
+                if disabled:
+                    result = app.dispatch_client_click("client-a", button.region.x + 1, button.region.y)
+                    assert result["ok"] and result["error"] is None
+
+            await verify("D:0", "#ffd479", True)
+            first = board.decide(base, "open", "D-20261107-01")
+            await verify("D:1", "#ff8f8f", False)
+            second = board.decide(base, "open", "D-20261107-02")
+            await verify("D:2", "#ff8f8f", False)
+            first.unlink()
+            second.unlink()
+            await verify("D:0", "#ffd479", True)
+
+            snapshot = model.snapshot(board.config)
+            snapshot["projects"][0]["decide"] = None
+            await app.apply_snapshot(snapshot)
+            await pilot.pause()
+            button = app.query_one("#project-0-D", Button)
+            assert str(button.label) == "D:-" and button.disabled
+            assert button.styles.color.hex.lower() == "#ffd479"
+            assert app.dispatch_client_click("client-a", button.region.x + 1, button.region.y)["ok"]
+
+            snapshot["projects"][0]["errors"].append({"source": "decide", "message": "read failed"})
+            await app.apply_snapshot(snapshot)
+            await pilot.pause()
+            button = app.query_one("#project-0-D", Button)
+            assert str(button.label) == "D:!" and button.disabled
+            assert button.styles.color.hex.lower() == "#ffd479"
+            assert app.dispatch_client_click("client-a", button.region.x + 1, button.region.y)["ok"]
+
+    asyncio.run(check())
+
+
 def test_sidebar_ignores_liveness_for_an_old_session(tmp_path):
     board = _make_sidebar_board(tmp_path)
     app = SidebarApp(str(board.config), poll=False)

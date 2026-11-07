@@ -53,6 +53,9 @@ current window. If that session is unavailable, the Board shows an error. Click 
 count to read its list, `D` to read decisions, or an assigned seat to switch the clicking
 client to its Worker window. The decision popup uses 90% of that client's
 terminal; the CR popup uses 80%. Press `Esc` or the popup's close button to close it.
+`D` is red when one or more decisions are open. `D:0`, unconfigured `D:-`, and read-error
+`D:!` keep the yellow color. CR and decision counts of `0`, `-`, or `!` ignore clicks without
+opening a popup or showing an error.
 tmux keeps an open popup running if an external command changes the client's window.
 If a managed pane is respawned while its client stays on the same window, run
 `project-board sync` to restore that window's Board pane immediately.

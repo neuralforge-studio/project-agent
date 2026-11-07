@@ -50,6 +50,7 @@ D:1
 
 - 모든 등록 project를 하나의 목록에 순서대로 표시합니다. Project를 바꾸는 탭이나 필터를 두지 않습니다. 화면 높이가 부족하면 목록 전체를 세로로 스크롤합니다.
 - `O/T/I`는 CR의 `open/todo/in-progress` 개수입니다. `D`는 열린 결정 항목 개수입니다. 두 종류를 합산하지 않습니다.
+- 열린 결정 항목이 하나 이상이면 `D`를 빨간색으로 표시합니다. `D:0`, 미설정 `D:-`, 읽기 오류 `D:!`는 기존 노란색으로 표시합니다.
 - Seat 번호는 등록 순서의 0부터 시작합니다. 빈 seat는 `SeatN`을 회색으로 표시합니다. 배정된 seat는 같은 행에 CR ID를 표시합니다.
 - `R`은 Leader의 `reviewing` 값이 그 seat의 CR ID와 같을 때만 붙입니다. Review 행을 별도로 만들거나 CR ID를 중복 표시하지 않습니다.
 - 제출 후 검토 대기(`review_wait`)는 `R`이 아닙니다. 필요하면 행의 색과 도움말로 구분합니다.
@@ -69,6 +70,7 @@ D:1
 | Sidebar의 휠 | 모든 project가 들어 있는 목록 스크롤 |
 
 위 클릭은 CR과 결정 항목의 상태를 바꾸지 않습니다. 키보드에서도 같은 화면을 열 수 있게 합니다.
+`O/T/I`나 `D`가 `0`, `-`, `!`이면 클릭해도 popup이나 오류 알림을 열지 않습니다.
 
 `review_wait`는 `in-progress` CR에서만 판정합니다. Write CR은 `Result`의 마지막 유효한 제출 commit을 `Disposition`이 앞 7자리 이상으로 인용하지 않았을 때 대기입니다. 제출 행의 문법은 [CR 계약](../codex/skills/project-item/references/cr.md)이 소유합니다. Read-only CR은 `Result`에 내용이 있으면 대기입니다. 이 표시는 `R` 표시와 별개입니다.
 

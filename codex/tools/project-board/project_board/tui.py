@@ -107,6 +107,7 @@ class SidebarApp(App):
                        padding: 0; text-align: left;
                        content-align: left middle; background: transparent; }
     .decision { color: #ffd479; }
+    .decision-open { color: #ff8f8f; }
     .seat { color: #c7dbf1; }
     .seat-empty { color: #778596; }
     .seat-stopped { color: #ff8f8f; }
@@ -229,10 +230,15 @@ class SidebarApp(App):
                     "error": {"code": "no_widget", "message": "이 위치에는 조작할 항목이 없습니다."}}
         while widget is not None and not isinstance(widget, Button):
             widget = widget.parent
-        if widget is None or widget.disabled:
+        if widget is None:
             return {"ok": False, "data": None,
                     "error": {"code": "not_clickable", "message": "이 항목은 클릭할 수 없습니다."}}
         target = self._actions.get(widget.id or "")
+        if widget.disabled:
+            if target is not None and target[0] in ("cr", "decision"):
+                return {"ok": True, "data": {"widget": widget.id}, "error": None}
+            return {"ok": False, "data": None,
+                    "error": {"code": "not_clickable", "message": "이 항목은 클릭할 수 없습니다."}}
         if target is not None:
             self._activate(target, client=client)
         else:
@@ -325,6 +331,8 @@ class SidebarApp(App):
             decision_count = _decide_count(project)
             decision = Button(f"D:{decision_count}", id=decision_id, classes="decision")
             decision.disabled = decision_count in ("-", "!", "0")
+            if not decision.disabled:
+                decision.add_class("decision-open")
             self._actions[decision_id] = ("decision", project["id"])
             name_id = f"project-{number}-name"
             name = Button(project["id"], id=name_id, classes="project-name")
