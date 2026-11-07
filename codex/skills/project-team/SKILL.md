@@ -105,7 +105,9 @@ Tmux window와 provider session은 유지하고 후속 메시지에서 관리를
 4. CR 파일의 `## Result`에 들여쓰지 않은 제출 행 `- 제출 commit: <40자리 hash>`와 검증 명령·결과를 추가합니다. Read-only CR은 제출 행 없이 결과만 씁니다. 다른 절은 고치지 않습니다.
 5. `agent-session send --job leader "CR-ID와 제출 commit"`로 보고합니다.
 6. 같은 CR의 feedback을 받으면 해당 범위의 작업·검증·제출을 반복합니다.
-7. Leader가 인수하면 자기가 띄운 background 작업(shell·monitor 등)을 멈추고 자기 작업의 불필요한 산출물을 정리한 뒤 종료를 보고합니다.
+7. Leader가 인수하면 자기가 띄운 background 작업(shell·monitor 등)을 멈추고 자기 작업의 불필요한 산출물을 정리합니다. 종료를 보고하기 직전에 자기 provider process의 자식을 확인합니다. Claude는 Bash tool에서 `ps -o pid,etime,args --ppid $PPID`를 실행합니다. Sub-agent가 띄운 shell도 같은 process의 자식입니다. 확인 명령 자신의 shell 말고 남은 것이 없을 때만 종료를 보고합니다. 남은 것이 있으면 PID로 멈춘 뒤 다시 확인합니다.
+
+다른 process를 기다릴 때는 PID(`while kill -0 <PID>; do sleep 5; done`)나 provider의 background 완료 알림을 씁니다. `pgrep -f`·`pkill -f`는 그 명령을 담은 자기 shell의 command line과도 맞습니다. 그래서 `pgrep -f`로 기다리는 loop는 끝나지 않고, `pkill -f`는 자기 shell을 끝냅니다. Sub-agent에게 일을 맡길 때도 이 규칙을 지시합니다.
 
 다른 project의 수정이 필요하면 직접 고치지 않고 자기 Leader에게 보고합니다. Worker는 다른 project에 send할 수 없습니다.
 
