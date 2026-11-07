@@ -19,13 +19,28 @@ def test_toggle_passes_the_registry_client_and_socket(monkeypatch):
 
 def test_sidebar_click_callbacks_keep_the_client_identity(monkeypatch):
     called = []
+    expanded_calls = []
     monkeypatch.setattr(tmux_control, "open_popup", lambda *args: called.append(("decision", args)))
     monkeypatch.setattr(tmux_control, "open_cr_popup", lambda *args: called.append(("cr", args)))
     monkeypatch.setattr(tmux_control, "switch_seat", lambda *args: called.append(("seat", args)))
     monkeypatch.setattr(tmux_control, "switch_project", lambda *args: called.append(("project", args)))
 
-    def sidebar(config, *, on_project, on_decision, on_cr, on_seat):
+    def read_expanded():
+        expanded_calls.append(("read",))
+        return {"Falcon2"}
+
+    def toggle_expanded(project_id):
+        expanded_calls.append(("toggle", project_id))
+        return {"Falcon2", project_id}
+
+    monkeypatch.setattr(tmux_control, "expanded_projects", read_expanded)
+    monkeypatch.setattr(tmux_control, "toggle_expanded_project", toggle_expanded)
+
+    def sidebar(config, *, on_project, on_decision, on_cr, on_seat,
+                expanded_reader, expanded_toggler):
         assert config == "/tmp/projects.json"
+        assert expanded_reader() == {"Falcon2"}
+        assert expanded_toggler("ProjectB") == {"Falcon2", "ProjectB"}
         on_project("Falcon2", client="/dev/ttys2")
         on_decision("Falcon2", "D-1", client="/dev/ttys1")
         on_cr("Falcon2", "open", client="/dev/ttys2")
@@ -39,6 +54,7 @@ def test_sidebar_click_callbacks_keep_the_client_identity(monkeypatch):
         ("cr", ("/tmp/projects.json", "Falcon2", "open", "/dev/ttys2")),
         ("seat", ("/tmp/projects.json", "Falcon2", 0, "/dev/ttys1")),
     ]
+    assert expanded_calls == [("read",), ("toggle", "ProjectB")]
 
 
 def test_popup_commands_run_the_matching_tui(monkeypatch):
