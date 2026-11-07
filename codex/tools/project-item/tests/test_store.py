@@ -112,6 +112,20 @@ def test_answer_is_recorded_once_and_preserves_exact_words(tmp_path):
     assert answered.read_text() == before
 
 
+@pytest.mark.parametrize("separator", ["\x85", "\u2028", "\u2029"])
+def test_unicode_line_separator_survives_answer_and_leader_confirmation(tmp_path, separator):
+    root = tmp_path / "decide"
+    item_id = "D-20261104-01"
+    answer = f"A{separator}B"
+    store.new_decide(root, decision_text, dt.date(2026, 11, 4))
+    answered = store.answer_decide(root, item_id, answer)
+    assert DECIDE.fmt.answer_text(DECIDE.fmt.parse(answered, "answered")) == answer
+    assert DECIDE.fmt.check(DECIDE.fmt.parse(answered, "answered")) == []
+    done = store.move(DECIDE, root, item_id, "done", outcome="decided A", by="Leader")
+    assert f'사용자 답변 원문: "A\\u{ord(separator):04x}B"' in done.read_text(encoding="utf-8")
+    assert DECIDE.fmt.check(DECIDE.fmt.parse(done, "done")) == []
+
+
 def test_concurrent_decision_answers_accept_only_one(tmp_path):
     root = tmp_path / "decide"
     item_id = "D-20261104-01"

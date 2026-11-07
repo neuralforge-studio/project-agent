@@ -18,6 +18,14 @@ from .registry import ItemError
 MAX_DECISION_ANSWER_BYTES = 16384
 
 
+def _answer_json(answer: str) -> str:
+    """Keep the JSON string on one Markdown line without escaping ordinary Unicode text."""
+    encoded = json.dumps(answer, ensure_ascii=False)
+    for separator in ("\x85", "\u2028", "\u2029"):
+        encoded = encoded.replace(separator, f"\\u{ord(separator):04x}")
+    return encoded
+
+
 # ---------------------------------------------------------------- lock
 def lock_path(root: Path) -> Path:
     digest = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
@@ -183,7 +191,7 @@ def answer_decide(root: Path, item_id: str, answer: str, *, by: str = "user") ->
         state, source = find(DECIDE, root, item_id)
         if state != "open":
             raise ItemError("decide_not_open", f"{item_id} is {state}; only open decisions accept answers.")
-        text = set_header(source.read_text(encoding="utf-8"), "Answer", json.dumps(answer, ensure_ascii=False))
+        text = set_header(source.read_text(encoding="utf-8"), "Answer", _answer_json(answer))
         day = dt.date.today().isoformat()
         text = add_disposition(text, f"{day} {by}: open -> answered. 답변을 접수했습니다.", DECIDE.sections)
         return _relocate(DECIDE, root, item_id, state, source, "answered", text)
@@ -318,13 +326,13 @@ def move_locked(kind: Kind, root: Path, item_id: str, state: str, outcome: str |
         answer = kind.fmt.answer_text(kind.fmt.parse_text(text, source, source_state))
         if answer is None:
             raise ItemError("format_invalid", f"{item_id} has no recorded answer.")
-        original = f"사용자 답변 원문: {json.dumps(answer, ensure_ascii=False)}"
+        original = f"사용자 답변 원문: {_answer_json(answer)}"
         note = f"{note} {original}" if note else original
     if kind is DECIDE and state == "open" and source_state == "answered":
         answer = kind.fmt.answer_text(kind.fmt.parse_text(text, source, source_state))
         if answer is None:
             raise ItemError("format_invalid", f"{item_id} has no recorded answer.")
-        note = f"{note} 이전 답변 원문: {json.dumps(answer, ensure_ascii=False)}"
+        note = f"{note} 이전 답변 원문: {_answer_json(answer)}"
     if kind is DECIDE and state == "open":
         text = set_header(text, "Answer", None)
     current = kind.fmt.parse_text(text, source, source_state).headers.get("Outcome")

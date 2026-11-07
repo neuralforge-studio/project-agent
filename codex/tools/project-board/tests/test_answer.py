@@ -8,6 +8,7 @@ import pytest
 
 from board_testing import LEADER_ID, Board, leader
 from project_board import answer
+from project_item import store
 
 DECIDE = "D-20261105-01"
 
@@ -132,6 +133,20 @@ def test_answer_is_recorded_once_before_notifying(board, monkeypatch):
     assert path.exists()
     assert 'Answer: "A\\n둘째 줄"' in path.read_text(encoding="utf-8")
     assert "답변 접수" in (base / "agent/decide/decide.html").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029"])
+def test_board_receipt_and_leader_confirmation_keep_unicode_separator(board, monkeypatch, separator):
+    data, base = board
+    words = f"A{separator}B"
+    monkeypatch.setattr(answer, "send_answer", lambda *_: {"ok": True, "data": {}, "error": None})
+    result = answer.submit_answer(data.config, "alpha", DECIDE, words)
+    assert result["ok"] is True and result["data"]["accepted"] is True
+    root = base / "agent/decide"
+    answered = root / "answered" / f"{DECIDE}.md"
+    assert answer.model.DECIDE.fmt.answer_text(answer.model.DECIDE.fmt.parse(answered, "answered")) == words
+    done = store.move(answer.model.DECIDE, root, DECIDE, "done", outcome="decided A", by="Leader")
+    assert f'사용자 답변 원문: "A\\u{ord(separator):04x}B"' in done.read_text(encoding="utf-8")
 
 
 def test_concurrent_answers_accept_only_one(board, monkeypatch):
