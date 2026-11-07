@@ -283,7 +283,7 @@ def test_cr_popup_opens_selected_cr_markdown(tmp_path):
     async def check():
         async with app.run_test(size=(90, 24)) as pilot:
             await app.apply_snapshot(model.snapshot(board.config))
-            await pilot.click("#cr-item-0")
+            await pilot.click(".cr-item")
             await pilot.pause()
             assert any(first.read_text(encoding="utf-8") == widget.source for widget in app.query(Markdown))
             await pilot.click("#cr-item-1")
