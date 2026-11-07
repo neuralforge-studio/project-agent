@@ -599,11 +599,12 @@ Sandbox가 적용된 profile은 시작 전에 unsupported_sandbox로 거절합�
 지원 판정은 실제 적용할 argv와 profile·config를 합친 설정을 기준으로 합니다.
 Binary를 직접 실행하므로 shell function·alias가 붙이던 인자는 상속하지 않습니다.
 기존에 승인한 비sandbox 실행 인자는 등록의 `launch`에 명시합니다.
-공통 tool이 권한 우회 옵션을 추가하거나 사용자 설정을 자동 변경하지 않습니다. 새로 clone한 Claude seat의 trust 기록(5절 Claude 실행·전송·관찰)만 예외입니다.
+공통 tool이 권한 우회 옵션을 추가하지 않습니다. 새로 clone한 Claude·Codex Worker seat의 trust 기록만 사용자 설정 변경의 예외입니다.
 현재 파일 쓰기 권한이나 tmux 접근이 없으면 needs_user_action입니다.
 프로젝트 mode read-only는 업무 수정 금지이며 OS sandbox나 승인 prompt 정책과 구분합니다.
 
 Codex에는 --settings가 없습니다.
+공통 start가 등록 project의 새 Codex Worker seat를 clone하면 Codex provider가 그 실제 경로의 `projects.<path>.trust_level = "trusted"`를 사용자 `config.toml`에 기록합니다. 기존의 명시적 `untrusted`는 덮어쓰지 않습니다. 다른 설정 값과 주석을 보존하며 같은 seat 재시도에서 중복 기록하지 않습니다. 기록하지 못하면 CLI의 `Folder access` 화면을 `workspace_trust`로 감지해 창을 포함한 `needs_user_action`을 반환합니다. Base와 기존 seat에는 기록하지 않습니다.
 Codex 실행 입력은 settings_file=null과 검증한 argv 배열입니다.
 설정은 `-c key=value`, 모델은 --model, profile은 --profile을 사용합니다.
 0.166.0의 --profile NAME은 `$CODEX_HOME/NAME.config.toml`의 profile v2입니다.

@@ -152,15 +152,29 @@ def test_missing_seat_is_cloned_from_the_base_origin(session_env):
 
 def test_only_a_seat_that_start_cloned_gets_workspace_trust(session_env, monkeypatch):
     from agent_session_fake_provider import FakeProvider
+    from agent_session.providers.codex import CodexProvider
     import shutil
+    import tomllib
 
     env = session_env
+    home = env.root / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    config = home / "config.toml"
+    config.write_text('model = "gpt-6"\n')
     trusted = []
-    monkeypatch.setattr(FakeProvider, "trust_new_seat", lambda self, root: trusted.append(Path(root)) or True)
+
+    def record_trust(self, root):
+        trusted.append(Path(root))
+        return CodexProvider().trust_new_seat(root)
+
+    monkeypatch.setattr(FakeProvider, "trust_new_seat", record_trust)
     shutil.rmtree(env.seats[0])
     assert env.manager().start(env.cr())["seat"] == 0
     assert env.manager().start(env.cr(2))["seat"] == 1
     assert trusted == [env.seats[0]]
+    projects = tomllib.loads(config.read_text())["projects"]
+    assert projects == {str(env.seats[0].resolve()): {"trust_level": "trusted"}}
 
 
 @pytest.mark.parametrize("target", ["leader", "worker"])
@@ -188,6 +202,31 @@ def test_start_held_at_a_startup_dialog_needs_the_user_and_resumes(session_env, 
     wait_until(lambda: env.tmux.get_current("fixture", slot).get("registered"))
     result = env.manager().start(job)
     assert result["run_id"] == waiting["run_id"] and result["ready"] is True
+
+
+def test_codex_trust_dialog_returns_its_window_and_reuses_the_run(session_env, monkeypatch):
+    import agent_session.lifecycle as lifecycle
+    from agent_session_fake_provider import FakeProvider
+    from agent_session.providers.codex import CodexProvider
+
+    env = session_env
+    job = env.cr()
+    fake = FakeProvider(dialog="codex")
+    fake.startup_dialog = CodexProvider().startup_dialog
+    monkeypatch.setattr(lifecycle, "get_provider", lambda name: fake)
+    started = time.monotonic()
+    with pytest.raises(SessionError) as error:
+        env.manager(timeout=6).start(job)
+    assert time.monotonic() - started < 6
+    assert error.value.code == "needs_user_action"
+    assert error.value.details["dialog"] == "workspace_trust"
+    waiting = env.tmux.get_current("fixture", "seat-0")
+    assert error.value.details["window_id"] == waiting["window_id"]
+    assert error.value.details["run_id"] == waiting["run_id"]
+    env.tmux.command("send-keys", "-t", waiting["pane_id"], "-l", "approve")
+    env.tmux.command("send-keys", "-t", waiting["pane_id"], "Enter")
+    wait_until(lambda: env.tmux.get_current("fixture", "seat-0").get("registered"))
+    assert env.manager().start(job)["run_id"] == waiting["run_id"]
 
 
 def test_automatic_allocation_skips_a_controlled_unassigned_seat(session_env):

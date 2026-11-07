@@ -25,6 +25,7 @@ class FakeProvider:
                      "--library", context["library_path"], "--run", context["run_id"],
                      "--config", context["config_path"], "--socket", context["socket_path"],
                      "--endpoint", context["endpoint"]] + (["--dialog"] if self.dialog else [])
+                    + (["--codex-dialog"] if self.dialog == "codex" else [])
                     + (["--session", context["session_id"]] if context.get("resume") else []),
             "env": prepared.get("env", {}), "unset_env": [],
         }
@@ -101,6 +102,7 @@ def main():
     for key in ("library", "run", "config", "socket", "endpoint"):
         parser.add_argument("--" + key, required=True)
     parser.add_argument("--dialog", action="store_true")
+    parser.add_argument("--codex-dialog", action="store_true")
     parser.add_argument("--session")                   # a resumed conversation keeps its recorded ID
     parser.add_argument("--claude", action="store_true")
     parser.add_argument("--record")
@@ -117,7 +119,10 @@ def main():
     if args.record:
         signal.signal(signal.SIGTERM, terminate)
     if args.dialog:
-        print("Accessing workspace:\n\n❯ 1. Yes, I trust this folder\n  2. No, exit", flush=True)
+        screen = ("Folder access\nTrust this folder?\n❯ 1. Yes, trust this folder\n  2. No, exit"
+                  if args.codex_dialog else
+                  "Accessing workspace:\n\n❯ 1. Yes, I trust this folder\n  2. No, exit")
+        print(screen, flush=True)
         for line in sys.stdin:
             if line.strip() == "approve":
                 break

@@ -3,6 +3,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
@@ -379,3 +380,55 @@ def test_claude_trust_does_not_create_a_missing_config(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     assert ClaudeProvider().trust_new_seat(tmp_path) is False
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(("screen", "kind"), [
+    ("Folder access\nTrust this folder?\n❯ 1. Yes, trust this folder\n  2. No, exit", "workspace_trust"),
+    ("Welcome to Codex\nChoose a model\n1. Recommended", None),
+    ("Codex Worker\n/fixture/project.seat0\nReady to help", None),
+    ("Folder access\nProject settings loaded", None),
+])
+def test_codex_startup_dialog_is_named_from_its_screen(screen, kind):
+    assert CodexProvider().startup_dialog(screen) == kind
+
+
+def test_codex_trust_records_only_the_new_seat_and_preserves_settings(tmp_path, monkeypatch):
+    home = tmp_path / "codex"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    config = home / "config.toml"
+    original = ('model = "gpt-6"\n# keep this comment\n[projects."/other"]\n'
+                'trust_level = "untrusted"\n')
+    config.write_text(original)
+    config.chmod(0o600)
+    seat = tmp_path / "new seat"
+    seat.mkdir()
+
+    assert CodexProvider().trust_new_seat(seat) is True
+    updated = config.read_text()
+    values = tomllib.loads(updated)
+    assert values["model"] == "gpt-6"
+    assert values["projects"]["/other"] == {"trust_level": "untrusted"}
+    assert values["projects"][str(seat.resolve())] == {"trust_level": "trusted"}
+    assert updated.startswith(original)
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert CodexProvider().trust_new_seat(seat) is True
+    assert config.read_text() == updated
+
+
+def test_codex_trust_keeps_explicit_untrusted_and_existing_seat_settings(tmp_path, monkeypatch):
+    home = tmp_path / "codex"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    config = home / "config.toml"
+    seat = tmp_path / "seat"
+    seat.mkdir()
+    original = f'[projects."{seat.resolve()}"]\ntrust_level = "untrusted"\nsandbox_mode = "read-only"\n'
+    config.write_text(original)
+    assert CodexProvider().trust_new_seat(seat) is False
+    assert config.read_text() == original
+
+    config.write_text(f'[projects."{seat.resolve()}"]\nsandbox_mode = "read-only"\n')
+    assert CodexProvider().trust_new_seat(seat) is True
+    assert tomllib.loads(config.read_text())["projects"][str(seat.resolve())] == {
+        "sandbox_mode": "read-only", "trust_level": "trusted"}

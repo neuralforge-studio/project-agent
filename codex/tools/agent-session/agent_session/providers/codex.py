@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import time
+import tomllib
 
 from ..errors import SessionError
 from .common import clean_env, context_timeout, deadline, executable, json_result, run, session_id, text_file
@@ -15,6 +16,106 @@ from .websocket import WebSocketRPC
 TERMINAL_TURNS = {"completed", "interrupted", "failed"}
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _LAUNCH_CONFIG_KEYS = ("sandbox_mode", "shell_environment_policy")
+TRUST_LOCK_SECONDS = 5
+
+
+def _trust_text(original, path):
+    """Add one trust value without rewriting other TOML settings or comments."""
+    try:
+        data = tomllib.loads(original)
+    except tomllib.TOMLDecodeError:
+        return None
+    projects = data.get("projects", {})
+    if not isinstance(projects, dict):
+        return None
+    entry = projects.get(path)
+    if entry is not None and not isinstance(entry, dict):
+        return None
+    if entry is not None and "trust_level" in entry:
+        return original if entry["trust_level"] == "trusted" else None
+    if entry is None:
+        revised = original + ("\n" if original and not original.endswith("\n") else "")
+        revised += f'\n[projects.{json.dumps(path)}]\ntrust_level = "trusted"\n'
+    else:
+        revised = None
+        offset = 0
+        for line in original.splitlines(keepends=True):
+            header = re.fullmatch(r"\s*\[(?!\[)(.*)\]\s*(?:#.*)?", line.rstrip("\r\n"))
+            if header:
+                try:
+                    section = tomllib.loads(f"[{header.group(1)}]\n")
+                except tomllib.TOMLDecodeError:
+                    section = {}
+                if section.get("projects", {}).get(path) == {}:
+                    end = offset + len(line)
+                    revised = (original[:end] + ("" if line.endswith("\n") else "\n")
+                               + 'trust_level = "trusted"\n' + original[end:])
+                    break
+            offset += len(line)
+        if revised is None:
+            return None
+    try:
+        if tomllib.loads(revised)["projects"][path]["trust_level"] == "trusted":
+            return revised
+    except (KeyError, TypeError, tomllib.TOMLDecodeError):
+        pass
+    return None
+
+
+def trust_workspace(path, wait=TRUST_LOCK_SECONDS):
+    """Record trust for a newly cloned Codex seat in the user's config."""
+    home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+    config = (home / "config.toml").resolve()
+    try:
+        config.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    lock = config.with_name(config.name + ".agent-session.lock")
+    end = time.monotonic() + wait
+    while True:
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.05)
+        except OSError:
+            return False
+    temporary = config.with_name(f".{config.name}.agent-session-{os.getpid()}-{time.time_ns()}")
+    try:
+        original = config.read_text(encoding="utf-8") if config.exists() else ""
+        previous = config.stat() if config.exists() else None
+        revised = _trust_text(original, str(Path(path).resolve()))
+        if revised is None:
+            return False
+        if revised == original:
+            return True
+        mode = previous.st_mode & 0o777 if previous else 0o600
+        handle = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(revised)
+            stream.flush()
+            os.fchmod(stream.fileno(), mode)
+            os.fsync(stream.fileno())
+        current = config.stat() if config.exists() else None
+        if (previous is None) != (current is None) or (previous and current and
+                (previous.st_ino, previous.st_mtime_ns, previous.st_size) !=
+                (current.st_ino, current.st_mtime_ns, current.st_size)):
+            return False
+        os.replace(temporary, config)
+        return True
+    except (OSError, UnicodeError):
+        return False
+    finally:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        try:
+            lock.rmdir()
+        except OSError:
+            pass
 
 
 def _merge(base, update):
@@ -194,10 +295,12 @@ class CodexProvider:
         return result
 
     def trust_new_seat(self, root):
-        return False                       # Codex trust is not recorded by this tool
+        return trust_workspace(root)
 
     def startup_dialog(self, screen):
-        return None                        # no Codex startup dialog is known to this tool
+        if re.search(r"\bFolder access\b", screen) and re.search(r"\bTrust this folder\?", screen):
+            return "workspace_trust"
+        return None
 
     def registration_hooks(self, context):
         # SessionStart alone does not prove which tmux run created a thread.
