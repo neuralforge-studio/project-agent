@@ -32,11 +32,9 @@ python3 install.py
 
 `~/.local/bin`을 PATH에 넣으십시오. 설치기는 다른 원본의 링크나 일반 파일을 덮어쓰지 않습니다.
 전체 skills 폴더가 외부 저장소의 symlink이면 그 저장소를 따라가 수정하지 않습니다.
-해당 owner가 제품 스킬 두 항목을 위 안정 root로 연결한 뒤 설치기를 실행하십시오.
+공유 skills 환경에서는 해당 owner가 준비한 제품 링크 두 항목을 검증·재사용합니다.
+최초 운영 전환은 아래 절차로 수행합니다.
 다른 스킬은 보존됩니다.
-기존 CLI·API 링크의 최초 전환도 해당 환경 owner가 기존 코드를 보존한 채 준비합니다.
-agent Git 원본에는 머신별 절대 링크나 clone 깊이에 고정된 외부 상대 링크를 넣지 않습니다.
-agent 소유 전환 절차가 실제 제품 root를 확인하여 runtime 호환 링크를 만들고 복구합니다.
 준비된 각 스킬 링크는 같은 이름의 제품 스킬을 가리켜야 합니다.
 두 스킬의 대상을 서로 바꾼 링크는 준비된 연결로 인정하지 않습니다.
 
@@ -45,6 +43,9 @@ Git·tmux·provider CLI·Board의 Textual은 사용할 기능의 실행 조건�
 Textual 버전은 [requirements.txt](tools/project-board/requirements.txt)가 소유합니다.
 Provider 로그인·SSH 접속·원격 origin 접근은 실제 실행에서 확인합니다.
 설치기는 provider를 실행하거나 인증 파일을 읽지 않습니다.
+설치 결과의 `action`·`changes`는 복사 설치본과 설치기가 관리한 제품 연결만 설명합니다.
+`consumer_transition.verified`는 항상 `false`입니다.
+기존 환경의 운영 소비 연결 전환은 설치기가 확인하지 않습니다.
 
 세 launcher의 기존 Python 선택 정책은 각 도구 README를 따릅니다.
 Agent Session은 macOS `python3`, WSL `~/python/.venv/bin/python`,
@@ -59,6 +60,7 @@ SSH seat의 host·절대 path·선택 Python은 기존 프로젝트 등록이 �
 내용이 바뀌면 새 설치본을 준비한 뒤 안정 root를 원자적으로 전환합니다.
 같은 내용의 재설치는 같은 링크를 재사용합니다.
 설치 기록은 `~/.local/state/project-agent/install.json`에 보관합니다.
+기록에는 설치한 버전의 파일 목록과 내용 해시를 포함합니다.
 중간 실패에서는 이번 실행이 바꾼 제품 링크를 복원합니다.
 
 ```sh
@@ -67,13 +69,25 @@ python3 ~/.local/lib/project-agent/install.py --rollback
 
 명시적 복구는 설치기가 소유한 연결만 직전 대상으로 되돌립니다.
 현재 링크가 사용자가 바꾼 항목이거나 이전 대상이 사라졌으면 성공으로 보고하지 않습니다.
+이전 설치본의 파일·실행 권한·해시를 확인하고 손상됐으면 연결과 기록을 보존한 채 거절합니다.
 이전 설치본은 자동 삭제하지 않습니다.
 실행 중 run·hook·controller가 기록한 절대 library 경로는 종료 전까지 필요합니다.
 등록·state·CR·Decision의 소유 위치는 설치나 복구로 바뀌지 않습니다.
 
-agent.desk 환경의 최초 전환·동결 실행본 보존·정상 인계는 별도 owner 작업입니다.
+## 기존 환경의 최초 운영 전환
+
+안정 root가 존재하거나 설치 명령이 성공해도 기존 운영 소비 연결의 전환을 뜻하지 않습니다.
+제품 설치기는 legacy/new tmux include를 자동으로 선택하지 않습니다.
 공통 AGENTS·references·provider 설정·일반 tmux 환경은 agent.desk가 소유합니다.
-이 저장소의 제품 제출만으로 운영 전환이 완료되지는 않습니다.
+
+1. 두 owner가 제품 제출과 agent 준비 변경을 검토합니다. agent 담당자는 옛 실제 코드와 연결을 복구 근거로 보존합니다.
+2. 검증된 복사 설치본을 준비합니다. CLI·API·스킬·제품 tmux 자산의 완결성을 확인합니다.
+3. agent 담당자가 실제 설치 root를 확인하고 CLI·API·스킬·tmux 소비 연결을 명시적으로 함께 전환합니다. agent 준비 commit도 이 전환 조건이 갖춰진 시점에 통합합니다.
+4. 실패하면 보존한 실제 코드와 양쪽 연결을 함께 복구합니다. 성공하면 기존 run을 정상 인계합니다.
+
+agent Git 원본에는 머신별 절대 링크나 clone 깊이에 고정된 외부 상대 링크를 넣지 않습니다.
+agent 소유 전환 절차가 runtime 호환 링크를 생성·복구합니다.
+제품 설치 기록은 이 owner 작업의 완료 상태를 기록하거나 판정하지 않습니다.
 
 ## tmux 연결
 

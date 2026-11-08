@@ -75,6 +75,10 @@ Textual 버전은 Board의 `requirements.txt` 하나가 소유합니다.
 새 module을 추가하면 같은 manifest를 갱신합니다. 빠진 필수 파일은 설치 전에 거절합니다.
 내용 해시는 상대 경로·실행 속성·내용으로 계산합니다.
 복사본을 검사한 뒤 안정 root 링크를 전환하며 기존 설치본은 남깁니다.
+설치 기록의 파일 목록은 해당 버전 manifest에서 파생한 검증 자료입니다.
+복구 전에는 그 목록과 해시로 이전 설치본의 무결성을 확인합니다.
+현재 버전의 파일 목록을 이전 설치본에 강제하지 않습니다.
+목록이 없는 초기 설치 기록은 기존 manifest로 검사합니다.
 설치기는 등록·인증·운영 state나 provider 설정을 생성하지 않습니다.
 
 SSH archive는 Session·Item helper와 `guidance/skills`, `guidance/docs`를 전송합니다.
@@ -88,7 +92,9 @@ Board include와 호환 helper는 `~/.local/bin/project-board`를 호출합니�
 일반 tmux 설정과 사용자 status layout은 이 제품의 설치 대상이 아닙니다.
 
 agent.desk는 공통 지침·개인 환경·제품 consumer 연결을 소유합니다.
-최초 운영 전환은 해당 owner와 조정합니다.
+최초 운영 전환의 순서와 책임은 [README](../README.md#기존-환경의-최초-운영-전환)를 따릅니다.
+설치 결과는 설치기가 관리한 파일과 연결만 보고하며 기존 운영 소비 연결 전환은 미확인으로 표시합니다.
+안정 root 존재만으로 legacy/new tmux를 선택하거나 준비 commit 통합을 판정하지 않습니다.
 기존 run이 기록한 옛 library·hook·controller 경로는 정상 인계 전까지 보존해야 합니다.
 제품 저장소의 구현 완료와 실제 운영 이전 완료를 구분합니다.
 

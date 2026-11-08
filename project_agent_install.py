@@ -52,6 +52,13 @@ PRODUCT_FILES = (
 )
 
 
+CONSUMER_TRANSITION = {
+    'verified': False,
+    'required_action': ('The environment owner must explicitly switch existing CLI/API/skills/tmux '
+                        'consumers together. Product-root existence alone does not confirm cutover.'),
+}
+
+
 class InstallError(Exception):
     def __init__(self, code: str, message: str):
         self.code = code
@@ -66,8 +73,21 @@ def product_files(source: Path) -> tuple[Path, ...]:
         files.update((f'tools/{tool}/bin/{tool}', f'tools/{tool}/README.md'))
         files.update(f'tools/{tool}/{package}/{module}.py' for module in PRODUCT_MODULES[tool])
     files.add('tools/agent-session/agent_session.py')
-    for name in sorted(files):
-        path = source / name
+    return _validated_files(source, sorted(files))
+
+
+def _validated_files(source: Path, names) -> tuple[Path, ...]:
+    """Check the selected version's files without following source links."""
+    if not isinstance(names, (tuple, list)):
+        raise InstallError('payload_path_invalid', f'Invalid payload inventory at: {source}')
+    paths = []
+    for name in names:
+        if not isinstance(name, str):
+            raise InstallError('payload_path_invalid', f'Invalid payload inventory at: {source}')
+        relative = Path(name)
+        if relative.is_absolute() or '..' in relative.parts or not relative.parts:
+            raise InstallError('payload_path_invalid', f'Invalid payload member: {name}')
+        path = source / relative
         if not path.is_file():
             raise InstallError('payload_missing', f'Required product file is missing: {path}')
         cursor = path
@@ -75,7 +95,15 @@ def product_files(source: Path) -> tuple[Path, ...]:
             if cursor.is_symlink():
                 raise InstallError('payload_link', f'Product source must contain real files: {cursor}')
             cursor = cursor.parent
-    return tuple(Path(name) for name in sorted(files))
+        paths.append(relative)
+    for tool in TOOLS:
+        relative = Path('tools') / tool / 'bin' / tool
+        launcher = source / relative
+        if relative not in paths:
+            raise InstallError('payload_missing', f'Required launcher is absent from the inventory: {launcher}')
+        if not launcher.stat().st_mode & 0o111 or not os.access(launcher, os.X_OK):
+            raise InstallError('payload_not_executable', f'Required launcher is not executable: {launcher}')
+    return tuple(sorted(paths, key=str))
 
 
 def _digest(source: Path, files: tuple[Path, ...]) -> str:
@@ -87,6 +115,14 @@ def _digest(source: Path, files: tuple[Path, ...]) -> str:
         digest.update(str(relative).encode() + b'\0' + mode + b'\0')
         digest.update(str(len(content)).encode() + b'\0' + content)
     return digest.hexdigest()
+
+
+def _verify_installed_payload(root: Path, expected_digest: str, files=None):
+    if root.is_symlink() or not root.is_dir():
+        raise InstallError('payload_conflict', f'Installed payload path is not a real directory: {root}')
+    paths = product_files(root) if files is None else _validated_files(root, files)
+    if _digest(root, paths) != expected_digest:
+        raise InstallError('payload_conflict', f'Installed payload content differs from its recorded hash: {root}')
 
 
 def _lexical_target(path: Path, target: str) -> Path:
@@ -206,10 +242,8 @@ def plan(source: Path, home: Path) -> InstallPlan:
         changes.append({'path': str(path), 'before': before, 'after': str(target)})
     _check_writable(copied_root.parent)
     _check_writable(_state_path(home).parent)
-    if copied_root.is_symlink() or copied_root.exists() and not copied_root.is_dir():
-        raise InstallError('payload_conflict', f'Installed payload path is not a real directory: {copied_root}')
-    if copied_root.exists() and _digest(copied_root, product_files(copied_root)) != digest:
-        raise InstallError('payload_conflict', f'Installed payload content differs from its hash: {copied_root}')
+    if copied_root.exists() or copied_root.is_symlink():
+        _verify_installed_payload(copied_root, digest)
     return InstallPlan(source, home, files, digest, copied_root, tuple(changes), state)
 
 
@@ -262,6 +296,7 @@ def _describe(prepared: InstallPlan, action: str) -> dict:
             'product_root': str(prepared.home / '.local/lib/project-agent'),
             'installed_payload': str(prepared.copied_root),
             'changes': list(prepared.changes),
+            'consumer_transition': CONSUMER_TRANSITION.copy(),
             'runtime': runtime_readiness(prepared.source, prepared.home)}
 
 
@@ -275,11 +310,15 @@ def _replace_link(path: Path, target: str | None):
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f'.{path.name}.{os.getpid()}.new')
+    created = False
     try:
         temporary.symlink_to(target)
+        created = True
         os.replace(temporary, path)
+        created = False
     finally:
-        temporary.unlink(missing_ok=True)
+        if created:
+            temporary.unlink(missing_ok=True)
 
 
 def _write_state(home: Path, state: dict):
@@ -360,6 +399,7 @@ def install(source: Path, home: Path) -> dict:
         created = _copy_payload(prepared)
         if prepared.changes:
             entry = {'content_hash': prepared.digest, 'installed_payload': str(prepared.copied_root),
+                     'files': [str(path) for path in prepared.files],
                      'created_payload': created, 'changes': list(prepared.changes)}
             state = {'version': 1, 'history': [*prepared.state['history'], entry]}
             _apply_transaction(prepared.home, list(prepared.changes), state)
@@ -385,8 +425,16 @@ def rollback(home: Path) -> dict:
             before = change['before']
             if before is not None and not _lexical_target(path, before).exists():
                 raise InstallError('rollback_target_missing', f'Previous link target no longer exists: {path} -> {before}')
+            if path == home / '.local/lib/project-agent' and before is not None:
+                target = _lexical_target(path, before)
+                recorded = next((entry for entry in reversed(state['history'][:-1])
+                                 if entry.get('installed_payload') == str(target)), None)
+                if recorded is None:
+                    raise InstallError('rollback_target_unknown', f'Previous payload has no installation record: {target}')
+                _verify_installed_payload(target, recorded['content_hash'], recorded.get('files'))
             changes.append({'path': str(path), 'before': change['after'], 'after': before})
         _apply_transaction(home, changes, {'version': 1, 'history': state['history'][:-1]})
     return {'action': 'rolled_back', 'restored_links': [c['path'] for c in changes],
             'retained_payload': previous['installed_payload'],
+            'consumer_transition': CONSUMER_TRANSITION.copy(),
             'note': 'Copied payloads are retained for existing runs. Parent repository migration is managed by its owner.'}

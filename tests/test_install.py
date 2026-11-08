@@ -57,6 +57,21 @@ def test_check_is_read_only_and_reports_missing_runtime(distribution, home, monk
     assert (home / '.local/lib/project-agent/install.py').is_file()
 
 
+def test_installation_results_do_not_verify_existing_consumer_cutover(distribution, home):
+    tmux_config = home / '.tmux.conf'
+    legacy_config = '# The environment owner selects the operational include.\nsource-file ~/legacy/project_board.conf\n'
+    tmux_config.write_text(legacy_config, encoding='utf-8')
+    for args, expected in ((('--check',), 'check'), ((), 'installed'),
+                           ((), 'unchanged'), (('--rollback',), 'rolled_back')):
+        completed = run_cli(distribution, home, *args)
+        assert completed.returncode == 0, completed.stderr
+        result = json.loads(completed.stdout)
+        assert result['action'] == expected
+        assert result['consumer_transition']['verified'] is False
+        assert result['consumer_transition']['required_action']
+        assert tmux_config.read_text(encoding='utf-8') == legacy_config
+
+
 def test_payload_is_complete_and_excludes_operational_files(distribution, home):
     (distribution / '.git').mkdir()
     (distribution / '.git/config').write_text('private')
@@ -417,3 +432,80 @@ def test_install_refuses_skills_parent_changed_after_plan(distribution, home, tm
     assert not (home / '.local/lib/project-agent').is_symlink()
     assert not (home / '.local/bin/agent-session').is_symlink()
     assert not (home / '.local/state/project-agent/install.json').exists()
+
+
+def test_temporary_link_name_collision_preserves_existing_file(distribution, home):
+    installer.install(distribution, home)
+    stable = home / '.local/lib/project-agent'
+    current_target = os.readlink(stable)
+    record = (home / '.local/state/project-agent/install.json').read_bytes()
+    collision = stable.with_name(f'.{stable.name}.{os.getpid()}.new')
+    collision.write_text('existing user file\n')
+    (distribution / 'README.md').write_text('updated distribution\n')
+
+    with pytest.raises(FileExistsError):
+        installer.install(distribution, home)
+
+    assert collision.is_file()
+    assert not collision.is_symlink()
+    assert collision.read_text() == 'existing user file\n'
+    assert os.readlink(stable) == current_target
+    assert (home / '.local/state/project-agent/install.json').read_bytes() == record
+
+
+def test_rollback_rejects_corrupted_previous_payload(distribution, home):
+    first = installer.install(distribution, home)
+    original = Path(first['installed_payload'])
+    (distribution / 'README.md').write_text('updated distribution\n')
+    latest = installer.install(distribution, home)
+    current = Path(latest['installed_payload'])
+    stable = home / '.local/lib/project-agent'
+    record = (home / '.local/state/project-agent/install.json').read_bytes()
+    corrupted = original / 'tools/agent-session/agent_session/lifecycle.py'
+    corrupted.write_text('raise RuntimeError("corrupted old install")\n')
+
+    with pytest.raises(installer.InstallError) as caught:
+        installer.rollback(home)
+
+    assert str(original) in str(caught.value)
+    assert stable.resolve() == current
+    assert (home / '.local/bin/agent-session').resolve() == current / 'tools/agent-session/bin/agent-session'
+    assert (home / '.local/state/project-agent/install.json').read_bytes() == record
+    assert corrupted.read_text() == 'raise RuntimeError("corrupted old install")\n'
+
+
+@pytest.mark.parametrize('tool', ['agent-session', 'project-item', 'project-board'])
+def test_nonexecutable_launcher_rejects_distribution(distribution, home, tool):
+    launcher = distribution / 'tools' / tool / 'bin' / tool
+    launcher.chmod(0o644)
+    for action in (installer.check, installer.install):
+        with pytest.raises(installer.InstallError) as caught:
+            action(distribution, home)
+        assert str(launcher) in str(caught.value)
+        assert list(home.iterdir()) == []
+    assert launcher.stat().st_mode & 0o111 == 0
+
+
+def test_rollback_uses_the_previous_payload_inventory(distribution, home, monkeypatch):
+    original = installer.install(distribution, home)
+    added_file = 'docs/new-product-asset.md'
+    (distribution / added_file).write_text('A new distribution asset.\n', encoding='utf-8')
+    monkeypatch.setattr(installer, 'PRODUCT_FILES', (*installer.PRODUCT_FILES, added_file))
+    updated = installer.install(distribution, home)
+    assert updated['installed_payload'] != original['installed_payload']
+    installer.rollback(home)
+    assert (home / '.local/lib/project-agent').resolve() == Path(original['installed_payload'])
+    assert not (home / '.local/lib/project-agent' / added_file).exists()
+
+
+def test_rollback_accepts_initial_records_without_inventory(distribution, home):
+    original = installer.install(distribution, home)
+    (distribution / 'README.md').write_text('Updated distribution.\n', encoding='utf-8')
+    installer.install(distribution, home)
+    record = home / '.local/state/project-agent/install.json'
+    saved = json.loads(record.read_text(encoding='utf-8'))
+    for transaction in saved['history']:
+        transaction.pop('files')
+    record.write_text(json.dumps(saved), encoding='utf-8')
+    installer.rollback(home)
+    assert (home / '.local/lib/project-agent').resolve() == Path(original['installed_payload'])
