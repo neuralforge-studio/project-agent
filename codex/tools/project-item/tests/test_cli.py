@@ -103,12 +103,41 @@ def test_cwd_selects_the_project_and_requester_is_recorded(project, capsys, monk
     assert code == 0
     own = project["cr"] / "open" / "TOOL-001-own-finding.md"
     assert "Requester" not in own.read_text()
+    assert "notify:" not in out
     monkeypatch.chdir(project["other"])
     code, out, _ = run(capsys, "new", "cr", "--config", config, "--project", "demo", "--area", "TOOL",
                        "--title", "Request from other")
     text = (project["cr"] / "open" / "TOOL-002-request-from-other.md").read_text()
     assert f"- Requester: other, {project['other']}," in text
     assert "notify:" in out
+
+
+@pytest.mark.parametrize("team", [False, True])
+@pytest.mark.parametrize("live_owner", [False, True])
+def test_cross_project_cr_links_the_notification_contract(project, capsys, monkeypatch,
+                                                        isolated_home, team, live_owner):
+    if team:
+        config = json.loads(project["config"].read_text())
+        config[str(project["base"])]["seats"] = ["../demo.seat0"]
+        project["config"].write_text(json.dumps(config))
+    if live_owner:
+        sessions = isolated_home / ".claude" / "sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "worker.json").write_text(json.dumps({
+            "kind": "interactive", "entrypoint": "cli", "pid": os.getpid(),
+            "cwd": str(project["base"]), "name": "recent-worker", "startedAt": 1,
+        }))
+    monkeypatch.chdir(project["other"])
+    code, out, err = run(capsys, "new", "cr", "--config", str(project["config"]),
+                        "--project", "demo", "--area", "TOOL", "--title", "Cross-project request")
+    item = project["cr"] / "open" / "TOOL-001-cross-project-request.md"
+    contract = Path(__file__).resolve().parents[3] / "skills/project-item/references/cr.md"
+
+    assert code == 0 and not err
+    assert item.is_file() and f"opened {item}" in out
+    assert f"notify: {contract}#다른-project에-요청할-때" in out.splitlines()
+    assert "SendMessage" not in out
+    assert "recent-worker" not in out
 
 
 def test_check_exit_codes_and_duplicates(project, capsys):

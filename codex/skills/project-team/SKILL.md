@@ -50,8 +50,12 @@ agent-session review --job TOOL-012
 agent-session send --job TOOL-012 --file FEEDBACK.md
 agent-session stop --job TOOL-012
 project-item new decide --title "질문 한 줄" --urgency high --blocks "기다리는 일" --related TOOL-012 --body-file -
-project-item move D-20261105-01 done --outcome "decided A" --by user --note "D-20261105-01 A"
+# 사용자의 답변을 받은 후 원문을 접수하고 Leader가 완료합니다.
+project-item answer D-20261105-01 --text "D-20261105-01 A"
+project-item move D-20261105-01 done --outcome "decided A" --by Leader
 ```
+
+결정 답변의 접수와 완료는 [결정 항목 절차](../project-item/references/decide.md)를 따릅니다.
 
 위임 범위:
 
@@ -112,8 +116,8 @@ Tmux window와 provider session은 유지하고 후속 메시지에서 관리를
 
 1. 최초 prompt가 가리키는 CR 파일과 그 본문이 link한 지침 문서를 읽고 범위, 작업 경로, 검증 기준을 확인합니다.
 2. 지정한 범위에서 작업하고 해당 검증을 수행합니다.
-3. Write CR이면 `cr/<CR-ID>` branch에 commit합니다. 작업 중 `origin/main`이 진행했으면 `cr/<CR-ID>`에 merge하고, merge한 상태에서 Verification을 다시 실행해 통과한 commit을 push합니다. 검증을 모두 마친 뒤에만 review를 요청합니다.
-4. CR 파일의 `## Result`에 들여쓰지 않은 제출 행 `- 제출 commit: <40자리 hash>`와 검증 명령·결과를 추가합니다. Read-only CR은 제출 행 없이 결과만 씁니다. 다른 절은 고치지 않습니다.
+3. Write CR이면 `cr/<CR-ID>` branch에 commit합니다. 작업 중 `origin/main`이 진행했으면 `cr/<CR-ID>`에 merge합니다. Merge로 검증 입력·환경·판정 기준이 달라진 항목만 merge한 상태에서 다시 실행하고, 영향받지 않은 유효한 근거는 재사용합니다. 제출 commit에서 실행해야 하는 저장소 필수 검사는 그 commit에서 수행합니다. 필요한 검증을 마친 제출 commit을 `origin`의 `cr/<CR-ID>` branch에 push합니다. 현재 작업의 기존 게시 승인을 재사용합니다.
+4. CR 파일의 `## Result`에 들여쓰지 않은 제출 행 `- 제출 commit: <40자리 hash>`와 검증 명령·결과, 근거 재사용·재실행 판정을 추가합니다. Read-only CR은 제출 행 없이 결과만 씁니다. 다른 절은 고치지 않습니다.
 5. 검증을 마친 제출마다 `agent-session send --job leader "CR-ID와 제출 commit"`로 한 번 보고합니다.
 6. 같은 CR의 feedback을 받으면 해당 범위의 작업·검증을 마친 수정 제출을 보고합니다. 접수 확인이나 중간 결과를 별도로 회신하지 않습니다.
 7. Leader가 인수하면 자기가 띄운 background 작업(shell·monitor 등)을 멈추고 자기 작업의 불필요한 산출물을 정리한 뒤 종료 준비 완료를 한 번 보고합니다.

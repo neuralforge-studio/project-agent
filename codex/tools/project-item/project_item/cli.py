@@ -106,12 +106,8 @@ def cmd_new_cr(args) -> int:
     if args.body_file:
         _report_format(CR, path)
     if source_name != project.project_id:
-        owners = registry.owner_sessions(project)
-        if owners:
-            print(f"notify: SendMessage to='{owners[0]['name']}' message='[project-item] {project.project_id} "
-                  f"{store.file_id(CR, path)} from {source_name}: {args.title}. {path}'")
-        else:
-            print("notify: no live owner session; the owner sees the CR with `project-item ls`.")
+        contract = Path(__file__).resolve().parents[3] / "skills/project-item/references/cr.md"
+        print(f"notify: {contract}#다른-project에-요청할-때")
     return 0
 
 

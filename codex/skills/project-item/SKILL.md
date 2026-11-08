@@ -96,6 +96,8 @@ Project는 현재 경로의 등록 base·seat로 선택합니다. 다른 project
 | `project-item render decide [--out F]` | 결정 페이지를 다시 씀 |
 | `project-item owner PROJECT` | Base·seat 아래의 live Claude 대화형 session 이름 |
 
+다른 project에 CR을 만들면 생성 경로와 [알림 계약](references/cr.md#다른-project에-요청할-때)의 위치를 출력합니다. 알림은 자동 전송하지 않습니다.
+
 입력·등록 오류는 exit 2와 `project-item: <code>: <message>`입니다.
 
 ## 동시 실행
