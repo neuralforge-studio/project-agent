@@ -1,0 +1,34 @@
+{
+  "/home/user/work/example.main": {
+    "project": "example",
+    "provider": "codex",
+    "seats": [
+      "../example.seat0",
+      "../example.seat1"
+    ],
+    "path_cr": "agent/cr",
+    "path_decide": "agent/decide",
+    "launch": {
+      "args": [
+        "--dangerously-bypass-approvals-and-sandbox"
+      ]
+    }
+  },
+  "/home/user/work/other.main": {
+    "project": "other",
+    "provider": "claude",
+    "seats": [
+      "../other.seat0"
+    ],
+    "launch": {
+      "args": [
+        "--permission-mode",
+        "bypassPermissions"
+      ],
+      "worker_args": [
+        "--model",
+        "claude-sonnet-5-5"
+      ]
+    }
+  }
+}

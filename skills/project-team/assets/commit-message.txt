@@ -1,0 +1,5 @@
+<type>: <summary>
+
+Reason: <reason for this change>
+Job: <JOB_ID>
+Validation: <actual command and result, or not run with its reason>
