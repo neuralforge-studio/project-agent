@@ -554,10 +554,31 @@ class Tmux:
         if (not meta.get("cli_birth") or not process.alive(pane["pane_pid"], meta["cli_birth"])
                 or pane["pane_pid"] != meta.get("cli_pid")):
             raise SessionError("target_changed", "The provider pane process identity changed.")
-        self._run("send-keys", "-t", pane_id, "-l", "/exit")
-        # Codex 0.166 treats Enter within its 120 ms paste window as input text.
-        time.sleep(0.25)
-        self._run("send-keys", "-t", pane_id, "Enter")
+        stage, literal_confirmed = "literal", False
+        try:
+            self._exit_input_ready(pane_id)
+            self._run("send-keys", "-t", pane_id, "-l", "/exit")
+            literal_confirmed = True
+            # Codex 0.166 treats Enter within its 120 ms paste window as input text.
+            time.sleep(0.25)
+            stage = "enter"
+            self._exit_input_ready(pane_id)
+            self._run("send-keys", "-t", pane_id, "Enter")
+        except SessionError as error:
+            error.details = {**error.details, "exit_delivery": {"stage": stage,
+                                                               "literal_confirmed": literal_confirmed}}
+            raise
+
+    def _exit_input_ready(self, pane_id):
+        """A native idle report does not mean tmux will route keys to the CLI."""
+        raw = self._run("display-message", "-p", "-t", pane_id, "#{pane_in_mode}\t#{pane_mode}")
+        fields = raw.split("\t")
+        if (len(fields) != 2 or fields[0] not in ("0", "1")
+                or bool(fields[1]) != (fields[0] == "1")):
+            raise SessionError("tmux_unknown", "Cannot confirm the pane input mode.", 4, {"pane": pane_id})
+        if fields[0] == "1":
+            raise SessionError("pane_input_blocked", "A tmux mode blocks the provider's exit input.", 4,
+                               {"pane": pane_id, "pane_mode": fields[1]})
 
     def request_placeholder_stop(self, window_id):
         """Request TERM only for the current run's unlaunched waiting process."""

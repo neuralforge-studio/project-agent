@@ -828,6 +828,60 @@ def test_stop_that_times_out_on_a_live_cli_lets_it_take_messages_again(session_e
     assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
 
 
+def test_codex_stop_preserves_assignment_in_view_mode_and_releases_after_explicit_retry(session_env):
+    env = session_env
+    cr = env.cr(mode="read-only")
+    worker = env.manager().start(cr)
+    env.finish(cr, state="open", note="read-only investigation completed")
+    before = env.store.read()
+    env.tmux.command("run-shell", "-t", worker["pane_id"], "printf 'fixture output\\n'")
+    with pytest.raises(SessionError) as error:
+        env.manager(timeout=2).control("stop", job=cr)
+    assert (error.value.code, error.value.exit_code) == ("pane_input_blocked", 4)
+    assert error.value.details["stopping_restored"] is True
+    assert error.value.details["exit_wait"]["exit_requested"] is False
+    assert env.store.read() == before
+    current = env.tmux.get_current("fixture", "seat-0")
+    assert current["run_id"] == worker["run_id"] and current["stopping"] is False
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
+
+    env.tmux.command("send-keys", "-X", "-t", worker["pane_id"], "cancel")
+    result = env.manager().control("stop", job=cr)
+    assert result["stopped"] is True and result["released"] is True
+    assert env.store.read()["0"] == EMPTY
+    assert env.tmux.get_current("fixture", "seat-0") is None
+
+
+def test_codex_exit_with_unconfirmed_enter_keeps_assignment_and_does_not_resend(session_env, monkeypatch):
+    env = session_env
+    cr = env.cr(mode="read-only")
+    worker = env.manager().start(cr)
+    env.finish(cr, state="open", note="read-only investigation completed")
+    before = env.store.read()
+    manager = env.manager()
+    run, sent = manager.tmux._run, []
+
+    def unconfirmed_enter(*arguments, **options):
+        if arguments[0] == "send-keys":
+            sent.append(arguments)
+            if arguments[-1] == "Enter":
+                raise SessionError("tmux_unknown", "The fixture cannot confirm Enter delivery.", 4)
+        return run(*arguments, **options)
+
+    monkeypatch.setattr(manager.tmux, "_run", unconfirmed_enter)
+    with pytest.raises(SessionError) as error:
+        manager.control("stop", job=cr)
+    assert error.value.code == "tmux_unknown"
+    assert error.value.details["exit_delivery"] == {"stage": "enter", "literal_confirmed": True}
+    assert error.value.details["exit_wait"]["exit_requested"] is False
+    assert error.value.details["stopping_restored"] is True
+    assert sent == [("send-keys", "-t", worker["pane_id"], "-l", "/exit"),
+                    ("send-keys", "-t", worker["pane_id"], "Enter")]
+    assert env.store.read() == before
+    assert env.tmux.get_current("fixture", "seat-0")["run_id"] == worker["run_id"]
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
+
+
 def claude_project(env, monkeypatch):
     """Make the fixture a Claude project; return the file where its CLI records input and signals."""
     import agent_session.lifecycle as lifecycle

@@ -395,6 +395,91 @@ def test_exit_waits_for_paste_sensitive_tui_to_submit_one_enter(tmp_path, tmux):
     assert wait_for(exited)
 
 
+@pytest.mark.parametrize("mode", ["copy-mode", "view-mode"])
+@pytest.mark.parametrize("after_literal", [False, True])
+def test_exit_refuses_tmux_mode_and_preserves_partial_input(tmp_path, tmux, mode, after_literal, request, monkeypatch):
+    meta = new_window(tmux, tmp_path)
+    tmux.set_current("demo", "seat-0", meta)
+    ready, observation = tmp_path / "ready.txt", tmp_path / "input.json"
+    fixture = Path(__file__).parent / "fixtures" / "paste_sensitive_tui.py"
+    script = tmp_path / "launch.sh"
+    script.write_text("#!/bin/bash\nexec " + shlex.join([sys.executable, "-u", str(fixture),
+                                                      str(ready), str(observation)]) + "\n")
+    launched = tmux.launch(meta["window_id"], tmp_path, script)
+    wait_for(ready.exists)
+    client = subprocess.Popen(tmux._argv(["-C", "attach", "-t", "demo"]),
+                              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def detach():
+        client.stdin.close()
+        client.wait(timeout=10)
+
+    request.addfinalizer(detach)
+    wait_for(lambda: tmux.command("list-clients", "-F", "#{client_pid}").strip())
+    def open_mode():
+        if mode == "copy-mode":
+            tmux.command("copy-mode", "-t", meta["pane_id"])
+        else:
+            # run-shell output opens view-mode without sending anything to the TUI.
+            tmux.command("run-shell", "-t", meta["pane_id"], "printf 'fixture output\\n'")
+
+    if after_literal:
+        run = tmux._run
+
+        def mode_after_text(*arguments, **options):
+            result = run(*arguments, **options)
+            if arguments == ("send-keys", "-t", meta["pane_id"], "-l", "/exit"):
+                open_mode()
+            return result
+
+        monkeypatch.setattr(tmux, "_run", mode_after_text)
+    else:
+        open_mode()
+    with pytest.raises(SessionError) as error:
+        tmux.send_exit(meta["pane_id"])
+    assert (error.value.code, error.value.exit_code) == ("pane_input_blocked", 4), error.value.as_dict()
+    assert error.value.details["pane_mode"] == mode
+    assert error.value.details["exit_delivery"] == {"stage": "enter" if after_literal else "literal",
+                                                   "literal_confirmed": after_literal}
+    assert not observation.exists()
+    assert alive(launched["cli_pid"], launched["cli_birth"])
+    assert tmux.command("display-message", "-p", "-t", meta["pane_id"], "#{pane_mode}") == mode
+
+    # Only the isolated test operator closes its mode, then makes a new explicit request.
+    tmux.command("send-keys", "-X", "-t", meta["pane_id"], "cancel")
+    if after_literal:
+        tmux.command("send-keys", "-t", meta["pane_id"], "Enter")
+    else:
+        tmux.send_exit(meta["pane_id"])
+    wait_for(observation.exists)
+    assert json.loads(observation.read_text()) == {"text": "/exit", "enter_suppressed": False, "enter_count": 1}
+    assert wait_for(lambda: tmux.pane_info(meta["pane_id"])["pane_dead"]
+                    and not alive(launched["cli_pid"], launched["cli_birth"]))
+
+
+@pytest.mark.parametrize("raw", ["", "0", "2\t", "0\tview-mode", "1\t", "1\tcopy-mode\textra"])
+def test_exit_sends_no_keys_when_the_input_mode_is_unknown(tmp_path, tmux, monkeypatch, raw):
+    meta = new_window(tmux, tmp_path)
+    tmux.set_current("demo", "seat-0", meta)
+    script = tmp_path / "launch.sh"
+    script.write_text("#!/bin/bash\nexec /bin/cat\n")
+    launched = tmux.launch(meta["window_id"], tmp_path, script)
+    run = tmux._run
+
+    def incomplete_mode(*arguments, **options):
+        if arguments == ("display-message", "-p", "-t", meta["pane_id"], "#{pane_in_mode}\t#{pane_mode}"):
+            return raw
+        assert arguments[0] != "send-keys", "Unknown input mode must not receive keys."
+        return run(*arguments, **options)
+
+    monkeypatch.setattr(tmux, "_run", incomplete_mode)
+    with pytest.raises(SessionError) as error:
+        tmux.send_exit(meta["pane_id"])
+    assert (error.value.code, error.value.exit_code) == ("tmux_unknown", 4)
+    assert error.value.details["exit_delivery"] == {"stage": "literal", "literal_confirmed": False}
+    assert alive(launched["cli_pid"], launched["cli_birth"])
+
+
 def test_pointer_is_cleared_only_for_the_named_run(tmp_path, tmux):
     meta = new_window(tmux, tmp_path)
     tmux.set_current("demo", "seat-0", meta)

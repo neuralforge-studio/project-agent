@@ -856,6 +856,12 @@ Claude는 process group에 신호를 보내지 않습니다.
 Claude 관리 pane에는 어떤 키도 입력하지 않습니다. 사용자가 같은 입력란에 입력하는 중일 수 있습니다.
 Codex는 SIGTERM 종료 동작을 확인하기 전까지 관리 pane에 /exit와 Enter를 전달합니다.
 이 키 입력은 Codex 종료 요청에만 사용하며 JOB 메시지·dialog 승인에 사용하지 않습니다.
+Codex는 각 키 전송 전에 `pane_in_mode`·`pane_mode`를 확인합니다.
+Copy-mode·view-mode가 열려 있으면 `pane_input_blocked`(exit 4)와 해당 `pane_mode`를 반환합니다.
+모드 관찰이 불완전하면 `tmux_unknown`입니다. 공통 도구는 모드를 닫거나 키를 추가로 보내지 않습니다.
+종료 전달 오류의 `exit_delivery.stage`는 `literal`(`/exit` 전송 단계) 또는 `enter`입니다.
+`exit_delivery.literal_confirmed`는 tmux가 literal 전송 명령의 성공을 반환했는지입니다. TUI 수신 확인은 아닙니다.
+Literal 전송 뒤 모드가 열리면 Enter를 보내지 않고 부분 전송 근거를 보존합니다.
 현재 turn을 확인하지 못하면 종료 요청을 반복하지 않고 timeout 오류를 반환합니다.
 실제 종료는 PID·process group·pane·provider 관찰로 확인합니다. Hook만으로 종료 완료를 판정하지 않습니다.
 SSH Worker는 이 근거를 원격 호스트에서 관찰합니다. 로컬 SSH 표시 창의 종료는 Worker 종료 근거가 아닙니다.
@@ -870,7 +876,7 @@ Stop·restart가 실제 종료를 확인하기 전에 실패할 수 있습니다
 
 | 필드 | 뜻 |
 | --- | --- |
-| `exit_requested` | 종료 요청(Claude는 SIGTERM)을 이미 보냈는지. false이면 CLI가 idle이 되기를 기다리던 중입니다. |
+| `exit_requested` | 종료 요청 함수가 성공을 반환했는지. false이면 idle 대기 중이거나 종료 전달이 실패·미확인입니다. Codex 부분 전송은 `exit_delivery`로 구분합니다. |
 | `observed` | 성공한 관찰이 있었는지. false이면 아래 필드가 없습니다. |
 | `provider_status` | provider가 보고한 상태. Claude는 background shell이 도는 동안 `idle`이 아니라 `shell`로 보고합니다. |
 | `idle` | provider 기준 idle 여부 |
@@ -1046,6 +1052,12 @@ Codex의 종료 확인 오류 뒤 입력란에 원래 /exit가 남으면 전체 
 운영자는 같은 run·pane·idle과 원래 입력을 확인한 뒤 Enter 한 번으로 그 요청만 마칩니다.
 그 뒤 기존 제어 결과와 실제 종료를 확인합니다.
 입력이나 실제 실행을 확인하지 못하면 추가 키를 보내지 않습니다.
+`pane_input_blocked`이면 운영자가 같은 pane의 모드 화면과 실제 TUI 입력을 따로 확인합니다.
+`display-message -p -t PANE '#{pane_in_mode} #{pane_mode}'`로 모드를 확인하고,
+지원하는 tmux에서는 `capture-pane -p -M -t PANE`로 모드 화면을 확인합니다.
+운영자가 확인한 모드를 닫은 뒤 `pane_in_mode=0`과 실제 입력을 다시 대조합니다.
+부분 전송이 없고 입력이 비었을 때만 정식 stop을 새로 요청합니다.
+부분 전송이나 수신 여부가 unknown이면 위의 원래 /exit 확인 절차를 적용합니다.
 
 ### 자기 종료·자기 재시작
 
