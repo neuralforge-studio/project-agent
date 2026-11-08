@@ -28,7 +28,10 @@ Launcher와 프로젝트 API는 같은 원본을 사용하며 상속한 PYTHONPA
 | macOS | 해당 환경에서 확인한 `python3` |
 
 Tmux·Git·provider CLI를 준비합니다.
-Base는 신뢰한 정확한 실제 경로에 미리 준비합니다.
+Base 디렉토리를 정확한 실제 경로에 미리 준비합니다.
+Codex의 start는 새 Leader 실행 전에 등록 Base의 정확한 실제 경로를 자동으로 신뢰 설정에 기록합니다.
+기존의 명시적 `untrusted`는 보존합니다.
+Claude Base의 신뢰 설정은 미리 준비합니다.
 배정할 seat 디렉토리가 없으면 start가 base의 origin을 clone합니다. 접속 인증은 사용자의 Git·SSH 설정을 따릅니다.
 공통 도구는 프로젝트 코드를 import하거나 실행하지 않습니다. CR 파일과 등록 선언만 읽습니다.
 CR 형식과 in-progress 이동은 같은 저장소의 `codex/tools/project-item`을 사용합니다.
