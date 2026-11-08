@@ -349,6 +349,50 @@ def test_codex_trust_dialog_returns_its_window_and_reuses_the_run(session_env, m
     assert env.manager().start(job)["run_id"] == waiting["run_id"]
 
 
+def test_codex_leader_retry_after_registration_timeout_reuses_the_run(session_env, monkeypatch):
+    import agent_session.lifecycle as lifecycle
+    from agent_session import internal
+    from agent_session_fake_provider import FakeProvider
+
+    env = session_env
+    launch_spec = FakeProvider.launch_spec
+
+    def expire_registration(self, context, prepared):
+        spec = launch_spec(self, context, prepared)
+        spec["argv"].append("--expire-registration")
+        return spec
+
+    def controller_returned(self, context):
+        raise SessionError("fixture_controller_returned", "The startup controller returned before publication.")
+
+    monkeypatch.setattr(FakeProvider, "launch_spec", expire_registration)
+    with monkeypatch.context() as controller:
+        controller.setattr(lifecycle.Manager, "_wait_ready", controller_returned)
+        with pytest.raises(SessionError) as error:
+            env.manager().start("leader")
+        assert error.value.code == "fixture_controller_returned"
+    waiting = env.tmux.get_current("fixture", "leader")
+    failure = env.base / "agent/runs" / waiting["run_id"] / "fixture-tool-error.json"
+    wait_until(failure.is_file)
+    assert json.loads(failure.read_text())["code"] == "registration_timeout"
+    pending = env.tmux.get_current("fixture", "leader")
+    assert pending["registered"] is True and pending["ready"] is False
+    assert env.store.read()["leader"] is None
+
+    result = env.manager().start("leader")
+    assert result["ready"] is True
+    assert all(result[key] == pending[key] for key in ("run_id", "window_id", "pane_id", "cwd"))
+    assert result["session"]["session_id"] == pending["session_id"]
+    assert env.tmux.get_current("fixture", "leader")["cli_pid"] == pending["cli_pid"]
+    assert env.store.read()["leader"]["session_id"] == pending["session_id"]
+    with monkeypatch.context() as native:
+        native.chdir(env.base)
+        native.setenv("CODEX_THREAD_ID", pending["session_id"])
+        session = internal.register_current(pending["run_id"], str(env.config), pending["socket_path"],
+                                            pending["endpoint"])
+    assert session == result["session"]
+
+
 def test_automatic_allocation_skips_a_controlled_unassigned_seat(session_env):
     env = session_env
     with locked(env.base / "agent/control/seat-0.lock"):

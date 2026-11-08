@@ -106,6 +106,7 @@ def main():
         parser.add_argument("--" + key, required=True)
     parser.add_argument("--dialog", action="store_true")
     parser.add_argument("--codex-dialog", action="store_true")
+    parser.add_argument("--expire-registration", action="store_true")
     parser.add_argument("--session")                   # a resumed conversation keeps its recorded ID
     parser.add_argument("--claude", action="store_true")
     parser.add_argument("--record")
@@ -134,16 +135,23 @@ def main():
     import agent_session.providers as providers
     fake = FakeClaudeProvider() if args.claude else FakeProvider()
     providers.get_provider = lambda name: fake
-    from agent_session.internal import register_current
+    from agent_session import internal
     from agent_session.errors import SessionError
     os.environ["CODEX_THREAD_ID"] = args.session or str(uuid.uuid4())
+    clock = internal.time
+    if args.expire_registration:
+        from types import SimpleNamespace
+        ticks = iter((0, 0, 121))
+        internal.time = SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda seconds: None)
     try:
-        register_current(args.run, args.config, args.socket, args.endpoint)
+        internal.register_current(args.run, args.config, args.socket, args.endpoint)
     except SessionError as error:
         # A failed tool call does not exit an interactive provider TUI.
         base = Path(os.environ["AGENT_SESSION_BASE"])
         path = base / "agent" / "runs" / args.run / "fixture-tool-error.json"
         path.write_text(json.dumps(error.as_dict()), encoding="utf-8")
+    finally:
+        internal.time = clock
     for line in sys.stdin:
         note({"input": line.rstrip("\n")})
         if line.strip() == "/exit":
