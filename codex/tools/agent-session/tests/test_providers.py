@@ -392,7 +392,8 @@ def test_codex_startup_dialog_is_named_from_its_screen(screen, kind):
     assert CodexProvider().startup_dialog(screen) == kind
 
 
-def test_codex_trust_records_only_the_new_seat_and_preserves_settings(tmp_path, monkeypatch):
+@pytest.mark.parametrize("method", ["trust_new_seat", "trust_base"])
+def test_codex_trust_records_only_the_workspace_and_preserves_settings(tmp_path, monkeypatch, method):
     home = tmp_path / "codex"
     home.mkdir()
     monkeypatch.setenv("CODEX_HOME", str(home))
@@ -403,8 +404,9 @@ def test_codex_trust_records_only_the_new_seat_and_preserves_settings(tmp_path, 
     config.chmod(0o600)
     seat = tmp_path / "new seat"
     seat.mkdir()
+    trust = getattr(CodexProvider(), method)
 
-    assert CodexProvider().trust_new_seat(seat) is True
+    assert trust(seat) is True
     updated = config.read_text()
     values = tomllib.loads(updated)
     assert values["model"] == "gpt-6"
@@ -412,23 +414,42 @@ def test_codex_trust_records_only_the_new_seat_and_preserves_settings(tmp_path, 
     assert values["projects"][str(seat.resolve())] == {"trust_level": "trusted"}
     assert updated.startswith(original)
     assert config.stat().st_mode & 0o777 == 0o600
-    assert CodexProvider().trust_new_seat(seat) is True
+    assert trust(seat) is True
     assert config.read_text() == updated
 
 
-def test_codex_trust_keeps_explicit_untrusted_and_existing_seat_settings(tmp_path, monkeypatch):
+@pytest.mark.parametrize("method", ["trust_new_seat", "trust_base"])
+def test_codex_trust_keeps_explicit_untrusted_and_existing_workspace_settings(tmp_path, monkeypatch, method):
     home = tmp_path / "codex"
     home.mkdir()
     monkeypatch.setenv("CODEX_HOME", str(home))
     config = home / "config.toml"
     seat = tmp_path / "seat"
     seat.mkdir()
+    trust = getattr(CodexProvider(), method)
     original = f'[projects."{seat.resolve()}"]\ntrust_level = "untrusted"\nsandbox_mode = "read-only"\n'
     config.write_text(original)
-    assert CodexProvider().trust_new_seat(seat) is False
+    assert trust(seat) is False
     assert config.read_text() == original
 
     config.write_text(f'[projects."{seat.resolve()}"]\nsandbox_mode = "read-only"\n')
-    assert CodexProvider().trust_new_seat(seat) is True
+    assert trust(seat) is True
     assert tomllib.loads(config.read_text())["projects"][str(seat.resolve())] == {
         "sandbox_mode": "read-only", "trust_level": "trusted"}
+
+
+def test_codex_base_trust_write_failure_preserves_config(tmp_path, monkeypatch):
+    from agent_session.providers import codex
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    config = tmp_path / "config.toml"
+    original = 'model = "gpt-6"\n# preserve this comment\n'
+    config.write_text(original)
+
+    def refuse_replace(source, target):
+        raise PermissionError("The config cannot be replaced.")
+
+    monkeypatch.setattr(codex.os, "replace", refuse_replace)
+    assert CodexProvider().trust_base(tmp_path / "base") is False
+    assert config.read_text() == original
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["config.toml"]

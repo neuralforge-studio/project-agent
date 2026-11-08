@@ -177,6 +177,126 @@ def test_only_a_seat_that_start_cloned_gets_workspace_trust(session_env, monkeyp
     assert projects == {str(env.seats[0].resolve()): {"trust_level": "trusted"}}
 
 
+@pytest.fixture
+def codex_base_trust(session_env, monkeypatch):
+    """Model the CLI's folder check at launch, with the real Codex config writer."""
+    import tomllib
+    import agent_session.lifecycle as lifecycle
+    from agent_session_fake_provider import FakeProvider
+    from agent_session.providers.codex import trust_workspace, CodexProvider
+
+    env = session_env
+    home = env.root / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    config = home / "config.toml"
+
+    class TrustAwareProvider(FakeProvider):
+        def trust_base(self, root):
+            return trust_workspace(root)
+
+        def launch_spec(self, context, prepared):
+            try:
+                values = tomllib.loads(config.read_text())
+            except tomllib.TOMLDecodeError:
+                values = {}
+            trusted = values.get("projects", {}).get(context["cwd"], {}).get("trust_level") == "trusted"
+            self.dialog = False if trusted else "codex"
+            return super().launch_spec(context, prepared)
+
+        def startup_dialog(self, screen):
+            return CodexProvider().startup_dialog(screen)
+
+    monkeypatch.setattr(lifecycle, "get_provider", lambda name: TrustAwareProvider())
+    return config
+
+
+def test_new_codex_leader_trusts_only_registered_real_base_before_launch(session_env, codex_base_trust):
+    import tomllib
+
+    env = session_env
+    config = codex_base_trust
+    original = 'model = "gpt-6"\n# preserve unrelated settings\n[projects."/outside"]\ntrust_level = "untrusted"\n'
+    config.write_text(original)
+    alias = env.root / "base-alias"
+    alias.symlink_to(env.base, target_is_directory=True)
+    registry = json.loads(env.config.read_text())
+    registry[str(alias)] = registry.pop(str(env.base))
+    env.config.write_text(json.dumps(registry))
+    child = alias / "subdirectory"
+    child.mkdir()
+
+    result = env.manager_at(child).start("leader")
+    assert result["ready"] is True and result["cwd"] == str(env.base.resolve())
+    updated = config.read_text()
+    assert updated.startswith(original)
+    assert tomllib.loads(updated)["projects"] == {
+        "/outside": {"trust_level": "untrusted"},
+        str(env.base.resolve()): {"trust_level": "trusted"},
+    }
+    with pytest.raises(SessionError) as error:
+        env.manager_at(alias).start("leader")
+    assert error.value.code == "leader_exists"
+    assert config.read_text() == updated
+    assert env.tmux.get_current("fixture", "leader")["run_id"] == result["run_id"]
+
+
+@pytest.mark.parametrize("blocked", ["untrusted", "write_failure"])
+def test_codex_base_trust_failure_keeps_config_and_existing_dialog_run(session_env, codex_base_trust,
+                                                                    monkeypatch, blocked):
+    from agent_session.providers import codex
+
+    env = session_env
+    config = codex_base_trust
+    original = (f'[projects."{env.base.resolve()}"]\ntrust_level = "untrusted"\n'
+                if blocked == "untrusted" else 'model = "gpt-6"\n')
+    config.write_text(original)
+    if blocked == "write_failure":
+        replace = codex.os.replace
+
+        def refuse_config_replace(source, target):
+            if Path(target) == config.resolve():
+                raise PermissionError("The config cannot be replaced.")
+            return replace(source, target)
+
+        monkeypatch.setattr(codex.os, "replace", refuse_config_replace)
+    with pytest.raises(SessionError) as first:
+        env.manager().start("leader")
+    assert first.value.code == "needs_user_action"
+    assert first.value.details["dialog"] == "workspace_trust"
+    assert config.read_text() == original
+    waiting = env.tmux.get_current("fixture", "leader")
+    assert first.value.details["window_id"] == waiting["window_id"]
+
+    # Preparing a new config does not make start relaunch or answer an already open dialog.
+    replacement = 'model = "gpt-6"\n'
+    config.write_text(replacement)
+    with pytest.raises(SessionError) as repeated:
+        env.manager().start("leader")
+    assert repeated.value.code == "needs_user_action"
+    assert repeated.value.details["run_id"] == waiting["run_id"]
+    assert config.read_text() == replacement and env.store.read()["leader"] is None
+
+    env.tmux.command("send-keys", "-t", waiting["pane_id"], "-l", "approve")
+    env.tmux.command("send-keys", "-t", waiting["pane_id"], "Enter")
+    wait_until(lambda: env.tmux.get_current("fixture", "leader").get("registered"))
+    result = env.manager().start("leader")
+    assert result["ready"] is True and result["run_id"] == waiting["run_id"]
+    assert config.read_text() == replacement
+
+
+def test_codex_leader_outside_registry_leaves_trust_config_unchanged(session_env, codex_base_trust):
+    env = session_env
+    original = 'model = "gpt-6"\n'
+    codex_base_trust.write_text(original)
+    outside = env.root / "unregistered"
+    outside.mkdir()
+    with pytest.raises(SessionError) as error:
+        env.manager_at(outside).start("leader")
+    assert error.value.code == "project_not_found"
+    assert codex_base_trust.read_text() == original
+
+
 @pytest.mark.parametrize("target", ["leader", "worker"])
 def test_start_held_at_a_startup_dialog_needs_the_user_and_resumes(session_env, monkeypatch, target):
     import agent_session.lifecycle as lifecycle

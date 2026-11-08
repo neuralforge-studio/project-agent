@@ -33,6 +33,9 @@ class FakeProvider:
     def trust_new_seat(self, root):
         return False
 
+    def trust_base(self, root):
+        return False
+
     def startup_dialog(self, screen):
         from agent_session.providers.claude import startup_dialog
         return startup_dialog(screen)

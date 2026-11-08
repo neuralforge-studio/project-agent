@@ -64,7 +64,7 @@ def _trust_text(original, path):
 
 
 def trust_workspace(path, wait=TRUST_LOCK_SECONDS):
-    """Record trust for a newly cloned Codex seat in the user's config."""
+    """Record trust for an approved Codex workspace in the user's config."""
     home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
     config = (home / "config.toml").resolve()
     try:
@@ -296,6 +296,9 @@ class CodexProvider:
         return result
 
     def trust_new_seat(self, root):
+        return trust_workspace(root)
+
+    def trust_base(self, root):
         return trust_workspace(root)
 
     def startup_dialog(self, screen):

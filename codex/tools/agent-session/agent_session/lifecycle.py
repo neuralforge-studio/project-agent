@@ -306,6 +306,8 @@ class Manager(SuspendMixin):
     def _prepare_launch(self, context, request=None):
         if context.get("remote_seat"):
             return {}, {}
+        if self.project.provider == "codex" and context["target"] == "leader":
+            self.provider.trust_base(self.project.base)
         context["timeout"] = self.remaining()
         directory = self.project.runtime_path / "runs" / context["run_id"]
         directory.mkdir(parents=True, exist_ok=True)
