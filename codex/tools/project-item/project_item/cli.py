@@ -44,7 +44,7 @@ def _report_format(kind, path: Path) -> None:
 
 
 def _render(project, root: Path) -> None:
-    print(f"page {render.render(project.project_id, root)}")
+    print(f"page {render.render(project.project_id, root, cr_root=project.path_cr)}")
 
 
 # ---------------------------------------------------------------- commands
@@ -106,12 +106,8 @@ def cmd_new_cr(args) -> int:
     if args.body_file:
         _report_format(CR, path)
     if source_name != project.project_id:
-        owners = registry.owner_sessions(project)
-        if owners:
-            print(f"notify: SendMessage to='{owners[0]['name']}' message='[project-item] {project.project_id} "
-                  f"{store.file_id(CR, path)} from {source_name}: {args.title}. {path}'")
-        else:
-            print("notify: no live owner session; the owner sees the CR with `project-item ls`.")
+        contract = Path(__file__).resolve().parents[3] / "skills/project-item/references/cr.md"
+        print(f"notify: {contract}#다른-project에-요청할-때")
     return 0
 
 
@@ -184,11 +180,36 @@ def cmd_move(args) -> int:
     with store.root_lock(root):
         if project.seats:
             guard.check_move(project, kind, root, args.id, args.state, args.outcome, args.by)
+            if kind is DECIDE and args.state == "done" and store.find(kind, root, args.id)[0] == "answered":
+                guard.require_leader(project)
         target = store.move_locked(kind, root, args.id, args.state, outcome=args.outcome, by=args.by,
                                    note=args.note)
     print(f"moved {target}")
-    if kind is DECIDE:
+    try:
+        if kind is DECIDE:
+            _render(project, root)
+        elif project.path_decide is not None and project.path_decide.is_dir():
+            _render(project, project.path_decide)
+    except Exception as error:
+        print(f"warning: item moved, but the decision page could not be refreshed: {error}", file=sys.stderr)
+    return 0
+
+
+def cmd_answer(args) -> int:
+    """Record a user's direct answer while the current Leader is handling the decision."""
+    project = _select(args)
+    if project.seats:
+        guard.require_leader(project)
+    answer = args.text if args.text is not None else (
+        sys.stdin.read() if args.body_file == "-" else Path(args.body_file).read_text(encoding="utf-8"))
+    root = registry.item_root(project, "decide")
+    target = store.answer_decide(root, args.id, answer)
+    print(f"answered {target}")
+    try:
         _render(project, root)
+    except Exception as error:
+        print(f"warning: answer recorded, but the decision page could not be refreshed: {error}",
+              file=sys.stderr)
     return 0
 
 
@@ -213,7 +234,7 @@ def cmd_render(args) -> int:
     project = _select(args)
     root = registry.item_root(project, "decide")
     out = Path(args.out).resolve() if args.out else None
-    print(f"page {render.render(project.project_id, root, out)}")
+    print(f"page {render.render(project.project_id, root, out, cr_root=project.path_cr)}")
     return 0
 
 
@@ -239,7 +260,7 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("projects", parents=[common], help="projects, item roots and counts")
     p.set_defaults(run=cmd_projects)
 
-    p = sub.add_parser("ls", parents=[common], help="items (default: cr open/todo/deferred, decide open)")
+    p = sub.add_parser("ls", parents=[common], help="items (default: cr open/todo/deferred, decide open/answered)")
     p.add_argument("kind", nargs="?", choices=KINDS)
     p.add_argument("--state", action="append", help="repeatable")
     p.add_argument("--all", action="store_true", help="every state")
@@ -281,6 +302,13 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--by", help="decider; writes one Disposition entry")
     p.add_argument("--note", help="reason or the user's words for the Disposition entry (needs --by)")
     p.set_defaults(run=cmd_move)
+
+    p = sub.add_parser("answer", parents=[common], help="record one answer to an open decision")
+    p.add_argument("id")
+    source = p.add_mutually_exclusive_group(required=True)
+    source.add_argument("--text", help="the user's exact answer")
+    source.add_argument("--body-file", help="answer file; '-' = stdin")
+    p.set_defaults(run=cmd_answer)
 
     p = sub.add_parser("accept", parents=[common], help="record the Leader's acceptance of a submitted commit")
     p.add_argument("id")

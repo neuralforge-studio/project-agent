@@ -91,6 +91,25 @@ def team(project, tmp_path, monkeypatch):
     return Team(project, tmp_path, monkeypatch)
 
 
+def test_only_current_leader_records_and_confirms_direct_answer(team, capsys):
+    item_id = "D-20261104-01"
+    source = team.project["decide"] / "open" / f"{item_id}.md"
+    source.parent.mkdir(parents=True)
+    source.write_text(f"# {item_id}: 선택?\n\n- Opened: 2026-11-04 10:00\n- Urgency: normal\n\n"
+                      "## Background\nb\n\n## Options\n| 선택지 | 내용 | 결과 |\n| --- | --- | --- |\n"
+                      "## Recommendation\nA\n\n## Evidence\ne\n")
+    team.caller("seat-0")
+    code, _, err = team.run(capsys, "answer", item_id, "--text", "A")
+    assert code == 2 and "role_denied" in err and source.exists()
+    team.caller("leader")
+    assert team.run(capsys, "answer", item_id, "--text", "A")[0] == 0
+    team.caller("seat-0")
+    code, _, err = team.run(capsys, "move", item_id, "done", "--outcome", "decided A", "--by", "user")
+    assert code == 2 and "role_denied" in err
+    team.caller("leader")
+    assert team.run(capsys, "move", item_id, "done", "--outcome", "decided A", "--by", "Leader")[0] == 0
+
+
 @pytest.mark.parametrize("actor", ["seat-0", "unmanaged-agent"])
 @pytest.mark.parametrize("args", [("done", "--outcome", "fixed", "--by", "user", "--note", "n"),
                                   ("done", "--outcome", "waived", "--by", "user", "--note", "n"),

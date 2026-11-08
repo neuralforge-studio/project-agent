@@ -1,8 +1,8 @@
-"""Board snapshot: what the page shows, read fresh from the source files on every request.
+"""Board snapshot: read current project facts from their source files.
 
-The plan (docs/project-board-plan.md) owns the rules: sources in section 3, screen states in
-section 4.3, the review-wait rule in section 7.1. The registry, state.json and run liveness
-come from agent_session; CR and decision files are read with project_item. Nothing is cached.
+The TUI plan (docs/project-board-tui-plan.md) owns the display contract. The registry,
+state.json and run liveness come from agent_session; CR and decision files are read with
+project_item. Nothing is cached.
 """
 from __future__ import annotations
 
@@ -18,16 +18,16 @@ for _name in ("agent-session", "project-item"):
         sys.path.insert(0, _path)
 
 from agent_session import api  # noqa: E402
-from agent_session.config import load_registry  # noqa: E402
+from agent_session.config import RemoteSeat, load_registry  # noqa: E402
 from agent_session.errors import SessionError  # noqa: E402
 from project_item.cr import submitted_hash  # noqa: E402  (the CR format owns the submission row)
 from project_item.kinds import CR, DECIDE  # noqa: E402
-from project_item.render import markdown, sections  # noqa: E402
-from project_item.store import item_files  # noqa: E402
+from project_item.render import cr_states, decision_stage, sections  # noqa: E402
+from project_item.store import file_id, item_files  # noqa: E402
 
-CR_STATES = ("open", "todo", "in-progress")           # done and deferred are not shown (plan 2)
+CR_STATES = ("open", "todo", "in-progress")           # done and deferred are not shown
 HASH_TOKEN = re.compile(r"\b[0-9a-f]{7,40}\b")
-DECIDE_HIDDEN = ("Evidence", "Disposition", "Result")   # the Board shows the question body; the rest is for the decide page
+DECIDE_HIDDEN = ("Disposition", "Result")
 
 
 def _error(error: Exception) -> dict:
@@ -73,7 +73,8 @@ def cr_items(root: Path) -> dict:
         rows = []
         for path in item_files(CR, root, state):
             parsed = CR.fmt.parse(path, state)
-            item = {"id": parsed.cr_id or path.stem, "title": parsed.title or path.stem, "state": state}
+            item = {"id": parsed.cr_id or path.stem, "title": parsed.title or path.stem,
+                    "state": state, "path": str(path)}
             if state == "in-progress":
                 parts = dict(sections(path))
                 base = parsed.headers.get("Base")
@@ -84,25 +85,41 @@ def cr_items(root: Path) -> dict:
                     "branch": f"cr/{item['id']}" if mode == "write" else None,
                     "submitted": submitted_hash(result) if mode == "write" else None,
                     "review_wait": review_wait(state, parsed.headers, parts),
-                    "result_html": markdown(_last_entry(result)) if result.strip() else "",
-                    "contract_html": markdown(parts.get("Contract", "")),
+                    "result_markdown": _last_entry(result) if result.strip() else "",
+                    "contract_markdown": parts.get("Contract", ""),
                 })
             rows.append(item)
         out[state] = rows
     return out
 
 
-def decide_items(root: Path) -> list[dict]:
+def read_cr_markdown(project: dict, item: dict, state: str) -> str:
+    """Read a listed CR only from its registered root and state directory."""
+    root = project.get("cr_root")
+    if state not in CR_STATES or not root or item.get("state") != state or not item.get("path"):
+        raise ValueError("CR 목록 경로가 유효하지 않습니다.")
+    path = Path(item["path"]).resolve(strict=True)
+    if not path.is_relative_to(Path(root).resolve() / state) or file_id(CR, path) != item.get("id"):
+        raise ValueError("CR 목록 밖의 파일은 읽을 수 없습니다.")
+    return path.read_text(encoding="utf-8")
+
+
+def decide_items(root: Path, cr_root: Path | None = None) -> list[dict]:
     items = []
-    for path in item_files(DECIDE, root, "open"):
-        parsed = DECIDE.fmt.parse(path, "open")
-        items.append({
-            "id": parsed.item_id or path.stem, "title": parsed.title or path.stem,
-            "urgency": parsed.headers.get("Urgency", "normal"), "blocks": parsed.headers.get("Blocks"),
-            "related": parsed.headers.get("Related"), "opened": parsed.headers.get("Opened"),
-            "sections": [{"name": name, "html": markdown(body)} for name, body in sections(path)
-                         if body and name not in DECIDE_HIDDEN],
-        })
+    states = cr_states(cr_root)
+    for state in DECIDE.states:
+        for path in item_files(DECIDE, root, state):
+            parsed = DECIDE.fmt.parse(path, state)
+            item = {"id": parsed.item_id or path.stem, "title": parsed.title or path.stem,
+                    "state": state, "headers": parsed.headers, "sections": sections(path)}
+            items.append({
+                "id": item["id"], "title": item["title"], "path": str(path.resolve()),
+                "state": state, "display_state": decision_stage(item, states),
+                "urgency": parsed.headers.get("Urgency", "normal"), "blocks": parsed.headers.get("Blocks"),
+                "related": parsed.headers.get("Related"), "opened": parsed.headers.get("Opened"),
+                "sections": [{"name": name, "body": body} for name, body in item["sections"]
+                             if body and name not in DECIDE_HIDDEN],
+            })
     return items
 
 
@@ -122,6 +139,7 @@ def _read_state(project):
 
 def project_view(project, now: dt.datetime) -> dict:
     view = {"id": project.project_id, "base": str(project.base), "base_display": _display(project.base),
+            "cr_root": str(project.path_cr.resolve()) if project.path_cr is not None else None,
             "provider": project.provider,
             "seat_count": len(project.seats), "leader": None, "seats": [], "crs": None, "decide": None,
             "errors": []}
@@ -137,13 +155,13 @@ def project_view(project, now: dt.datetime) -> dict:
             view["errors"].append({"source": "cr", **_error(error)})
     if project.path_decide is not None:
         try:
-            view["decide"] = decide_items(project.path_decide)
+            view["decide"] = decide_items(project.path_decide, project.path_cr)
         except Exception as error:
             view["errors"].append({"source": "decide", **_error(error)})
     in_progress = {item["id"]: item for item in (view["crs"] or {}).get("in-progress", [])}
     leader = state["leader"] if state else None
     reviewing = leader.get("reviewing") if leader else None
-    for index in range(len(project.seats)):
+    for index, root in enumerate(project.seats):
         entry = state[str(index)] if state else {"job_id": None, "git_hash": None, "session": None}
         session = entry["session"]
         job = entry["job_id"]
@@ -160,6 +178,8 @@ def project_view(project, now: dt.datetime) -> dict:
             status = "working"
         view["seats"].append({
             "index": index, "job_id": job, "status": status, "session": session is not None,
+            "host": root.host if isinstance(root, RemoteSeat) else None,
+            "path": str(root.path if isinstance(root, RemoteSeat) else root),
             "session_id": session["session_id"] if session else None,
             "elapsed": _elapsed(session.get("connected_at"), now) if session else None,
             "title": cr["title"] if cr else None, "cr": cr,
@@ -202,4 +222,5 @@ def find_project(config, project_id: str):
 def open_decision(project, decide_id: str) -> dict | None:
     if project.path_decide is None:
         return None
-    return next((item for item in decide_items(project.path_decide) if item["id"] == decide_id), None)
+    return next((item for item in decide_items(project.path_decide)
+                 if item["id"] == decide_id and item["state"] == "open"), None)

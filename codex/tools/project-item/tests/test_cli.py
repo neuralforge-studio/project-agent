@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from project_item import registry
+from project_item import registry, render
 from project_item.cli import main
 
 ENTRY = Path(__file__).resolve().parents[1] / "bin" / "project-item"
@@ -50,14 +50,50 @@ def test_decision_flow_renders_the_page(project, capsys, tmp_path):
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html and "<script>" not in html
     assert "결정 페이지를 &lt;공용&gt;으로 둘까요?" in html
     item_id = item.stem
+    code, out, _ = run(capsys, "answer", "--config", config, "--project", "demo", item_id,
+                       "--text", f"{item_id} A")
+    assert code == 0
+    assert (project["decide"] / "answered" / item.name).exists()
+    assert "답변 접수 1건" in page.read_text()
+    code, out, err = run(capsys, "answer", "--config", config, "--project", "demo", item_id,
+                         "--text", f"{item_id} A")
+    assert code == 2 and "decide_not_open" in err
     code, out, _ = run(capsys, "move", "--config", config, "--project", "demo", item_id, "done",
-                       "--outcome", "decided A", "--by", "user", "--note", f'"{item_id} A"')
+                       "--outcome", "decided A", "--by", "Leader")
     assert code == 0
     assert (project["decide"] / "done" / item.name).exists()
     html = page.read_text()
-    assert "결정 대기 0건" in html and "결정된 항목 1건" in html
+    assert "결정 대기 0건" in html and "완료 1건" in html
     code, out, _ = run(capsys, "ls", "decide", "--config", config, "--project", "demo", "--all")
     assert f"decide done     high   {item_id}" in out
+
+
+def test_cr_move_refreshes_related_decision_page(project, capsys):
+    config = ("--config", str(project["config"]), "--project", "demo")
+    assert run(capsys, "new", "cr", *config, "--area", "TOOL", "--title", "Implementation")[0] == 0
+    assert run(capsys, "new", "decide", *config, "--title", "선택?", "--related", "TOOL-001")[0] == 0
+    item_id = next((project["decide"] / "open").glob("*.md")).stem
+    assert run(capsys, "answer", *config, item_id, "--text", "A")[0] == 0
+    assert run(capsys, "move", *config, item_id, "done", "--outcome", "decided A",
+               "--by", "Leader")[0] == 0
+    page = project["decide"] / "decide.html"
+    article = page.read_text().split(f'<article id="{item_id}"')[1].split("</article>")[0]
+    assert '<span class="pill stage">반영 중</span>' in article
+    assert run(capsys, "move", *config, "TOOL-001", "done", "--outcome", "waived",
+               "--by", "Leader", "--note", "종결")[0] == 0
+    article = page.read_text().split(f'<article id="{item_id}"')[1].split("</article>")[0]
+    assert '<span class="pill stage">완료</span>' in article
+
+
+def test_answer_reports_receipt_when_page_refresh_fails(project, capsys, monkeypatch):
+    config = ("--config", str(project["config"]), "--project", "demo")
+    assert run(capsys, "new", "decide", *config, "--title", "선택?")[0] == 0
+    item_id = next((project["decide"] / "open").glob("*.md")).stem
+    monkeypatch.setattr(render, "render", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+    code, out, err = run(capsys, "answer", *config, item_id, "--text", "A")
+    assert code == 0 and f"answered {project['decide'] / 'answered' / (item_id + '.md')}" in out
+    assert "answer recorded" in err
+    assert (project["decide"] / "answered" / f"{item_id}.md").exists()
 
 
 def test_cwd_selects_the_project_and_requester_is_recorded(project, capsys, monkeypatch):
@@ -67,12 +103,41 @@ def test_cwd_selects_the_project_and_requester_is_recorded(project, capsys, monk
     assert code == 0
     own = project["cr"] / "open" / "TOOL-001-own-finding.md"
     assert "Requester" not in own.read_text()
+    assert "notify:" not in out
     monkeypatch.chdir(project["other"])
     code, out, _ = run(capsys, "new", "cr", "--config", config, "--project", "demo", "--area", "TOOL",
                        "--title", "Request from other")
     text = (project["cr"] / "open" / "TOOL-002-request-from-other.md").read_text()
     assert f"- Requester: other, {project['other']}," in text
     assert "notify:" in out
+
+
+@pytest.mark.parametrize("team", [False, True])
+@pytest.mark.parametrize("live_owner", [False, True])
+def test_cross_project_cr_links_the_notification_contract(project, capsys, monkeypatch,
+                                                        isolated_home, team, live_owner):
+    if team:
+        config = json.loads(project["config"].read_text())
+        config[str(project["base"])]["seats"] = ["../demo.seat0"]
+        project["config"].write_text(json.dumps(config))
+    if live_owner:
+        sessions = isolated_home / ".claude" / "sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "worker.json").write_text(json.dumps({
+            "kind": "interactive", "entrypoint": "cli", "pid": os.getpid(),
+            "cwd": str(project["base"]), "name": "recent-worker", "startedAt": 1,
+        }))
+    monkeypatch.chdir(project["other"])
+    code, out, err = run(capsys, "new", "cr", "--config", str(project["config"]),
+                        "--project", "demo", "--area", "TOOL", "--title", "Cross-project request")
+    item = project["cr"] / "open" / "TOOL-001-cross-project-request.md"
+    contract = Path(__file__).resolve().parents[3] / "skills/project-item/references/cr.md"
+
+    assert code == 0 and not err
+    assert item.is_file() and f"opened {item}" in out
+    assert f"notify: {contract}#다른-project에-요청할-때" in out.splitlines()
+    assert "SendMessage" not in out
+    assert "recent-worker" not in out
 
 
 def test_check_exit_codes_and_duplicates(project, capsys):

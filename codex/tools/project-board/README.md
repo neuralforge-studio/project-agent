@@ -1,56 +1,94 @@
 # project-board
 
-`project-board` serves one local page that shows every registered project team: the
-Leader, the seats and their Workers, the CR counts and the decisions that wait for the user.
-The page can send a decision answer to the project's Leader.
+`project-board` is the tmux text interface for every registered project. One sidebar lists
+each project's open, todo and in-progress CR counts, open decisions and Worker seats. A large
+popup shows a decision's Markdown and accepts the operator's answer. A CR popup shows the
+selected CR's full Markdown. The Board has no HTTP server or browser page.
 
-- Rules: `docs/project-board-plan.md` (sources, screen states, review-wait rule, liveness,
-  answer sending, security). The screen follows `docs/project-board-mockup.html`.
-- Sources, read again on every request; the server keeps no state besides its token:
-  - registry, `state.json` and run liveness through `agent_session.api`
-    (`read_state`, `liveness`) of the sibling `codex/tools/agent-session`
-  - CR and decision files through `project_item` of the sibling `codex/tools/project-item`
-- Writes: none. An answer goes out through `agent-session send --job leader`. The Leader moves
-  the decision item.
-- Python: Workstation `/primehome/tools/Inhouse/Python3/latest`, WSL `~/python/.venv`,
-  else `python3`. Standard library only.
+The current behavior is specified in `docs/project-board-tui-plan.md`. The registry and
+team state are read through `agent_session`; CR and decision files are read through
+`project_item`. The Board does not edit those sources. It sends an answer through
+`agent-session send --job leader`; the Leader moves the decision item.
 
-## Install
+## Dependency and install
+
+The launcher selects the Workstation global Python first, then `~/python/.venv/bin/python`,
+then `python3`. Install `requirements.txt` into the interpreter it selects. On macOS and WSL
+with the standard virtual environment:
 
 ```sh
+~/python/.venv/bin/python -m pip install -r codex/tools/project-board/requirements.txt
 ln -s <agent repo>/codex/tools/project-board/bin/project-board ~/.local/bin/project-board
 ```
+
+Source `~/.tmux/scripts/project_board.conf` from a custom `~/.tmux.conf`. If that file
+uses tmux's one-line default status, also source `project_board_home_status.conf` to add
+the clickable `Board` range. The repository's `tmux/tmux.conf` already includes the Board
+binding and status range.
+
+On Workstation, use `/primehome/tools/Inhouse/Python3/latest/` and request a missing package
+instead of creating a virtual environment.
 
 ## Run
 
 ```sh
-project-board                 # http://127.0.0.1:8765/
-project-board --port 8800 --config ~/.codex/project.json --verbose
+project-board toggle                          # show or hide the tmux sidebar
+project-board --config PATH toggle            # use a specific project registry
+project-board sidebar                         # run the TUI in the current pane
+project-board popup --project PROJECT_ID      # show that project's unfinished decisions
+project-board cr --project PROJECT_ID --state open  # show a CR list
 ```
 
-Start the board from your own terminal. If it runs inside an unmanaged agent session (for
-example Claude Code), `agent-session` refuses its answers with `caller_unbound`. Inside a
-registered Leader or Worker the answer becomes a peer message, which is not a decision
-approval. The server prints a warning at start when it sees an agent identity.
+The sidebar refreshes source files every 2 seconds and run liveness every 10 seconds.
+The TUI keeps clicks and scrolling responsive during reads and answer delivery. Decision
+answers require the `operator` caller classification from `agent-session`; a managed or
+unmanaged agent session cannot submit an approval.
 
-The server binds `127.0.0.1` only. Answers need the page's token in `X-Board-Token`, a JSON
-body, a `Host` of `127.0.0.1:<port>` or `localhost:<port>` and a matching `Origin` when one
-is sent. These checks stop other web sites from sending through the browser. They are not a
-login: local processes are trusted, as they are by `agent-session` itself.
+In tmux, prefix `B` or click `Board` in the status line to toggle the sidebar for every
+attached client. The same window shares one Board pane. Each visible window gives the Board
+25 columns by default and shows existing panes in the remaining space. A width adjusted in
+tmux is used when the Board pane moves to another window or is created again. Turning the
+Board off restores the previous pane layout and focus. A window with too little space for
+the chosen width shows a smaller Board pane; another window with room restores that width.
+Each project shows its decision count above the CR counts. Seats start folded. Click
+`▸` to expand one project's seats, or `▾` to fold them. The fold state is shared by
+Board panes in the same tmux server and survives window changes and Board off/on. Use Tab
+and Enter for the same action from the keyboard. The list scrolls vertically when many
+projects are present;
+long names and CR IDs can be read in tooltips and by scrolling horizontally. An empty seat
+shows its number followed by `-`.
+An SSH seat shows `number@host` before its CR ID. Its tooltip shows the registered
+host and remote path. An unavailable execution check keeps the seat assigned and shows
+`실행 확인 불가` with the unknown-state color.
+Click a project name to switch the clicking client to that project's tmux session and
+current window. If that session is unavailable, the Board shows an error. Click a CR
+count to open its CR list, `D` to read decisions, or a seat with a Worker session to switch
+the clicking client to its Worker window. For an SSH seat, that window contains the SSH
+connection to the remote Worker's tmux screen. The Board uses the same local window switch
+as for a local seat. A seat with a CR but no Worker session shows `대기` and ignores clicks,
+as does an empty seat. The decision popup uses 90% of that client's
+terminal; the CR popup uses 80%. Press `Esc` or the popup's close button to close it.
+In the CR popup, click a CR row or focus it with Tab and press Enter to read its full
+Markdown. Select another row to change CRs. In either popup, `목록` is shown only below
+70 columns. Use it to switch between the list and the selected item. Wider popups show
+both panes and hide the button. After a popup grows and shrinks again, it shows the selected
+item's body. If a listed CR file moves, is deleted, or cannot be read, the
+popup shows an error for that row and stays open.
 
-## Endpoints
+`D` is red when one or more decisions are open. `D:0`, unconfigured `D:-`, and read-error
+`D:!` keep the yellow color. The count includes only open decisions. The decision popup
+shows decisions whose display stage is not `완료`, including answered decisions and decisions
+whose related CRs are still in progress. These items remain accessible at `D:0`. If all
+decisions are complete, `D:0` ignores clicks. A completed selection moves to the first
+remaining item, or an empty view when none remain. CR counts of `0`, `-`, or `!`, and
+decision counts of `-` or `!`, ignore clicks without opening a popup or showing an error.
+tmux keeps an open popup running if an external command changes the client's window.
+If a managed pane is respawned while its client stays on the same window, run
+`project-board sync` to restore that window's Board pane immediately.
 
-| Method and path | Result |
-| --- | --- |
-| `GET /` | the page with this run's token |
-| `GET /api/board` | every project: Leader, seats with derived states, CR lists (open, todo, in-progress), open decisions, per-project errors |
-| `GET /api/live` | per project and bound slot: the judged `session_id` and `alive`, `stopped` or `unknown` |
-| `POST /api/answer` | `{"project", "decide_id", "answer"}`; returns the `agent-session send` result |
-
-The page polls `/api/board` every 2 seconds and `/api/live` every 10 seconds.
-
-## Tests
+## Check
 
 ```sh
 ~/python/.venv/bin/python -m pytest -q codex/tools/project-board/tests
+git diff --check
 ```

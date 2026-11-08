@@ -27,10 +27,16 @@ def cr_text(cr_id, title, with_base=True, mode=None, disposition="", result=""):
     return f"# {cr_id}: {title}\n\n" + "\n".join(headers) + "\n\n" + body
 
 
-def decide_text(decide_id, title, urgency="high", blocks="TOOL-002"):
-    return (f"# {decide_id}: {title}\n\n- Opened: 2026-11-05 09:30\n- Urgency: {urgency}\n- Blocks: {blocks}\n\n"
-            "## Background\n\n배경 <b>입니다</b>.\n\n## Options\n\n| 선택지 | 내용 |\n| --- | --- |\n| A | 하나 |\n\n"
-            "## Recommendation\n\nA를 추천합니다.\n\n## Evidence\n\n`b.py:2`\n")
+def decide_text(decide_id, title, urgency="high", blocks="TOOL-002", related=None, state="open"):
+    answer = '- Answer: "A"\n' if state == "answered" else ""
+    outcome = "- Outcome: decided A\n" if state == "done" else ""
+    disposition = ("\n## Disposition\n\n- 2026-11-05 user: 답변을 접수했습니다.\n"
+                   if state == "answered" else
+                   "\n## Disposition\n\n- 2026-11-05 user: A를 결정했습니다.\n" if state == "done" else "")
+    return (f"# {decide_id}: {title}\n\n- Opened: 2026-11-05 09:30\n- Urgency: {urgency}\n- Blocks: {blocks}\n"
+            + (f"- Related: {related}\n" if related else "") + answer + outcome + "\n"
+            + "## Background\n\n배경 <b>입니다</b>.\n\n## Options\n\n| 선택지 | 내용 |\n| --- | --- |\n| A | 하나 |\n\n"
+            "## Recommendation\n\nA를 추천합니다.\n\n## Evidence\n\n`b.py:2`\n" + disposition)
 
 
 class Board:
@@ -49,7 +55,7 @@ class Board:
             entry.update(path_cr="./agent/cr/", path_decide="./agent/decide/")
             for state in ("open", "todo", "in-progress", "done", "deferred"):
                 (base / "agent/cr" / state).mkdir(parents=True)
-            for state in ("open", "done"):
+            for state in ("open", "answered", "done"):
                 (base / "agent/decide" / state).mkdir(parents=True)
         self.registry[str(base)] = entry
         self.config.write_text(json.dumps(self.registry), encoding="utf-8")
@@ -69,7 +75,7 @@ class Board:
     @staticmethod
     def decide(base, state, decide_id, title="Question", **kwargs):
         path = base / "agent/decide" / state / f"{decide_id}.md"
-        path.write_text(decide_text(decide_id, title, **kwargs), encoding="utf-8")
+        path.write_text(decide_text(decide_id, title, state=state, **kwargs), encoding="utf-8")
         return path
 
 

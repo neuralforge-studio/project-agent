@@ -36,7 +36,7 @@ def manager(tmp_path):
             self.submitted.append(str(script))
     value = Manager.__new__(Manager)
     value.project = SimpleNamespace(base=base, runtime_path=tmp_path / "agent",
-                                    project_id="fixture", config_path=tmp_path / "projects.json")
+                                    project_id="fixture", config_path=tmp_path / "projects.json", seats=(tmp_path / "seat",))
     value.timeout = 10
     value.end = time.monotonic() + 10
     value.store = SimpleNamespace(timeout=10, read=lambda: state)

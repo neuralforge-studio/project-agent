@@ -36,6 +36,16 @@ def ident(session):
     return {key: session[key] for key in ("session_id", "endpoint")}
 
 
+def test_launch_records_the_managed_pane_pid(session_env):
+    env = session_env
+    started = env.manager().start("leader")
+    meta = env.tmux.get_current("fixture", "leader")
+    pane = env.tmux.pane_info(meta["pane_id"])
+    assert meta["cli_pid"] == pane["pane_pid"]
+    assert env.store.read()["leader"]["session_id"] == started["session"]["session_id"]
+    assert env.manager().control("stop", job="leader")["released"] is True
+
+
 def windows(env):
     if not env.tmux.has_session("fixture"):
         return []
@@ -142,15 +152,149 @@ def test_missing_seat_is_cloned_from_the_base_origin(session_env):
 
 def test_only_a_seat_that_start_cloned_gets_workspace_trust(session_env, monkeypatch):
     from agent_session_fake_provider import FakeProvider
+    from agent_session.providers.codex import CodexProvider
     import shutil
+    import tomllib
 
     env = session_env
+    home = env.root / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    config = home / "config.toml"
+    config.write_text('model = "gpt-6"\n')
     trusted = []
-    monkeypatch.setattr(FakeProvider, "trust_new_seat", lambda self, root: trusted.append(Path(root)) or True)
+
+    def record_trust(self, root):
+        trusted.append(Path(root))
+        return CodexProvider().trust_new_seat(root)
+
+    monkeypatch.setattr(FakeProvider, "trust_new_seat", record_trust)
     shutil.rmtree(env.seats[0])
     assert env.manager().start(env.cr())["seat"] == 0
     assert env.manager().start(env.cr(2))["seat"] == 1
     assert trusted == [env.seats[0]]
+    projects = tomllib.loads(config.read_text())["projects"]
+    assert projects == {str(env.seats[0].resolve()): {"trust_level": "trusted"}}
+
+
+@pytest.fixture
+def codex_base_trust(session_env, monkeypatch):
+    """Model the CLI's folder check at launch, with the real Codex config writer."""
+    import tomllib
+    import agent_session.lifecycle as lifecycle
+    from agent_session_fake_provider import FakeProvider
+    from agent_session.providers.codex import trust_workspace, CodexProvider
+
+    env = session_env
+    home = env.root / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    config = home / "config.toml"
+
+    class TrustAwareProvider(FakeProvider):
+        def trust_base(self, root):
+            return trust_workspace(root)
+
+        def launch_spec(self, context, prepared):
+            try:
+                values = tomllib.loads(config.read_text())
+            except tomllib.TOMLDecodeError:
+                values = {}
+            trusted = values.get("projects", {}).get(context["cwd"], {}).get("trust_level") == "trusted"
+            self.dialog = False if trusted else "codex"
+            return super().launch_spec(context, prepared)
+
+        def startup_dialog(self, screen):
+            return CodexProvider().startup_dialog(screen)
+
+    monkeypatch.setattr(lifecycle, "get_provider", lambda name: TrustAwareProvider())
+    return config
+
+
+def test_new_codex_leader_trusts_only_registered_real_base_before_launch(session_env, codex_base_trust):
+    import tomllib
+
+    env = session_env
+    config = codex_base_trust
+    original = 'model = "gpt-6"\n# preserve unrelated settings\n[projects."/outside"]\ntrust_level = "untrusted"\n'
+    config.write_text(original)
+    alias = env.root / "base-alias"
+    alias.symlink_to(env.base, target_is_directory=True)
+    registry = json.loads(env.config.read_text())
+    registry[str(alias)] = registry.pop(str(env.base))
+    env.config.write_text(json.dumps(registry))
+    child = alias / "subdirectory"
+    child.mkdir()
+
+    result = env.manager_at(child).start("leader")
+    assert result["ready"] is True and result["cwd"] == str(env.base.resolve())
+    updated = config.read_text()
+    assert updated.startswith(original)
+    assert tomllib.loads(updated)["projects"] == {
+        "/outside": {"trust_level": "untrusted"},
+        str(env.base.resolve()): {"trust_level": "trusted"},
+    }
+    with pytest.raises(SessionError) as error:
+        env.manager_at(alias).start("leader")
+    assert error.value.code == "leader_exists"
+    assert config.read_text() == updated
+    assert env.tmux.get_current("fixture", "leader")["run_id"] == result["run_id"]
+
+
+@pytest.mark.parametrize("blocked", ["untrusted", "write_failure"])
+def test_codex_base_trust_failure_keeps_config_and_existing_dialog_run(session_env, codex_base_trust,
+                                                                    monkeypatch, blocked):
+    from agent_session.providers import codex
+
+    env = session_env
+    config = codex_base_trust
+    original = (f'[projects."{env.base.resolve()}"]\ntrust_level = "untrusted"\n'
+                if blocked == "untrusted" else 'model = "gpt-6"\n')
+    config.write_text(original)
+    if blocked == "write_failure":
+        replace = codex.os.replace
+
+        def refuse_config_replace(source, target):
+            if Path(target) == config.resolve():
+                raise PermissionError("The config cannot be replaced.")
+            return replace(source, target)
+
+        monkeypatch.setattr(codex.os, "replace", refuse_config_replace)
+    with pytest.raises(SessionError) as first:
+        env.manager().start("leader")
+    assert first.value.code == "needs_user_action"
+    assert first.value.details["dialog"] == "workspace_trust"
+    assert config.read_text() == original
+    waiting = env.tmux.get_current("fixture", "leader")
+    assert first.value.details["window_id"] == waiting["window_id"]
+
+    # Preparing a new config does not make start relaunch or answer an already open dialog.
+    replacement = 'model = "gpt-6"\n'
+    config.write_text(replacement)
+    with pytest.raises(SessionError) as repeated:
+        env.manager().start("leader")
+    assert repeated.value.code == "needs_user_action"
+    assert repeated.value.details["run_id"] == waiting["run_id"]
+    assert config.read_text() == replacement and env.store.read()["leader"] is None
+
+    env.tmux.command("send-keys", "-t", waiting["pane_id"], "-l", "approve")
+    env.tmux.command("send-keys", "-t", waiting["pane_id"], "Enter")
+    wait_until(lambda: env.tmux.get_current("fixture", "leader").get("registered"))
+    result = env.manager().start("leader")
+    assert result["ready"] is True and result["run_id"] == waiting["run_id"]
+    assert config.read_text() == replacement
+
+
+def test_codex_leader_outside_registry_leaves_trust_config_unchanged(session_env, codex_base_trust):
+    env = session_env
+    original = 'model = "gpt-6"\n'
+    codex_base_trust.write_text(original)
+    outside = env.root / "unregistered"
+    outside.mkdir()
+    with pytest.raises(SessionError) as error:
+        env.manager_at(outside).start("leader")
+    assert error.value.code == "project_not_found"
+    assert codex_base_trust.read_text() == original
 
 
 @pytest.mark.parametrize("target", ["leader", "worker"])
@@ -178,6 +322,75 @@ def test_start_held_at_a_startup_dialog_needs_the_user_and_resumes(session_env, 
     wait_until(lambda: env.tmux.get_current("fixture", slot).get("registered"))
     result = env.manager().start(job)
     assert result["run_id"] == waiting["run_id"] and result["ready"] is True
+
+
+def test_codex_trust_dialog_returns_its_window_and_reuses_the_run(session_env, monkeypatch):
+    import agent_session.lifecycle as lifecycle
+    from agent_session_fake_provider import FakeProvider
+    from agent_session.providers.codex import CodexProvider
+
+    env = session_env
+    job = env.cr()
+    fake = FakeProvider(dialog="codex")
+    fake.startup_dialog = CodexProvider().startup_dialog
+    monkeypatch.setattr(lifecycle, "get_provider", lambda name: fake)
+    started = time.monotonic()
+    with pytest.raises(SessionError) as error:
+        env.manager(timeout=6).start(job)
+    assert time.monotonic() - started < 6
+    assert error.value.code == "needs_user_action"
+    assert error.value.details["dialog"] == "workspace_trust"
+    waiting = env.tmux.get_current("fixture", "seat-0")
+    assert error.value.details["window_id"] == waiting["window_id"]
+    assert error.value.details["run_id"] == waiting["run_id"]
+    env.tmux.command("send-keys", "-t", waiting["pane_id"], "-l", "approve")
+    env.tmux.command("send-keys", "-t", waiting["pane_id"], "Enter")
+    wait_until(lambda: env.tmux.get_current("fixture", "seat-0").get("registered"))
+    assert env.manager().start(job)["run_id"] == waiting["run_id"]
+
+
+def test_codex_leader_retry_after_registration_timeout_reuses_the_run(session_env, monkeypatch):
+    import agent_session.lifecycle as lifecycle
+    from agent_session import internal
+    from agent_session_fake_provider import FakeProvider
+
+    env = session_env
+    launch_spec = FakeProvider.launch_spec
+
+    def expire_registration(self, context, prepared):
+        spec = launch_spec(self, context, prepared)
+        spec["argv"].append("--expire-registration")
+        return spec
+
+    def controller_returned(self, context):
+        raise SessionError("fixture_controller_returned", "The startup controller returned before publication.")
+
+    monkeypatch.setattr(FakeProvider, "launch_spec", expire_registration)
+    with monkeypatch.context() as controller:
+        controller.setattr(lifecycle.Manager, "_wait_ready", controller_returned)
+        with pytest.raises(SessionError) as error:
+            env.manager().start("leader")
+        assert error.value.code == "fixture_controller_returned"
+    waiting = env.tmux.get_current("fixture", "leader")
+    failure = env.base / "agent/runs" / waiting["run_id"] / "fixture-tool-error.json"
+    wait_until(failure.is_file)
+    assert json.loads(failure.read_text())["code"] == "registration_timeout"
+    pending = env.tmux.get_current("fixture", "leader")
+    assert pending["registered"] is True and pending["ready"] is False
+    assert env.store.read()["leader"] is None
+
+    result = env.manager().start("leader")
+    assert result["ready"] is True
+    assert all(result[key] == pending[key] for key in ("run_id", "window_id", "pane_id", "cwd"))
+    assert result["session"]["session_id"] == pending["session_id"]
+    assert env.tmux.get_current("fixture", "leader")["cli_pid"] == pending["cli_pid"]
+    assert env.store.read()["leader"]["session_id"] == pending["session_id"]
+    with monkeypatch.context() as native:
+        native.chdir(env.base)
+        native.setenv("CODEX_THREAD_ID", pending["session_id"])
+        session = internal.register_current(pending["run_id"], str(env.config), pending["socket_path"],
+                                            pending["endpoint"])
+    assert session == result["session"]
 
 
 def test_automatic_allocation_skips_a_controlled_unassigned_seat(session_env):
@@ -433,6 +646,43 @@ def test_read_only_preparation_syncs_main_without_a_branch(session_env):
     assert env.manager().control("stop", job=result["job_id"])["released"] is True
 
 
+@pytest.mark.parametrize("seat_number", [0, 1])
+def test_read_only_cr_can_be_reassigned_for_write_with_an_old_branch(session_env, seat_number):
+    env = session_env
+    cr = env.cr(mode="read-only")
+    branch = f"cr/{cr}"
+    git(env.seats[0], "branch", branch, env.initial_hash)
+    git(env.seed, "push", "origin", f"{env.initial_hash}:refs/heads/{branch}")
+    git(env.seats[0], "fetch", "origin", branch)
+    expected = env.advance_remote()
+    first = env.manager().start(cr, seat=0)
+    base = env.cr_header(cr, "Base")
+    assert base.startswith(expected)
+    env.finish(cr, state="open", outcome=None, note="read-only investigation completed")
+    assert env.manager().control("stop", job=cr)["released"] is True
+    _, path = env.cr_state(cr)
+    path.write_text(path.read_text().replace("- Mode: read-only", "- Mode: write"))
+    env.finish(cr, state="todo", outcome=None, note="approve the write work")
+    kept = env.seats[seat_number] / "agent" / "private.txt"
+    kept.parent.mkdir(exist_ok=True)
+    kept.write_text("preserve the ignored user file\n")
+    before = kept.stat()
+
+    second = env.manager().start(cr, seat=seat_number)
+    assert second["ready"] is True and second["seat"] == seat_number
+    assert second["session"]["session_id"] != first["session"]["session_id"]
+    assert git(env.seats[seat_number], "rev-parse", "HEAD") == expected
+    assert git(env.seats[seat_number], "branch", "--show-current") == branch
+    assert git(env.remote, "rev-parse", f"refs/heads/{branch}") == env.initial_hash
+    after = kept.stat()
+    assert (after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns) == (
+        before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns)
+    assert kept.read_text() == "preserve the ignored user file\n"
+    assert env.cr_header(cr, "Base") == base
+    assert env.store.read()[str(seat_number)]["git_hash"] == expected
+    assert env.cr_state(cr)[0] == "in-progress"
+
+
 def test_fixed_result_must_be_on_origin_main_before_release(session_env):
     env = session_env
     cr = env.cr()
@@ -575,6 +825,60 @@ def test_stop_that_times_out_on_a_live_cli_lets_it_take_messages_again(session_e
         delivered = failure.code
     assert (stopping, delivered) == (False, "accepted")
     assert error.value.details["stopping_restored"] is True
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
+
+
+def test_codex_stop_preserves_assignment_in_view_mode_and_releases_after_explicit_retry(session_env):
+    env = session_env
+    cr = env.cr(mode="read-only")
+    worker = env.manager().start(cr)
+    env.finish(cr, state="open", note="read-only investigation completed")
+    before = env.store.read()
+    env.tmux.command("run-shell", "-t", worker["pane_id"], "printf 'fixture output\\n'")
+    with pytest.raises(SessionError) as error:
+        env.manager(timeout=2).control("stop", job=cr)
+    assert (error.value.code, error.value.exit_code) == ("pane_input_blocked", 4)
+    assert error.value.details["stopping_restored"] is True
+    assert error.value.details["exit_wait"]["exit_requested"] is False
+    assert env.store.read() == before
+    current = env.tmux.get_current("fixture", "seat-0")
+    assert current["run_id"] == worker["run_id"] and current["stopping"] is False
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
+
+    env.tmux.command("send-keys", "-X", "-t", worker["pane_id"], "cancel")
+    result = env.manager().control("stop", job=cr)
+    assert result["stopped"] is True and result["released"] is True
+    assert env.store.read()["0"] == EMPTY
+    assert env.tmux.get_current("fixture", "seat-0") is None
+
+
+def test_codex_exit_with_unconfirmed_enter_keeps_assignment_and_does_not_resend(session_env, monkeypatch):
+    env = session_env
+    cr = env.cr(mode="read-only")
+    worker = env.manager().start(cr)
+    env.finish(cr, state="open", note="read-only investigation completed")
+    before = env.store.read()
+    manager = env.manager()
+    run, sent = manager.tmux._run, []
+
+    def unconfirmed_enter(*arguments, **options):
+        if arguments[0] == "send-keys":
+            sent.append(arguments)
+            if arguments[-1] == "Enter":
+                raise SessionError("tmux_unknown", "The fixture cannot confirm Enter delivery.", 4)
+        return run(*arguments, **options)
+
+    monkeypatch.setattr(manager.tmux, "_run", unconfirmed_enter)
+    with pytest.raises(SessionError) as error:
+        manager.control("stop", job=cr)
+    assert error.value.code == "tmux_unknown"
+    assert error.value.details["exit_delivery"] == {"stage": "enter", "literal_confirmed": True}
+    assert error.value.details["exit_wait"]["exit_requested"] is False
+    assert error.value.details["stopping_restored"] is True
+    assert sent == [("send-keys", "-t", worker["pane_id"], "-l", "/exit"),
+                    ("send-keys", "-t", worker["pane_id"], "Enter")]
+    assert env.store.read() == before
+    assert env.tmux.get_current("fixture", "seat-0")["run_id"] == worker["run_id"]
     assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
 
 

@@ -23,7 +23,7 @@ OUTCOME_RE = re.compile(rf"^(fixed|waived|merged\s+{ID_RE}|moved\s+\S+\s+\S+)$")
 BASE_RE = re.compile(r"^[0-9a-f]{40} \d{4}-\d{2}-\d{2}T\S+$")
 STATUS_LINE_RE = re.compile(r"^-\s+\**Status\**\s*:", re.I)
 SUBMISSION_RE = re.compile(r"^- 제출 commit:\s*`?([0-9a-f]{40})\b")    # "JOB으로 쓸 때": top level only
-FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 REQUIRED_HEADERS = ("Opened", "Scope", "Severity")
 FINDING_SECTIONS = ("Symptom", "Evidence", "Contract")
@@ -55,12 +55,17 @@ def state_of(path: Path, root: Path) -> str | None:
 def outside_fence(lines: list[str]):
     """Yield (index, line) of the lines outside code fences; the fence lines are skipped.
     The Markdown section boundary: every reader and writer of CR sections uses it."""
-    in_fence = False
+    fence = None
     for n, line in enumerate(lines):
-        if line.startswith("```"):
-            in_fence = not in_fence
-        elif not in_fence:
+        marker = FENCE_RE.match(line)
+        if fence is None:
+            if marker and (marker.group(1)[0] == "~" or "`" not in marker.group(2)):
+                fence = marker.group(1)
+                continue
             yield n, line
+        elif (marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence)
+              and not marker.group(2).strip(" \t")):
+            fence = None
 
 
 def section_heads(lines: list[str]) -> list[tuple[int, str]]:
@@ -86,19 +91,7 @@ def submitted_hash(result: str) -> str | None:
     fence, indented or not, and indented lines are examples, not submissions.
     """
     found = None
-    fence = None                                     # the opening run, e.g. "````"
-    for line in result.splitlines():
-        marker = FENCE_RE.match(line)
-        if fence is None:
-            if marker:
-                fence = marker.group(1)
-                continue
-        else:
-            # Only the same character, at least as long, with nothing after it closes the fence.
-            if (marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence)
-                    and not marker.group(2).strip()):
-                fence = None
-            continue
+    for _, line in outside_fence(result.splitlines()):
         match = SUBMISSION_RE.match(line)
         if match:
             found = match.group(1)

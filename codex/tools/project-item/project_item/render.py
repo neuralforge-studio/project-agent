@@ -6,11 +6,14 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import json
 import os
 import re
 from pathlib import Path
+from typing import Mapping
 
-from .kinds import DECIDE
+from .cr import section_heads
+from .kinds import CR, DECIDE
 from . import store
 from .store import item_files
 
@@ -108,16 +111,13 @@ def markdown(text: str) -> str:
 
 # ---------------------------------------------------------------- items
 def sections(path: Path) -> list[tuple[str, str]]:
-    out: list[tuple[str, list[str]]] = []
-    in_fence = False
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("```"):
-            in_fence = not in_fence
-        if not in_fence and line.startswith("## "):
-            out.append((line[3:].strip(), []))
-        elif out:
-            out[-1][1].append(line)
-    return [(name, "\n".join(body).strip()) for name, body in out]
+    lines = path.read_text(encoding="utf-8").splitlines()
+    heads = section_heads(lines)
+    out = []
+    for index, (start, name) in enumerate(heads):
+        end = heads[index + 1][0] if index + 1 < len(heads) else len(lines)
+        out.append((name, "\n".join(lines[start + 1:end]).strip()))
+    return out
 
 
 def load(root: Path) -> list[dict]:
@@ -130,6 +130,30 @@ def load(root: Path) -> list[dict]:
     return items
 
 
+RELATED_CR_RE = re.compile(r"(?<![\w-])([A-Z][A-Z0-9]*-\d{2,})(?![\w-])")
+
+
+def cr_states(root: Path | None) -> dict[str, str]:
+    """Map CR/JOB IDs to their source directory states for derived decision progress."""
+    if root is None:
+        return {}
+    return {store.file_id(CR, path): state for state, path in store.all_files(CR, root)
+            if store.file_id(CR, path)}
+
+
+def decision_stage(item: dict, states: Mapping[str, str]) -> str:
+    """Display stage from the decision directory and related CR/JOB directories."""
+    if item["state"] == "open":
+        return "결정 대기"
+    if item["state"] == "answered":
+        return "답변 접수"
+    if item["headers"].get("Outcome", "").split()[:1] == ["withdrawn"]:
+        return "완료"
+    related = RELATED_CR_RE.findall(item["headers"].get("Related", ""))
+    return ("반영 중" if any(states.get(item_id) not in ("done", "deferred") for item_id in related)
+            else "완료")
+
+
 def _first_line(body: str) -> str:
     for line in body.splitlines():
         if line.strip() and not line.lstrip().startswith("|"):
@@ -137,11 +161,19 @@ def _first_line(body: str) -> str:
     return ""
 
 
-def _article(item: dict) -> str:
+def _article(item: dict, stage: str) -> str:
     urgency = item["headers"].get("Urgency", "normal")
     facts = "".join(f"<dt>{label}</dt><dd>{inline(item['headers'][key])}</dd>"
                     for key, label in HEADER_FACTS if item["headers"].get(key))
     parts = []
+    encoded_answer = item["headers"].get("Answer")
+    if encoded_answer:
+        try:
+            answer = json.loads(encoded_answer)
+        except ValueError:
+            answer = None
+        if isinstance(answer, str):
+            parts.append(f'<section><div class="sh">답변 원문</div><pre>{html.escape(answer)}</pre></section>')
     for name, body in item["sections"]:
         if not body:
             continue
@@ -150,6 +182,7 @@ def _article(item: dict) -> str:
                      f"{markdown(body)}</section>")
     return (f'<article id="{html.escape(item["id"])}" class="u-{html.escape(urgency)}">'
             f'<div class="ahead"><span class="id">{html.escape(item["id"])}</span>'
+            f'<span class="pill stage">{stage}</span>'
             f'<span class="pill u-{html.escape(urgency)}">긴급도 {URGENCY_KO.get(urgency, html.escape(urgency))}</span>'
             f"<h3>{inline(item['title'])}</h3></div>"
             f'<dl class="facts">{facts}</dl>{"".join(parts)}</article>')
@@ -174,6 +207,7 @@ th,td{text-align:left;vertical-align:top;padding:6px 10px;border-bottom:1px soli
 th{color:var(--muted);font-weight:600}
 a{color:var(--accent)}
 .pill{display:inline-block;border-radius:999px;padding:1px 9px;font-size:.78rem;font-weight:600}
+.pill.stage{background:var(--accent-soft);color:var(--accent)}
 .pill.u-high{background:var(--hi-soft);color:var(--hi)}.pill.u-normal{background:var(--mid-soft);color:var(--mid)}
 .pill.u-low{background:var(--lo-soft);color:var(--lo)}
 article{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px 20px;
@@ -201,12 +235,18 @@ details.closed summary{cursor:pointer;font-weight:600}
 """
 
 
-def page(project_id: str, items: list[dict], now: dt.datetime | None = None) -> str:
+def page(project_id: str, items: list[dict], now: dt.datetime | None = None,
+         states: Mapping[str, str] | None = None) -> str:
     stamp = (now or dt.datetime.now()).strftime("%Y-%m-%d %H:%M")
+    states = states or {}
     live = sorted((it for it in items if it["state"] == "open"),
                   key=lambda it: (URGENCY_ORDER.get(it["headers"].get("Urgency"), 9),
                                   it["headers"].get("Opened", ""), it["id"]))
-    closed = sorted((it for it in items if it["state"] == "done"), key=lambda it: it["id"], reverse=True)
+    received = sorted((it for it in items if it["state"] == "answered"), key=lambda it: it["id"], reverse=True)
+    processing = sorted((it for it in items if it["state"] == "done" and
+                         decision_stage(it, states) == "반영 중"), key=lambda it: it["id"], reverse=True)
+    closed = sorted((it for it in items if it["state"] == "done" and
+                     decision_stage(it, states) == "완료"), key=lambda it: it["id"], reverse=True)
     rows = "".join(
         f'<tr><td><a href="#{html.escape(it["id"])}">{html.escape(it["id"])}</a></td>'
         f"<td>{inline(it['title'])}</td>"
@@ -219,9 +259,9 @@ def page(project_id: str, items: list[dict], now: dt.datetime | None = None) -> 
                if live else '<p class="empty">결정을 기다리는 항목이 없습니다.</p>')
     closed_html = ""
     if closed:
-        closed_html = (f'<details class="closed"><summary>결정된 항목 {len(closed)}건</summary>'
-                       + "".join(_article(it) for it in closed) + "</details>")
-    title = f"{html.escape(project_id)} 결정 대기"
+        closed_html = (f'<details class="closed"><summary>완료 {len(closed)}건</summary>'
+                       + "".join(_article(it, "완료") for it in closed) + "</details>")
+    title = f"{html.escape(project_id)} 결정 현황"
     return f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -234,12 +274,14 @@ def page(project_id: str, items: list[dict], now: dt.datetime | None = None) -> 
 <div class="wrap">
 <header>
 <h1>{title}</h1>
-<div class="meta">결정 대기 {len(live)}건 · 결정됨 {len(closed)}건 · 갱신 {stamp}</div>
+<div class="meta">결정 대기 {len(live)}건 · 답변 접수 {len(received)}건 · 반영 중 {len(processing)}건 · 완료 {len(closed)}건 · 갱신 {stamp}</div>
 </header>
 <div class="how">답하는 방법: 담당 session의 터미널에 <code>D-YYYYMMDD-NN A</code>처럼 ID와 선택을 입력하십시오.
 이 페이지는 입력을 받지 않습니다.</div>
 <section><h2>요약</h2>{summary}</section>
-<section style="display:flex;flex-direction:column;gap:16px"><h2>항목</h2>{"".join(_article(it) for it in live)}</section>
+<section style="display:flex;flex-direction:column;gap:16px"><h2>결정 대기</h2>{"".join(_article(it, "결정 대기") for it in live)}</section>
+<section style="display:flex;flex-direction:column;gap:16px"><h2>답변 접수</h2>{"".join(_article(it, "답변 접수") for it in received)}</section>
+<section style="display:flex;flex-direction:column;gap:16px"><h2>반영 중</h2>{"".join(_article(it, "반영 중") for it in processing)}</section>
 {closed_html}
 </div>
 </body>
@@ -247,13 +289,13 @@ def page(project_id: str, items: list[dict], now: dt.datetime | None = None) -> 
 """
 
 
-def render(project_id: str, root: Path, out: Path | None = None) -> Path:
+def render(project_id: str, root: Path, out: Path | None = None, cr_root: Path | None = None) -> Path:
     """Read the items and write the page under the root lock, so that a late render cannot
     write an older state over a newer page."""
     target = out or root / PAGE_NAME
     target.parent.mkdir(parents=True, exist_ok=True)
     with store.root_lock(root):
-        text = page(project_id, load(root))
+        text = page(project_id, load(root), states=cr_states(cr_root))
         store._pause("render")
         temp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
         temp.write_text(text, encoding="utf-8")

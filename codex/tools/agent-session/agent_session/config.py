@@ -2,9 +2,25 @@
 
 from dataclasses import dataclass
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 
 from .errors import SessionError
+
+
+@dataclass(frozen=True)
+class RemoteSeat:
+    """A work tree on an explicitly registered SSH host, never a local path."""
+
+    host: str
+    path: PurePosixPath
+    python: str = "python3"
+
+    def __post_init__(self):
+        object.__setattr__(self, "path", PurePosixPath(self.path))
+
+    def __str__(self):
+        return str(self.path)
 
 
 @dataclass(frozen=True)
@@ -13,7 +29,7 @@ class Project:
     base_path_key: str
     project_id: str
     provider: str
-    seats: tuple[Path, ...]
+    seats: tuple[Path | RemoteSeat, ...]
     config_path: Path
     path_cr: Path | None = None
     path_decide: Path | None = None
@@ -88,6 +104,22 @@ def _path(value, base):
     return (path if path.is_absolute() else base / path).resolve()
 
 
+def _seat(value, base, provider):
+    if _text(value):
+        return _path(value, base)
+    if (provider != "codex" or not isinstance(value, dict)
+            or not {"host", "path"} <= set(value) or set(value) - {"host", "path", "python"}):
+        raise SessionError("registry_invalid", "Seats must be local paths or Codex SSH seat objects.", 2)
+    host, path, python = value["host"], value["path"], value.get("python", "python3")
+    if (not isinstance(host, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@-]*", host)
+            or not _text(path) or any(ord(char) < 32 or ord(char) == 127 for char in path)
+            or not PurePosixPath(path).is_absolute() or ".." in PurePosixPath(path).parts
+            or not _text(python) or python.startswith("-")
+            or any(ord(char) < 32 or ord(char) == 127 for char in python)):
+        raise SessionError("registry_invalid", "SSH seats require a safe host, absolute path and Python executable.", 2)
+    return RemoteSeat(host, PurePosixPath(path), python)
+
+
 def _overlap(first, second):
     return first == second or first in second.parents or second in first.parents
 
@@ -135,15 +167,16 @@ def load_registry(config_path=None):
             raise SessionError("registry_invalid", "Project names must be nonempty and unique.", 2)
         if provider not in ("claude", "codex"):
             raise SessionError("registry_invalid", "The provider must be claude or codex.", 2)
-        if not isinstance(seats, list) or not all(_text(seat) for seat in seats):
-            raise SessionError("registry_invalid", "Seats must be an array of nonempty paths.", 2)
+        if not isinstance(seats, list):
+            raise SessionError("registry_invalid", "Seats must be an array of paths or SSH seat objects.", 2)
         base = Path(base_key).expanduser().resolve()
-        resolved_seats = tuple(_path(seat, base) for seat in seats)
+        resolved_seats = tuple(_seat(seat, base, provider) for seat in seats)
         for root in (base,) + resolved_seats:
-            if root in roots:
+            identity = (root.host, root.path) if isinstance(root, RemoteSeat) else root
+            if identity in roots:
                 raise SessionError("project_ambiguous", "A base or seat path is registered more than once.", 2,
-                                   {"path": str(root), "projects": [roots[root], name]})
-            roots[root] = name
+                                   {"path": str(root), "projects": [roots[identity], name]})
+            roots[identity] = name
         items = {}
         for key in ITEM_KEYS:
             if key not in entry:
@@ -177,6 +210,8 @@ def resolve_project(cwd=None, config_path=None):
     matches = []
     for project in load_registry(config_path):
         for root in (project.base,) + project.seats:
+            if isinstance(root, RemoteSeat):
+                continue
             if current == root or root in current.parents:
                 matches.append((len(root.parts), project))
     if not matches:

@@ -25,11 +25,15 @@ class FakeProvider:
                      "--library", context["library_path"], "--run", context["run_id"],
                      "--config", context["config_path"], "--socket", context["socket_path"],
                      "--endpoint", context["endpoint"]] + (["--dialog"] if self.dialog else [])
+                    + (["--codex-dialog"] if self.dialog == "codex" else [])
                     + (["--session", context["session_id"]] if context.get("resume") else []),
             "env": prepared.get("env", {}), "unset_env": [],
         }
 
     def trust_new_seat(self, root):
+        return False
+
+    def trust_base(self, root):
         return False
 
     def startup_dialog(self, screen):
@@ -101,6 +105,8 @@ def main():
     for key in ("library", "run", "config", "socket", "endpoint"):
         parser.add_argument("--" + key, required=True)
     parser.add_argument("--dialog", action="store_true")
+    parser.add_argument("--codex-dialog", action="store_true")
+    parser.add_argument("--expire-registration", action="store_true")
     parser.add_argument("--session")                   # a resumed conversation keeps its recorded ID
     parser.add_argument("--claude", action="store_true")
     parser.add_argument("--record")
@@ -117,7 +123,10 @@ def main():
     if args.record:
         signal.signal(signal.SIGTERM, terminate)
     if args.dialog:
-        print("Accessing workspace:\n\n❯ 1. Yes, I trust this folder\n  2. No, exit", flush=True)
+        screen = ("Folder access\nTrust this folder?\n❯ 1. Yes, trust this folder\n  2. No, exit"
+                  if args.codex_dialog else
+                  "Accessing workspace:\n\n❯ 1. Yes, I trust this folder\n  2. No, exit")
+        print(screen, flush=True)
         for line in sys.stdin:
             if line.strip() == "approve":
                 break
@@ -126,16 +135,23 @@ def main():
     import agent_session.providers as providers
     fake = FakeClaudeProvider() if args.claude else FakeProvider()
     providers.get_provider = lambda name: fake
-    from agent_session.internal import register_current
+    from agent_session import internal
     from agent_session.errors import SessionError
     os.environ["CODEX_THREAD_ID"] = args.session or str(uuid.uuid4())
+    clock = internal.time
+    if args.expire_registration:
+        from types import SimpleNamespace
+        ticks = iter((0, 0, 121))
+        internal.time = SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda seconds: None)
     try:
-        register_current(args.run, args.config, args.socket, args.endpoint)
+        internal.register_current(args.run, args.config, args.socket, args.endpoint)
     except SessionError as error:
         # A failed tool call does not exit an interactive provider TUI.
         base = Path(os.environ["AGENT_SESSION_BASE"])
         path = base / "agent" / "runs" / args.run / "fixture-tool-error.json"
         path.write_text(json.dumps(error.as_dict()), encoding="utf-8")
+    finally:
+        internal.time = clock
     for line in sys.stdin:
         note({"input": line.rstrip("\n")})
         if line.strip() == "/exit":

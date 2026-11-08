@@ -18,8 +18,19 @@ JOB은 CR 파일입니다. CR 형식과 상태는 [project-item skill](../projec
 - 상태 JSON, tmux 소유 정보, CR의 `- Base:` header를 직접 편집하여 배정을 변경하지 않습니다.
 
 모든 명령의 `--job`은 `leader` 또는 CR ID입니다.
-Worker seat는 start가 자동으로 선택합니다. Seat 디렉토리가 없으면 start가 만듭니다.
+Worker seat는 기본으로 start가 자동 선택합니다. `start --job <CR-ID> --seat N`은 지정한 seat만 검사합니다. 이미 배정한 CR의 번호는 바꾸지 않습니다. Seat 디렉토리가 없으면 start가 만듭니다.
 Start가 `needs_user_action`과 `dialog`를 반환하면 그 window와 dialog 종류를 사용자에게 알립니다. 사용자가 그 창에서 답한 뒤 같은 start를 다시 실행합니다. Dialog에 대신 답하지 않습니다.
+
+## 보고와 검증
+
+명시적인 진행 보고 요청이 없으면 `send`는 상대의 다음 행동에 필요한 새 정보가 있을 때만 사용합니다.
+
+- 보고할 내용은 검증을 마친 제출·수정 제출, 외부 조치가 필요한 차단 문제, 사용자 결정이나 다른 owner의 조치가 필요한 계약 변경, 정리 후 종료 준비 완료입니다.
+- 단순 접수·배정 재확인·작업 예정·변경 없는 상태 대조·자체 해결 중인 테스트 실패는 별도 메시지로 보내지 않습니다. 실행 기록은 CR의 Result에 모읍니다.
+- 같은 검증 배치의 중간 hash를 차례로 제출하지 않습니다. 피드백 접수 회신 대신 수정과 검증을 마친 제출을 한 번 보고합니다.
+- Leader는 한 제출의 검토 결과를 모아 피드백합니다. 이미 검토한 범위와 유효한 검증 근거는 재사용하고 변경된 부분만 다시 확인합니다. 새 실패·변경 영향 없이 전체 검증이나 상태 조회를 반복하지 않습니다.
+- 알려진 run·hash·종결 기록으로 지연·중복 보고임을 판정할 수 있으면 접수 회신·재조회·재배정을 하지 않습니다. 최신 작업의 근거와 실제로 충돌하거나 조치가 필요할 때만 추가 확인합니다.
+- 동료 메시지 수신 자체는 사용자에게 보고할 사건이 아닙니다. 내부 접수와 상태 확인을 매번 사용자 대화로 옮기지 않습니다. 사용자 질문, 필요한 진행 안내, 실제 차단·결정·완료 결과를 중심으로 전달합니다.
 
 ## Leader
 
@@ -39,8 +50,12 @@ agent-session review --job TOOL-012
 agent-session send --job TOOL-012 --file FEEDBACK.md
 agent-session stop --job TOOL-012
 project-item new decide --title "질문 한 줄" --urgency high --blocks "기다리는 일" --related TOOL-012 --body-file -
-project-item move D-20261105-01 done --outcome "decided A" --by user --note "D-20261105-01 A"
+# 사용자의 답변을 받은 후 원문을 접수하고 Leader가 완료합니다.
+project-item answer D-20261105-01 --text "D-20261105-01 A"
+project-item move D-20261105-01 done --outcome "decided A" --by Leader
 ```
+
+결정 답변의 접수와 완료는 [결정 항목 절차](../project-item/references/decide.md)를 따릅니다.
 
 위임 범위:
 
@@ -59,7 +74,7 @@ agent-session send --project pm_vip --job leader "<CR ID> <제목> <CR 파일 �
 
 새 대화로 교체된 Leader는 `project-item ls`로 결정 대기와 CR todo·in-progress를 이어받습니다.
 
-제출 hash가 바뀌면 새 hash를 다시 검토합니다.
+제출 hash가 바뀌면 변경된 코드와 검증을 확인합니다. 변경하지 않은 범위의 유효한 검토 근거는 재사용합니다.
 완료 보고만으로 CR을 done으로 옮기거나 seat를 비우지 않습니다.
 `released: false`이면 배정을 보존하고 반환한 이유를 처리합니다. CR이 in-progress에 남아 있거나 결과가 origin에 없으면 반납하지 않습니다.
 보류한 todo CR의 배정이 남았으면 같은 `agent-session start --job <CR-ID>`로 같은 seat에서 재개합니다.
@@ -101,11 +116,11 @@ Tmux window와 provider session은 유지하고 후속 메시지에서 관리를
 
 1. 최초 prompt가 가리키는 CR 파일과 그 본문이 link한 지침 문서를 읽고 범위, 작업 경로, 검증 기준을 확인합니다.
 2. 지정한 범위에서 작업하고 해당 검증을 수행합니다.
-3. Write CR이면 `cr/<CR-ID>` branch에 commit합니다. 작업 중 `origin/main`이 진행했으면 `cr/<CR-ID>`에 merge하고, merge한 상태에서 Verification을 다시 실행해 통과한 commit을 push합니다. 검증을 모두 마친 뒤에만 review를 요청합니다.
-4. CR 파일의 `## Result`에 들여쓰지 않은 제출 행 `- 제출 commit: <40자리 hash>`와 검증 명령·결과를 추가합니다. Read-only CR은 제출 행 없이 결과만 씁니다. 다른 절은 고치지 않습니다.
-5. `agent-session send --job leader "CR-ID와 제출 commit"`로 보고합니다.
-6. 같은 CR의 feedback을 받으면 해당 범위의 작업·검증·제출을 반복합니다.
-7. Leader가 인수하면 자기가 띄운 background 작업(shell·monitor 등)을 멈추고 자기 작업의 불필요한 산출물을 정리합니다. 종료를 보고하기 직전에 자기 provider process의 자식을 확인합니다. Claude는 Bash tool에서 `ps -o pid,etime,args --ppid $PPID`를 실행합니다. Sub-agent가 띄운 shell도 같은 process의 자식입니다. 확인 명령 자신의 shell 말고 남은 것이 없을 때만 종료를 보고합니다. 남은 것이 있으면 PID로 멈춘 뒤 다시 확인합니다.
+3. Write CR이면 `cr/<CR-ID>` branch에 commit합니다. 작업 중 `origin/main`이 진행했으면 `cr/<CR-ID>`에 merge합니다. Merge로 검증 입력·환경·판정 기준이 달라진 항목만 merge한 상태에서 다시 실행하고, 영향받지 않은 유효한 근거는 재사용합니다. 제출 commit에서 실행해야 하는 저장소 필수 검사는 그 commit에서 수행합니다. 필요한 검증을 마친 제출 commit을 `origin`의 `cr/<CR-ID>` branch에 push합니다. 현재 작업의 기존 게시 승인을 재사용합니다.
+4. CR 파일의 `## Result`에 들여쓰지 않은 제출 행 `- 제출 commit: <40자리 hash>`와 검증 명령·결과, 근거 재사용·재실행 판정을 추가합니다. Read-only CR은 제출 행 없이 결과만 씁니다. 다른 절은 고치지 않습니다.
+5. 검증을 마친 제출마다 `agent-session send --job leader "CR-ID와 제출 commit"`로 한 번 보고합니다.
+6. 같은 CR의 feedback을 받으면 해당 범위의 작업·검증을 마친 수정 제출을 보고합니다. 접수 확인이나 중간 결과를 별도로 회신하지 않습니다.
+7. Leader가 인수하면 자기가 띄운 background 작업(shell·monitor 등)을 멈추고 자기 작업의 불필요한 산출물을 정리합니다. 종료를 보고하기 직전에 자기 provider process의 자식을 확인합니다. Claude는 Bash tool에서 `ps -o pid,etime,args --ppid $PPID`를 실행합니다. Sub-agent가 띄운 shell도 같은 process의 자식입니다. 확인 명령 자신의 shell 말고 남은 것이 없을 때만 종료를 보고합니다. 남은 것이 있으면 PID로 멈춘 뒤 다시 확인합니다. 종료 준비 완료는 한 번 보고합니다.
 
 다른 process를 기다릴 때는 PID(`while kill -0 <PID>; do sleep 5; done`)나 provider의 background 완료 알림을 씁니다. `pgrep -f`·`pkill -f`는 그 명령을 담은 자기 shell의 command line과도 맞습니다. 그래서 `pgrep -f`로 기다리는 loop는 끝나지 않고, `pkill -f`는 자기 shell을 끝냅니다. Sub-agent에게 일을 맡길 때도 이 규칙을 지시합니다.
 

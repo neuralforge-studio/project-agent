@@ -278,6 +278,31 @@ def test_only_the_operator_may_shut_down_or_resume(session_env, monkeypatch, who
 
 # alarms
 
+@pytest.mark.parametrize("event", ["warn", "deadline"])
+@pytest.mark.parametrize("status", ["busy", "unknown"])
+def test_alarms_keep_unrecorded_targets_after_their_threads_finish(monkeypatch, event, status):
+    notices, bells = [], []
+    monkeypatch.setattr(Tmux, "notify", lambda self, text, duration: notices.append(text) or 2)
+    monkeypatch.setattr(Tmux, "ring_bell", lambda self, pane: bells.append(pane))
+    targets = [
+        {"project": "fixture", "slot": "seat-0", "done": True,
+         "outcome": {"status": status}, "pane_id": "%1"},
+        {"project": "fixture", "slot": "leader", "done": False,
+         "outcome": None, "pane_id": "%0"},
+        {"project": "fixture", "slot": "seat-1", "done": True,
+         "outcome": {"status": "recorded"}, "pane_id": "%2"},
+    ]
+    alarm = suspend.Alarm(Tmux(), "agent-session shutdown --all", False, "12:00:00")
+
+    alarm.fire(event, targets, len(targets), "12:00:00")
+
+    assert len(notices) == 1
+    assert "남은 대상 2: fixture:seat-0, fixture:leader." in notices[0]
+    assert bells == ["%1", "%0"]
+    assert alarm.log[0]["clients"] == 2 and alarm.log[0]["bells"] == 2
+    assert alarm.log[0]["errors"] == []
+
+
 class ControlClient:
     """An attached tmux client in control mode: its `%message` lines are what a person would see."""
 

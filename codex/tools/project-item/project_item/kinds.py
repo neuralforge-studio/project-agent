@@ -39,8 +39,9 @@ CR = Kind(
     outcomes={"done": ("fixed", "waived", "merged"), "deferred": ("moved",)})
 
 DECIDE = Kind(
-    name="decide", fmt=decide, states=decide.STATES, terminal=("done",), listed=("open",),
-    transitions={"open": frozenset({"done"}), "done": frozenset({"open"})},
+    name="decide", fmt=decide, states=decide.STATES, terminal=("done",), listed=("open", "answered"),
+    transitions={"open": frozenset({"answered", "done"}),
+                 "answered": frozenset({"done", "open"}), "done": frozenset({"open"})},
     id_re=re.compile(rf"^({decide.ID_RE})\b"), sections=decide.SECTION_ORDER,
     outcomes={"done": ("decided", "withdrawn", "merged")})
 

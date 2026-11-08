@@ -43,6 +43,16 @@ def test_valid_open_decision(tmp_path):
     assert decide.check(item) == []
 
 
+def test_decision_parser_ignores_fenced_example_sections(tmp_path):
+    text = DECISION.replace("## Background\n배경입니다.\n", "## Background\n배경입니다.\n\n"
+                            "  ~~~md\n## Disposition\n예시입니다.\n  ~~~\n\n"
+                            "````md\n## Result\n```\n## Status\n````\n")
+    path = write(tmp_path, "open", "D-20261104-01.md", text)
+    item = decide.parse(path, "open")
+    assert item.sections == ["Background", "Options", "Recommendation", "Evidence"]
+    assert decide.check(item) == []
+
+
 def test_done_decision_needs_outcome_and_disposition(tmp_path):
     path = write(tmp_path, "done", "D-20261104-01.md", DECISION)
     assert decide.check(decide.parse(path, "done")) == [
@@ -51,6 +61,19 @@ def test_done_decision_needs_outcome_and_disposition(tmp_path):
         "\n## Disposition\n- 2026-11-04 user: open -> done. \"D-20261104-01 A\"\n")
     path.write_text(text, encoding="utf-8")
     assert decide.check(decide.parse(path, "done")) == []
+
+
+def test_answered_decision_needs_json_answer_and_legacy_done_is_valid(tmp_path):
+    path = write(tmp_path, "answered", "D-20261104-01.md", DECISION)
+    assert "answered/ needs a non-empty JSON-string Answer header" in decide.check(decide.parse(path, "answered"))
+    path.write_text(DECISION.replace("- Urgency: high", '- Urgency: high\n- Answer: "A\\n이유"'))
+    parsed = decide.parse(path, "answered")
+    assert decide.check(parsed) == []
+    assert decide.answer_text(parsed) == "A\n이유"
+    legacy = write(tmp_path, "done", "D-20261104-01.md", DECISION.replace(
+        "- Urgency: high", "- Urgency: high\n- Outcome: decided A") +
+        "\n## Disposition\n- 2026-11-04 user: 선택 A\n")
+    assert decide.check(decide.parse(legacy, "done")) == []
 
 
 @pytest.mark.parametrize("change, message", [

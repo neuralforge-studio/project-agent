@@ -5,6 +5,7 @@ import contextlib
 import datetime as dt
 import fcntl
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -13,6 +14,16 @@ from pathlib import Path
 from .cr import section_heads
 from .kinds import CR, DECIDE, Kind
 from .registry import ItemError
+
+MAX_DECISION_ANSWER_BYTES = 16384
+
+
+def _answer_json(answer: str) -> str:
+    """Keep the JSON string on one Markdown line without escaping ordinary Unicode text."""
+    encoded = json.dumps(answer, ensure_ascii=False)
+    for separator in ("\x85", "\u2028", "\u2029"):
+        encoded = encoded.replace(separator, f"\\u{ord(separator):04x}")
+    return encoded
 
 
 # ---------------------------------------------------------------- lock
@@ -162,6 +173,30 @@ def new_decide(root: Path, text_of, today: dt.date | None = None) -> Path:
     return path
 
 
+def answer_decide(root: Path, item_id: str, answer: str, *, by: str = "user") -> Path:
+    """Record one answer and move open/ to answered/ under the same decision-root lock.
+
+    The answer is a JSON string in the file header, so newlines and Markdown headings survive
+    without creating a second item store. Notification is the caller's next step.
+    """
+    if not isinstance(answer, str):
+        raise ItemError("answer_invalid", "The decision answer must be text.")
+    if not answer.strip():
+        raise ItemError("answer_empty", "The decision answer is empty.")
+    if "\x00" in answer:
+        raise ItemError("answer_invalid", "The decision answer contains a NUL byte.")
+    if len(answer.encode("utf-8")) > MAX_DECISION_ANSWER_BYTES:
+        raise ItemError("answer_too_large", f"Keep the answer within {MAX_DECISION_ANSWER_BYTES} bytes.")
+    with root_lock(root):
+        state, source = find(DECIDE, root, item_id)
+        if state != "open":
+            raise ItemError("decide_not_open", f"{item_id} is {state}; only open decisions accept answers.")
+        text = set_header(source.read_text(encoding="utf-8"), "Answer", _answer_json(answer))
+        day = dt.date.today().isoformat()
+        text = add_disposition(text, f"{day} {by}: open -> answered. 답변을 접수했습니다.", DECIDE.sections)
+        return _relocate(DECIDE, root, item_id, state, source, "answered", text)
+
+
 # ---------------------------------------------------------------- move
 _HEADER_LINE = re.compile(r"^-\s+([A-Z][A-Za-z ]*?):")
 
@@ -285,6 +320,21 @@ def move_locked(kind: Kind, root: Path, item_id: str, state: str, outcome: str |
         raise ItemError("invalid_transition",
                         f"{kind.name} {item_id}: {source_state} -> {state} is not allowed.")
     text = source.read_text(encoding="utf-8")
+    if kind is DECIDE and state == "done" and source_state == "open" and _outcome_kind(outcome) == "decided":
+        raise ItemError("invalid_transition", "Record the answer before confirming a decided decision.")
+    if kind is DECIDE and state == "done" and source_state == "answered":
+        answer = kind.fmt.answer_text(kind.fmt.parse_text(text, source, source_state))
+        if answer is None:
+            raise ItemError("format_invalid", f"{item_id} has no recorded answer.")
+        original = f"사용자 답변 원문: {_answer_json(answer)}"
+        note = f"{note} {original}" if note else original
+    if kind is DECIDE and state == "open" and source_state == "answered":
+        answer = kind.fmt.answer_text(kind.fmt.parse_text(text, source, source_state))
+        if answer is None:
+            raise ItemError("format_invalid", f"{item_id} has no recorded answer.")
+        note = f"{note} 이전 답변 원문: {_answer_json(answer)}"
+    if kind is DECIDE and state == "open":
+        text = set_header(text, "Answer", None)
     current = kind.fmt.parse_text(text, source, source_state).headers.get("Outcome")
     new_outcome = None if state in ("open", "todo", "in-progress") else (outcome or current)
     if outcome and new_outcome is None:

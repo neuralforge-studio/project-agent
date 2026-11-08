@@ -1,1 +1,1 @@
-"""Project Board: a local page that shows every registered project team."""
+"""Project Board: a tmux TUI for registered project teams."""

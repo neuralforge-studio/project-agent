@@ -19,8 +19,9 @@ class FakeManager:
     def __init__(self, **options):
         self.options = options
 
-    def start(self, job, prompt_file=None):
-        return {"command": "start", "options": self.options, "job": job, "prompt_file": prompt_file}
+    def start(self, job, prompt_file=None, seat=None):
+        return {"command": "start", "options": self.options, "job": job, "prompt_file": prompt_file,
+                **({"seat": seat} if seat is not None else {})}
 
     def send(self, **arguments):
         return {"command": "send", "options": self.options, **arguments}
@@ -95,6 +96,8 @@ def test_an_incomplete_shutdown_exits_4_with_its_report(capsys):
     (["start", "--job", "J-20261103-07.md"], {"command": "start", "job": "J-20261103-07.md", "prompt_file": None}),
     (["start", "--job", "leader", "--prompt-file", "REQUEST.md"],
      {"command": "start", "job": "leader", "prompt_file": "REQUEST.md"}),
+    (["start", "--job", "TOOL-022", "--seat", "3"],
+     {"command": "start", "job": "TOOL-022", "prompt_file": None, "seat": 3}),
     (["send", "--job", "leader", "작업 결과입니다."],
      {"command": "send", "job": "leader", "seat": None, "message": "작업 결과입니다.", "file": None, "project": None}),
     (["send", "--seat", "0", "--file", "FEEDBACK.md"],
@@ -135,6 +138,7 @@ def test_global_source_and_socket_precede_the_command(capsys):
     [], ["status"], ["projects"], ["bind"], ["event"],
     ["start"], ["start", "--job", ""],
     ["start", "--job", "JOB.md", "--prompt-file", "OTHER.md"],
+    ["start", "--job", "leader", "--seat", "0"], ["start", "--job", "TOOL-022", "--seat", "-1"],
     ["start", "--leader"], ["start", "--job-file", "JOB.md"],
     ["send", "--job", "leader"], ["send", "message"],
     ["send", "--job", "leader", "--seat", "1", "message"],
@@ -290,7 +294,13 @@ def test_entry_points_work_outside_the_source_tree_without_pythonpath(tmp_path):
 
 
 def test_launcher_missing_wsl_interpreter_returns_structured_error(tmp_path):
-    env = dict(os.environ, HOME=str(tmp_path), WSL_DISTRO_NAME="test-wsl")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    uname = binary / "uname"
+    uname.write_text("#!/bin/sh\nprintf '%s\\n' Linux\n")
+    uname.chmod(0o755)
+    env = dict(os.environ, HOME=str(tmp_path), WSL_DISTRO_NAME="test-wsl",
+               PATH=str(binary) + os.pathsep + os.environ["PATH"])
     result = subprocess.run([str(TOOL / "bin/agent-session"), "--help"],
                             env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 5

@@ -233,3 +233,54 @@ def test_invalid_launch_declarations(tmp_path, key, block):
     with pytest.raises(SessionError) as error:
         load_registry(config)
     assert error.value.code == "registry_invalid"
+
+
+def test_remote_seat_preserves_local_paths_and_is_not_a_local_selection_root(tmp_path):
+    from agent_session.config import RemoteSeat
+
+    base = tmp_path / "base"
+    base.mkdir()
+    same_path_here = tmp_path / "remote"
+    same_path_here.mkdir()
+    config = write_registry(tmp_path / "project.json", {
+        str(base): entry(seats=["../local", {"host": "macbook-worker", "path": str(same_path_here),
+                                             "python": "/opt/python/bin/python3"}])})
+    project = resolve_project(base, config)
+    assert project.seats[0] == tmp_path / "local"
+    remote = project.seats[1]
+    assert isinstance(remote, RemoteSeat)
+    assert (remote.host, str(remote.path), remote.python) == (
+        "macbook-worker", str(same_path_here), "/opt/python/bin/python3")
+    with pytest.raises(SessionError) as error:
+        resolve_project(same_path_here, config)
+    assert error.value.code == "project_not_found"
+
+
+@pytest.mark.parametrize("remote", [
+    {"host": "-oProxyCommand=bad", "path": "/seat"},
+    {"host": "book;touch bad", "path": "/seat"},
+    {"host": "book", "path": "relative/seat"},
+    {"host": "book", "path": "/seat/../other"},
+    {"host": "book", "path": "/seat\nother"},
+    {"host": "book", "path": "/seat", "python": "-c"},
+    {"host": "book", "path": "/seat", "extra": True},
+])
+def test_remote_seat_rejects_ambiguous_or_unsafe_inputs(tmp_path, remote):
+    config = write_registry(tmp_path / "project.json", {"/base": entry(seats=[remote])})
+    with pytest.raises(SessionError) as error:
+        load_registry(config)
+    assert error.value.code == "registry_invalid"
+
+
+def test_remote_seat_is_codex_only_and_duplicate_host_paths_are_rejected(tmp_path):
+    remote = {"host": "book", "path": "/seat"}
+    config = write_registry(tmp_path / "project.json", {"/base": entry(provider="claude", seats=[remote])})
+    with pytest.raises(SessionError) as error:
+        load_registry(config)
+    assert error.value.code == "registry_invalid"
+    write_registry(config, {"/base": entry(seats=[remote, remote])})
+    with pytest.raises(SessionError) as error:
+        load_registry(config)
+    assert error.value.code == "project_ambiguous"
+    write_registry(config, {"/base": entry(seats=[remote, {"host": "other", "path": "/seat"}])})
+    assert len(load_registry(config)[0].seats) == 2

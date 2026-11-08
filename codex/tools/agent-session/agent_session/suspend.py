@@ -272,7 +272,8 @@ class Alarm:
         self.log = []
 
     def fire(self, event, targets, total, deadline_text):
-        pending = [target for target in targets if not target["done"]]
+        # A finished thread can leave its CLI busy or its exit unconfirmed.
+        pending = [target for target in targets if (target["outcome"] or {}).get("status") != "recorded"]
         names = ", ".join(f"{target['project']}:{target['slot']}" for target in pending) or "없음"
         if event == "start":
             text = (f"agent shutdown: 대상 {total}, 강제 종료 시각 {deadline_text}" if self.force else

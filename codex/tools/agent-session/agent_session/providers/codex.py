@@ -6,8 +6,10 @@ import os
 from pathlib import Path
 import re
 import time
+import tomllib
 
 from ..errors import SessionError
+from .. import remote
 from .common import clean_env, context_timeout, deadline, executable, json_result, run, session_id, text_file
 from .websocket import WebSocketRPC
 
@@ -15,6 +17,106 @@ from .websocket import WebSocketRPC
 TERMINAL_TURNS = {"completed", "interrupted", "failed"}
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _LAUNCH_CONFIG_KEYS = ("sandbox_mode", "shell_environment_policy")
+TRUST_LOCK_SECONDS = 5
+
+
+def _trust_text(original, path):
+    """Add one trust value without rewriting other TOML settings or comments."""
+    try:
+        data = tomllib.loads(original)
+    except tomllib.TOMLDecodeError:
+        return None
+    projects = data.get("projects", {})
+    if not isinstance(projects, dict):
+        return None
+    entry = projects.get(path)
+    if entry is not None and not isinstance(entry, dict):
+        return None
+    if entry is not None and "trust_level" in entry:
+        return original if entry["trust_level"] == "trusted" else None
+    if entry is None:
+        revised = original + ("\n" if original and not original.endswith("\n") else "")
+        revised += f'\n[projects.{json.dumps(path)}]\ntrust_level = "trusted"\n'
+    else:
+        revised = None
+        offset = 0
+        for line in original.splitlines(keepends=True):
+            header = re.fullmatch(r"\s*\[(?!\[)(.*)\]\s*(?:#.*)?", line.rstrip("\r\n"))
+            if header:
+                try:
+                    section = tomllib.loads(f"[{header.group(1)}]\n")
+                except tomllib.TOMLDecodeError:
+                    section = {}
+                if section.get("projects", {}).get(path) == {}:
+                    end = offset + len(line)
+                    revised = (original[:end] + ("" if line.endswith("\n") else "\n")
+                               + 'trust_level = "trusted"\n' + original[end:])
+                    break
+            offset += len(line)
+        if revised is None:
+            return None
+    try:
+        if tomllib.loads(revised)["projects"][path]["trust_level"] == "trusted":
+            return revised
+    except (KeyError, TypeError, tomllib.TOMLDecodeError):
+        pass
+    return None
+
+
+def trust_workspace(path, wait=TRUST_LOCK_SECONDS):
+    """Record trust for an approved Codex workspace in the user's config."""
+    home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+    config = (home / "config.toml").resolve()
+    try:
+        config.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    lock = config.with_name(config.name + ".agent-session.lock")
+    end = time.monotonic() + wait
+    while True:
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.05)
+        except OSError:
+            return False
+    temporary = config.with_name(f".{config.name}.agent-session-{os.getpid()}-{time.time_ns()}")
+    try:
+        original = config.read_text(encoding="utf-8") if config.exists() else ""
+        previous = config.stat() if config.exists() else None
+        revised = _trust_text(original, str(Path(path).resolve()))
+        if revised is None:
+            return False
+        if revised == original:
+            return True
+        mode = previous.st_mode & 0o777 if previous else 0o600
+        handle = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(revised)
+            stream.flush()
+            os.fchmod(stream.fileno(), mode)
+            os.fsync(stream.fileno())
+        current = config.stat() if config.exists() else None
+        if (previous is None) != (current is None) or (previous and current and
+                (previous.st_ino, previous.st_mtime_ns, previous.st_size) !=
+                (current.st_ino, current.st_mtime_ns, current.st_size)):
+            return False
+        os.replace(temporary, config)
+        return True
+    except (OSError, UnicodeError):
+        return False
+    finally:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        try:
+            lock.rmdir()
+        except OSError:
+            pass
 
 
 def _merge(base, update):
@@ -194,10 +296,15 @@ class CodexProvider:
         return result
 
     def trust_new_seat(self, root):
-        return False                       # Codex trust is not recorded by this tool
+        return trust_workspace(root)
+
+    def trust_base(self, root):
+        return trust_workspace(root)
 
     def startup_dialog(self, screen):
-        return None                        # no Codex startup dialog is known to this tool
+        if re.search(r"\bFolder access\b", screen) and re.search(r"\bTrust this folder\?", screen):
+            return "workspace_trust"
+        return None
 
     def registration_hooks(self, context):
         # SessionStart alone does not prove which tmux run created a thread.
@@ -312,6 +419,9 @@ class CodexProvider:
         recorded = meta.get("session_id")
         if recorded and recorded != session_id(session):
             raise SessionError("session_mismatch", "The Codex thread differs from the recorded run.", 3)
+        if meta.get("remote_seat") or context.get("remote_seat"):
+            remote.run_call({**context, **meta}, "check_binding", timeout=timeout)
+            return dict(session)
         with self.rpc_factory(endpoint, timeout) as rpc:
             self._thread(rpc, session, context)
         return {"session_id": session_id(session), "endpoint": endpoint}
@@ -319,6 +429,9 @@ class CodexProvider:
     def send(self, session, text, context, timeout=30):
         limit = deadline(timeout)
         endpoint = self._endpoint(session, context)
+        if context.get("remote_seat"):
+            result = remote.run_call(context, "send", {"message": text}, timeout=timeout)
+            return {**result, "session": dict(session)}
         with self.rpc_factory(endpoint, limit) as rpc:
             thread = self._thread(rpc, session, context)
             if thread["status"]["type"] == "notLoaded":
@@ -385,12 +498,18 @@ class CodexProvider:
                 "runtime_status": thread["status"]["type"]}
 
     def observe(self, session, context, meta=None, timeout=30):
+        if context.get("remote_seat") or (meta or {}).get("remote_seat"):
+            self._endpoint(session, context)
+            return remote.run_call({**context, **(meta or {})}, "observe", timeout=timeout)
         with self.rpc_factory(self._endpoint(session, context), timeout) as rpc:
             return self._observe(rpc, session, context, meta)
 
     def request_stop(self, session, context, meta=None, timeout=30):
         limit = deadline(timeout)
         identity = session_id(session)
+        if context.get("remote_seat") or (meta or {}).get("remote_seat"):
+            self._endpoint(session, context)
+            return remote.run_call({**context, **(meta or {})}, "request_stop", timeout=timeout)
         with self.rpc_factory(self._endpoint(session, context), limit) as rpc:
             observed = self._observe(rpc, session, context, meta)
             for item in observed["pending"]:
@@ -411,5 +530,7 @@ class CodexProvider:
             return self._observe(rpc, session, context, meta)
 
     def request_exit(self, meta, tmux):
+        if meta.get("remote_seat"):
+            return remote.run_call(meta, "request_exit")
         # The idle TUI gets /exit and Enter in its owned pane until its SIGTERM exit is verified.
         tmux.send_exit(meta["pane_id"])

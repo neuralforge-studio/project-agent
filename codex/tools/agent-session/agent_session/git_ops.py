@@ -3,6 +3,7 @@
 import subprocess
 from pathlib import Path
 
+from .config import RemoteSeat
 from .errors import SessionError
 
 
@@ -28,6 +29,10 @@ def _interrupt(proc):
 
 def index_lock(root):
     """Path of the seat's index.lock when it exists, else None."""
+    if isinstance(root, RemoteSeat):
+        from . import remote
+        found = remote.call(root, "index_lock", {})
+        return Path(found) if found else None
     try:
         found = subprocess.run(_argv(root, "rev-parse", "--git-path", "index.lock"),
                                capture_output=True, text=True, timeout=30)
@@ -49,6 +54,9 @@ def lock_reason(root):
 
 
 def git(root, *args, timeout=GIT_TIMEOUT):
+    if isinstance(root, RemoteSeat):
+        from . import remote
+        return remote.call(root, "git", {"args": list(args)}, timeout=timeout)
     try:
         proc = subprocess.Popen(_argv(root, *args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except OSError as exc:
@@ -74,6 +82,9 @@ def git(root, *args, timeout=GIT_TIMEOUT):
 
 
 def is_git(root):
+    if isinstance(root, RemoteSeat):
+        from . import remote
+        return remote.call(root, "is_git", {})
     return (Path(root) / ".git").exists()
 
 
@@ -108,20 +119,39 @@ def _first(context, project, store, root):
     return baseline
 
 
+def _is_ancestor(root, ancestor, descendant):
+    try:
+        git(root, "merge-base", "--is-ancestor", ancestor, descendant)
+    except SessionError as error:
+        if error.code == "git_failed" and error.details.get("returncode") == 1:
+            return False
+        raise
+    return True
+
+
 def _resume_branch(root, job, base_hash, published_first):
     """Switch to the CR branch: the published branch on a new assignment, else the local one, else
     create it from Base when HEAD is still the clean Base."""
     branch = job["branch"]
     remote = None
     if published_first:
+        # A Base recorded by a read-only assignment may not exist in this seat yet.
+        try:
+            git(root, "cat-file", "-e", f"{base_hash}^{{commit}}")
+        except SessionError:
+            git(root, "fetch", "--quiet", "origin", timeout=600)
+            git(root, "cat-file", "-e", f"{base_hash}^{{commit}}")
         try:
             git(root, "fetch", "--quiet", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
             remote = git(root, "rev-parse", "--verify", f"refs/remotes/origin/{branch}")
         except SessionError:
             remote = None
     if git(root, "branch", "--list", branch):
-        if remote and git(root, "rev-parse", branch) != remote:
-            raise SessionError("branch_mismatch", f"Local {branch} differs from origin/{branch}.")
+        local = git(root, "rev-parse", branch)
+        if remote and local != remote:
+            # A fast-forward may have completed before its state write failed.
+            if local != base_hash or not _is_ancestor(root, remote, base_hash):
+                raise SessionError("branch_mismatch", f"Local {branch} differs from origin/{branch}.")
         git(root, "switch", "--no-overwrite-ignore", branch)
     elif remote:
         git(root, "switch", "--no-overwrite-ignore", "-c", branch, f"refs/remotes/origin/{branch}")
@@ -131,14 +161,21 @@ def _resume_branch(root, job, base_hash, published_first):
         git(root, "fetch", "--quiet", "origin")
         git(root, "cat-file", "-e", f"{base_hash}^{{commit}}")
         git(root, "switch", "--no-overwrite-ignore", "-c", branch, base_hash)
+    if published_first and _is_ancestor(root, "HEAD", base_hash):
+        git(root, "merge", "--ff-only", "--no-overwrite-ignore", base_hash)
     git(root, "merge-base", "--is-ancestor", base_hash, "HEAD")
 
 
 def prepare(context, project, store):
     """Prepare the seat's Git state, then align its submodules with the HEAD gitlinks."""
     baseline = _prepare_git(context, project, store)
-    git(Path(context["seat_root"]), "submodule", "update", "--init", "--recursive")
+    git(_root(context, project), "submodule", "update", "--init", "--recursive")
     return baseline
+
+
+def _root(context, project):
+    seat = project.seats[context["seat"]]
+    return seat if isinstance(seat, RemoteSeat) else Path(context["seat_root"])
 
 
 def _prepare_git(context, project, store):
@@ -150,7 +187,7 @@ def _prepare_git(context, project, store):
       cr/<ID> branch from Base; read-only prepares again from the latest main
     """
     from . import jobs
-    root = Path(context["seat_root"])
+    root = _root(context, project)
     job = context["job"]
     seat = str(context["seat"])
     if not is_git(root):

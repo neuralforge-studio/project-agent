@@ -28,12 +28,22 @@ Launcher와 프로젝트 API는 같은 원본을 사용하며 상속한 PYTHONPA
 | macOS | 해당 환경에서 확인한 `python3` |
 
 Tmux·Git·provider CLI를 준비합니다.
-Base는 신뢰한 정확한 실제 경로에 미리 준비합니다.
+Base 디렉토리를 정확한 실제 경로에 미리 준비합니다.
+Codex의 start는 새 Leader 실행 전에 등록 Base의 정확한 실제 경로를 자동으로 신뢰 설정에 기록합니다.
+기존의 명시적 `untrusted`는 보존합니다.
+신뢰 설정을 기록하지 못해 Codex CLI가 신뢰 화면에 멈추면 창 정보와 `dialog=workspace_trust`를 포함한 `needs_user_action`(exit 3)을 반환합니다.
+Claude Base의 신뢰 설정은 미리 준비합니다.
 배정할 seat 디렉토리가 없으면 start가 base의 origin을 clone합니다. 접속 인증은 사용자의 Git·SSH 설정을 따릅니다.
 공통 도구는 프로젝트 코드를 import하거나 실행하지 않습니다. CR 파일과 등록 선언만 읽습니다.
 CR 형식과 in-progress 이동은 같은 저장소의 `codex/tools/project-item`을 사용합니다.
 Tmux 제어 권한은 host 명령 실행 권한입니다.
 V1은 기존에 승인한 비sandbox 실행만 지원합니다.
+
+Codex SSH Worker를 사용할 때는 원격 호스트에도 Python 3.11 이상·Git·tmux·로그인한 Codex CLI를 준비합니다.
+Leader 호스트에서 등록한 SSH alias로 비대화형 접속과 원격 origin 접근이 가능해야 합니다.
+SSH 서버는 Unix socket reverse forwarding을 허용해야 합니다.
+원격 실행에 필요한 Python helper는 start가 전송합니다. 원격 project clone은 seat 준비가 수행합니다.
+등록 형식과 원본·cache 경계는 [SSH Worker 계약](../../../docs/project-team/spec.md#codex-ssh-worker-seat)을 따릅니다.
 
 ## 등록과 실행
 
@@ -47,7 +57,7 @@ JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자�
 
 | 명령 | 예 |
 | --- | --- |
-| start | `agent-session start --job leader` 또는 `agent-session start --job TOOL-012` |
+| start | `agent-session start --job leader`, `agent-session start --job TOOL-012`, 지정 시 `agent-session start --job TOOL-012 --seat 3` |
 | send | `agent-session send --job leader "제출 commit과 CR ID"`. 다른 project의 Leader에게는 `agent-session send --project <project> --job leader "..."` |
 | stop | `agent-session stop --job TOOL-012` |
 | restart | `agent-session restart --job TOOL-012` |
@@ -56,7 +66,9 @@ JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자�
 | resume | `agent-session resume --all` 또는 `--project NAME`. 서버가 뜬 뒤 운영자가 실행합니다 |
 
 Start는 todo의 CR을 in-progress로 옮기고 Worker seat를 자동 배정합니다.
-Claude seat를 새로 clone하면 그 seat의 workspace trust를 기록합니다.
+`--seat N`을 지정하면 해당 Worker seat만 검사합니다. 지정한 seat가 비어 있지 않거나 안전 검사를 통과하지 못하면 배정을 거절합니다.
+이미 배정한 CR의 재시도는 같은 seat만 지정할 수 있습니다. Leader에는 `--seat`를 사용할 수 없습니다.
+Claude·Codex seat를 새로 clone하면 그 seat의 workspace trust를 기록합니다.
 시작이 trust·login·권한 dialog에서 멈추면 `needs_user_action`(exit 3)과 `dialog`를 반환합니다. 사용자가 그 창에서 답한 뒤 같은 start를 다시 실행합니다.
 다른 명령은 CR ID 대신 `--seat N`으로 현재 배정 대상을 지정할 수 있습니다.
 옵션은 `agent-session --help`와 해당 하위 명령의 `--help`에서 확인합니다.
@@ -80,6 +92,15 @@ Binary를 직접 실행하므로 shell function·alias가 붙이던 인자는 �
 기존 비sandbox 승인 인자도 등록에 명시하며 공통 도구가 새 bypass 기본값을 추가하지 않습니다.
 Codex TUI는 공용 daemon에 연결할 때도 `--cd <배정한 실제 cwd>`를 명시합니다.
 Launcher의 cd만으로 remote daemon의 작업 경로를 추측하지 않습니다.
+
+원격 Worker의 작업 파일·셸·검증과 Codex daemon은 등록한 호스트에서 실행됩니다.
+Board는 seat의 호스트를 표시하고 Leader 호스트의 SSH 표시 창으로 전환합니다.
+SSH 표시 창이 끊겨도 원격 실행을 종료로 판정하지 않습니다.
+연결을 복구한 뒤 같은 `start --job <CR-ID>`를 실행하면 같은 배정의 실행을 대조하고 표시 창을 다시 연결합니다.
+Provider 실행 전 준비 실패는 원인을 고친 뒤 같은 start로 재시도합니다. 이전 controller 종료와 실행 전 근거를 확인할 수 있어야 합니다.
+관찰할 수 없으면 `remote_unknown`(exit 4)과 기존 배정을 보존합니다.
+원격 Worker가 `send --job leader`를 실행하면 CR snapshot의 Result만 원본에 돌려보냅니다.
+원본 Result와 충돌하면 `remote_result_conflict`로 거절합니다. 원격 파일과 원본을 보존한 뒤 내용을 조정합니다.
 
 ## 프로젝트 API와 검사
 
@@ -107,5 +128,6 @@ pytest 프로세스(xdist worker)마다 한 번 만들고, 테스트마다 그 �
 Machine load가 높으면 `AGENT_SESSION_TEST_TIMEOUT`(초, 기본 15)으로 fixture의 명령당 대기 한도를
 늘립니다. `codex/tools/conftest.py`는 `--basetemp`가 없을 때 실행마다 `TMPDIR` 아래 전용 임시
 디렉터리를 쓰고, 통과하면 지웁니다. 실패하면 조사를 위해 남깁니다.
+macOS의 Unix socket 경로 제한에 걸리면 `--basetemp=/tmp/as-test`처럼 짧은 임시 경로를 지정합니다.
 
 이 검사는 실제 provider 연결과 실제 project의 인수 결과를 대신하지 않습니다.
