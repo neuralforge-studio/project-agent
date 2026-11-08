@@ -35,6 +35,10 @@ python3 install.py
 해당 owner가 제품 스킬 두 항목을 위 안정 root로 연결한 뒤 설치기를 실행하십시오.
 다른 스킬은 보존됩니다.
 기존 CLI·API 링크의 최초 전환도 해당 환경 owner가 기존 코드를 보존한 채 준비합니다.
+agent Git 원본에는 머신별 절대 링크나 clone 깊이에 고정된 외부 상대 링크를 넣지 않습니다.
+agent 소유 전환 절차가 실제 제품 root를 확인하여 runtime 호환 링크를 만들고 복구합니다.
+준비된 각 스킬 링크는 같은 이름의 제품 스킬을 가리켜야 합니다.
+두 스킬의 대상을 서로 바꾼 링크는 준비된 연결로 인정하지 않습니다.
 
 설치기는 실행 준비 상태를 파일 설치 가능 여부와 별도로 표시합니다.
 Git·tmux·provider CLI·Board의 Textual은 사용할 기능의 실행 조건입니다.
@@ -100,5 +104,6 @@ git diff --check
 
 검증은 임시 home·등록·Git 저장소와 격리 tmux socket을 사용합니다.
 부하가 높으면 [Session 검증 안내](tools/agent-session/README.md#검증)의 기존 timeout 환경변수를 사용하십시오.
-설치 검증은 다운로드 삭제 뒤 CLI·API·스킬·관리 명령, 갱신·복구와 실패 transaction을 확인합니다.
+설치 검증은 임의 깊이와 공백을 포함한 source·home에서 수행합니다.
+다운로드 삭제 뒤 CLI·API·스킬·관리 명령, 갱신·복구와 실패 transaction을 확인합니다.
 실제 provider 로그인·원격 SSH 접속과 운영 인계는 격리 검증의 PASS 범위에 포함하지 않습니다.

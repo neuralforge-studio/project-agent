@@ -90,7 +90,9 @@ def _digest(source: Path, files: tuple[Path, ...]) -> str:
 
 
 def _lexical_target(path: Path, target: str) -> Path:
-    return Path(os.path.abspath(path.parent / target))
+    # A relative link starts at the physical parent, even when skills itself is a link.
+    # Keep the final target lexical so the two product skill names stay distinct.
+    return Path(os.path.abspath(path.parent.resolve() / target))
 
 
 def _readlink(path: Path) -> str | None:

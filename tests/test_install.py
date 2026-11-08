@@ -96,12 +96,33 @@ def test_reinstall_keeps_record_and_unrelated_files(distribution, home):
     assert (personal / 'SKILL.md').read_text() == 'user skill'
 
 
-def test_installed_management_and_tools_survive_deleted_download(distribution, home):
+@pytest.mark.parametrize('nested', [False, True])
+def test_installed_management_and_tools_survive_deleted_download(distribution, home, tmp_path, nested):
+    if nested:
+        source_target = tmp_path / 'incoming/vendor clone/releases/archive/project agent'
+        source_target.parent.mkdir(parents=True)
+        distribution.rename(source_target)
+        distribution = source_target
+        home_target = tmp_path / 'runtime/accounts/new user/profile/home'
+        home_target.parent.mkdir(parents=True)
+        home.rename(home_target)
+        home = home_target
     result = run_cli(distribution, home)
     assert result.returncode == 0, result.stderr
     payload = Path(json.loads(result.stdout)['installed_payload'])
     shutil.rmtree(distribution)
     stable = home / '.local/lib/project-agent'
+    expected_skills = {
+        'project-team': ('SKILL.md', 'agents/openai.yaml', 'assets/commit-message.txt'),
+        'project-item': ('SKILL.md', 'agents/openai.yaml', 'references/cr.md', 'references/decide.md'),
+    }
+    for provider in ('.codex', '.claude'):
+        for skill, files in expected_skills.items():
+            link = home / provider / 'skills' / skill
+            assert link.resolve() == payload / 'skills' / skill
+            for relative in files:
+                assert (link / relative).read_text(encoding='utf-8').strip()
+            assert (link / '../../docs/project-team/spec.md').resolve().is_file()
     env = {**os.environ, 'HOME': str(home), 'PYTHONPATH': '', 'PYTHONDONTWRITEBYTECODE': '1'}
     for tool in installer.TOOLS:
         command = subprocess.run([str(home / '.local/bin' / tool), '--help'],
@@ -160,25 +181,56 @@ def test_conflict_preserves_existing_entry_and_installs_nothing(distribution, ho
     assert not (home / '.local/lib/project-agent-installs').exists()
 
 
-def test_external_skills_directory_is_never_modified(distribution, home, tmp_path):
-    shared = tmp_path / 'other-repository/skills'
+@pytest.mark.parametrize('provider', ['.codex', '.claude'])
+@pytest.mark.parametrize('link_style', ['absolute', 'relative'])
+def test_external_skills_directory_is_never_modified(distribution, home, tmp_path, provider, link_style):
+    home_target = tmp_path / 'runtime/users/operator profile/home'
+    home_target.parent.mkdir(parents=True)
+    home.rename(home_target)
+    home = home_target
+    shared = tmp_path / 'arbitrary clone depth/owner checkout/config/codex/skills'
     shared.mkdir(parents=True)
     (shared / 'personal').mkdir()
-    (home / '.codex').mkdir()
-    (home / '.codex/skills').symlink_to(shared, target_is_directory=True)
+    (home / provider).mkdir()
+    (home / provider / 'skills').symlink_to(os.path.relpath(shared, home / provider), target_is_directory=True)
     with pytest.raises(installer.InstallError) as caught:
         installer.check(distribution, home)
     assert caught.value.code == 'skills_external'
+    assert str(home / provider / 'skills/project-team') in str(caught.value)
     assert sorted(p.name for p in shared.iterdir()) == ['personal']
     stable = home / '.local/lib/project-agent'
     for skill in installer.SKILLS:
-        (shared / skill).symlink_to(stable / 'skills' / skill)
+        target = stable / 'skills' / skill
+        (shared / skill).symlink_to(os.path.relpath(target, shared) if link_style == 'relative' else target)
     before = {p.name: p.lstat().st_ino for p in shared.iterdir()}
+    checked = installer.check(distribution, home)
+    assert checked['action'] == 'check'
     installer.install(distribution, home)
     assert {p.name: p.lstat().st_ino for p in shared.iterdir()} == before
+    for skill in installer.SKILLS:
+        assert (shared / skill).resolve() == (stable / 'skills' / skill).resolve()
     installer.rollback(home)
     assert {p.name: p.lstat().st_ino for p in shared.iterdir()} == before
     assert all((shared / skill).is_symlink() for skill in installer.SKILLS)
+
+
+@pytest.mark.parametrize(('provider', 'link_style'), [('.codex', 'absolute'), ('.claude', 'relative')])
+def test_swapped_external_skill_links_are_rejected(distribution, home, tmp_path, provider, link_style):
+    shared = tmp_path / 'nested/agent checkout/clone/skills'
+    shared.mkdir(parents=True)
+    (home / provider).mkdir()
+    (home / provider / 'skills').symlink_to(shared, target_is_directory=True)
+    stable = home / '.local/lib/project-agent'
+    for skill, swapped in (('project-team', 'project-item'), ('project-item', 'project-team')):
+        target = stable / 'skills' / swapped
+        (shared / skill).symlink_to(os.path.relpath(target, shared) if link_style == 'relative' else target)
+    before = {p.name: (p.lstat().st_ino, os.readlink(p)) for p in shared.iterdir()}
+    for action in (installer.check, installer.install):
+        with pytest.raises(installer.InstallError) as caught:
+            action(distribution, home)
+        assert caught.value.code == 'skills_external'
+    assert {p.name: (p.lstat().st_ino, os.readlink(p)) for p in shared.iterdir()} == before
+    assert not (home / '.local').exists()
 
 
 def test_missing_previous_payload_refuses_rollback(distribution, home):
