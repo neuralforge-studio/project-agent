@@ -22,6 +22,11 @@ def identity(path):
     git(path, "config", "user.email", "fixture@example.invalid")
 
 
+def file_snapshot(path):
+    info = path.stat()
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, path.read_bytes())
+
+
 @pytest.fixture
 def repo(tmp_path):
     origin = tmp_path / "origin.git"
@@ -163,6 +168,157 @@ def test_parked_read_only_cr_prepares_again_from_main(tmp_path, repo, cr_bases):
     context, store, project = setup_job(tmp_path, seat, "read-only", base=old)
     assert git_ops.prepare(context, project, store)["base_hash"] == updated
     assert cr_bases[-1]["base_hash"] == updated
+
+
+@pytest.mark.parametrize("branch_location", ["local", "remote", "both"])
+def test_read_only_to_write_fast_forwards_the_old_cr_branch(tmp_path, repo, cr_bases, branch_location):
+    source, seat, initial = repo
+    branch = "cr/TOOL-001"
+    if branch_location != "remote":
+        git(seat, "branch", branch, initial)
+    if branch_location != "local":
+        git(source, "push", "origin", f"{initial}:refs/heads/{branch}")
+    git(seat, "branch", "unrelated", initial)
+    expected = advance(source)
+    context, store, project = setup_job(tmp_path, seat, "read-only")
+    base = git_ops.prepare(context, project, store)
+    assert base["base_hash"] == expected
+
+    # The read-only assignment was released; the same CR now has write permission.
+    context, store, project = setup_job(tmp_path, seat, base=base)
+    files = [seat / "notes.txt", seat / "private.txt"]
+    for path in files:
+        path.write_text("keep this user file\n")
+    before = [file_snapshot(path) for path in files]
+    advance(source, "newer than the recorded Base\n")
+    assert git_ops.prepare(context, project, store) == base
+    assert git(seat, "branch", "--show-current") == branch
+    assert git(seat, "rev-parse", "HEAD") == expected
+    assert git(seat, "rev-parse", "main") == expected
+    assert git(seat, "rev-parse", "unrelated") == initial
+    if branch_location != "local":
+        assert git(source, "ls-remote", "origin", f"refs/heads/{branch}").split()[0] == initial
+    assert [file_snapshot(path) for path in files] == before
+    assert store.read()["0"]["git_hash"] == expected
+    assert cr_bases == [base]
+
+    (seat / "data.txt").write_text("unfinished write work\n")
+    assert git_ops.prepare(context, project, store) == base
+    assert (seat / "data.txt").read_text() == "unfinished write work\n"
+    assert git(seat, "rev-parse", "HEAD") == expected
+
+
+def test_reused_cr_branch_divergence_is_preserved_and_refused(tmp_path, repo, cr_bases):
+    source, seat, initial = repo
+    branch = "cr/TOOL-001"
+    git(seat, "switch", "-c", branch)
+    (seat / "work.txt").write_text("unmerged CR work\n")
+    git(seat, "add", "work.txt")
+    git(seat, "commit", "-m", "Unmerged CR work")
+    tip = git(seat, "rev-parse", "HEAD")
+    git(seat, "push", "origin", branch)
+    git(seat, "switch", "main")
+    advance(source)
+    context, store, project = setup_job(tmp_path, seat, "read-only")
+    base = git_ops.prepare(context, project, store)
+    context, store, project = setup_job(tmp_path, seat, base=base)
+    (seat / "private.txt").write_text("keep this user file\n")
+    with pytest.raises(SessionError) as error:
+        git_ops.prepare(context, project, store)
+    assert error.value.code == "git_failed"
+    assert git(seat, "rev-parse", branch) == tip
+    assert git(source, "ls-remote", "origin", f"refs/heads/{branch}").split()[0] == tip
+    assert (seat / "work.txt").read_text() == "unmerged CR work\n"
+    assert (seat / "private.txt").read_text() == "keep this user file\n"
+    assert store.read()["0"]["git_hash"] is None
+    assert cr_bases == [base]
+
+
+def test_reused_cr_fast_forward_retries_a_lost_state_write(tmp_path, repo, cr_bases, monkeypatch):
+    source, seat, initial = repo
+    branch = "cr/TOOL-001"
+    git(seat, "branch", branch, initial)
+    git(source, "push", "origin", f"{initial}:refs/heads/{branch}")
+    expected = advance(source)
+    context, store, project = setup_job(tmp_path, seat, "read-only")
+    base = git_ops.prepare(context, project, store)
+    context, store, project = setup_job(tmp_path, seat, base=base)
+    original = store.update
+    calls = []
+
+    def lose_first_write(update):
+        if not calls:
+            calls.append(True)
+            raise SessionError("fixture_write_failure", "The state write failed.", 5)
+        return original(update)
+
+    monkeypatch.setattr(store, "update", lose_first_write)
+    with pytest.raises(SessionError) as error:
+        git_ops.prepare(context, project, store)
+    assert error.value.code == "fixture_write_failure"
+    assert git(seat, "rev-parse", branch) == expected
+    assert store.read()["0"]["git_hash"] is None
+    advance(source, "newer than the recorded Base\n")
+    assert git_ops.prepare(context, project, store) == base
+    assert git(seat, "rev-parse", "HEAD") == expected
+    assert git(source, "ls-remote", "origin", f"refs/heads/{branch}").split()[0] == initial
+    assert store.read()["0"]["git_hash"] == expected
+    assert cr_bases == [base]
+
+
+@pytest.mark.parametrize("unmerged", ["local", "remote"])
+def test_reused_cr_mismatched_unmerged_branches_are_refused(tmp_path, repo, cr_bases, unmerged):
+    source, seat, initial = repo
+    branch = "cr/TOOL-001"
+    git(seat, "switch", "-c", "unmerged")
+    (seat / "work.txt").write_text("unmerged work\n")
+    git(seat, "add", "work.txt")
+    git(seat, "commit", "-m", "Unmerged work")
+    tip = git(seat, "rev-parse", "HEAD")
+    published = initial if unmerged == "local" else tip
+    git(seat, "push", "origin", f"{published}:refs/heads/{branch}")
+    git(seat, "switch", "main")
+    expected = advance(source)
+    context, store, project = setup_job(tmp_path, seat, "read-only")
+    base = git_ops.prepare(context, project, store)
+    local = tip if unmerged == "local" else expected
+    git(seat, "branch", branch, local)
+    context, store, project = setup_job(tmp_path, seat, base=base)
+    with pytest.raises(SessionError) as error:
+        git_ops.prepare(context, project, store)
+    assert error.value.code == "branch_mismatch"
+    assert git(seat, "rev-parse", branch) == local
+    assert git(source, "ls-remote", "origin", f"refs/heads/{branch}").split()[0] == published
+    assert git(seat, "branch", "--show-current") == "main"
+    assert store.read()["0"]["git_hash"] is None
+    assert cr_bases == [base]
+
+
+@pytest.mark.parametrize("filename", ["notes.txt", "private.txt"])
+def test_reused_cr_fast_forward_refuses_user_file_collision(tmp_path, repo, cr_bases, filename):
+    source, seat, initial = repo
+    branch = "cr/TOOL-001"
+    git(seat, "branch", branch, initial)
+    git(source, "push", "origin", f"{initial}:refs/heads/{branch}")
+    (source / filename).write_text("tracked upstream\n")
+    git(source, "add", "-f", filename)
+    git(source, "commit", "-m", "Track the collision path")
+    git(source, "push", "origin", "main")
+    expected = git(source, "rev-parse", "HEAD")
+    base = {"base_hash": expected, "base_commit_time": git(source, "show", "-s", "--format=%cI", expected)}
+    context, store, project = setup_job(tmp_path, seat, base=base)
+    path = seat / filename
+    path.write_text("preserve this user file\n")
+    before = file_snapshot(path)
+    with pytest.raises(SessionError) as error:
+        git_ops.prepare(context, project, store)
+    assert error.value.code == "git_failed"
+    assert error.value.details["operation"][0] == "merge"
+    assert file_snapshot(path) == before
+    assert git(seat, "rev-parse", branch) == initial
+    assert git(source, "ls-remote", "origin", f"refs/heads/{branch}").split()[0] == initial
+    assert store.read()["0"]["git_hash"] is None
+    assert cr_bases == []
 
 
 @pytest.mark.parametrize("collision", ["local-main", "remote-main"])

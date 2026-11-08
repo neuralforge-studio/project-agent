@@ -502,6 +502,9 @@ CR의 `- Base: <commit> <ISO 시각>` header가 준비 이력입니다. 이 head
 | 작업 뒤 restart | 같은 배정, run 교체 | Git 준비를 다시 하지 않음. Base·branch·작업 파일 유지 |
 | 보류 뒤 재배정 | 새 배정, CR에 Base 있음 | Write는 `origin/cr/<ID>`를 fetch해 이어받음. 원격 branch가 없으면 Base에서 생성. Base 유지. Read-only는 최초 준비와 같이 최신 main으로 맞추고 Base를 새 값으로 바꿈 |
 
+- Read-only에서 write로 재배정할 때 과거 CR branch tip이 기록된 Base의 조상이면, 해당 branch를 `merge --ff-only --no-overwrite-ignore <Base>`로 올립니다. Base와 원격 branch는 바꾸지 않습니다. 실제 divergence와 사용자 파일 충돌은 거절합니다.
+- 다른 seat에 Base commit이 없으면 origin에서 fetch한 뒤 그 commit을 확인합니다. Main을 전환하거나 최신 main으로 Base를 바꾸지 않습니다.
+- Fast-forward 뒤 state 기록이 실패한 재시도는 로컬 tip이 Base이고 원격 tip이 Base의 조상일 때만 그 불일치를 허용합니다. 새 배정 전 seat 검사의 local/remote 일치 조건은 유지합니다.
 - State hash가 있는데 CR Base가 없으면 state 값으로 CR Base를 복원합니다.
 - Read-only 재배정이 새 Base를 state에만 쓰고 CR 쓰기에 실패했으면, seat HEAD가 그 state 값일 때 CR Base를 state 값으로 고칩니다. Main을 다시 맞추지 않습니다.
 - CR Base와 state hash가 다르면 baseline_mismatch이며 덮어쓰지 않습니다.

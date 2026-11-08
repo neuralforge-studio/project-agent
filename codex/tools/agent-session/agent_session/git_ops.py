@@ -62,20 +62,39 @@ def _first(context, project, store, root):
     return baseline
 
 
+def _is_ancestor(root, ancestor, descendant):
+    try:
+        git(root, "merge-base", "--is-ancestor", ancestor, descendant)
+    except SessionError as error:
+        if error.code == "git_failed" and error.details.get("returncode") == 1:
+            return False
+        raise
+    return True
+
+
 def _resume_branch(root, job, base_hash, published_first):
     """Switch to the CR branch: the published branch on a new assignment, else the local one, else
     create it from Base when HEAD is still the clean Base."""
     branch = job["branch"]
     remote = None
     if published_first:
+        # A Base recorded by a read-only assignment may not exist in this seat yet.
+        try:
+            git(root, "cat-file", "-e", f"{base_hash}^{{commit}}")
+        except SessionError:
+            git(root, "fetch", "--quiet", "origin", timeout=600)
+            git(root, "cat-file", "-e", f"{base_hash}^{{commit}}")
         try:
             git(root, "fetch", "--quiet", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", timeout=600)
             remote = git(root, "rev-parse", "--verify", f"refs/remotes/origin/{branch}")
         except SessionError:
             remote = None
     if git(root, "branch", "--list", branch):
-        if remote and git(root, "rev-parse", branch) != remote:
-            raise SessionError("branch_mismatch", f"Local {branch} differs from origin/{branch}.")
+        local = git(root, "rev-parse", branch)
+        if remote and local != remote:
+            # A fast-forward may have completed before its state write failed.
+            if local != base_hash or not _is_ancestor(root, remote, base_hash):
+                raise SessionError("branch_mismatch", f"Local {branch} differs from origin/{branch}.")
         git(root, "switch", "--no-overwrite-ignore", branch)
     elif remote:
         git(root, "switch", "--no-overwrite-ignore", "-c", branch, f"refs/remotes/origin/{branch}")
@@ -85,6 +104,8 @@ def _resume_branch(root, job, base_hash, published_first):
         git(root, "fetch", "--quiet", "origin", timeout=600)
         git(root, "cat-file", "-e", f"{base_hash}^{{commit}}")
         git(root, "switch", "--no-overwrite-ignore", "-c", branch, base_hash)
+    if published_first and _is_ancestor(root, "HEAD", base_hash):
+        git(root, "merge", "--ff-only", "--no-overwrite-ignore", base_hash)
     git(root, "merge-base", "--is-ancestor", base_hash, "HEAD")
 
 

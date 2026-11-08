@@ -482,6 +482,43 @@ def test_read_only_preparation_syncs_main_without_a_branch(session_env):
     assert env.manager().control("stop", job=result["job_id"])["released"] is True
 
 
+@pytest.mark.parametrize("seat_number", [0, 1])
+def test_read_only_cr_can_be_reassigned_for_write_with_an_old_branch(session_env, seat_number):
+    env = session_env
+    cr = env.cr(mode="read-only")
+    branch = f"cr/{cr}"
+    git(env.seats[0], "branch", branch, env.initial_hash)
+    git(env.seed, "push", "origin", f"{env.initial_hash}:refs/heads/{branch}")
+    git(env.seats[0], "fetch", "origin", branch)
+    expected = env.advance_remote()
+    first = env.manager().start(cr, seat=0)
+    base = env.cr_header(cr, "Base")
+    assert base.startswith(expected)
+    env.finish(cr, state="open", outcome=None, note="read-only investigation completed")
+    assert env.manager().control("stop", job=cr)["released"] is True
+    _, path = env.cr_state(cr)
+    path.write_text(path.read_text().replace("- Mode: read-only", "- Mode: write"))
+    env.finish(cr, state="todo", outcome=None, note="approve the write work")
+    kept = env.seats[seat_number] / "agent" / "private.txt"
+    kept.parent.mkdir(exist_ok=True)
+    kept.write_text("preserve the ignored user file\n")
+    before = kept.stat()
+
+    second = env.manager().start(cr, seat=seat_number)
+    assert second["ready"] is True and second["seat"] == seat_number
+    assert second["session"]["session_id"] != first["session"]["session_id"]
+    assert git(env.seats[seat_number], "rev-parse", "HEAD") == expected
+    assert git(env.seats[seat_number], "branch", "--show-current") == branch
+    assert git(env.remote, "rev-parse", f"refs/heads/{branch}") == env.initial_hash
+    after = kept.stat()
+    assert (after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns) == (
+        before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns)
+    assert kept.read_text() == "preserve the ignored user file\n"
+    assert env.cr_header(cr, "Base") == base
+    assert env.store.read()[str(seat_number)]["git_hash"] == expected
+    assert env.cr_state(cr)[0] == "in-progress"
+
+
 def test_fixed_result_must_be_on_origin_main_before_release(session_env):
     env = session_env
     cr = env.cr()
