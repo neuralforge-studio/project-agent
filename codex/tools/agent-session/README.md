@@ -31,6 +31,7 @@ Tmux·Git·provider CLI를 준비합니다.
 Base 디렉토리를 정확한 실제 경로에 미리 준비합니다.
 Codex의 start는 새 Leader 실행 전에 등록 Base의 정확한 실제 경로를 자동으로 신뢰 설정에 기록합니다.
 기존의 명시적 `untrusted`는 보존합니다.
+신뢰 설정을 기록하지 못해 Codex CLI가 신뢰 화면에 멈추면 창 정보와 `dialog=workspace_trust`를 포함한 `needs_user_action`(exit 3)을 반환합니다.
 Claude Base의 신뢰 설정은 미리 준비합니다.
 배정할 seat 디렉토리가 없으면 start가 base의 origin을 clone합니다. 접속 인증은 사용자의 Git·SSH 설정을 따릅니다.
 공통 도구는 프로젝트 코드를 import하거나 실행하지 않습니다. CR 파일과 등록 선언만 읽습니다.
@@ -67,7 +68,7 @@ JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자�
 Start는 todo의 CR을 in-progress로 옮기고 Worker seat를 자동 배정합니다.
 `--seat N`을 지정하면 해당 Worker seat만 검사합니다. 지정한 seat가 비어 있지 않거나 안전 검사를 통과하지 못하면 배정을 거절합니다.
 이미 배정한 CR의 재시도는 같은 seat만 지정할 수 있습니다. Leader에는 `--seat`를 사용할 수 없습니다.
-Claude seat를 새로 clone하면 그 seat의 workspace trust를 기록합니다.
+Claude·Codex seat를 새로 clone하면 그 seat의 workspace trust를 기록합니다.
 시작이 trust·login·권한 dialog에서 멈추면 `needs_user_action`(exit 3)과 `dialog`를 반환합니다. 사용자가 그 창에서 답한 뒤 같은 start를 다시 실행합니다.
 다른 명령은 CR ID 대신 `--seat N`으로 현재 배정 대상을 지정할 수 있습니다.
 옵션은 `agent-session --help`와 해당 하위 명령의 `--help`에서 확인합니다.
