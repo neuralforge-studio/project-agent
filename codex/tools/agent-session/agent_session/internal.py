@@ -12,6 +12,8 @@ from .state import StateStore
 from .tmux import control as tmux_control
 
 
+_BINDING_TIMEOUT = 20      # seconds; inside the 30 second SessionStart hook limit
+_BINDING_INTERVAL = 1.0
 _HOOK_FIELDS = ("session_id", "hook_event_name", "cwd", "source", "reason", "background_tasks", "session_crons")
 
 
@@ -63,10 +65,29 @@ def mark_process(run_id, config_path, socket_path, pid):
 
 
 def _register(run_id, config_path, socket_path, session_id, endpoint=None, cwd=None):
+    project, control, context = _run(run_id, config_path, socket_path, cwd)
+    try:
+        session = _bind(project, control, context, session_id, endpoint, cwd)
+    except SessionError as error:
+        _record_failure(control, context, error)
+        raise
+
+    # Only the controller that holds the target lock publishes canonical state.
+    # A late hook can update its old window, but cannot replace a newer owner. The window may be
+    # handed to a newer run (reuse_window); naming this run makes write_meta refuse such a write.
+    # A registration that succeeds clears a failure an earlier attempt of this run recorded.
+    control.write_meta(context["window_id"], {
+        "run_id": context["run_id"], "session_id": session_id, "registered": True, "start_error": None,
+        **({"message_to": session["message_to"]} if project.provider == "claude" else {}),
+    })
+    return project, control, context, session
+
+
+def _bind(project, control, context, session_id, endpoint, cwd):
+    """Check that the actual provider conversation is this run's; return its session binding."""
     from . import process
     from .providers import get_provider
 
-    project, control, context = _run(run_id, config_path, socket_path, cwd)
     if not isinstance(session_id, str) or not session_id:
         raise SessionError("session_unbound", "The actual provider conversation ID is missing.")
     actual_cwd = Path(cwd or Path.cwd()).resolve()
@@ -83,21 +104,44 @@ def _register(run_id, config_path, socket_path, session_id, endpoint=None, cwd=N
         session["endpoint"] = endpoint
     provider = get_provider(project.provider)
     context["session_id"] = session_id
-    session = provider.verify_binding(session, context, context, timeout=20) or session
+    session = _verify_binding(provider, session, context) or session
     if project.provider == "claude" and not session.get("message_to"):
         raise SessionError("session_unbound", "The native Claude recipient is unverified.", 4)
     current = control.get_current(project.project_id, context["target"])
-    if not current or current.get("run_id") != run_id:
+    if not current or current.get("run_id") != context["run_id"]:
         raise SessionError("target_changed", "A newer run replaced this registration.")
+    return session
 
-    # Only the controller that holds the target lock publishes canonical state.
-    # A late hook can update its old window, but cannot replace a newer owner. The window may be
-    # handed to a newer run (reuse_window); naming this run makes write_meta refuse such a write.
-    control.write_meta(context["window_id"], {
-        "run_id": run_id, "session_id": session_id, "registered": True,
-        **({"message_to": session["message_to"]} if project.provider == "claude" else {}),
-    })
-    return project, control, context, session
+
+def _verify_binding(provider, session, context):
+    """Check the native binding; look again while the provider's listing has not shown this pane yet.
+
+    Starting several conversations at once can leave a listing without the pane for a moment.
+    Only a failure the provider marks retryable is repeated, and only until the hook's time is spent;
+    every other failure (several rows, another name or UUID, no locator) stands at once."""
+    end = time.monotonic() + _BINDING_TIMEOUT
+    while True:
+        try:
+            return provider.verify_binding(session, context, context, timeout=max(0.1, end - time.monotonic()))
+        except SessionError as error:
+            if not error.details.get("retryable") or time.monotonic() + _BINDING_INTERVAL >= end:
+                raise
+        time.sleep(_BINDING_INTERVAL)
+
+
+def _record_failure(control, context, error):
+    """Leave the registration failure on this run's window so the waiting start can report it.
+
+    A newer run that replaced this one is that run's concern, not this window's; write_meta also
+    refuses a window that was handed to another run."""
+    if error.code == "target_changed":
+        return
+    try:
+        control.write_meta(context["window_id"], {
+            "run_id": context["run_id"], "start_error": {"code": error.code, "message": error.message},
+        })
+    except SessionError:
+        pass                                # the original error is the one to report
 
 
 def register_current(run_id, config_path, socket_path, endpoint):

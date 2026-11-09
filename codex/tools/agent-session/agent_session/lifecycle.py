@@ -508,6 +508,12 @@ class Manager(SuspendMixin):
                     self.store.update(publish)
                     meta = self.tmux.write_meta(meta["window_id"], {"ready": True, "start_error": None})
                 return self._result(meta, ready=True)
+            failure = meta.get("start_error")
+            if isinstance(failure, dict):
+                # The registration hook recorded why it failed; the run's CLI stays alive, so nothing else ends this wait.
+                raise SessionError("registration_failed", "The provider's registration was rejected: "
+                                   f"{failure.get('message')}", 4,
+                                   {**self._result(meta), "hook_error": failure})
             if not meta.get("remote_seat") and self.tmux.pane_info(meta["pane_id"])["pane_dead"]:
                 raise SessionError("provider_exited", "The CLI exited before registering its conversation.", 4,
                                    self._result(meta))

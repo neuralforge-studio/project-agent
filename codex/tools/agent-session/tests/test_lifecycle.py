@@ -1948,3 +1948,32 @@ def test_a_run_of_the_retired_window_cannot_write_into_the_next_runs_values(sess
     manager._restore_stopping(old, stopping)
     assert stopping.details["stopping_restored"] is False and stopping.details["stopping_kept"] == "target_changed"
     assert env.tmux.read_meta(first["window_id"]) == before
+
+
+def test_start_reports_a_failed_registration_before_its_timeout(session_env, monkeypatch):
+    from agent_session_fake_provider import FakeProvider
+
+    env = session_env
+    launch_spec = FakeProvider.launch_spec
+
+    def never_listed(self, context, prepared):
+        spec = launch_spec(self, context, prepared)
+        spec["argv"].append("--fail-binding")
+        return spec
+
+    monkeypatch.setattr(FakeProvider, "launch_spec", never_listed)
+    started = time.monotonic()
+    with pytest.raises(SessionError) as error:
+        env.manager(timeout=60).start("leader")
+    assert time.monotonic() - started < 30, "start must not wait for its timeout"
+    assert error.value.code == "registration_failed" and error.value.exit_code == 4
+    assert error.value.details["hook_error"]["code"] == "session_not_bound"
+    assert "ListAgents" in error.value.details["hook_error"]["message"]
+    waiting = env.tmux.get_current("fixture", "leader")
+    assert error.value.details["run_id"] == waiting["run_id"] and waiting.get("registered") is not True
+    assert env.store.read()["leader"] is None
+    # A repeated start names the same failure at once; it neither waits again nor launches another run.
+    with pytest.raises(SessionError) as again:
+        env.manager(timeout=60).start("leader")
+    assert again.value.code == "registration_failed"
+    assert env.tmux.get_current("fixture", "leader")["run_id"] == waiting["run_id"]
