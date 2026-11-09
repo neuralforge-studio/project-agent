@@ -26,6 +26,7 @@ project-agent를 다른 직원에게 배포하려면 설치기가 있어야 합�
 - 2026-11-09 Leader: 고친다(Leader 판정). REPO-001(1e06cac)과 TMUX-001(e5ac6db)이 통합되어 판정 입력이 갖춰졌습니다. 이 CR은 agent의 승인한 계획 DIST-001 4단계이고, 동작과 인수 test는 설치 계약 2·3·6.1·7·8절이 이미 정했습니다. 그러므로 위임 범위(승인한 작업의 하위 작업)입니다. 단, 외부 package를 가져오는 방법은 사용자 결정 D-20261109-01로 묻습니다. 2026-11-09 확인 결과 이 workstation의 pip는 저장소에 닿지 않아(`pip download` 시간 초과) 계획의 `pip install --target`만으로는 설치가 끝나지 않습니다. 그 단계 밖의 구현은 결정을 기다리지 않습니다.
 - 2026-11-09 Leader: 범위를 나눕니다(Leader 판정). 사용자 지시(2026-11-09 대화): "seat 3자리인데, 4자리 만들어서, 병렬로 진행 가능 한 것은 병렬로 진행해. 남은 CR은 전부 등록해서 얼마나 남았는지 알 수 있게 해줘." 이 CR은 핵심 설치기(release, 2절 진입점, 3절 tmux 블록, 7절 명령, 8절 T1~T23)만 맡습니다. 떼어 낸 일: release 진입점의 interpreter 선택은 INSTALL-002, 외부 package는 INSTALL-003(D-20261109-01), 형식 버전 거절과 release 정리 명령은 INSTALL-004, 옛 checkout link 넘겨받기는 INSTALL-005, 버전 값과 형식 버전의 선언은 RELEASE-001입니다. INSTALL-002·RELEASE-001과 병렬로 진행하므로 그 사이의 interface는 아래 Implementation이 정합니다.
 - 2026-11-09 Leader: 사용자 결정 D-20261109-01 waive를 반영합니다. 외부 package를 release에 넣지 않으므로 Implementation 2단계의 package 항목을 고쳤습니다. 사용자 답변 원문: "D-20261109-01 Waive / Refactoring 이후에, rust로 변경가능한 것들은 변경할 것임. 너무 느림."
+- 2026-11-09 Leader: 제출 31e7412 수정 요청. Leader가 제출 snapshot에서 `install/tests` 103 passed·1 skipped를 다시 확인했습니다. 실제 기본 tmux server에는 Worker 사건의 흔적이 없습니다(`fx` session 없음, `@project_agent_*` option·`[project-agent]` hook 0개, 사용자 `prefix B` 그대로). 독립 검토(sub-agent)가 찾은 결함을 Leader가 코드에서 확인했습니다: (1) 설치 기록의 항목을 검증하지 않고 지움(`layout.py:63-64` `expand`, `commands.py:309-327`), (2) tmux 블록 제거가 사용자 파일을 O_TRUNC 뒤 한 번 write(`actions.py:198-201`), (3) 블록 추가의 되돌림이 write 뒤에 등록되고 backup이 계획 시점 bytes(`actions.py:169-180`), (4) `force_rmtree`의 `ignore_errors=True`(`actions.py:114-118`), (5) 중단(signal·임시 파일 실패) 뒤 설치 기록 없는 잔여물로 install·uninstall이 모두 막힘. 그 밖에 main과 `install-contract.md` 충돌(INSTALL-002가 6.1·5.3·9절을 고침). 상세는 feedback 파일과 같습니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 전체(원본), [제품 지도](../../project-team/README.md)의 실행 경로 계약, [README의 검증](../../../README.md#검증). 이 CR의 Contract와 설치 계약이 범위의 원본입니다. 계약과 다르게 구현해야 하면 계약을 먼저 고치고 이유를 적습니다.
@@ -58,3 +59,24 @@ project-agent를 다른 직원에게 배포하려면 설치기가 있어야 합�
 3. 실제 HOME 불변: test 실행 전후로 실제 HOME의 2절 경로(`~/.local/lib/project-agent`, `~/.local/bin`의 세 이름, skill link, `~/.config/project-agent`)와 `~/.tmux.conf`의 상태가 같음을 Result에 기록합니다.
 4. 영향 회귀: README의 기존 네 명령이 통과합니다. 알려진 timing test 2개(TEST-001, TEST-002)는 단독 실행으로 통과를 확인합니다.
 5. 고친 계약 절과 문서의 Markdown 상대 link가 실제 파일을 가리킵니다.
+
+## Result
+- 제출 commit: 31e741203383cb51f9a2757a67137df7a389f1ed
+
+구현 (`cr/INSTALL-001`, origin에 push, origin/main 477516b를 merge한 뒤):
+- `install/project-agent-install`과 `install/project_agent_install/`(표준 library만): `install`·`upgrade`·`rollback`·`uninstall`·`check`, 공통 `--dry-run`, `--json`, `--source`. 각 명령은 계획(Step 목록)을 만들고 `--dry-run`은 그 계획을 출력하며 실제 실행은 같은 계획을 적용합니다. 실패하면 적용한 Step을 되돌립니다(종료 코드 4). 거절은 3, `check` 실패는 1.
+- release: Git commit에서 만들고(`<VERSION 첫 줄>-<HEAD 12자>`), release 파일이 commit과 다르면 거절합니다. `tools/python.env`(두 이름, `PROJECT_AGENT_PYTHONPATH` 빈 값)를 씁니다. 외부 package는 넣지 않습니다. 계약에 없던 결정 하나: 실행이 release에 `__pycache__`를 더하면 불변이 깨지므로(T19에서 확인), 만들 때 설치 interpreter로 미리 compile하고 쓰기 권한을 뺍니다. uninstall·되돌림은 권한을 풀고 지웁니다.
+- `install/project_agent_install/runs.py`: `run_slots`(liveness, suspend.json)·`release_of_run`·`releases_in_use`. INSTALL-004가 형식 버전 판정에 다시 쓸 한 곳입니다.
+- 계약 고침(`docs/project-team/install-contract.md`): 2절 release 내용·shim 형태(절대 경로 symlink), 3절 표시 줄 확정, 6.1절 `python.env`, 7절 명령 공통(종료 코드, release 이름·dirty tree 규칙, textual 안내, uninstall의 등록 파일 없음·state 없음 처리, `current` 변경 시 거절), 8절 test 위치. README(검증 명령, 디렉터리 지도)와 제품 지도에 설치기를 더했습니다.
+- 인수 test `install/tests`(`python -m pytest -q -n 8 install/tests`): T1~T23 전부, 추가 경우(VERSION 없음·형식 오류, dirty tree, python.env, 부모 symlink, release 읽기 전용, check 실패 경우 등). 격리 HOME + snapshot diff(기대 목록은 계약에서 직접 씀, 설치 기록에서 얻지 않음) + 격리 tmux(`-S` socket). T7·T10·T19는 설치된 실제 `agent-session`을 쓰고 provider만 fake CLI(agent-session test fixture를 이 test 환경의 `sitecustomize`로 주입)입니다. 한계: T19의 fake provider는 provider별 신뢰 기록(5.1의 `~/.claude.json`, `~/.codex/config.toml` 쓰기)을 하지 않으므로 그 두 쓰기는 이 test가 보지 못합니다.
+
+검증 (제출 commit 31e7412):
+1. `python -m pytest -q -n 8 install/tests`: 103 passed, 1 skipped(T11의 "LIB에 link 형태 없음" 조합). 이전 merge 직후 commit에서도 102 passed + T7 순서 의존 1건을 고쳐 3회 통과를 확인했습니다.
+2. 추가 test: release의 `tools/python.env` 형식·값, `VERSION` 없음 거절(snapshot 같음), dirty tree 거절(변경·추적 안 된 release 파일, 제외 경로 변경은 통과)이 계약대로 통과합니다.
+3. 실제 HOME(`/primehome/swain`) 불변: 이 작업 중 설치기를 실제 HOME에 실행하지 않았습니다. 마지막에 확인: `~/.local/lib/project-agent`와 `~/.config/project-agent` 없음, `~/.local/bin/{agent-session,project-item,project-board}`는 옛 개발 checkout symlink(2026-11-05) 그대로, `~/.claude/skills`·`~/.codex/skills`는 옛 symlink(2026-11-05) 그대로, `~/.tmux.conf`는 옛 symlink(2026-11-05) 그대로.
+4. 영향 회귀(merge 후 같은 commit): agent-session 704 passed(`AGENT_SESSION_TEST_TIMEOUT=60`), project-item 120 passed, project-board 113 passed + 1 failed, integrations/tmux·launcher·boundary·private_root·release_files 55 passed(merge 직후 commit). project-board의 실패 `test_many_projects_scroll_and_ipc_fold_the_clicked_project`는 load average 100 근처에서 났고 단독 2회 통과했습니다(이 CR은 project-board를 바꾸지 않았습니다). 앞선 같은 조건의 첫 실행에서 TEST-001 계열 3건과 TEST-002 대상이 시간 초과로 실패했으나, 단독 실행(TEST-001은 timeout 60)에서 통과했습니다.
+5. 고친 문서(`README.md`, `docs/project-team/README.md`, `docs/project-team/install-contract.md`)의 Markdown 상대 link가 모두 실제 파일을 가리킵니다(스크립트로 확인).
+
+사건 하나(알림): 개발 중 설치 후의 `agent-session start`를 시험하다가 `--socket-path`를 주지 않아 사용자의 실제 기본 tmux server에 시험용 session `fx`(window 1개, 시험용 fake CLI)가 생겼습니다. 제가 만든 것임을 session의 owner option으로 확인하고 그 session만 kill했습니다. 다른 session은 건드리지 않았습니다. 이후 test 하네스는 모든 명령에 private socket을 명시하고 `TMUX_TMPDIR`도 격리해 실제 server에 닿을 수 없게 했습니다.
+
+인수 전 Leader 독립 검토에서 볼 곳: `actions.py`(쓰기·삭제 Step과 되돌림), `commands.py`의 `plan_uninstall`(지우는 대상 결정과 빈 디렉터리 계산), `tmuxconf.py`·`actions.remove_block`(tmux 파일 byte 보장).
