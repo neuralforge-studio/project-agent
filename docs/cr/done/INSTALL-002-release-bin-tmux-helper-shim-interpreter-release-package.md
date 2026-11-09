@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: 9458aba01535c1a12ee034ce725048aca5448c10 2026-11-09T14:40:54+09:00
+- Outcome: fixed
 
 ## Symptom
 설치본에서 tmux가 부르는 helper는 `~/.local/bin`의 shim을 거치지 않습니다. `integrations/tmux/tmux_project_board.sh`는 release 안의 `tools/project-board/bin/project-board`를 직접 실행하고, `@project_agent_decide_status`는 `tmux_decide_status.py`(`#!/usr/bin/env python3`)를 직접 실행합니다. shim이 정하는 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`가 없으므로 개발 checkout 규칙(`python3` 등)으로 interpreter를 고릅니다. 새 직원 환경에서는 그 interpreter가 Python 3.10 미만이거나 `textual`이 없을 수 있어 Board와 결정 표시가 동작하지 않습니다.
@@ -22,6 +23,7 @@
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). 승인한 계획 agent DIST-001 4단계의 하위 결함입니다(TMUX-001 review에서 발견). 계약 6.1절이 정한 동작을 tmux helper 경로에도 지키게 하는 일이므로 위임 범위입니다. INSTALL-001에서 떼어 내 병렬로 진행합니다(사용자 지시 2026-11-09 "병렬로 진행 가능 한 것은 병렬로 진행해").
 - 2026-11-09 Leader: 제출 b3ec7334be420a187261c99bf2cba53c7b44e827를 인수합니다. Leader review: 수정 제출은 origin/main merge(b3ec733)만 더했습니다. docs/project-team/README.md 충돌은 RELEASE-001의 버전 규칙 행과 이 CR의 tmux 연결·CLI 행·실행 경로 계약 6항을 모두 보존했습니다(5c41f2d 대비 diff 확인). Result의 TEST-002 사실 정정과 merge 상태의 project-board 114 passed·네 번째 명령 70 passed를 확인했습니다. 이전 검토(5c41f2d의 launcher·wrapper·계약 6.1/5.3/9절, Leader snapshot 67 passed)를 재사용합니다.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 298ea6e(Merge cr/INSTALL-002, 제출 b3ec733). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 6.1절·3.1절·5.3절, [README의 검증](../../../README.md#검증), INSTALL-001의 Implementation 2단계(interface).
