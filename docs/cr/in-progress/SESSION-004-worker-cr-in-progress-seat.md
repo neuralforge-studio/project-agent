@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
+- Base: 7e35d2411a827df482e386643624eb7663330833 2026-11-09T19:53:55+09:00
 
 ## Symptom
 다른 project의 Leader 보고(사용자 전달): RUST-058 조사가 16:20쯤 끝났는데 Leader가 CR을 done으로 옮기기 전에 seat1을 stop해서 "CR이 아직 진행 중"이라 반납이 거절됐고, Leader가 다른 일을 하는 동안 seat1이 약 40분 놀았습니다. 사용자 요청: "이런일이 발생하지 않게 script 보완 필요."
