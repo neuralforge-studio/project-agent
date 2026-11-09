@@ -4,7 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Related: RUST-001
-- Mode: read-only
+- Mode: write
 - Base: 2fd273983ce67607b63b3ae1c44be5b90d751c45 2026-11-10T08:01:10+09:00
 
 ## Symptom
@@ -31,18 +31,20 @@
 - 관련 CR: RUST-001(open)의 Disposition은 "배포 준비가 끝난 뒤, 느린 경로의 측정값과 전환 후보를 근거로 범위를 사용자 결정 항목으로 묻는다"입니다. 이 CR의 결과가 그 측정값입니다.
 
 ## Contract
-- 이 CR은 측정과 원인 분해만 하는 read-only CR입니다. 제품 코드·문서·release를 바꾸지 않고 commit·push하지 않습니다.
+- (2026-11-10 변경) 이 CR은 측정 도구를 저장소에 commit하는 write CR입니다. 제품 코드(`tools/*/` 패키지·`integrations/`·`install/`)와 release는 바꾸지 않습니다.
+- 측정 도구는 두 실행본(기준과 후보)을 같은 host·같은 격리 환경에서 번갈아 실행해 비교합니다. 기준은 v0.3.0입니다. 수정 CR과 release는 이 도구의 결과로 개선량을 숫자로 보입니다(사용자 2026-11-10: "측정은 필요해. 개선이 얼마나 된것인지 명확한 비교대상. 정량적 평가가 되어야 하니까.").
 - 측정은 사용자의 실제 tmux server(`/tmp/tmux-1028/default`)·등록 파일·state·캐시(`~/.cache/tmux-decide-status.json`)를 바꾸지 않습니다. 사용자 server에서는 읽기만 하는 호출(`model.snapshot`·`model.liveness`·status script)만 잽니다.
 - 측정 대상 규모는 사용자가 예로 든 16 project × seat 16입니다. 비례를 보이도록 더 작은 규모도 함께 잽니다.
 
 ## Disposition
 - 2026-11-10 Leader: 측정한다(Leader 판정). 사용할 수 없을 만큼 느리다는 사용자 보고와 재현 측정(위 Evidence)이 있는 결함의 원인 조사입니다. 수정 범위는 이 CR의 결과로 나눕니다. 알고리즘 결함(같은 tmux·파일 조회의 반복 등)은 Leader 판정으로 수정 CR을 엽니다. Rust 전환 범위는 RUST-001의 Disposition대로 이 결과를 근거로 사용자 결정 항목으로 묻습니다.
 - 2026-11-10 Leader: open -> todo. Leader 판정: 측정(read-only). 사용자 보고와 재현 측정이 있는 속도 결함의 원인 조사
+- 2026-11-10 Leader: Mode를 read-only에서 write로 바꿉니다. 사용자 지시(2026-11-10 대화 원문: "측정은 필요해. 개선이 얼마나 된것인지 명확한 비교대상. 정량적 평가가 되어야 하니까.")로 측정 도구를 저장소에 남겨 v0.3.0을 기준으로 A/B 비교합니다. Base(2fd2739)는 그대로이고, Worker는 start가 write CR에 하는 것과 같이 `git switch --no-overwrite-ignore -c cr/PERF-001 2fd273983ce67607b63b3ae1c44be5b90d751c45`로 branch를 만듭니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증)(test tmux server 규칙), [동작 명세 5절 Python API](../../project-team/spec.md#프로젝트-consumer용-python-api), [project-team Worker 절](../../../skills/project-team/SKILL.md), [tmux 통합](../../../integrations/tmux/project-agent-main.conf).
 
-이 CR은 read-only입니다. 측정 script와 산출물은 seat 밖 임시 디렉터리에 두고 Result에 경로를 적습니다. 저장소에 commit하지 않습니다.
+측정 도구는 저장소에 commit합니다(아래 7단계). 측정 산출물(JSON·표)은 seat 밖 임시 디렉터리에 두고 Result에 숫자와 경로를 적습니다.
 
 1. 격리 환경을 만듭니다.
    - tmux server: [`tools/tests/tmux_test_server.py`](../../../tools/tests/tmux_test_server.py)의 `claim`으로 받고 끝나면 `release`합니다.
@@ -104,9 +106,29 @@
 
    마지막으로 연산별 목표 시간 제안을 적습니다.
 
+7. (2026-11-10 추가) 측정 도구를 저장소에 둡니다.
+   - 위치: 배포하지 않는 개발 도구로 둡니다. 위치는 [`tools/test_distribution_boundary.py`](../../../tools/test_distribution_boundary.py)의 규칙을 따르고, README의 디렉터리 지도와 검증 절에 한 줄로 적습니다.
+   - 입력:
+     - 비교할 실행본 둘(설치 release 디렉터리 또는 checkout. 예: `git archive v0.3.0`으로 푼 사본과 현재 checkout)
+     - 규모(project 수 × seat 수)
+     - 반복 횟수
+   - 실행 순서: 두 실행본을 같은 격리 환경에서 번갈아 실행합니다(ABAB). 시간대마다 달라지는 host 부하가 한쪽에만 실리지 않게 하기 위해서입니다.
+   - 실행 간격 두 가지:
+     - 연속 실행(warm)
+     - NFS attribute cache가 만료된 실행(cold). 이 workstation의 `/primehome` mount는 `acregmin=60`이라, 실제 사용처럼 명령 사이가 60초를 넘으면 매번 파일 속성을 다시 확인합니다. 방법과 간격은 Worker가 정하고 근거를 적습니다.
+   - 출력: 연산 × 규모 × 실행본마다 다음 값을 JSON과 Markdown 표로 냅니다.
+     - 중앙값과 p90
+     - tmux process 수
+     - 그 밖의 subprocess 수
+     - 두 실행본의 비율
+     - 측정 중 host load
+   - test: 측정 도구 자신의 test(작은 규모 1회 실행과 출력 형식)를 두고 README 검증 표에 그 행을 더합니다.
+   - 기준선: 이 도구로 v0.3.0과 Base(2fd2739)를 같은 실행본으로 비교한 결과(A/A, 차이가 오차 범위임을 보임)와 v0.3.0의 연산 × 규모 표를 Result에 적습니다. 이 표가 이후 모든 개선의 비교 대상입니다.
+   - 단계 1~6의 측정은 이 도구로 합니다.
+
 의존: 없음.
 
-위험 등급: 낮음(read-only, 격리 server).
+위험 등급: 낮음(제품 코드 변경 없음, 격리 server).
 
 ## Verification
 1. Result에 다음을 적습니다. 숫자는 Result 안에 바로 적고, 내용은 Leader가 같은 명령으로 다시 재현할 수 있어야 합니다.
@@ -115,5 +137,7 @@
    - 연산 × 규모 표
    - 지속 비용
    - 원인 분류와 항목별 제안
+   - 측정 도구의 commit과 v0.3.0 기준선 표, A/A 비교 결과(7단계)
 2. Evidence의 Leader 측정 두 개(`review --clear` 3.1초, liveness 396번)를 같은 방법으로 다시 재서 측정 방법이 맞는지 보입니다.
 3. 측정이 끝난 뒤 격리 tmux server와 그 process·socket이 남지 않았음을 확인합니다. 확인 기준은 README 검증의 test 자원 규칙입니다.
+4. (2026-11-10 추가) README 검증 표에서 바꾼 경로의 행을 모두 실행합니다. 측정 도구 자신의 test, 고친 문서의 상대 link 검사, `tools/test_distribution_boundary.py`가 포함됩니다. 제출 전에 `origin/main`이 움직여 그 입력을 바꿨으면 merge하고 merge commit에서 다시 실행합니다.

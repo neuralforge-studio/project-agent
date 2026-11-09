@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Related: PERF-001, TMUX-003
+- Base: 6a2c0f09a9a30b88c9ab4b9794442e5b84674a92 2026-11-10T08:17:51+09:00
 
 ## Symptom
 agent-session의 tmux 조회가 slot마다, 같은 명령 안에서도 호출마다 같은 server 정보를 다시 읽습니다. 그래서 Board의 liveness 한 번과 Leader의 명령이 slot 수와 조회 횟수에 비례해 느려집니다. 사용자 평가(2026-11-10): "정말 너무 느려서 쓸 수가 없는데", "반복 조회 수정은 측정 결과 기다리지 말고 바로 시작해줘. 너무 느려."
