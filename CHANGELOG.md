@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
+
+## 0.1.0 - 2026-11-09
+
 - REPO-001
 - TMUX-001
 - RELEASE-001
