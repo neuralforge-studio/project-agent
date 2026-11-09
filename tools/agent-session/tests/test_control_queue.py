@@ -9,7 +9,7 @@ import pytest
 
 from agent_session.errors import SessionError
 from agent_session.lifecycle import Manager
-from fake_tmux import FakeTmux
+from fake_tmux import FakeTmux, fake_tmux
 
 
 def manager(tmp_path):
@@ -117,3 +117,14 @@ def test_a_fake_tmux_follows_the_product_interface():
         class Renamed(FakeTmux):
             def read_meta(self, window):
                 pass
+
+
+def test_a_fake_tmux_built_from_callables_follows_the_product_interface():
+    fake = fake_tmux(get_current=lambda *args: {"run_id": "r"}, pane_info=lambda pane_id: {"pane_dead": True})
+    assert fake.get_current("p", "seat-0") == {"run_id": "r"} and fake.pane_info("%1") == {"pane_dead": True}
+    with pytest.raises(AssertionError, match="not a method"):
+        fake_tmux(no_such_method=lambda: None)
+    with pytest.raises(AssertionError, match="differs from"):
+        fake_tmux(pane_info=lambda pane: None)
+    with pytest.raises(AssertionError, match="differs from"):
+        fake_tmux(pane_info=lambda pane_id, extra: None)
