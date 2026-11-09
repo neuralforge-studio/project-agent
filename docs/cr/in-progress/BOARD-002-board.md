@@ -183,3 +183,23 @@ README 검증 표의 `tools/project-board/**`, `integrations/tmux/**`, `tools/ag
 새 test: `test_tui.py`(보이지 않는 sidebar는 읽지 않고 보이면 곧바로 한 번 읽음, SIGUSR1 경로와 handler 정리), `test_tmux_control.py`(pane 상한과 가장 오래 안 본 window 제거, `mark_ready`·`board_visible`), `test_project_agent_conf.py`(visibility 스크립트가 바뀐 ready pane에만 신호를 보내는지, hook이 스크립트를 실행하는지), `test_model.py`(반납 대기는 10초 갱신에서만 읽음). `test_cli.py`는 고친 호출 인자를 확인합니다.
 
 근거 재사용·재실행 판정: 마지막 코드 변경(`test_cli.py` 수정) 전에 전체 명령을 한 번 실행했고, 그 뒤 바뀐 것은 `test_cli.py`뿐이라 그 파일만 다시 실행했습니다. CHANGELOG는 Leader 통합에서 씁니다.
+
+### 수정 제출 2 (SESSION-007 merge)
+
+- 제출 commit: 15284553a32a978084138d5793c13886850816d2
+
+`origin/main`(SESSION-007, `0ab12a1`)을 다시 merge했습니다. 충돌 2개를 양쪽 모두 살려 해결했습니다.
+
+- `docs/project-team/install-contract.md` 5.3절: Board pane·visibility·상한(제 변경)의 행과 `pane-died[agent-session]` hook 행(SESSION-007)을 모두 남겼습니다. hook 행 순서는 `[project-agent]` hook → `agent-session`의 hook → server option입니다.
+- `tools/agent-session/agent_session/lifecycle.py`: import에 `ended`(SESSION-007)와 `require_base`(제 `Manager(project=…)`)를 함께 두었습니다. SESSION-007의 `_settle`은 건드리지 않았습니다.
+- CHANGELOG.md는 origin/main과 같습니다(`git diff origin/main -- CHANGELOG.md` 비어 있음).
+
+재실행(merge가 입력을 바꾼 test):
+
+| 명령 | 결과 |
+| --- | --- |
+| `pytest -n 8 tools/agent-session/tests/test_self_ended.py test_lifecycle.py test_tmux.py test_api_boundary.py test_internal.py` | 224 passed, 1 failed (아래) |
+| `pytest -n 8 install/tests` | 261 passed, 2 skipped |
+| `pytest tools/project-board/tests/test_tmux_control.py test_model.py integrations/tmux tools/test_distribution_boundary.py` | 105 passed |
+
+실패 1건: `test_lifecycle.py::test_the_seats_next_cr_opens_a_new_window_after_the_released_ones_pane_was_closed`(`second["seat"] == 0`이 1). **제 변경이 만든 실패가 아니라고 판단합니다.** 같은 test를 번갈아 6번씩 돌렸을 때 순수 `origin/main`(`git archive`본, 제 변경 없음)이 **0/6 통과**, 제 branch가 1/6 통과였습니다(host load average 320). 처음 한 번은 `origin/main`에서 통과했으므로 부하에 따라 결과가 갈리는 test입니다. 다만 이 host에서 `origin/main`도 이 test를 통과하지 못하므로, 같은 test를 부하가 낮은 시간에 한 번 더 확인하시길 권합니다. 이 test가 읽는 `agent_session` 쪽 제 변경은 `api.py`의 추가 함수와 `Manager.__init__(project=None)`뿐이며, `project`를 주지 않으면 이전과 같은 경로(`current_project`)를 탑니다.
