@@ -1,6 +1,7 @@
 """The source tree of a release: which files go in, the version, and the commit that names it."""
 
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import re
@@ -13,6 +14,10 @@ PRODUCT_DIRS = ("tools", "skills", "docs", "integrations", "install")
 VERSION_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+~-]*")
 HASH_LENGTH = 12
 PYTHON_ENV = "tools/python.env"
+FORMATS = "tools/formats.json"
+FORMAT_KEYS = ("agent_session", "tmux_options", "item_files")
+# The format versions of a product copy that is not a release: the agent repository's frozen copy (release.md 3).
+FROZEN_FORMATS = {key: 1 for key in FORMAT_KEYS}
 MINIMUM_PYTHON = (3, 10)
 
 
@@ -86,6 +91,22 @@ def load_source(root):
         raise InstallerError("source_invalid", "The source tree is not a project-agent checkout.",
                              {"source": str(root)})
     return Source(root, version, commit, files)
+
+
+def read_formats(root):
+    """The format versions a source tree or a release declares in `tools/formats.json` (the one declaration,
+    release.md 3). A file that is missing or not the three integers is an error."""
+    path = Path(root) / FORMATS
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        ok = (isinstance(value, dict) and set(value) == set(FORMAT_KEYS)
+              and all(type(number) is int and number > 0 for number in value.values()))
+    except (OSError, UnicodeError, ValueError):
+        ok = False
+    if not ok:
+        raise InstallerError("formats_unreadable", "%s is missing or does not declare the three format versions; "
+                             "the format of that release cannot be judged." % path, {"path": str(path)})
+    return value
 
 
 def python_env(python, python_path=""):

@@ -32,7 +32,7 @@ python -m pytest -q -n 8 install/tests
 
 - 다섯 명령은 서로 독립이며 pytest 설정 파일 없이 각 디렉터리의 `conftest.py`로 동작합니다.
 - Agent-session test는 seat 여럿이 같은 host에서 동시에 검증하는 평소 부하에서 같은 결과를 냅니다. 한도(`AGENT_SESSION_TEST_TIMEOUT`, 기본 120초)는 host가 이보다 심하게 느릴 때만 늘립니다. 자세한 사용법은 [agent-session README](tools/agent-session/README.md#프로젝트-api와-검사)가 설명합니다.
-- 설치기 test(`install/tests`)는 격리 HOME에서만 설치기를 실행합니다. 개발 중 설치기를 실제 HOME에 실행하지 않습니다. `tmux`와 `git`이 필요하고 계약 8절의 T1~T28을 구현합니다.
+- 설치기 test(`install/tests`)는 격리 HOME에서만 설치기를 실행합니다. 개발 중 설치기를 실제 HOME에 실행하지 않습니다. `tmux`와 `git`이 필요하고 계약 8절의 T1~T32을 구현합니다.
 - CLI smoke: `tools/<도구>/bin/<도구> --help`.
 
 ## 관련 문서

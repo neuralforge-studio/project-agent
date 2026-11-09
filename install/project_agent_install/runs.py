@@ -84,34 +84,70 @@ def blocking(slots):
     return [item for item in slots if item["state"] in ("alive", "unknown", "suspended")]
 
 
-def release_of_run(env, base, run_id):
-    """The release name a run's generated scripts call, or None when they name no release.
-
-    A run's `launch.sh`, `controller.sh` and Claude `settings.json` hold the resolved release path."""
-    directory = Path(base) / "agent" / "runs" / run_id
-    roots = {str(env.releases), str(env.releases.resolve())}
-    pattern = re.compile("(?:%s)/([^/\\s'\"]+)/" % "|".join(re.escape(root) for root in roots))
+def _run_text(directory):
+    """The generated scripts of a run, in the order they are searched."""
     for name in ("launch.sh", "controller.sh", "settings.json"):
         try:
-            text = (directory / name).read_text(encoding="utf-8", errors="replace")
+            yield (directory / name).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        found = pattern.search(text)
+
+
+def origin_of_run(env, base, run_id):
+    """Where the code of a run comes from: `("release", name)`, `("other", None)` for a product copy that is not
+    a release (the agent repository's frozen copy `.../codex/tools/agent-session`), or None when the run's
+    scripts name neither.
+
+    A run's `launch.sh`, `controller.sh` and Claude `settings.json` hold the resolved path of its code."""
+    directory = Path(base) / "agent" / "runs" / run_id
+    roots = {str(env.releases), str(env.releases.resolve())}
+    in_release = re.compile("(?:%s)/([^/\\s'\"]+)/" % "|".join(re.escape(root) for root in roots))
+    other = re.compile("/tools/agent-session\\b")
+    texts = list(_run_text(directory))
+    for text in texts:
+        found = in_release.search(text)
         if found:
-            return found.group(1)
-    return None
+            return "release", found.group(1)
+    return ("other", None) if any(other.search(text) for text in texts) else None
+
+
+def release_of_run(env, base, run_id):
+    """The release name a run's generated scripts call, or None when they name no release."""
+    origin = origin_of_run(env, base, run_id)
+    return origin[1] if origin and origin[0] == "release" else None
+
+
+def live(slots):
+    """The slots whose run may still call its code: `alive` and `unknown` (contract 7.2)."""
+    return [item for item in slots if item["state"] in ("alive", "unknown")]
+
+
+def origins_in_use(env, slots):
+    """{origin: [project/slot, ...]} for the live runs, `origin` as in `origin_of_run`.
+
+    A live slot whose run cannot be traced to its scripts (no run in tmux after a server restart, or scripts
+    that name no code) is charged with every run directory of its project: what cannot be told apart is treated
+    as used, so that nothing a live run might call is judged unused."""
+    used = {}
+    for item in live(slots):
+        label = "%s/%s" % (item["project"], item["slot"])
+        origin = origin_of_run(env, item["base"], item["run_id"]) if item["run_id"] else None
+        found = {origin} if origin else set()
+        if not found:
+            runs = Path(item["base"]) / "agent" / "runs"
+            try:
+                names = sorted(path.name for path in runs.iterdir() if path.is_dir())
+            except OSError:
+                names = []
+            found = {origin_of_run(env, item["base"], name) for name in names} - {None}
+        for origin in found:
+            used.setdefault(origin, []).append(label)
+    return used
 
 
 def releases_in_use(env, slots):
     """{release name: [project/slot, ...]} for the runs that have not ended."""
-    used = {}
-    for item in slots:
-        if item["state"] == "stopped" or not item["run_id"]:
-            continue
-        release = release_of_run(env, item["base"], item["run_id"])
-        if release:
-            used.setdefault(release, []).append("%s/%s" % (item["project"], item["slot"]))
-    return used
+    return {origin[1]: labels for origin, labels in origins_in_use(env, slots).items() if origin[0] == "release"}
 
 
 def server_option(name, socket=None):
