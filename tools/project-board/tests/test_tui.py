@@ -1,5 +1,6 @@
 """User interactions and displayed project facts in the terminal Board."""
 import asyncio
+import datetime as dt
 import html
 import json
 import os
@@ -11,8 +12,12 @@ import pytest
 
 from board_testing import Board, click_socket, leader, session, wait_until
 from project_board import model
-from project_board.tui import CRPopupApp, CSVScreen, PopupApp, SidebarApp, _seat_text
+from project_board.tui import CRPopupApp, CSVScreen, PopupApp, SidebarApp, _seat_text, format_elapsed
 from textual.widgets import Button, DataTable, Markdown, Static, TextArea
+
+
+# 2h 30m after the worker sessions (08:00) and 1d 01h 30m after the Leader session (Nov 4 09:00).
+NOW = dt.datetime(2026, 11, 5, 10, 30, tzinfo=dt.timezone.utc)
 
 
 def _rendered_left_column(svg: str, label: str) -> int:
@@ -69,7 +74,7 @@ def test_sidebar_shows_every_project_and_mouse_opens_the_right_project(tmp_path)
 
     async def check():
         async with app.run_test(size=(25, 25)) as pilot:
-            await app.apply_snapshot(model.snapshot(board.config))
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
             await pilot.pause()
             assert [str(item.label) for item in app.query(".project-name")] == ["Falcon2", "ProjectB"]
             svg = app.export_screenshot()
@@ -88,7 +93,7 @@ def test_sidebar_shows_every_project_and_mouse_opens_the_right_project(tmp_path)
             assert str(app.query_one("#project-0-seats", Button).label) == "▾"
             assert app.query_one("#project-0-seats", Button).tooltip == "좌석 접기"
             assert not app.query("#project-1-seat-0")
-            assert str(app.query_one("#project-0-seat-0", Button).label) == "R 0 CPU-012"
+            assert str(app.query_one("#project-0-seat-0", Button).label) == "R 0 CPU-012 2h 30m"
             empty = app.query_one("#project-0-seat-1", Button)
             assert str(empty.label) == "  1 -" and empty.disabled
             assert empty.tooltip == "1 -"
@@ -103,6 +108,79 @@ def test_sidebar_shows_every_project_and_mouse_opens_the_right_project(tmp_path)
             await pilot.pause()
             assert crs == [("Falcon2", "open")]
             assert [str(item.label) for item in app.query(".project-name")] == ["Falcon2", "ProjectB"]
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("seconds, text", [
+    (0, "0m"), (59, "0m"), (60, "1m"), (59 * 60, "59m"), (59 * 60 + 59, "59m"),
+    (3600, "1h 00m"), (3 * 3600 + 5 * 60, "3h 05m"), (23 * 3600 + 59 * 60, "23h 59m"),
+    (24 * 3600, "1d 00h 00m"), (2 * 86400 + 3600, "2d 01h 00m"), (12 * 86400 + 5 * 3600 + 9 * 60, "12d 05h 09m"),
+    (-30, "0m"), (None, None),
+])
+def test_elapsed_time_drops_zero_leading_units(seconds, text):
+    assert format_elapsed(seconds) == text
+
+
+def test_seat_row_ends_with_the_session_time_only_when_known():
+    assert _seat_text({"index": 0, "job_id": "TOOL-001", "elapsed": 11 * 3600 + 120}) == "  0 TOOL-001 11h 02m"
+    assert _seat_text({"index": 0, "job_id": "TOOL-001", "elapsed": None}) == "  0 TOOL-001"
+    assert _seat_text({"index": 1, "job_id": None, "elapsed": None}) == "  1 -"
+
+
+def _leader_rows(app):
+    return [str(row.render()) for row in app.query(".leader")]
+
+
+def test_sidebar_shows_leader_and_worker_time_and_redraws_only_when_the_minute_changes(tmp_path):
+    board = _make_sidebar_board(tmp_path)
+    app = SidebarApp(str(board.config), poll=False)
+
+    async def check():
+        async with app.run_test(size=(40, 25)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await pilot.pause()
+            await pilot.click("#project-0-seats")
+            await wait_until(pilot, lambda: app.query(".leader"))
+            assert _leader_rows(app) == ["  Leader 1d 01h 30m"]
+            assert str(app.query_one("#project-0-seat-0", Button).label) == "R 0 CPU-012 2h 30m"
+            assert str(app.query_one("#project-0-seat-1", Button).label) == "  1 -"
+            svg = app.export_screenshot()
+            assert _rendered_left_column(svg, "Leader 1d 01h 30m") <= 2
+            assert _rendered_left_column(svg, "CPU-012 2h 30m") <= 6
+            worker = app.query_one("#project-0-seat-0", Button)
+            # Another poll within the same minute keeps the same widgets (no redraw, no flicker).
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW + dt.timedelta(seconds=40)))
+            await pilot.pause()
+            assert app.query_one("#project-0-seat-0", Button) is worker
+            # The next minute redraws both rows.
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW + dt.timedelta(seconds=60)))
+            await pilot.pause()
+            assert _leader_rows(app) == ["  Leader 1d 01h 31m"]
+            assert str(app.query_one("#project-0-seat-0", Button).label) == "R 0 CPU-012 2h 31m"
+
+    asyncio.run(check())
+
+
+def test_sidebar_shows_no_time_for_old_state_without_connected_at_or_without_a_session(tmp_path):
+    board = Board(tmp_path)
+    project = board.project("Falcon2", seats=2)
+    board.state(project, {
+        "leader": leader(connected_at=None),
+        "0": {"job_id": "CPU-012", "git_hash": None, "session": session(0, connected_at=None)},
+        "1": {"job_id": "CPU-013", "git_hash": None, "session": None},
+    })
+    app = SidebarApp(str(board.config), poll=False)
+
+    async def check():
+        async with app.run_test(size=(40, 25)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await pilot.pause()
+            await pilot.click("#project-0-seats")
+            await wait_until(pilot, lambda: app.query("#project-0-seat-0"))
+            assert _leader_rows(app) == []
+            assert str(app.query_one("#project-0-seat-0", Button).label) == "  0 CPU-012"
+            assert str(app.query_one("#project-0-seat-1", Button).label) == "대기 1 CPU-013"
 
     asyncio.run(check())
 
@@ -562,7 +640,7 @@ def test_pending_seats_wait_without_clicking_and_running_seat_still_opens(tmp_pa
 
     async def check():
         async with app.run_test(size=(50, 25)) as pilot:
-            snapshot = model.snapshot(board.config)
+            snapshot = model.snapshot(board.config, now=NOW)
             assert [seat["status"] for seat in snapshot["projects"][0]["seats"]] == ["pending"] * 3
             assert snapshot["projects"][1]["seats"][0]["status"] == "working"
             await app.apply_snapshot(snapshot)
@@ -581,7 +659,7 @@ def test_pending_seats_wait_without_clicking_and_running_seat_still_opens(tmp_pa
             assert calls == [] and notifications == []
 
             running = app.query_one("#project-1-seat-0", Button)
-            assert str(running.label) == "  0 AG-001" and not running.disabled
+            assert str(running.label) == "  0 AG-001 2h 30m" and not running.disabled
             await pilot.click("#project-1-seat-0")
             result = await send_click(running)
             await pilot.pause()

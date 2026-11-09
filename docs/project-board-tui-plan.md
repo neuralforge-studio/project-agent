@@ -53,6 +53,7 @@ R 0 GPU-007
 - `O/T/I`는 CR의 `open/todo/in-progress` 개수입니다. `D`는 열린 결정 항목 개수입니다. 두 종류를 합산하지 않습니다.
 - 열린 결정 항목이 하나 이상이면 `D`를 빨간색으로 표시합니다. `D:0`, 미설정 `D:-`, 읽기 오류 `D:!`는 기존 노란색으로 표시합니다. `D:0`이어도 답변 접수·반영 중 항목이 있으면 popup을 열 수 있습니다. 표시 상태가 `완료`인 항목만 있으면 열지 않습니다.
 - Seat 번호는 등록 순서의 0부터 시작합니다. 빈 seat는 번호 뒤에 `-`를 회색으로 표시합니다. 배정된 seat는 같은 행에 CR ID를 표시합니다. Worker session이 없는 배정은 `대기`를 붙여 시작 대기를 표시합니다. Worker가 종료했지만 CR이 in-progress라 반납하지 못한 seat는 `반납대기`를 붙입니다(`agent_session.api.pending_releases`). CR을 옮기면 사라집니다.
+- 동작 시간(BOARD-008): session이 있는 Worker seat 행은 CR ID 뒤에 그 session이 게시된 뒤 지난 시간을 `??d ??h ??m`으로 붙입니다. 펼친 project의 첫 줄에는 Leader session이 있을 때 `Leader`와 같은 형식의 시간을 한 줄로 표시합니다. 기준은 state의 `connected_at`(명세 3절)이고, 지난 시간은 `snapshot`의 `elapsed`(초)입니다. 분 단위로 내림하고 0인 앞자리 단위는 생략합니다: `0m`, `12m`, `3h 05m`, `2d 01h 00m`(시와 분은 두 자리, 일은 자릿수 그대로). session이 없는 seat와 `connected_at`이 없는 이전 state는 시간을 표시하지 않습니다(Leader는 줄 자체를 두지 않습니다). 시간은 기존 snapshot 갱신(2초)에서 읽으며, 화면에 보이는 문자열(분)이 바뀔 때만 다시 그립니다.
 - SSH seat는 번호 뒤에 `@호스트`를 붙입니다. Tooltip은 호스트와 원격 경로를 표시합니다. 실행 관찰이 실패하면 확인 불가로 표시합니다. 등록과 실행 근거의 계약은 [Agent Session 명세](project-team/spec.md)가 소유합니다.
 - `R`은 Leader의 `reviewing` 값이 그 seat의 CR ID와 같을 때만 붙입니다. Review 행을 별도로 만들거나 CR ID를 중복 표시하지 않습니다.
 - 제출 후 검토 대기(`review_wait`)는 `R`이 아닙니다. 필요하면 행의 색과 도움말로 구분합니다.
