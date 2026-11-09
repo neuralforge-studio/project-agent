@@ -129,3 +129,5 @@ Read-only CR이므로 제출 commit은 없습니다. 제품 코드·문서를 �
 5. tmux 2.7의 설정 오류는 `source-file` 명령의 오류 문구로만 확인했습니다. 2.7이 첫 client에 이 오류를 어떻게 보여 주는지는 실제 client로 확인하지 못했습니다(2.7의 `show-messages`는 client가 없으면 쓸 수 없고, pty client 시도는 출력을 얻지 못했습니다).
 6. 실행하지 않은 것(CR 범위 밖): 충돌 거절(T11), `--adopt-dev-links`, 떠 있는 run이 있을 때의 `upgrade`·`rollback`(`formats_differ`)·`uninstall` 거절, 원격 seat. 이 계정의 실제 설치본 `~/.local/lib/project-agent`(DIST-005)는 읽기만 했습니다(검증 2).
 7. 시범은 한 번의 순차 실행입니다(1차 A → 2차 B). 같은 구성의 반복 실행이나 중단(SIGKILL) 복구는 하지 않았습니다.
+
+- 정리(Worker 종료 준비): 위 "도구" 항의 scratchpad `out/`와 script는 시범 산출물이라 지웠습니다. 시범 HOME·checkout·tmux server·시범 소켓·`/tmp` 잔여물도 없습니다(확인함). 이 Result의 수치는 그 시점의 출력이 근거이며 파일로는 남지 않았습니다.
