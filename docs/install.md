@@ -9,7 +9,7 @@
 | 필요한 것 | 확인 |
 | --- | --- |
 | Python 3.10 이상 | `python3 --version` |
-| tmux | `tmux -V` |
+| tmux | `tmux -V`. 3.8에서 검증했습니다. 2.7은 통합 파일의 `{ }` 문법을 읽지 못해 동작하지 않습니다. 그 사이 버전은 검증하지 않았습니다. 사내 tmux는 `/primehome/tools/Inhouse/tmux/latest/bin/tmux`입니다. PATH에서 새 tmux가 앞에 오는지 확인합니다. |
 | git | `git --version` |
 | Claude Code 또는 Codex CLI | 쓰려는 provider의 CLI가 실행됩니다. |
 | Board용 `textual` | 설치에 쓰는 Python에 있어야 합니다. 버전은 [requirements.txt](../tools/project-board/requirements.txt)입니다. 사내 Python에는 있습니다. |
@@ -18,6 +18,7 @@
 - 사내 workstation의 Python은 `/primehome/tools/Inhouse/Python3/latest/bin/python3`입니다.
 - `textual`이 없어도 설치는 됩니다. Board만 시작하지 않으며 `check`가 알려 줍니다(5절).
 - Claude Code와 Codex의 skill link는 그 provider의 홈(`~/.claude`, `~/.codex`)이 이미 있을 때만 만듭니다. 쓰려는 CLI를 한 번 실행해 홈을 만든 뒤에 설치합니다.
+- 홈이 생기기 전에 설치했다면 `install`을 다시 실행해도 link를 더하지 않습니다("No change"). 홈을 만든 뒤 `uninstall`과 `install`을 차례로 실행합니다(7절).
 
 ## 2. 설치
 
@@ -46,7 +47,7 @@ $PY project-agent/install/project-agent-install install
 $PY ~/.local/lib/project-agent/current/install/project-agent-install check
 ```
 
-`check`는 읽기만 합니다. 종료 코드 0이면 통과입니다. 안내(Note)는 실패가 아닙니다. 안내가 나오면 아래 3~5절에서 해당 항목을 처리합니다.
+`check`는 읽기만 합니다. 마지막 줄이 `OK`이고 종료 코드가 0이면 통과입니다. `Note:` 안내는 실패가 아닙니다. 안내가 나오면 아래 3~4절에서 해당 항목을 처리합니다.
 
 ## 3. 설치가 만드는 경로와 고치는 파일
 
@@ -96,7 +97,7 @@ Board의 기본 키는 prefix `B`입니다. 다른 키를 쓰려면 통합 파�
 set-option -g @project_agent_board_key X
 ```
 
-떠 있는 server에는 이 줄을 실행한 뒤 위의 `tmux source-file` 명령을 다시 실행합니다.
+떠 있는 server에는 이 줄을 실행한 뒤 위의 `tmux source-file` 명령을 다시 실행합니다. 이미 넣은 이전 키(`B`)의 binding은 server가 끝날 때까지 남습니다. 필요하면 `tmux unbind-key B`로 지웁니다.
 
 ### 결정 대기 표시
 
@@ -137,7 +138,7 @@ cd /home/me/work/example.base
 project-item ls
 ```
 
-오류 없이 끝나면 등록이 읽힙니다. 이어서 `agent-session start --job leader`로 Leader를 시작합니다. 역할별 절차는 [project-team skill](../skills/project-team/SKILL.md)입니다.
+오류 없이 끝나면 등록이 읽힙니다. 항목 디렉터리가 아직 없으면 `no directory yet`이 나오며 정상입니다. 이어서 `agent-session start --job leader`로 Leader를 시작합니다. 역할별 절차는 [project-team skill](../skills/project-team/SKILL.md)입니다.
 
 ### base의 `agent/`가 untracked로 보일 때
 
@@ -193,16 +194,17 @@ $PY ~/.local/lib/project-agent/current/install/project-agent-install uninstall
 
 | 거절 사유 | 해소 |
 | --- | --- |
-| run이 살아 있음(`alive`) 또는 확인할 수 없음(`unknown`) | `agent-session stop --job <leader 또는 CR ID>`로 끝냅니다. |
+| run이 살아 있음(`alive`) 또는 확인할 수 없음(`unknown`) | `agent-session stop --job <leader 또는 CR ID>`로 끝냅니다. `execution_unknown`으로 거절되면 [수동 복구](project-team/spec.md#종료-근거가-부족한-실행의-수동-복구)를 따릅니다. |
 | run은 없고 `shutdown` 기록이 남음 | `agent-session resume`으로 재개한 뒤 `stop`으로 끝냅니다. |
-| 등록 파일이 있는데 읽을 수 없음 | 등록 파일을 고칩니다(5절). |
+| `registry_unreadable`: 등록 파일을 읽을 수 없음 | 등록 파일을 고칩니다(5절). |
+| `run_unjudgeable`: 한 project의 run을 판정할 수 없음 | `--json` 출력의 `details.reason`을 읽고 그 project의 `<base>/agent/state.json`이나 등록을 고칩니다. |
 
 ## 8. 문제가 생길 때
 
 | 증상 | 확인 |
 | --- | --- |
 | `check`가 실패(종료 코드 1) | 출력이 어긋난 경로를 알립니다. 사용자가 바꾼 경로는 설치기가 고치지 않습니다. |
-| 설치가 `journal` 때문에 막힘 | 중단된 실행의 기록입니다. 같은 명령을 다시 실행하면 먼저 마무리합니다. |
+| `check`가 "A run was interrupted"로 실패 | 설치기가 중단된 흔적입니다. `check` 외의 명령(예: `install`)을 다시 실행하면 먼저 되돌립니다. `uninstall`과 `prune`은 같은 명령만 마무리합니다([계약 2절 규칙 5](project-team/install-contract.md#2-설치가-만드는-것)). |
 | `python_unavailable`, `python_version` | 설치에 쓴 Python이 없어졌거나 3.10 미만입니다. 올바른 Python으로 다시 설치합니다. |
 | Board가 시작하지 않음 | 설치 Python에 `textual`이 있는지 `check`의 안내를 봅니다. |
 
