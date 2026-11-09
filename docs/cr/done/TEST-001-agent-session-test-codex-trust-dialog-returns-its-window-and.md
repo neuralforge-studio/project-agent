@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Base: ce1f4e2178e2d82b6e081f161373e206bf6ac412 2026-11-09T14:45:03+09:00
+- Outcome: fixed
 
 ## Symptom
 병렬 실행(`-n 8`)이나 host load가 높을 때 이 test가 간헐적으로 실패합니다. 단독 실행은 통과합니다. 매 검증에서 알려진 실패로 따로 확인해야 해서 회귀 판정을 흐립니다.
@@ -19,6 +20,7 @@
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). 여러 CR(agent DIST-004, REPO-001, TMUX-001)의 Result에 같은 간헐 실패가 재현 근거와 함께 남아 있습니다. 근거가 있는 결함 수정이므로 위임 범위입니다. 사용자 지시(2026-11-09 "남은 CR은 전부 등록해서 얼마나 남았는지 알 수 있게 해줘")에 따라 열었습니다.
 - 2026-11-09 Leader: 제출 5d5cc7ca3e2425fd5ada63ec25e3521a06f9059c를 인수합니다. Leader review: test 두 개의 host 속도 단언만 지운 diff를 확인했습니다. 대기 한도를 다 쓰면 code가 timeout이 되므로 남은 code 단언(needs_user_action, registration_failed)이 '한도를 기다리지 않고 반환'을 계속 구분합니다. Result의 부하 재현(수정 전 23/24 실패, 수정 후 0/24)과 agent-session suite 704 passed를 근거로 인수합니다. Worker가 보고한 극한 부하(CPU 점유 64개+16개 동시)에서의 tmux client 10초 한도·fixture 15초 한도 만료는 CR 증거 범위(-n 8, load 30~60)를 크게 넘으므로 이번에는 CR을 열지 않습니다. 다시 볼 조건: 통상 검증(README 명령)에서 tmux_unknown 또는 timeout 실패가 재현될 때.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 f9c4ce3(Merge cr/TEST-001, 제출 5d5cc7c). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README의 검증](../../../README.md#검증), 해당 도구의 README.
