@@ -1676,6 +1676,68 @@ def test_review_mark_clears_on_leader_feedback_stop_and_a_new_leader(session_env
     assert released["released"] is True and env.store.read()["0"] == EMPTY and reviewing() is None
 
 
+def test_a_stop_before_the_cr_move_is_finished_by_the_move(session_env):
+    from agent_session.api import finish_release, pending_releases
+    env = session_env
+    cr = env.cr()
+    first = env.manager().start(cr)
+    held = env.manager().control("stop", job=cr)
+    assert held["stopped"] is True and held["released"] is False
+    assert env.store.read()["0"]["job_id"] == cr                       # the assignment is kept
+    waiting = env.manager().pending_releases()
+    assert list(waiting) == [cr] and waiting[cr]["seat"] == 0
+    assert waiting[cr]["reasons"] == held["reasons"] and waiting[cr]["since"].endswith("Z")
+    assert pending_releases(env.base, env.config, env.tmux.effective_socket()) == waiting
+    # The CR is still in-progress: nothing is released and the hold stays.
+    still = env.manager().finish_release(cr)
+    assert still["released"] is False and any("in-progress" in reason for reason in still["reasons"])
+    assert env.manager().pending_releases()[cr]["since"] == waiting[cr]["since"]
+    env.finish(cr, state="done", outcome="waived", note="no change needed")
+    done = finish_release(env.base, cr, env.config, env.tmux.effective_socket())
+    assert done["released"] is True and done["seat"] == 0 and done["reasons"] == []
+    assert env.store.read()["0"] == EMPTY and env.manager().pending_releases() == {}
+    assert env.manager().finish_release(cr) is None                      # nothing is pending any more
+    second_cr = env.cr(number=2)
+    second = env.manager().start(second_cr)
+    assert second["seat"] == 0 and second["run_id"] != first["run_id"]  # the next start takes the freed seat
+    assert env.tmux.get_current("fixture", "seat-0").get("release_pending") is None
+
+
+def test_the_move_does_not_release_a_seat_that_keeps_work(session_env):
+    env = session_env
+    cr = env.cr()
+    env.manager().start(cr)
+    env.manager().control("stop", job=cr)
+    untracked = env.seats[0] / "worker-notes.txt"
+    untracked.write_text("unfinished work\n")
+    env.finish(cr, state="todo", outcome=None, note="parked")
+    kept = env.manager().finish_release(cr)
+    assert kept["released"] is False and kept["reasons"] == ["seat has uncommitted or untracked files"]
+    assert env.store.read()["0"]["job_id"] == cr and untracked.exists()
+    assert env.manager().pending_releases()[cr]["reasons"] == kept["reasons"]
+    untracked.unlink()
+    assert env.manager().finish_release(cr)["released"] is True
+    assert env.store.read()["0"] == EMPTY
+
+
+def test_a_stop_after_the_cr_move_holds_nothing(session_env):
+    env = session_env
+    cr = env.cr()
+    env.manager().start(cr)
+    env.finish(cr, state="done", outcome="waived", note="no change needed")
+    assert env.manager().control("stop", job=cr)["released"] is True
+    assert env.manager().pending_releases() == {} and env.store.read()["0"] == EMPTY
+
+
+def test_a_running_worker_or_an_unassigned_job_has_no_release_to_finish(session_env):
+    env = session_env
+    cr = env.cr()
+    env.manager().start(cr)
+    assert env.manager().pending_releases() == {} and env.manager().finish_release(cr) is None
+    assert env.manager().finish_release("TOOL-099") is None
+    assert env.manager().control("stop", job=cr)["released"] is False
+
+
 def test_restart_and_a_later_start_close_retired_windows(session_env, monkeypatch):
     from agent_session import internal
 

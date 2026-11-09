@@ -850,34 +850,95 @@ class Manager(SuspendMixin):
                 # _launch already swept once the new run became current; a self-controller sweeps again
                 # after it saved its result, when its own pending window may close.
                 return {**result, "deferred_cleanup": meta["target"]} if defer_cleanup else result
-            check = workspace.check_release(self.project, meta, jobs.state_of(self.project, meta["job_id"])
-                                            if meta.get("job_id") else (None, None))
-            pointer_kept = []
-            if check.get("allowed"):
-                def release(value):
-                    if meta["seat"] is None:
-                        if value["leader"] and value["leader"]["session_id"] != meta["session_id"]:
-                            raise SessionError("target_changed", "The Leader changed before release.")
-                        value["leader"] = None
-                    else:
-                        key = str(meta["seat"])
-                        if value[key]["job_id"] != meta["job_id"]:
-                            raise SessionError("target_changed", "The JOB changed before release.")
-                        value[key] = {"job_id": None, "git_hash": None, "session": None}
-                        if value["leader"] and value["leader"].get("reviewing") == meta["job_id"]:
-                            value["leader"]["reviewing"] = None
-                self.store.update(release)
-                # The released run is no longer current; its window becomes a retired window.
-                try:
-                    self.tmux.clear_current(self.project.project_id, meta["target"], meta["run_id"])
-                except SessionError as error:
-                    # Release stands; the pointer and its window stay and the result names them.
-                    pointer_kept.append({"window_id": meta["window_id"], "reason": error.code})
-            elif meta.get("job_id"):
+            cr_state = jobs.state_of(self.project, meta["job_id"]) if meta.get("job_id") else (None, None)
+            check, pointer_kept = self._release(meta, cr_state)
+            if not check.get("allowed") and meta.get("job_id"):
                 self._clear_review(meta["job_id"])
+                if cr_state[0] == "in-progress":
+                    # The CR's move out of in-progress finishes this release (finish_release).
+                    self._hold_release(meta, check["reasons"])
             result = self._result(meta, stopped=True, released=bool(check.get("allowed")),
                                   reasons=check.get("reasons", []))
             return self._finish_control(result, meta, defer_cleanup, pointer_kept)
+
+    def _release(self, meta, cr_state):
+        """Release the stopped run's slot when the release check allows it: (check, kept pointers)."""
+        check = workspace.check_release(self.project, meta, cr_state)
+        pointer_kept = []
+        if check.get("allowed"):
+            def release(value):
+                if meta["seat"] is None:
+                    if value["leader"] and value["leader"]["session_id"] != meta["session_id"]:
+                        raise SessionError("target_changed", "The Leader changed before release.")
+                    value["leader"] = None
+                else:
+                    key = str(meta["seat"])
+                    if value[key]["job_id"] != meta["job_id"]:
+                        raise SessionError("target_changed", "The JOB changed before release.")
+                    value[key] = {"job_id": None, "git_hash": None, "session": None}
+                    if value["leader"] and value["leader"].get("reviewing") == meta["job_id"]:
+                        value["leader"]["reviewing"] = None
+            self.store.update(release)
+            # The released run is no longer current; its window becomes a retired window.
+            try:
+                self.tmux.clear_current(self.project.project_id, meta["target"], meta["run_id"])
+            except SessionError as error:
+                # Release stands; the pointer and its window stay and the result names them.
+                pointer_kept.append({"window_id": meta["window_id"], "reason": error.code})
+        return check, pointer_kept
+
+    def _hold_release(self, meta, reasons):
+        """Record on the stopped run's window that its release waits for the CR to leave in-progress.
+
+        The state keeps the assignment; this record is only the execution evidence that finish_release
+        and the displays read. A repeated hold keeps the first time."""
+        since = (meta.get("release_pending") or {}).get("since") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self.tmux.write_meta(meta["window_id"], {"release_pending": {"since": since, "reasons": list(reasons)}})
+
+    def finish_release(self, job):
+        """Finish the release that a stop left pending, once the CR is out of in-progress.
+
+        None when the JOB has no pending release. Otherwise the release check decides as it does in
+        stop: released true frees the seat; false keeps the assignment and returns the reasons."""
+        state = self.store.read(missing_ok=True)
+        seats = [key for key, entry in state.items() if key != "leader" and entry["job_id"] == job]
+        if len(seats) != 1:
+            return None
+        slot = f"seat-{seats[0]}"
+        with self._lock(slot):
+            try:
+                meta = self.tmux.get_current(self.project.project_id, slot)
+            except SessionError as error:
+                if error.code == "execution_evidence_missing":
+                    return None
+                raise
+            if not meta or meta.get("job_id") != job or not meta.get("release_pending") or not meta.get("stopping"):
+                return None
+            self._owned(meta, slot, self.store.read())
+            check, kept = self._release(meta, jobs.state_of(self.project, job))
+            result = {"job_id": job, "seat": int(seats[0]), "released": bool(check.get("allowed")),
+                      "reasons": check.get("reasons", [])}
+            if not check.get("allowed"):
+                self._hold_release(meta, check["reasons"])
+                return result
+            cleanup = self._sweep(slot)
+            return {**result, "cleanup": {"closed": cleanup["closed"], "kept": kept + cleanup["kept"]}}
+
+    def pending_releases(self):
+        """JOB ID -> {seat, since, reasons} for each assigned seat whose stopped run waits for release."""
+        state = self.store.read(missing_ok=True)
+        found = {}
+        for key, entry in state.items():
+            if key == "leader" or not entry["job_id"]:
+                continue
+            try:
+                meta = self.tmux.get_current(self.project.project_id, f"seat-{key}")
+            except SessionError:
+                continue                           # unknown evidence is not a pending release
+            pending = meta and meta.get("job_id") == entry["job_id"] and meta.get("release_pending")
+            if pending:
+                found[entry["job_id"]] = {"seat": int(key), **pending}
+        return found
 
     def _restore_stopping(self, meta, error):
         """After a control that failed before the end, unblock the run only while its same CLI lives."""

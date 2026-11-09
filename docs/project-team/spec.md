@@ -265,7 +265,7 @@ State는 배정과 연결의 원본이며 실행 process 정보의 원본은 아
 | Tmux 실행 | 실제 socket 경로, server PID·시작 시각, session/window/pane ID |
 | Process 실행 | CLI PID·생성 시각·process group, 추적한 background PID·생성 시각 |
 | Provider 연결 | 실제 session_id, Claude message_to 또는 Codex endpoint |
-| 제어와 관찰 | stopping 여부, provider 실행 시도 여부, 등록 완료 여부, 게시 의도(`publishing`), hook 관찰값, controller PID·생성 시각, background로 옮겨짐(`moved_to_background`) |
+| 제어와 관찰 | stopping 여부, 반납 대기(`release_pending`), provider 실행 시도 여부, 등록 완료 여부, 게시 의도(`publishing`), hook 관찰값, controller PID·생성 시각, background로 옮겨짐(`moved_to_background`) |
 
 JOB 값은 CR을 가리키는 값(8절)만 둡니다. CR 본문은 option에 복제하지 않고 CR 파일에서 읽습니다.
 
@@ -573,13 +573,15 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | resolve_project(cwd=None, config_path=None) | 현재 디렉토리를 포함하는 가장 깊은 등록 base·seat의 project를 반환. 없거나 모호하면 `SessionError` |
 | RemoteSeat | 원격 Worker seat의 등록 항목 형식. `Project.seats`의 원소가 이 형식이면 원격 seat |
 | SessionError | 공통 오류. `code`·`message`·`exit_code`·`details` |
+| pending_releases(cwd=None, config_path=None, socket=None) | 반납 대기인 seat를 `{JOB ID: {seat, since, reasons}}`로 반환. tmux 실행 근거만 읽고, 읽을 수 없는 run은 나열하지 않음 |
+| finish_release(cwd, job_id, config_path=None, socket=None) | JOB의 반납 대기를 마침. CR이 in-progress를 떠난 뒤에 호출. 대기가 없으면 None, 있으면 `{job_id, seat, released, reasons}`. 반납 조건은 stop과 같고 맞지 않으면 배정을 보존하고 이유를 반환 |
 | Tmux | tmux control 클래스. 소비자는 socket 경로를 주어 만들고 option 조회·pane 조작에 씀 |
 | PANE_ID_OPTION | 관리 window의 pane을 가리키는 tmux window option 이름(`@agent_session_pane_id`). 정의는 `agent_session/tmux.py`. tmux 설정 파일은 import할 수 없어 같은 문자열을 주석과 함께 씀 |
 
 `PANE_ID_OPTION`·`RemoteSeat`·`SessionError`·`Tmux`는 이름과 형식을 제공하는 값이고, 나머지는 함수입니다.
 agent-session 내부 모듈은 서로의 밑줄 이름을 import하지 않습니다. 함께 쓰는 helper는 소유 모듈의 공개 이름입니다.
 
-`read_state`·`check_binding`·`liveness`·`caller`·`require_live`는 읽기 전용입니다.
+`read_state`·`check_binding`·`liveness`·`pending_releases`·`caller`·`require_live`는 읽기 전용이고, `finish_release`는 반납 대기를 마치는 쓰기 호출입니다(project-item이 CR을 옮긴 직후 부름).
 호출자는 선택한 등록 파일과 socket을 전달할 수 있습니다.
 전달하지 않은 등록 경로는 CLI와 같은 표준 경로 규칙을 적용합니다.
 상태 손상·미등록·현재 소유자 불일치·관찰 불가를 구분해 공통 오류로 반환합니다.
@@ -969,6 +971,9 @@ Worker는 아래 반납 검사를 추가로 확인합니다.
 조건이 안 맞으면 종료만 수행하고 JOB·hash·대화 기록을 보존합니다.
 이때 `leader.reviewing`이 이 JOB이면 null로 만들고 현재 실행 포인터와 window는 유지합니다.
 이 경우 `stopped: true, released: false`와 이유를 반환합니다.
+CR이 in-progress라서 반납하지 못했으면 종료한 run의 window에 반납 대기를 기록합니다(`release_pending`: 처음 기록한 UTC 시각 `since`와 `reasons`). state의 배정은 그대로 둡니다. 실행 근거이므로 state에 쓰지 않고, 같은 window를 다음 run이 이어받으면 다른 run 값처럼 null로 돌아갑니다.
+Leader가 그 CR을 `project-item move`로 in-progress에서 옮기면(done·todo·open·deferred) 같은 명령이 이 반납을 마칩니다. 반납 조건은 위 검사를 그대로 씁니다. 조건이 안 맞으면 반납하지 않고 이유를 출력하며, 반납 대기는 유지합니다. 이미 CR을 옮긴 뒤의 stop은 이 기록 없이 위처럼 반납합니다.
+`project-item ls`와 Board sidebar는 반납 대기인 seat를 표시합니다.
 보류로 todo에 둔 CR의 배정이 남으면 같은 CR의 start가 같은 seat에서 새 대화로 이어받습니다(4절).
 종료 성공·반납 보류는 exit 0입니다. 실제 종료 미확인은 exit 4입니다.
 보존한 session은 종료한 대화의 이력이며 송신 가능을 뜻하지 않습니다.
@@ -980,7 +985,7 @@ Provider 실행 시도가 명시적으로 false인 예약도 stop할 수 있습�
 공통 코드는 그 PID에 정상 SIGTERM을 요청하고 실제 종료를 확인합니다.
 Native provider 관찰은 수행하지 않습니다. Provider를 시작한 적이 없기 때문입니다.
 반납 검사는 그대로 적용합니다. CR이 in-progress에 있으면 첫 stop은 released=false입니다.
-Leader는 실제 종료 후 CR을 todo로 되돌리고 stop을 다시 호출해 반납합니다.
+Leader가 실제 종료 후 CR을 todo로 옮기면 그 move가 반납을 마칩니다.
 이 경로의 API binding은 session=null·ready=false·alive=false입니다.
 Termination-confirmed는 대기 pane·PID·그룹이 모두 종료했을 때만 true입니다.
 실행 시도가 true 또는 누락인 미등록 실행에는 이 경로를 적용하지 않습니다.

@@ -12,8 +12,8 @@ from .tmux import PANE_ID_OPTION, Tmux
 # The public names. spec 5 (docs/project-team/spec.md) records each one's input and result.
 __all__ = (
     "PANE_ID_OPTION", "RemoteSeat", "SessionError", "Tmux",
-    "caller", "check_binding", "liveness", "load_registry", "read_state", "require_live",
-    "resolve_project",
+    "caller", "check_binding", "finish_release", "liveness", "load_registry", "pending_releases",
+    "read_state", "require_live", "resolve_project",
 )
 
 
@@ -188,3 +188,29 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
         "termination_confirmed": terminated, "metadata": meta,
         "observation": observation,
     }
+
+
+def _manager(cwd, config_path, socket, timeout):
+    from .lifecycle import Manager          # lifecycle imports this module
+    socket = socket or os.environ.get("AGENT_SESSION_SOCKET")
+    if isinstance(socket, dict):
+        kwargs = socket
+    else:
+        kwargs = {"socket_path": str(socket)} if socket else {}
+    return Manager(cwd, config_path, timeout=timeout, **kwargs)
+
+
+def pending_releases(cwd=None, config_path=None, socket=None):
+    """JOB ID -> {seat, since, reasons} for each seat whose Worker stopped but whose release waits
+    because the CR was still in-progress. Read-only; an unreadable run is not listed.
+    """
+    return _manager(cwd, config_path, socket, 60).pending_releases()
+
+
+def finish_release(cwd, job_id, config_path=None, socket=None):
+    """Finish the release that `stop` left pending for the JOB, after its CR left in-progress.
+
+    None when the JOB has no pending release. Otherwise {job_id, seat, released, reasons}: the release
+    check of stop decides, and a refusal keeps the assignment and names why.
+    """
+    return _manager(cwd, config_path, socket, 120).finish_release(job_id)
