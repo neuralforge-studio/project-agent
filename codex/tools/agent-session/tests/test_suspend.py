@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 from agent_session_fixture import command_timeout, git, session_env  # noqa: F401  (pytest fixture)
-from agent_session import suspend
+from agent_session import lifecycle, suspend
 from agent_session.config import resolve_project
 from agent_session.state import StateStore
 from agent_session.errors import SessionError
@@ -39,7 +39,7 @@ def claude_project(env, monkeypatch, others=()):
 
 
 def fleet(env, timeout=None):
-    return Fleet(config_path=env.config, socket_name=env.socket_name, timeout=timeout or command_timeout())
+    return Fleet(lifecycle.Manager, config_path=env.config, socket_name=env.socket_name, timeout=timeout or command_timeout())
 
 
 def signals(path):

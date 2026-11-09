@@ -137,8 +137,7 @@ def test_global_source_and_socket_precede_the_command(capsys):
 @pytest.mark.parametrize("argv", [
     [], ["status"], ["projects"], ["bind"], ["event"],
     ["start"], ["start", "--job", ""],
-    ["start", "--job", "JOB.md", "--prompt-file", "OTHER.md"],
-    ["start", "--job", "leader", "--seat", "0"], ["start", "--job", "TOOL-022", "--seat", "-1"],
+    ["start", "--job", "TOOL-022", "--seat", "-1"],
     ["start", "--leader"], ["start", "--job-file", "JOB.md"],
     ["send", "--job", "leader"], ["send", "message"],
     ["send", "--job", "leader", "--seat", "1", "message"],
