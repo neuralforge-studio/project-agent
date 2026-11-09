@@ -59,6 +59,7 @@ R 0 GPU-007
 - 제출 후 검토 대기(`review_wait`)는 `R`이 아닙니다. 필요하면 행의 색과 도움말로 구분합니다.
 - `path_cr` 또는 `path_decide`가 없는 project는 해당 개수를 `-`로 표시합니다. 읽기 오류도 `0`으로 바꾸지 않습니다.
 - 화면은 등록 순서를 유지합니다. 긴 project 이름과 CR ID는 tooltip과 가로 스크롤로 전체 값을 볼 수 있게 합니다.
+- Tooltip은 pane이 focus를 잃으면(`AppBlur`) 곧바로, 그 밖에는 마지막 mouse motion 5초 뒤에 지웁니다(`SidebarApp.TOOLTIP_IDLE`). Mouse가 다른 pane으로 나가면 tmux는 이 pane에 아무 event도 보내지 않아 Textual이 tooltip을 지울 계기가 없습니다. 그래서 모든 경우에 tooltip이 남아 사용자가 따로 치울 일이 없게 시간으로 닫습니다. 5초는 표시 지연(0.5초) 뒤 가장 긴 tooltip(seat의 CR 제목·호스트·원격 경로)을 읽기에 충분하고, 움직이지 않는 mouse 때문에 오래 남지는 않는 값입니다. Motion이 이어지면 시간을 다시 잽니다. 닫은 tooltip은 mouse를 다시 움직여야 다시 뜹니다.
 
 마우스 클릭은 필수 조작입니다. tmux 설정은 이미 `mouse on`입니다. Sidebar pane 안의 클릭과 휠은 TUI가 처리합니다. tmux 상태줄의 별도 `Board` 영역은 기존 session·cswap 클릭 동작을 유지하면서 sidebar toggle에 사용합니다.
 
@@ -86,6 +87,15 @@ CR·결정 popup의 너비가 70 column 미만이면 `목록` 버튼으로 목�
 선택 뒤 파일이 이동·삭제되거나 읽기에 실패하면 해당 항목의 오류를 표시합니다.
 오류가 나도 popup은 열린 상태를 유지합니다.
 원본 경로는 등록한 CR root의 해당 상태에서 열거한 항목으로 제한합니다.
+
+#### Popup 목록 행과 선택 표시 (BOARD-007)
+
+CR popup과 결정 popup의 왼쪽 목록은 같은 규칙을 씁니다(`tui._item_label`).
+
+- 항목마다 한 줄입니다. 형식은 `표식 ID 상태 제목`이고 줄바꿈하지 않습니다. 칸보다 긴 줄은 끝을 `…`로 줄입니다. ID와 상태가 앞에 있으므로 줄어드는 것은 제목뿐입니다. 제목 전체는 오른쪽 본문 머리에서 읽습니다. 너비는 문자 폭(한글 2칸) 기준이며 칸 너비가 바뀌면 다시 줄입니다.
+- 목록 칸은 popup 너비의 40%이고 30~46 column입니다. 80 column popup에서 결정 ID와 상태를 모두 보이게 하는 최소 폭입니다.
+- 선택한 항목은 표식 `▶`, 파란 배경, 굵은 흰 글자입니다. 선택하지 않은 항목의 표식은 공백이고 어두운 배경입니다. 키보드 초점(Tab)이 선택하지 않은 항목에 있으면 밝은 회청색 배경으로 구별합니다. 선택과 초점은 서로 다른 표시입니다. 선택은 Enter나 클릭으로만 바뀝니다.
+- 결정의 상태는 snapshot의 `display_state`를 줄인 말(`결정 대기`→`대기`, `답변 접수`→`접수`, `반영 중`→`반영`)이며 상태마다 색이 다릅니다(대기 노랑, 접수 하늘, 반영 초록). CR 목록은 popup이 상태 하나(`open`·`todo`·`in-progress`)의 목록이고 머리줄이 그 상태를 이미 표시하므로 행마다 반복하지 않습니다. 행에는 구별이 필요한 `review_wait`(아래)만 `검토`로 노랑으로 표시합니다.
 
 `review_wait`의 판정 규칙은 [project-board README](../tools/project-board/README.md#review-wait)가 소유합니다. 제출 행의 문법은 [CR 계약](../skills/project-item/references/cr.md)이 소유합니다. 이 표시는 `R` 표시와 별개입니다.
 

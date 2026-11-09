@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
+- Base: 183f619e84aa8972de73df498ca348cf0a463c52 2026-11-10T00:12:20+09:00
 
 ## Symptom
 사용자 보고: "side bar 빈곳을 click 하면 현재 활성화 되어 있는 pane에서 error 발생"

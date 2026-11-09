@@ -19,6 +19,7 @@ from typing import Callable
 from urllib.parse import unquote, urlsplit
 
 from textual.app import App, ComposeResult
+from textual.content import Content
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.errors import NoWidget
 from textual.screen import Screen
@@ -94,6 +95,40 @@ def _decide_stages(project: dict) -> tuple[int, int, int, int]:
     decisions = project.get("decide") or []
     return tuple(sum(item.get("display_state") == stage for item in decisions)
                  for stage in ("결정 대기", "답변 접수", "반영 중", "완료"))
+
+
+# Popup list rows (docs/project-board-tui-plan.md, "Popup 목록 행과 선택 표시"). The status is the
+# short form of the snapshot's `display_state`; an unknown stage is shown in full.
+STATUS_STYLE = {"결정 대기": ("대기", "#ffcf70"), "답변 접수": ("접수", "#8fd0ff"), "반영 중": ("반영", "#9be28f")}
+REVIEW_STATUS = ("검토", "#ffcf70")
+LIST_ITEM_CSS = """
+Button.list-item { width: 100%; height: 1; min-width: 0; border: none; padding: 0 1;
+                   content-align: left middle; text-align: left; text-style: none;
+                   text-wrap: nowrap; text-overflow: ellipsis;
+                   background: #17222f; color: #c9dbed; }
+Button.list-item:hover { background: #22344a; }
+Button.list-item:focus { background: #2b3d52; text-style: none; }
+Button.list-item.selected { background: #2f6db3; color: #ffffff; text-style: bold; }
+Button.list-item.selected:focus { background: #3a7bc8; text-style: bold; }
+"""
+
+
+def _item_label(selected: bool, item_id: str, status: tuple[str, str] | None, title: str) -> Content:
+    """`▶ ID 상태 제목` on one line. CSS cuts the end of the line, so only the title is shortened."""
+    parts: list = ["▶ " if selected else "  ", item_id, " "]
+    if status:
+        parts += [(status[0], status[1]), " "]
+    parts.append(title.replace("\n", " "))
+    return Content.assemble(*parts)
+
+
+def _decision_status(item: dict) -> tuple[str, str] | None:
+    stage = item.get("display_state")
+    return STATUS_STYLE.get(stage, (stage, "#c9dbed")) if stage else None
+
+
+def _cr_status(item: dict) -> tuple[str, str] | None:
+    return REVIEW_STATUS if item.get("review_wait") else None
 
 
 def format_elapsed(seconds: int | None) -> str | None:
@@ -195,6 +230,7 @@ class SidebarApp(App):
         self._snapshot_busy = False
         self._live_busy = False
         self._stopping = False
+        self._tooltip_expiry = None
         self._click_server: asyncio.AbstractServer | None = None
 
     def compose(self) -> ComposeResult:
@@ -244,6 +280,26 @@ class SidebarApp(App):
         if shown:                                    # a window shown again is read at once
             self._queue(self.refresh_snapshot())
             self._queue(self.refresh_liveness())
+
+    # A hover tooltip is hidden only by the next mouse move over this pane. When tmux moves focus to
+    # another pane, or the mouse leaves with focus unchanged, no such event follows and the tooltip
+    # would stay (BOARD-005). Focus loss hides it at once; otherwise it expires this long after the
+    # last mouse motion. The value is owned by docs/project-board-tui-plan.md section 3.
+    TOOLTIP_IDLE = 5.0
+
+    def _hide_tooltip(self) -> None:
+        screen = self.screen
+        if screen._tooltip_timer is not None:      # a tooltip still waiting for its delay
+            screen._tooltip_timer.stop()
+        screen._clear_tooltip()
+
+    def on_app_blur(self, event) -> None:
+        self._hide_tooltip()
+
+    def on_mouse_move(self, event) -> None:
+        if self._tooltip_expiry is not None:
+            self._tooltip_expiry.stop()
+        self._tooltip_expiry = self.set_timer(self.TOOLTIP_IDLE, self._hide_tooltip)
 
     def on_unmount(self) -> None:
         self._stopping = True
@@ -580,18 +636,16 @@ class CRPopupApp(App):
     Screen { background: #111c28; }
     #cr-title { height: 2; padding: 0 1; text-style: bold; }
     #cr-main { height: 1fr; }
-    #cr-items { width: 28%; min-width: 18; border-right: solid #536474; }
-    .cr-item { width: 100%; height: auto; min-width: 0; border: none; padding: 0 1;
-               content-align: left middle; text-align: left; }
+    #cr-items { width: 40%; min-width: 30; max-width: 46; border-right: solid #536474; }
     #cr-detail { width: 1fr; padding: 0 1; }
     #cr-actions { height: 2; }
     #cr-actions Button { height: 1; width: auto; min-width: 0; border: none; margin-right: 1; }
     #cr-show-list { display: none; }
     .narrow #cr-show-list { display: block; }
     .narrow #cr-items { display: none; }
-    .narrow.list-open #cr-items { display: block; width: 100%; }
+    .narrow.list-open #cr-items { display: block; width: 100%; max-width: 100%; }
     .narrow.list-open #cr-detail { display: none; }
-    """
+    """ + LIST_ITEM_CSS
     BINDINGS = [("escape", "quit", "닫기")]
 
     def __init__(self, config: str | None, project_id: str, state: str, *, load: bool = True):
@@ -643,15 +697,25 @@ class CRPopupApp(App):
             return
         self.items = (self.project.get("crs") or {}).get(self.state, [])
         if self.items:
-            await listing.mount(*[Button(f"{item['id']}\n{item['title']}", id=f"cr-item-{index}",
-                                         classes="cr-item") for index, item in enumerate(self.items)])
             if not any(item["id"] == self.selected_id for item in self.items):
                 self.selected_id = self.items[0]["id"]
+            await listing.mount(*[Button(self._row_label(item), id=f"cr-item-{index}", classes="list-item")
+                                  for index, item in enumerate(self.items)])
+            self._mark_selected()
             await self._show_cr()
         else:
             await listing.mount(Static("CR이 없습니다."))
             self.selected_id = None
             await self._show_message("CR이 없습니다.")
+
+    def _row_label(self, item: dict) -> Content:
+        return _item_label(item["id"] == self.selected_id, item["id"], _cr_status(item), item["title"])
+
+    def _mark_selected(self) -> None:
+        for index, item in enumerate(self.items):
+            button = self.query_one(f"#cr-item-{index}", Button)
+            button.label = self._row_label(item)
+            button.set_class(item["id"] == self.selected_id, "selected")
 
     async def _show_message(self, message: str) -> None:
         self._load_generation += 1
@@ -686,6 +750,7 @@ class CRPopupApp(App):
         if button_id.startswith("cr-item-"):
             index = int(button_id.removeprefix("cr-item-"))
             self.selected_id = self.items[index]["id"]
+            self._mark_selected()
             await self._show_cr()
             self.remove_class("list-open")
         elif button_id == "cr-show-list":
@@ -707,9 +772,7 @@ class PopupApp(App):
     Screen { background: #101923; }
     #popup-heading { height: 2; padding: 0 1; text-style: bold; color: #f3f6ff; }
     #popup-main { height: 1fr; }
-    #decision-list { width: 26%; min-width: 18; border-right: solid #536474; }
-    #decision-list Button { width: 100%; height: auto; min-width: 0; border: none;
-                            padding: 0 1; content-align: left middle; text-align: left; }
+    #decision-list { width: 40%; min-width: 30; max-width: 46; border-right: solid #536474; }
     #decision-detail { width: 1fr; padding: 0 1; }
     .decision-meta { height: auto; color: #c9dbed; }
     .section-title { height: auto; text-style: bold; color: #ffe1a0; }
@@ -723,9 +786,9 @@ class PopupApp(App):
     .narrow #show-list { display: block; }
     #popup-message { height: auto; min-height: 1; max-height: 3; color: #ffcb84; }
     .narrow #decision-list { display: none; }
-    .narrow.list-open #decision-list { display: block; width: 100%; }
+    .narrow.list-open #decision-list { display: block; width: 100%; max-width: 100%; }
     .narrow.list-open #decision-detail { display: none; }
-    """
+    """ + LIST_ITEM_CSS
     BINDINGS = [("escape", "quit", "닫기"), ("ctrl+s", "send", "전송")]
 
     def __init__(
@@ -812,12 +875,20 @@ class PopupApp(App):
         listing = self.query_one("#decision-list", VerticalScroll)
         await listing.remove_children()
         if items:
-            await listing.mount(*[Button(f"{item['id']} · {item['display_state']}\n{item['title']}",
-                                         id=f"decision-{index}")
+            await listing.mount(*[Button(self._row_label(item), id=f"decision-{index}", classes="list-item")
                                   for index, item in enumerate(items)])
         else:
             await listing.mount(Static("결정 항목이 없습니다."))
         await self._show_decision()
+
+    def _row_label(self, item: dict) -> Content:
+        return _item_label(item["id"] == self.decide_id, item["id"], _decision_status(item), item["title"])
+
+    def _mark_selected(self) -> None:
+        for index, item in enumerate(self.decisions.values()):
+            button = self.query_one(f"#decision-{index}", Button)
+            button.label = self._row_label(item)
+            button.set_class(item["id"] == self.decide_id, "selected")
 
     def _sync_answer_controls(self) -> None:
         item = self.decisions.get(self.decide_id)
@@ -826,6 +897,7 @@ class PopupApp(App):
         self.query_one("#send", Button).disabled = not editable or self._sending
 
     async def _show_decision(self) -> None:
+        self._mark_selected()
         detail = self.query_one("#decision-detail", VerticalScroll)
         await detail.remove_children()
         item = self.decisions.get(self.decide_id)

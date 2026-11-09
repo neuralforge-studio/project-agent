@@ -389,8 +389,8 @@ def test_cr_list_opens_in_its_own_popup(tmp_path):
     async def check():
         async with app.run_test(size=(70, 20)) as pilot:
             await app.apply_snapshot(model.snapshot(board.config))
-            assert [str(item.label) for item in app.query(".cr-item")] == [
-                "CPU-001\nCR title", "CPU-002\nCR title",
+            assert [str(item.label) for item in app.query(".list-item")] == [
+                "▶ CPU-001 CR title", "  CPU-002 CR title",
             ]
             assert any("The **contract** of CPU-001." in widget.source for widget in app.query(Markdown))
             await pilot.click("#cr-close")
@@ -408,7 +408,7 @@ def test_cr_popup_opens_selected_cr_markdown(tmp_path):
     async def check():
         async with app.run_test(size=(90, 24)) as pilot:
             await app.apply_snapshot(model.snapshot(board.config))
-            await pilot.click(".cr-item")
+            await pilot.click(".list-item")
             await pilot.pause()
             assert any(first.read_text(encoding="utf-8") == widget.source for widget in app.query(Markdown))
             await pilot.click("#cr-item-1")
@@ -822,9 +822,9 @@ def test_popup_labels_stages_and_disables_answer_for_non_open_decisions(tmp_path
             await app.apply_snapshot(snapshot)
             await pilot.pause()
             assert [str(button.label) for button in app.query("#decision-list Button")] == [
-                "D-20261107-01 · 결정 대기\n기다리는 질문",
-                "D-20261107-02 · 답변 접수\n접수된 질문",
-                "D-20261107-03 · 반영 중\n반영 중인 질문",
+                "▶ D-20261107-01 대기 기다리는 질문",
+                "  D-20261107-02 접수 접수된 질문",
+                "  D-20261107-03 반영 반영 중인 질문",
             ]
             assert "D-20261107-04" not in app.decisions
             editor = app.query_one("#answer", TextArea)
@@ -1210,5 +1210,143 @@ def test_switching_decisions_keeps_each_unsent_draft(tmp_path):
             editor.text = "둘째 답변 초안"
             await pilot.click("#decision-0")
             assert app.decide_id == "D-20261107-01" and editor.text == "첫 답변 초안"
+
+    asyncio.run(check())
+
+
+def test_hover_tooltip_does_not_outlive_pane_focus(tmp_path):
+    """BOARD-005: a tooltip shown or about to show when tmux moves focus away must not stay."""
+    from textual import events
+    from textual.widgets._tooltip import Tooltip
+
+    board = Board(tmp_path)
+    board.cr(board.project("Falcon2", seats=1), "open", "CPU-001")
+    app = SidebarApp(str(board.config), poll=False)
+
+    async def check():
+        async with app.run_test(size=(25, 25), tooltips=True) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            tooltip = app.screen.get_child_by_type(Tooltip)
+            await pilot.hover("#project-0-name")
+            await wait_until(pilot, lambda: tooltip.display)
+            app.post_message(events.AppBlur())
+            await wait_until(pilot, lambda: not tooltip.display)
+            await pilot.pause(app.TOOLTIP_DELAY + 0.2)
+            assert not tooltip.display
+            # Focus lost before the delay ends: the pending tooltip must not appear afterwards.
+            await pilot.hover("#project-0-seats")
+            app.post_message(events.AppBlur())
+            await pilot.pause(app.TOOLTIP_DELAY + 0.3)
+            assert not tooltip.display
+            # Focus back and a new hover shows the tooltip again.
+            app.post_message(events.AppFocus())
+            await pilot.hover("#project-0-name")
+            await wait_until(pilot, lambda: tooltip.display)
+
+    asyncio.run(check())
+
+
+def test_hover_tooltip_expires_after_the_mouse_stops_moving(tmp_path):
+    """BOARD-005: the mouse leaving the pane sends tmux no event, so the tooltip must expire by itself."""
+    from textual.widgets._tooltip import Tooltip
+
+    board = Board(tmp_path)
+    board.cr(board.project("Falcon2", seats=1), "open", "CPU-001")
+    app = SidebarApp(str(board.config), poll=False)
+    app.TOOLTIP_IDLE = 1.0
+
+    async def check():
+        async with app.run_test(size=(25, 25), tooltips=True) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            tooltip = app.screen.get_child_by_type(Tooltip)
+            await pilot.hover("#project-0-name")
+            await wait_until(pilot, lambda: tooltip.display)
+            # Motion restarts the idle time: still shown after more than one idle period of moving.
+            for _ in range(3):
+                await pilot.pause(0.5)
+                await pilot.hover("#project-0-seats")
+                await pilot.hover("#project-0-name")
+            await wait_until(pilot, lambda: tooltip.display)
+            # No more motion (the mouse is over another pane): it goes away by itself, and stays away.
+            await wait_until(pilot, lambda: not tooltip.display, timeout=app.TOOLTIP_IDLE + 2)
+            await pilot.pause(app.TOOLTIP_DELAY + 0.3)
+            assert not tooltip.display
+
+    asyncio.run(check())
+
+
+def _list_rows(app, selector):
+    return [(str(button.label), button.has_class("selected"), button.region.height) for button in app.query(selector)]
+
+
+@pytest.mark.parametrize("width", (80, 120))
+def test_cr_popup_rows_are_one_line_and_mark_the_selected_item(tmp_path, width):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    long_title = "아주 긴 한글 제목입니다 " * 6 + "[not markup]"
+    board.cr(base, "in-progress", "CPU-001", "Short", mode="write")
+    board.cr(base, "in-progress", "CPU-002", long_title)
+    app = CRPopupApp(str(board.config), "Falcon2", "in-progress", load=False)
+
+    async def check():
+        async with app.run_test(size=(width, 24)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            rows = _list_rows(app, ".list-item")
+            assert [row[2] for row in rows] == [1, 1]  # a long title does not wrap
+            assert [row[1] for row in rows] == [True, False]
+            assert rows[0][0] == "▶ CPU-001 Short" and rows[1][0].startswith("  CPU-002 아주")
+            assert app.query_one("#cr-items").region.width == (32 if width == 80 else 46)  # 40%, 30..46
+            await pilot.click("#cr-item-1")
+            await pilot.pause()
+            rows = _list_rows(app, ".list-item")
+            assert [row[1] for row in rows] == [False, True]
+            assert rows[0][0].startswith("  CPU-001") and rows[1][0].startswith("▶ CPU-002")
+            assert "[not markup]" in rows[1][0]
+
+    asyncio.run(check())
+
+
+def test_popup_marks_selected_decision_and_keeps_id_and_status_when_title_is_long(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.decide(base, "open", "D-20261107-01", "A very long decision title " * 8)
+    board.decide(base, "answered", "D-20261107-02", "접수된 질문")
+    app = PopupApp(str(board.config), "Falcon2", load=False)
+
+    async def check():
+        async with app.run_test(size=(80, 30)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            rows = _list_rows(app, "#decision-list Button")
+            assert [row[1:] for row in rows] == [(True, 1), (False, 1)]
+            assert rows[0][0].startswith("▶ D-20261107-01 대기 A very")
+            screen_lines = [line.text for line in app.screen._compositor.render_strips()]
+            assert any("D-20261107-01 대기 A very" in line and "…" in line for line in screen_lines)
+            await pilot.click("#decision-1")
+            await pilot.pause()
+            rows = _list_rows(app, "#decision-list Button")
+            assert [row[1] for row in rows] == [False, True]
+            assert rows[1][0] == "▶ D-20261107-02 접수 접수된 질문"
+
+    asyncio.run(check())
+
+
+def test_cr_popup_row_marks_review_wait(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.cr(base, "in-progress", "CPU-001", "Submitted", result="- 제출 commit: " + "a" * 40 + "\n")
+    board.cr(base, "in-progress", "CPU-002", "Working")
+    snapshot = model.snapshot(board.config)
+    app = CRPopupApp(str(board.config), "Falcon2", "in-progress", load=False)
+
+    async def check():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await app.apply_snapshot(snapshot)
+            await pilot.pause()
+            assert [row[0] for row in _list_rows(app, ".list-item")] == [
+                "▶ CPU-001 검토 Submitted", "  CPU-002 Working"]
 
     asyncio.run(check())
