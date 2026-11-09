@@ -3,8 +3,6 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
-- Mode: read-only
-- Base: aad704d7a9f4d0465d490262a5ed2c7f867997d9 2026-11-09T15:03:07+09:00
 
 ## Symptom
 2026-11-09 13:52 project-agent Leader(run `df0fad2994a0410095a7024e7c34585d`)를 시작했습니다. SessionStart 내부 등록은 성공했습니다(window option `registered: true`, `start_error: null`, hook의 session_id가 기대값과 같음). 그러나 `agent/state.json`의 `leader`가 null이고 `ready: false`였습니다. 게시를 맡는 시작 controller process는 이미 없었습니다. Leader가 같은 `agent-session start --job leader`를 다시 실행하자 `_wait_ready`가 게시했습니다(`connected_at` 2026-11-09T04:55:03Z). 게시 전까지 Worker는 `send --job leader`로 보고할 수 없습니다.
@@ -23,23 +21,41 @@
 ## Disposition
 - 2026-11-09 Leader: 조사한다(Leader 판정, read-only). 이 project의 Leader 시작에서 관찰한 이상이며 원인은 확인하지 않았습니다. 조사는 위임 범위입니다. 결과에 따라 Leader가 고치기(todo), 판정 보류(open), 문제 없음(done waived)으로 옮깁니다. 시작 방법은 사용자에게 확인을 요청했습니다(2026-11-09 대화). 답을 받으면 이 절에 적습니다.
 - 2026-11-09 Leader: in-progress -> open. Result 검토: 관찰은 현재 계약(게시는 시작 controller만 함)대로의 결과이며 기존 test가 같은 동작을 확인합니다. 원인은 시작 dialog 대기로 controller가 먼저 끝난 경우가 가장 유력하나, 시작 방법을 확인하지 못해 확정하지 않습니다. 빈틈을 메우는 방법(안내 보강, hook 게시, 유지)은 설계 선택이므로 사용자 결정 D-20261109-03으로 묻습니다. 결정 뒤 고칠 일은 이 CR을 todo로 옮겨 Implementation을 씁니다.
+- 2026-11-09 Leader: D-20261109-03을 철회했습니다. 사용자 지시 원문: "D-20261109-03: 이걸 나한테 물어봐야해? 동작에 있어서 완벽하게 동작하지 못하는 거잖아. 어떻게 해야 최적의 방법인지는 너가 찾아야지. 절대 문제가 발생하지 않을 방법을 찾아야할거 잖아."
+- 2026-11-09 Leader: 고친다(Leader 판정, write로 전환). 등록에 성공한 run이 게시되지 않는 것은 동작 결함입니다. 결함 수정은 위임 범위이고, 결함을 없애는 데 필요한 명세 5절 계약 변경도 이 수정에 포함합니다. 근본 원인: canonical state 게시가 시작 controller 한 process의 생존에 달려 있습니다. 그 process는 dialog 대기 반환, signal, timeout, 호출한 shell의 종료로 등록 전에 끝날 수 있습니다. 안내나 자기 확인(이전 선택지 A)은 누군가의 행동에 기대므로 빈틈이 남습니다. 그래서 "등록에 성공한 run은 어느 경로로든 게시가 끝난다"는 닫힌 설계로 고칩니다(아래 Implementation). read-only 조사 때의 `- Base:`(aad704d)는 지웠습니다. write CR은 배정할 때의 main을 기준으로 새로 시작합니다. 이 수정은 project-agent 저장소에 들어가며, 이 workstation의 실행본(agent 저장소의 동결 사본)에는 agent DIST-001 6단계 전환 때 반영됩니다.
 
 ## Implementation
-- Mode는 read-only입니다. 업무 branch를 만들거나 commit·push하지 않습니다. 결과는 `## Result`에 씁니다.
-- 읽을 문서: [동작 명세](../../project-team/spec.md) 4절 Leader, 5절 "Provider 내부 등록", 7절 shutdown·resume.
+읽을 문서: [동작 명세](../../project-team/spec.md) 3절(state·실행 근거와 잠금), 4절 Leader, 5절 "Provider 내부 등록", 7절 shutdown·resume. 이 CR의 Result(경우별 코드 위치)가 결함 경로의 근거입니다. 명세를 먼저 고친 뒤 코드를 바꿉니다.
 
-1. Leader start가 등록을 기다려 게시하는 경로(`lifecycle.py`의 Leader start, `_wait_ready`, CLI의 timeout·signal 처리)를 따라, 게시 전에 controller가 끝날 수 있는 경우를 모두 나열합니다. 예: 호출한 shell·tool이 시간 제한으로 process를 끝냄, 사용자 중단(SIGINT·SIGHUP), timeout, 예외. 경우마다 window option·state·diagnostics에 남는 흔적을 적습니다.
-2. 관찰한 흔적(Evidence)과 맞는 경우를 고릅니다. 실행한 library는 agent 저장소의 동결 사본입니다. 이 저장소 코드와 다르면 그 차이를 적습니다.
-3. 결론을 셋 중 하나로 적습니다. (a) 제품 결함: 게시 전에 controller가 끝나는 것을 막거나, 끝나도 다음 행동(예: Worker의 `send`, Leader 자신의 hook)이 게시를 마치게 할 방법. (b) 호출 방법의 문제: 안내할 내용. (c) 판정 불가: 더 필요한 근거.
-4. 같은 현상을 격리 tmux server와 fake provider로 재현할 수 있으면 재현 절차를 적습니다.
+목표 계약: 등록(`registered: true`)에 성공한 현재 run은, 시작 controller가 살아 있든 없든 게시(`state`의 session, window `ready: true`)까지 끝납니다. 게시는 누가 하든 같은 함수, 같은 검증, 같은 대상 제어 잠금을 거칩니다.
 
-의존: 없음. 다른 CR과 병렬로 진행합니다.
+1. 게시 함수 하나: `lifecycle.py`의 `_wait_ready` 안 게시 단계(현재 pointer·binding 검증(`_same`), `store.update(publish)`, `write_meta(ready=True, start_error=None)`)를 대상 제어 잠금을 잡고 실행하는 함수 하나로 뽑습니다. 이미 `ready`이면 아무것도 바꾸지 않고 성공합니다(멱등). 현재 pointer가 다른 run이면 `target_changed`로 게시하지 않습니다. 시작 controller는 이 함수를 씁니다. controller는 대기 중 이미 잠금을 가지고 있으므로 잠금을 다시 잡지 않는 경로를 둡니다.
+2. 등록 쪽이 게시를 끝냄: `internal.py`의 `register_from_hook`(SessionStart)과 `register_current`(Codex)는 `_register` 뒤에 1의 함수를 부릅니다. 잠금 대기는 hook 제한(30초) 안의 한도로 둡니다. controller가 살아 있으면 controller가 0.1초 안에 먼저 게시하고 잠금을 놓으므로, 등록 쪽은 잠금을 얻은 뒤 `ready`를 보고 끝납니다. controller가 이미 끝났으면 잠금이 비어 있으므로 등록 쪽이 게시합니다. 지금의 "controller의 ready를 120초 기다림"(`internal.py`의 `_wait_ready`)은 이것으로 대체합니다.
+3. 남은 경우의 재시도: 등록은 됐는데 게시가 실패한 run(잠금 한도 초과, state 쓰기 실패, hook process 중단)을 다음 시점이 게시합니다.
+   - 같은 run의 다음 hook event(`Stop`, `StopFailure`): `registered`이고 `ready`가 아니면 1의 함수를 부릅니다. `SessionEnd`에서는 게시하지 않습니다(끝나는 대화).
+   - 대상을 고르는 명령(`_target`을 쓰는 `send`·`review`·`stop`·`restart`, 그리고 `start`): 고른 현재 run이 `registered`이고 `ready`가 아니며 `stopping`이 아니면 1의 함수로 게시한 뒤 진행합니다.
+   - 호출자 판정(`api.caller`): 호출한 대화가 자기 slot의 현재 run이고 `registered`인데 state에 없으면, 그 run을 1의 함수로 게시한 뒤 다시 판정합니다. 그래서 게시 전의 Leader가 자기 명령(`start --job <CR>` 등)을 거절당하지 않습니다.
+4. 원격 seat(`remote_seat`): 지금의 poll 게시 경로를 유지합니다. 3의 대상 명령 경로가 원격 run에도 같은 함수를 쓰는지 확인하고, 다르면 같은 검증을 거치게 맞춥니다.
+5. 시작 controller의 게시 뒤 단계는 `_sweep`(옛 window 정리)뿐입니다(`lifecycle.py` `_launch`). controller 없이 게시된 run은 다음 start의 sweep이 정리합니다. 이 사실을 명세에 적습니다.
+6. 명세를 고칩니다: 5절 "Canonical state는 시작 controller가 게시하며 등록 함수는 그 준비 결과를 기다립니다"와 4절 Leader의 "다시 실행한 start가 게시" 서술을 위 계약으로 바꿉니다. `needs_user_action` 뒤 dialog에 답하면 다시 start하지 않아도 게시된다는 사실과, 다시 실행한 start는 이미 게시된 run을 그대로 돌려준다는 사실을 적습니다. project-team skill(`skills/project-team/SKILL.md`)의 "사용자가 그 창에서 답한 뒤 같은 start를 다시 실행" 문장도 새 동작에 맞춥니다.
 
-위험 등급: 낮음(read-only).
+범위 밖: 등록 자체가 실패하는 경우(`registration_failed`, `start_error`)의 동작은 바꾸지 않습니다.
+
+의존: 없음. INSTALL-001·002와 병렬로 진행합니다(바꾸는 파일이 겹치지 않음).
+
+위험 등급: 높음. 모든 Leader·Worker의 시작과 state 게시 경로를 바꿉니다. 잠금 순서가 틀리면 교착이나 늦은 hook의 덮어쓰기가 생길 수 있습니다. 인수 전에 Leader가 잠금·게시 경로를 독립 검토(sub-agent)로 확인합니다.
 
 ## Verification
-1. Result에 나열한 경우마다 코드 위치(`path:line`)와 흔적이 있습니다.
-2. 결론이 (a)·(b)이면 재현 절차 또는 그 경우를 뒷받침하는 근거가 있습니다.
+결함 경로마다 test를 둡니다. 모두 격리 tmux server와 fake provider(기존 fixture)로 실행합니다.
+
+1. 재현(수정 전 실패): 시작 dialog에서 controller가 `needs_user_action`으로 끝난 뒤 사용자가 답해 등록되면, 다시 start하지 않는 한 `state.leader`가 null로 남습니다. 이 test가 Base에서 실패하고 수정 뒤 통과합니다. 기존 `test_start_held_at_a_startup_dialog_needs_the_user_and_resumes`의 기대는 새 계약에 맞게 고칩니다(답한 뒤 곧 게시, 다시 실행한 start는 같은 결과를 돌려줌).
+2. controller가 등록 전에 끝나는 다른 경우도 각각 test로 둡니다: SIGINT(`interrupted`), SIGTERM, SIGKILL, `--timeout` 만료. 모두 등록 뒤 다시 start하지 않아도 게시됩니다.
+3. controller가 살아 있는 정상 경로: 게시가 정확히 한 번 일어나고 `connected_at`이 한 번만 정해집니다. controller와 등록 쪽이 동시에 게시를 시도해도 state가 깨지지 않고 결과가 같습니다.
+4. 등록 쪽 게시 실패 주입(잠금 한도 초과, state 쓰기 실패): 같은 run의 다음 `Stop` hook이 게시합니다. 그 전에 Worker의 `send --job leader`나 Leader 자신의 명령(`start --job <CR>`)이 오면 그 명령이 게시를 마치고 진행합니다.
+5. 늦은 hook: 더 새로운 run이 slot을 이어받은 뒤 옛 run의 hook이 게시를 시도하면 `target_changed`로 아무것도 바꾸지 않습니다. `stopping` 중인 run은 명령 경로가 게시하지 않습니다.
+6. Codex `register_current` 경로가 1~4와 같은 결과를 냅니다.
+7. 영향 회귀: README의 agent-session suite(`-n 8`)와 project-item suite가 모두 통과합니다.
+8. 명세와 skill의 고친 문장이 코드 동작과 맞고, 고친 문서의 상대 link가 열립니다.
 
 ## Result
 조사 결과 (Worker seat3, read-only, Base aad704d). 코드 변경·commit 없음. 제출 행 없음.
