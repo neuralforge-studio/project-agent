@@ -31,6 +31,18 @@ python -m pytest -q -n 8 install/tests
 ```
 
 - 다섯 명령은 서로 독립이며 pytest 설정 파일 없이 각 디렉터리의 `conftest.py`로 동작합니다.
+- 다섯 명령을 모두 실행하는 것은 release를 낼 때 한 번입니다([버전 규칙 5절](docs/project-team/release.md#5-변경-기록과-release-절차)). 평소 변경은 아래 표에서 바꾼 경로에 해당하는 명령만 실행합니다(focused check와 직접 영향 회귀). 표의 의존은 [제품 지도의 의존 관계](docs/project-team/README.md#의존-관계)를 따릅니다. `origin/main`을 merge한 뒤에는 merge가 고른 명령의 입력을 바꿨을 때만 다시 실행합니다.
+
+| 바꾼 경로 | 실행할 명령 |
+| --- | --- |
+| `install/**` | `install/tests` |
+| `integrations/tmux/**` | 네 번째 명령, `tools/project-board/tests/test_tmux_control.py`, `install/tests` |
+| `tools/python-launcher.sh`, `tools/formats.json`, `VERSION` | 네 번째 명령, `install/tests` |
+| `tools/project-board/**` | `tools/project-board/tests` |
+| `tools/project-item/**` | `tools/project-item/tests`. `project_item/api.py` 또는 CR·결정 형식(`cr.py`, `decide.py`, `kinds.py`)을 바꾸면 agent-session·project-board test와 네 번째 명령도 |
+| `tools/agent-session/**` | `tools/agent-session/tests`. `agent_session/api.py`, state 형식(`state.py`), tmux option 이름을 바꾸면 project-item·project-board test와 `install/tests`도 |
+| `tools/conftest.py`, 여러 도구가 함께 쓰는 test helper | 다섯 명령 모두 |
+| `skills/**`, `docs/**`, `README.md`, `AGENTS.md` | 고친 문서의 상대 link 검사, `tools/test_distribution_boundary.py`. `skills/project-item`의 형식 문서를 바꾸면 `tools/project-item/tests/test_doc_contract.py`, 원격 guidance 문서(`skills/**`, `docs/project-team/spec.md`)를 바꾸면 `tools/agent-session/tests/test_remote.py`도 |
 - Agent-session test는 seat 여럿이 같은 host에서 동시에 검증하는 평소 부하에서 같은 결과를 냅니다. 한도(`AGENT_SESSION_TEST_TIMEOUT`, 기본 120초)는 host가 이보다 심하게 느릴 때만 늘립니다. 자세한 사용법은 [agent-session README](tools/agent-session/README.md#프로젝트-api와-검사)가 설명합니다.
 - 설치기 test(`install/tests`)는 격리 HOME에서만 설치기를 실행합니다. 개발 중 설치기를 실제 HOME에 실행하지 않습니다. `tmux`와 `git`이 필요하고 계약 8절의 T1~T32을 구현합니다.
 - CLI smoke: `tools/<도구>/bin/<도구> --help`.
