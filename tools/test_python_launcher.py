@@ -18,7 +18,7 @@ def run(entry, *args, env=None, link_dir=None):
         path = link_dir / entry.name
         path.symlink_to(entry)
     base = {key: value for key, value in os.environ.items()
-            if key not in ("PROJECT_AGENT_PYTHON", "PROJECT_AGENT_PYTHONPATH", "PYTHONPATH")}
+            if key not in ("PROJECT_AGENT_PYTHON", "PROJECT_AGENT_PYTHONPATH", "PROJECT_AGENT_LD_LIBRARY_PATH", "PYTHONPATH")}
     return subprocess.run([str(path), *args], env={**base, **(env or {})}, capture_output=True, text=True, timeout=60)
 
 
@@ -180,3 +180,40 @@ def test_python_env_other_names_do_not_select_an_interpreter(release, fake_pytho
     write_env(release, f"PYTHON={fake_python}", f"PROJECT_AGENT_PYTHONX={fake_python}")
     assert not run(release_entry(release, "project-item"), "--help").stdout.startswith("ARGV1=")
 
+
+
+# PROJECT_AGENT_LD_LIBRARY_PATH: the library directory the installer's interpreter needs (INSTALL-006).
+@pytest.fixture
+def ld_python(tmp_path):
+    path = tmp_path / "ld-python"
+    path.write_text('#!/bin/sh\nprintf "LD=%s\\n" "$LD_LIBRARY_PATH"\n')
+    path.chmod(0o755)
+    return path
+
+
+@pytest.mark.parametrize("name", RELEASE_ENTRIES)
+def test_python_env_library_path_goes_in_front_of_ld_library_path(name, release, ld_python):
+    write_env(release, f"PROJECT_AGENT_PYTHON={ld_python}", "PROJECT_AGENT_LD_LIBRARY_PATH=/lib/installed")
+    result = run(release_entry(release, name), env={"LD_LIBRARY_PATH": "/lib/users"})
+    assert result.stdout == "LD=/lib/installed:/lib/users\n"
+
+
+def test_library_path_alone_is_the_whole_value_without_a_user_value(release, ld_python):
+    write_env(release, f"PROJECT_AGENT_PYTHON={ld_python}", "PROJECT_AGENT_LD_LIBRARY_PATH=/lib/installed")
+    env = {key: value for key, value in os.environ.items() if key != "LD_LIBRARY_PATH"}
+    result = subprocess.run([str(release_entry(release, "project-item"))], env=env, capture_output=True, text=True)
+    assert result.stdout == "LD=/lib/installed\n"
+
+
+def test_environment_library_path_wins_over_python_env(release, ld_python):
+    write_env(release, f"PROJECT_AGENT_PYTHON={ld_python}", "PROJECT_AGENT_LD_LIBRARY_PATH=/lib/from-file")
+    result = run(release_entry(release, "project-item"), env={"PROJECT_AGENT_LD_LIBRARY_PATH": "/lib/from-env",
+                                                              "LD_LIBRARY_PATH": ""})
+    assert result.stdout == "LD=/lib/from-env\n"
+
+
+def test_library_path_is_not_applied_without_the_installer_interpreter(release, ld_python):
+    """The development checkout rule is unchanged: the value is only read together with PROJECT_AGENT_PYTHON."""
+    write_env(release, "PROJECT_AGENT_LD_LIBRARY_PATH=/lib/installed")
+    result = run(release_entry(release, "project-item"), "--help", env={"LD_LIBRARY_PATH": "/lib/users"})
+    assert "/lib/installed" not in result.stdout + result.stderr
