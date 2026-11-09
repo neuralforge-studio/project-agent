@@ -18,6 +18,7 @@ from . import process
 _PREFIX = "@agent_session_"
 PANE_ID_OPTION = _PREFIX + "pane_id"    # window option naming the managed pane; project-agent.conf repeats it
 EXIT_HOOK = "pane-died[agent-session]"  # the server-wide hook element that starts the wrap-up of a run that ended itself
+LAST_ERROR_OPTION = "@project_agent_last_error"   # the one record of a failed tmux job (install contract 5.3, project_agent_run.sh)
 _HOOK_WORD = re.compile(r"[A-Za-z0-9_./:@%+=,-]+")  # what a hook command may carry as a path: no quote, space, or `$`
 COMPANY_TMUX = "/primehome/tools/Inhouse/tmux/latest/bin"   # install contract 3.2: put this directory first in PATH
 # The minimum tmux version has one definition: `@project_agent_tmux_min` in the integration file (install
@@ -35,6 +36,25 @@ def minimum_version():
     except OSError:
         return None
     return found.group(1) if found else None
+
+
+def quiet_shell(job, name, socket, quote='"', notify_client=None):
+    """Shell text for one `run-shell` job that leaves nothing in the pane the user is working in (BOARD-011).
+
+    tmux shows the output and a nonzero exit status of a `run-shell` job in the then active pane, which is the
+    user's work pane. The text runs `job` with its output discarded and always exits 0. A failure is written
+    to the server option `LAST_ERROR_OPTION` as one line, `<date> <time> <name> failed (exit N)`, replaced by
+    the next failure; with `notify_client` (an action of a person) that client also gets a message for 5
+    seconds, which covers no pane. This is the rule of `integrations/tmux/project_agent_run.sh` (`hook` and
+    `key` modes) for the jobs of the tools, which cannot call that script: the remote runtime's bundle does
+    not carry it. `socket` and `notify_client` are shell words. `quote` is the double quote of the text the
+    message is in; a hook that nests this text in tmux's own quotes passes `\\"`. The text has no `'`."""
+    message = f"{quote}$(date +%F) $(date +%T) {name} failed (exit $*){quote}"
+    record = f"set -- $?; tmux -S {socket} set-option -g {LAST_ERROR_OPTION} {message} >/dev/null 2>&1"
+    if notify_client is not None:
+        notice = f"{quote}project-agent: {name} failed (tmux show-options -gv {LAST_ERROR_OPTION}){quote}"
+        record += f"; tmux -S {socket} display-message -c {notify_client} -d 5000 {notice} >/dev/null 2>&1"
+    return f"( {job} ) >/dev/null 2>&1 || {{ {record}; }}; exit 0"
 
 
 def _version_number(text):
@@ -511,12 +531,13 @@ class Tmux:
         a managed window names as its own (`PANE_ID_OPTION`), and the wrap-up reads everything else from that
         window. It is an element of its own, so the hooks of a person's configuration still run (a window-scope
         hook would replace them). The command is written again at every launch with that launch's interpreter
-        and library. Returns False, without a hook, when a path has a character the command cannot carry."""
+        and library. It leaves nothing in the user's pane whatever the wrap-up does (`quiet_shell`). Returns False, without a hook, when a path has a character the command cannot carry."""
         words = (str(python), str(library))
         if any(_HOOK_WORD.fullmatch(word) is None for word in words):
             return False
-        shell = (f"exec env PYTHONPATH={words[1]} {words[0]} -m agent_session.internal finish-ended "
-                 "#{socket_path} #{window_id} #{pane_id} >/dev/null 2>&1")
+        job = (f"env PYTHONPATH={words[1]} {words[0]} -m agent_session.internal finish-ended "
+               "#{socket_path} #{window_id} #{pane_id}")
+        shell = quiet_shell(job, "finish-ended", "#{socket_path}", quote='\\"')
         command = ("if-shell -F '#{==:#{" + PANE_ID_OPTION + "},\"#{pane_id}\"}' 'run-shell -b \"" + shell + "\"'")
         self._run("set-hook", "-g", EXIT_HOOK, command)
         return True
@@ -704,14 +725,20 @@ class Tmux:
             raise SessionError("execution_unknown", "Cannot confirm the waiting process termination request.", 4) from exc
         return {"requested": True, "pane_dead": self.pane_info(meta["pane_id"])["pane_dead"]}
 
+    def run_quiet(self, job, name, client=None):
+        """Run a shell `job` as a background `run-shell` that leaves nothing in the user's pane (`quiet_shell`).
+
+        `client` is the tmux client of a person who started the job; a failure is shown on it for a moment."""
+        socket = shlex.quote(self.effective_socket())
+        self._run("run-shell", "-b", quiet_shell(job, name, socket, notify_client=shlex.quote(client) if client else None))
+
     def run_controller(self, script_path, cwd):
         """Ask the selected tmux server to run a fixed controller script."""
         script = Path(script_path).expanduser().resolve()
         cwd = Path(cwd).expanduser().resolve()
         if not script.is_file() or not cwd.is_dir():
             raise SessionError("tmux_input", "The controller script or working directory is unavailable.", 2)
-        command = "cd " + shlex.quote(str(cwd)) + " && exec " + shlex.join(["/bin/bash", str(script)])
-        self._run("run-shell", "-b", command)
+        self.run_quiet("cd " + shlex.quote(str(cwd)) + " && " + shlex.join(["/bin/bash", str(script)]), "controller")
         return {"submitted": True, "script": str(script), "cwd": str(cwd),
                 "socket_path": self.effective_socket()}
 

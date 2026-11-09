@@ -1,7 +1,9 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
+import signal
 import shutil
 import subprocess
 import sys
@@ -15,7 +17,7 @@ from agent_session.config import Project
 from agent_session.errors import SessionError
 from agent_session.lifecycle import Manager
 from agent_session.process import alive, birth
-from agent_session.tmux import Tmux
+from agent_session.tmux import LAST_ERROR_OPTION, Tmux, quiet_shell
 import tmux_test_server  # noqa: E402
 
 
@@ -690,3 +692,91 @@ def test_pane_slot_names_the_project_and_slot_of_a_managed_window_only(tmp_path,
     # A project_id that is not JSON means the window is not managed.
     tmux.command("set-option", "-w", "-t", seat["window_id"], "@agent_session_project_id", "demo")
     assert tmux.pane_slot(seat["pane_id"]) is None
+
+
+# BOARD-011: a `run-shell` job of the product leaves nothing in the pane the user is working in.
+
+def attach_client(tmux, request):
+    """A tmux client on the server, so that the output of a `run-shell` job has a pane to appear in."""
+    client = subprocess.Popen(tmux._argv(["-C", "attach", "-t", "demo"]),
+                              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def detach():
+        client.stdin.close()
+        client.wait(timeout=10)
+
+    request.addfinalizer(detach)
+    wait_for(lambda: tmux.command("list-clients", "-F", "#{client_pid}").strip())
+
+
+def pane_mode(tmux, pane_id):
+    return tmux.command("display-message", "-p", "-t", pane_id, "#{pane_mode}")
+
+
+def wait_for_error(tmux, pattern):
+    import re
+
+    return wait_for(lambda: re.fullmatch(pattern, tmux.command("show-options", "-gqv", LAST_ERROR_OPTION)))
+
+
+def test_the_check_sees_what_a_bare_run_shell_does_to_the_work_pane(tmp_path, tmux, request):
+    meta = new_window(tmux, tmp_path)
+    attach_client(tmux, request)
+    tmux.command("run-shell", "-b", "echo noisy; exit 3")
+    assert wait_for(lambda: pane_mode(tmux, meta["pane_id"])) == "view-mode"
+
+
+def test_a_failing_quiet_job_leaves_the_work_pane_alone_and_is_recorded(tmp_path, tmux, request):
+    meta = new_window(tmux, tmp_path)
+    attach_client(tmux, request)
+    tmux.run_quiet("echo noisy; echo noisy >&2; exit 3", "fake-job")
+    wait_for_error(tmux, r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d fake-job failed \(exit 3\)")
+    time.sleep(0.5)                                  # tmux reports a job when it ends, after the record
+    assert pane_mode(tmux, meta["pane_id"]) == ""
+    assert tmux.command("capture-pane", "-M", "-p", "-t", meta["pane_id"]).strip() == ""
+
+
+def test_a_quiet_job_that_succeeds_records_nothing(tmp_path, tmux, request):
+    meta = new_window(tmux, tmp_path)
+    attach_client(tmux, request)
+    marker = tmp_path / "ran"
+    tmux.run_quiet(f"echo noisy; touch {shlex.quote(str(marker))}", "fake-job")
+    wait_for(marker.exists)
+    time.sleep(0.5)
+    assert pane_mode(tmux, meta["pane_id"]) == ""
+    assert tmux.command("show-options", "-gqv", LAST_ERROR_OPTION) == ""
+
+
+def test_a_quiet_job_started_by_a_person_also_tells_that_client(tmp_path):
+    """The message goes to the named client with `display-message`; a stub `tmux` shows the calls."""
+    log = tmp_path / "log"
+    stub = tmp_path / "tmux"
+    stub.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> {shlex.quote(str(log))}\n')
+    stub.chmod(0o755)
+    text = quiet_shell("echo noisy; exit 5", "popup", "/s", notify_client="/dev/pts/9")
+    done = subprocess.run(["sh", "-c", text], env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+                          capture_output=True, text=True, timeout=10)
+    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
+    set_option, display = log.read_text().splitlines()
+    assert re.fullmatch(rf"-S /s set-option -g {LAST_ERROR_OPTION} \S+ \S+ popup failed \(exit 5\)", set_option)
+    assert display.startswith("-S /s display-message -c /dev/pts/9 -d 5000 project-agent: popup failed")
+    quiet = quiet_shell("exit 5", "popup", "/s")
+    assert "display-message" not in quiet and "'" not in quiet
+
+
+def test_the_pane_died_hook_leaves_the_work_pane_alone_whatever_the_wrap_up_does(tmp_path, tmux, request):
+    """The wrap-up that cannot even start (its interpreter fails) used to show `returned 7` in the pane."""
+    work = new_window(tmux, tmp_path)
+    ended = new_window(tmux, tmp_path, run="run-two", target="seat-1", job="J-20261103-02")
+    failing = tmp_path / "python-fails"
+    failing.write_text("#!/bin/sh\necho 'interpreter broken'\nexit 7\n")
+    failing.chmod(0o755)
+    assert tmux.install_exit_hook(failing, tmp_path) is True
+    tmux.command("select-window", "-t", work["window_id"])
+    attach_client(tmux, request)
+    pid = tmux.pane_info(ended["pane_id"])["pane_pid"]
+    os.kill(pid, signal.SIGKILL)
+    wait_for_error(tmux, r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d finish-ended failed \(exit 7\)")
+    time.sleep(0.5)
+    assert pane_mode(tmux, work["pane_id"]) == ""
+    assert tmux.command("capture-pane", "-M", "-p", "-t", work["pane_id"]).strip() == ""
