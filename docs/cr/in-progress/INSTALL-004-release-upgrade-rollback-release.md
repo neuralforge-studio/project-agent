@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
+- Base: 4c4168325298d1ae1515696acbc16417de5d152e 2026-11-09T17:40:07+09:00
 
 ## Symptom
 설치·갱신·되돌리기는 관리 run이 떠 있는 동안 합니다. 옛 release와 새 release가 한동안 같은 state·tmux option·CR 파일을 함께 씁니다. 형식이 호환되지 않는 갱신을 막는 장치가 없습니다. 또 `upgrade`는 이전 release를 지우지 않으므로 release가 계속 쌓이고, 정리 명령이 없습니다.
