@@ -18,7 +18,8 @@ pytestmark = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is un
 # A test process that owns one server with one pane process (the stand-in for a fake provider),
 # reports both and waits to be killed.
 OWNER = r'''
-import subprocess, sys, time
+import signal, subprocess, sys, time
+signal.signal(signal.SIGINT, signal.default_int_handler)  # a job started in the background inherits SIGINT ignored
 sys.path.insert(0, sys.argv[1])
 import tmux_test_server
 name = tmux_test_server.claim("pa-selftest")
