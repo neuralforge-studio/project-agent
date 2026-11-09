@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Mode: read-only
+- Base: e41a82631c6e0cb277989c3c668c6f56bbdb57fc 2026-11-09T19:45:16+09:00
 
 ## Symptom
 새 계정에서 설치해 계약 밖 변경이 없는지 확인한 기록이 없습니다. 격리 HOME 인수 test(INSTALL-001)는 실제 계정의 shell·tmux·provider 환경을 모두 흉내 내지 못합니다.
