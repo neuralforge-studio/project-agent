@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: 477516bef5be923ccdbeefb999c832a77d604171 2026-11-09T15:12:26+09:00
+- Outcome: fixed
 
 ## Symptom
 2026-11-09 13:52 project-agent Leader(run `df0fad2994a0410095a7024e7c34585d`)를 시작했습니다. SessionStart 내부 등록은 성공했습니다(window option `registered: true`, `start_error: null`, hook의 session_id가 기대값과 같음). 그러나 `agent/state.json`의 `leader`가 null이고 `ready: false`였습니다. 게시를 맡는 시작 controller process는 이미 없었습니다. Leader가 같은 `agent-session start --job leader`를 다시 실행하자 `_wait_ready`가 게시했습니다(`connected_at` 2026-11-09T04:55:03Z). 게시 전까지 Worker는 `send --job leader`로 보고할 수 없습니다.
@@ -27,6 +28,8 @@
 - 2026-11-09 Leader: 직전 Implementation(게시 함수를 여러 곳에서 부르는 재시도 지점)을 철회합니다. 근본 원인을 확정하지 않고 여러 경로에 게시를 붙인 땜질이었습니다. 사용자 지적 원문: "등록에 성공한 run은 어떤 경로로든?? 무책임하게 뭔가 되게만 하겠다는거야?? 정확한 계획을 가지고 해야하지 어떤 경로로든? 땜질 하겠다는거야? root cause를 찾아야지? 뭐하는거야?"
 - 2026-11-09 Leader: 근본 원인 확정. (1) agent Leader가 04:47:46Z에 base를 새로 clone하고 04:48:09Z에 등록했으며 workspace trust를 기록하지 않았습니다(agent Leader 대화 `399cefc7…jsonl`, 그 구간에 `.claude.json` 쓰기 없음). (2) Claude provider의 start는 자기가 clone한 seat에만 trust를 기록하고 base에는 기록하지 않습니다(명세 5절, `lifecycle.py:536` `trust_new_seat`). Claude는 trust를 cwd부터 git root까지만 찾으므로, 새 base의 첫 Leader 시작은 반드시 workspace trust dialog(`providers/claude.py:74`)에서 멈춥니다. (3) start는 dialog를 감지하면 `needs_user_action`(exit 3)을 반환하고 끝납니다(`lifecycle.py:385-390`). 그런데 canonical state 게시는 그 시작 controller만 합니다(`internal.py` `_register`의 주석 "Only the controller that holds the target lock publishes canonical state", `lifecycle.py:358-370`). (4) 이번 run의 등록은 launch 63초 뒤(다른 run은 6~8초)였고, 지금 `.claude.json`의 base 항목은 `hasTrustDialogAccepted: true`입니다. 사용자가 dialog에 답한 시간과 맞습니다. 결론: 결함은 게시 책임이 등록 사건이 아니라 호출자에 묶인 시작 process에 있다는 설계입니다. 그 process는 dialog(설계상 정상 경로)·signal·timeout으로 등록 전에 끝날 수 있고, 그러면 게시할 주체가 없습니다. 고칠 것은 게시 책임의 위치 하나입니다. dialog 자체(새 workspace에 대한 사용자 승인)는 정상 동작이므로 바꾸지 않습니다.
 - 2026-11-09 Leader: 제출 8054b7a 수정 요청. 설계(게시는 등록의 일부, 게시 주체는 등록 함수, controller는 잠금 없이 기다림)와 경로별 test는 맞습니다. 독립 검토(sub-agent)가 찾고 Leader가 코드에서 확인한 결함: (1) 이전 code가 남긴 `registered`·미게시 run을 만나면 `_wait_ready`(`lifecycle.py:383-405`)가 끝날 조건 없이 timeout까지 기다림, (2) `publish_session`(`state.py:133-135`)이 state를 쓴 뒤 window를 쓰므로 그 사이 hook 종료·`write_meta` 실패에서 state만 게시된 상태가 남고, 시간 한도(binding 20초 + 잠금 8초 + state 잠금 8초)가 hook 30초를 넘음, (3) 잠금을 놓은 틈에 끼어든 shutdown의 기록을 `forget("leader")`(`lifecycle.py:500`)가 run 구분 없이 지움, 낮음: `_abandon`이 잠금 밖, 게시 성공 뒤 잠금 재취득 실패가 실패로 보고됨. Worker 판단 요청 답: Leader 재실행 start의 `leader_exists`는 명세 4절과 같아 맞습니다. 형식 버전은 1을 유지합니다(새 run은 `registered`와 `ready`를 함께 쓰고, 이전 상태는 아래 규칙으로 다룸). 그 밖에: `git stash` 사용은 전역 규칙(사용자 요청 없이 stash를 만들지 않음) 위반이므로 다시 하지 않습니다. `remote_runtime` 변경은 `_register` 공유의 결과로 받아들이고 실제 원격 검증은 SESSION-002에 넘깁니다.
+- 2026-11-09 Leader: 제출 9ced69100ed8f965365883c61806f5ce3086a4a3를 인수합니다. Leader review: 지적 5건 반영을 확인했습니다. state.publish_session을 직접 읽어 commit 절차(의도 기록 → state 쓰기 commit → window 한 번에 쓰기, commit 뒤 실패면 같은 잠금 안 되돌림, 되돌릴 수 없이 끝나면 complete_publication이 state가 의도 session을 가리킬 때만 window를 마침)를 확인했습니다. 25초 하나의 deadline으로 hook 30초 제한에 걸려 두 쓰기 사이에서 죽는 경로가 없어졌고, 남는 것은 강제 종료(SIGKILL·OOM)뿐이며 다음 start가 결정적으로 마무리합니다. 새 window option publishing은 이전 release가 무시하는 추가이므로 형식 버전 1 유지. 이전 상태는 registration_incomplete로 즉시 보고. 수정 전 실패 test 15건, 3458d98 전체 suite와 9ced691의 영향 test 재실행 근거를 재사용합니다.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 a825c04(Merge cr/SESSION-001, 제출 9ced691). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [동작 명세](../../project-team/spec.md) 3절(실행 근거와 잠금), 4절 Leader·Worker, 5절 "Provider 내부 등록", 이 CR의 Disposition(근본 원인)과 Result(조사).
@@ -67,7 +70,21 @@
 8. 명세·skill의 고친 문장이 코드 동작과 맞고, 고친 문서의 상대 link가 열립니다.
 
 ## Result
-- 제출 commit: 8054b7aa6079d7c115a54c66b7682c19ec92f9a5
+- 제출 commit: 9ced69100ed8f965365883c61806f5ce3086a4a3
+
+### 수정 제출 (Leader 검토 5건 반영, Base 8054b7a 위에 3458d98 + 9ced691)
+명세 5절·3절에 규칙을 먼저 적고 코드를 고쳤습니다. 항목마다 수정 전 commit(8054b7a)에서 실패하는 test를 두었습니다(새 test 17건을 8054b7a에 놓고 실행: 15건 실패, 2건은 두 경로에서 모두 성립하는 음성 test).
+
+1. commit 절차(높음): `state.publish_session`의 순서를 대조 → window에 게시 의도(`publishing`) 기록 → state 쓰기(commit) → window `session_id`·`registered`·`ready` 한 번에 쓰기·`publishing` 해제로 바꿨습니다. window 쓰기가 실패하면 같은 잠금 안에서 그 slot을 쓰기 전 값으로 되돌리고(state 쓰기 전 실패면 의도만 지움) `start_error`를 남깁니다. 되돌림 자체가 실패하면 의도를 남겨 roll-forward가 마무리합니다. roll-forward는 `state.complete_publication`(window 쓰기만): 기다리는 start의 `_observe_ready`가 대상 제어 잠금 안에서 "현재 run·window ready 아님·state가 `publishing` session을 가리킴"일 때만 부릅니다. 그 밖에서 controller는 state를 쓰지 않습니다. 의도는 새 window option `publishing`(window 생성·재사용 때 null)이며 이전 release가 무시하는 추가입니다(형식 버전 1 유지).
+   - test: `test_a_failed_window_update_puts_the_published_session_back`, `…leaves_nothing_published`(fixture CLI에 window 쓰기 실패 주입 → state 불변, `start_error`, `registration_failed`), `test_a_process_that_ends_after_the_commit_leaves_what_complete_publication_finishes`(되돌릴 수 없이 끝남), `test_complete_publication_finishes_nothing_the_state_does_not_name`, `test_a_start_finishes_a_publication_whose_registration_committed_the_state`(다음 start가 window를 마치고 같은 session 보고), `test_a_start_publishes_nothing_for_an_intent_the_state_does_not_name`.
+2. 시간 한도(중간): `_register`가 hook 시작 시각(`register_from_hook` 진입)에서 25초 deadline 하나를 정하고(hook 30초보다 짧음), binding 확인은 deadline 6초 전에 끝나며 제어 잠금·state 잠금이 남은 시간을 나눠 씁니다. test: `test_every_step_of_a_registration_ends_inside_its_one_deadline[binding|control_lock|state_lock]`(deadline 3초에서 각 단계가 느릴 때 전체가 안에 끝나고 state 불변, window 미등록, `start_error`).
+3. 이전 release가 남긴 상태(중간): 로컬 run이 `registered`이고 `ready`가 아니면 `_wait_ready`가 기다리지 않고 곧바로 `registration_incomplete`(exit 4)로 끝나며 `stop`·`restart --job <JOB>` 해소 방법을 출력합니다. 게시하지 않습니다. 명세 5절에 적었습니다. test: `test_a_registered_run_that_was_never_published_is_reported_not_waited_for[leader|worker]`.
+4. 잠금 공백 뒤(중간): Leader·suspended start의 기록 제거를 `SuspendStore.forget_before(slot, 이 run의 run_id)`로 바꿨습니다(그 run의 기록은 남기고 이전 run의 기록만 지움). `_wait_ready`는 기다린 뒤 현재 pointer를 다시 읽어 run이 바뀌었으면 `target_changed`, 멈추는 중이면 `target_stopping`으로 보고합니다. test: `test_a_start_reports_the_run_as_it_is_after_waiting_without_the_lock[stopping|replaced]`(shutdown 기록이 남고 보고가 사실과 맞음), `test_starting_a_leader_keeps_a_shutdown_record_made_for_the_new_run`.
+5. 낮음: `_abandon`이 대상 제어 잠금 안에서 실행되도록 `Manager._regain(slot)`을 두었습니다(`test_a_failed_resume_leaves_the_record_and_start_can_take_over`에 잠금 보유 확인 추가). 대기 뒤 잠금 재취득이 실패해도(`_unlocked`) start는 게시 사실을 보고하고 정리는 건너뛰어 `cleanup.kept`에 이유를 남깁니다(`test_a_published_run_is_reported_even_when_the_lock_cannot_be_taken_again`).
+
+검증: 마지막 기능 commit 3458d98에서 `AGENT_SESSION_TEST_TIMEOUT=60 python -m pytest -q -n 8 tools/agent-session/tests` → 727 passed, 3 failed. 실패 3건 중 2건은 새 option이 재사용 window에만 나타나 두 test의 key 비교를 어긋나게 한 것(`test_tmux`·`test_lifecycle`의 window 재사용 test)이고, 9ced691에서 `publishing`을 새 window에도 두어(생성 시 null) 고쳤습니다. 1건(`test_a_failed_resume_leaves_the_record_and_start_can_take_over`의 seat-0이 `provider_exited` 대신 `timeout`)은 호스트 부하 시간 초과였으며 같은 test를 다시 실행해 통과했습니다. 9ced691에서는 영향받은 test(`test_tmux.py`, `test_lifecycle`의 window 재사용·restart, `test_suspend`의 failed resume, `test_internal.py` 전체)만 다시 실행해 통과했고 전체 suite는 다시 돌리지 않았습니다(Leader 지침: 바뀐 부분만). 다른 suite(project-item 120, 4번째 명령 55)는 이전 근거를 재사용합니다(이번 수정은 그 대상 파일을 바꾸지 않았습니다).
+
+### 이전 제출 (8054b7aa6079d7c115a54c66b7682c19ec92f9a5)
 
 Worker seat2 구현 결과입니다. Base는 ee5edf0이며 `origin/cr/SESSION-001`에 push했습니다(origin/main 진행 없음, merge 불필요).
 

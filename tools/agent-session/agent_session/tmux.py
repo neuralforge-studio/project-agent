@@ -190,7 +190,7 @@ class Tmux:
             raise SessionError("execution_unknown", "The waiting process group is unavailable.", 4) from exc
         return {**values, "base": base, "project_id": name, "window_id": window_id, "pane_id": pane_id,
                 "cwd": str(cwd), **self.server_identity(), "provider_launch_attempted": False,
-                "registered": False, "ready": False, "stopping": False,
+                "registered": False, "ready": False, "publishing": None, "stopping": False,
                 "placeholder_pid": pane["pane_pid"], "placeholder_birth": process.birth(pane["pane_pid"]),
                 "placeholder_process_group": placeholder_group}
 
@@ -257,7 +257,7 @@ class Tmux:
         if not self.pane_info(meta["pane_id"])["pane_dead"]:
             raise SessionError("target_running", "The managed pane is still running.")
         leftover = sorted(set(meta) - set(values) - set(_RUN_VALUES) - set(_IDENTITY)
-                          - {"cwd", "provider_launch_attempted", "registered", "ready", "stopping",
+                          - {"cwd", "provider_launch_attempted", "registered", "ready", "publishing", "stopping",
                              "placeholder_pid", "placeholder_birth", "placeholder_process_group"})
         if leftover:
             raise SessionError("window_unreusable", "The window has metadata that a new run cannot replace.",

@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
+- Base: 8ead20ab6917371f1a2415e89ce02422dca96e97 2026-11-09T17:00:26+09:00
 
 ## Symptom
 운영자 항의(2026-11-09 16:30경 실측, `/primehome/swain/tmp/claude-1028/-primehome-swain-Utils-project-agent-project-agent-base/76a0fdc1-de2f-4592-908d-8a956e743da6/scratchpad/complaint.md`): 사용자가 서버 자원이 점점 줄어든다고 신고했고, 상당 부분이 project-agent test의 정리 누락입니다.

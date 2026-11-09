@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 from agent_session_fixture import command_timeout, git, session_env  # noqa: F401  (pytest fixture)
 from agent_session import lifecycle, process, suspend
 from agent_session.config import resolve_project
-from agent_session.state import StateStore
+from agent_session.state import StateStore, control_lock
 from agent_session.errors import SessionError
 from agent_session.suspend import Fleet, SuspendMixin, SuspendStore
 from agent_session.tmux import Tmux
@@ -737,8 +737,21 @@ def test_a_failed_resume_leaves_the_record_and_start_can_take_over(session_env, 
         return {**spec, "argv": ["/bin/false"]} if context.get("resume") else spec
 
     monkeypatch.setattr(FakeClaudeProvider, "launch_spec", exits)
+    locked_while_dropped = []
+    clear_current = Tmux.clear_current
+
+    def spy(self, project_id, target, run_id):
+        try:
+            with control_lock(env.project, target, 0, blocking=False):
+                locked_while_dropped.append(False)
+        except SessionError as error:
+            locked_while_dropped.append(error.code == "control_busy")
+        return clear_current(self, project_id, target, run_id)
+
+    monkeypatch.setattr(Tmux, "clear_current", spy)
     with pytest.raises(SessionError) as error:
         fleet(env, timeout=20).resume(project="fixture")
+    assert locked_while_dropped and all(locked_while_dropped), "a failed launch was dropped without the lock"
     failed = {item["slot"]: item["error"]["code"] for item in error.value.details["projects"][0]["failed"]}
     assert failed == {"leader": "provider_exited", "seat-0": "provider_exited"}
     assert set(records(env)) == {"leader", "seat-0"}
