@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: f3182143ab5b3c436d1c2f975c28fe784e4eadb9 2026-11-10T00:03:56+09:00
+- Outcome: fixed
 
 ## Symptom
 사용자 보고: "mouse over 에 따른 pop up 창이 focus를 잃어버렸을 때, 남아있는 경우가 있음. ( kill을 따로 한번 더 해줘야 함 )"
@@ -20,6 +21,7 @@
 - 2026-11-10 Leader: 선행 BOARD-002가 61e881e로 통합되었습니다(BOARD-003·004 병합). 그 구조를 따르십시오: Board pane은 본 window에 남고(최대 8개, 최근 본 순서), 보이지 않는 pane은 갱신하지 않으며(`project_board_visibility.sh`의 SIGUSR1), 파일은 바뀐 것만 다시 읽습니다(TUI 계획 2·5절). Board CR 다섯 개가 같은 `tui.py`·`tmux_control.py`를 고칠 수 있으므로 제출 전에 `origin/main`을 merge하십시오.
 - 2026-11-10 Leader: 제출 b7c44ec 검토. 원인(sidebar hover tooltip이 AppBlur에 지워지지 않음, display-popup은 원인 아님)과 focus 이동 때 지우는 수정, 수정 전 실패 test를 확인했습니다. 수정 요청: 알려진 한계로 둔 '마우스만 다른 pane으로 나감'(focus 그대로, tmux가 이 pane에 event를 주지 않음)은 사용자 보고("mouse over 에 따른 pop up 창이 … 남아있는 경우가 있음")의 흔한 경우이므로 이 CR에서 다룹니다. pane에 mouse event가 오지 않아도 tooltip이 남지 않게, 마지막 mouse motion 뒤 일정 시간(값과 근거를 TUI 계획에 적음)이 지나면 tooltip을 지우십시오.
 - 2026-11-10 Leader: 제출 ffbf1fcb9d3e17aac993b44c69427763e501126c를 인수합니다. Leader review: 수정 delta(AppBlur 즉시, 그 밖에는 마지막 mouse motion 5초 뒤 tooltip 제거, SidebarApp.TOOLTIP_IDLE, 값과 근거는 TUI 계획 3절)를 확인했습니다. 격리 tmux 재현(마우스만 다른 pane으로 나가면 수정 전 남음, 수정 뒤 사라짐)과 새 test, project-board 148 passed. 이전 검토(b7c44ec의 원인·AppBlur 수정)를 재사용합니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 bbfc775(Merge cr/BOARD-005, 제출 ffbf1fc). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [project-board README](../../../tools/project-board/README.md), [TUI 계획](../../project-board-tui-plan.md), [설치 계약 5.3·5.4절](../../project-team/install-contract.md), [README 검증 표](../../../README.md#검증).
