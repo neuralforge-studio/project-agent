@@ -68,7 +68,7 @@ class Builder:
 
 # ---------------------------------------------------------------- install
 
-def plan_install(env, source, python):
+def plan_install(env, source, python, adopt=None):
     installed = records.read(env)
     if installed:
         if installed["current"] != source.name:
@@ -103,13 +103,18 @@ def plan_install(env, source, python):
     if b.ensure_dir(env.bin):
         for tool in TOOLS:
             path = env.shim(tool)
-            if os.path.lexists(path):
-                b.conflict(path, "already exists")
+            ident = "shim:" + tool
+            target = places.link_target(ident)
+            entry = records.owned(env.display(path), "symlink", target=target)
+            if not os.path.lexists(path):
+                b.add(actions.new_link(places, ident, target))
+            elif not _adopt_dev_link(b, path, ident, target, adopt, entry):
                 continue
-            target = places.link_target("shim:" + tool)
-            b.add(actions.new_link(places, "shim:" + tool, target))
-            owned.append(records.owned(env.display(path), "symlink", target=target))
-    _plan_skill_links(env, b, owned)
+            owned.append(entry)
+    _plan_skill_links(env, b, owned, adopt)
+    if any("adopted_from" in entry for entry in owned):
+        b.note("Links into the development checkout were taken over; `uninstall` points them back at the targets "
+               "recorded in %s." % env.display(env.record))
     _plan_registry_draft(env, b)
     _plan_tmux_block(env, b, new)
     path_entries = [os.path.realpath(entry) for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
@@ -136,7 +141,24 @@ def _adoptable(env, link, name):
         return False
 
 
-def _plan_skill_links(env, b, owned):
+def _adopt_dev_link(b, link, ident, target, checkout, entry):
+    """Contract section 2, rule 8: with `--adopt-dev-links`, a link that is the user's own and points into the
+    known development checkout is swapped for the installer's. The text it had goes into the record. Anything
+    else is a conflict (rule 1). Returns whether the name is taken care of."""
+    places = b.places
+    text = os.readlink(link) if checkout and link.is_symlink() else None
+    if (text is not None and link.lstat().st_uid == os.getuid() and places.dev_shaped(ident, text)
+            and os.path.realpath(os.path.join(os.path.realpath(link.parent), text))
+            == os.path.realpath(places.dev_target(ident, checkout))):
+        b.add(actions.swap_link(places, ident, target, "-> %s (take over the development checkout's link)" % target))
+        entry["adopted_from"] = text
+        return True
+    b.conflict(link, "already exists" if not checkout else "already exists and is not your link into %s in the known "
+               "shape" % b.env.display(places.dev_target(ident, checkout)))
+    return False
+
+
+def _plan_skill_links(env, b, owned, adopt=None):
     places = b.places
     for provider, home in places.homes.items():
         if not os.path.isdir(home):
@@ -157,8 +179,7 @@ def _plan_skill_links(env, b, owned):
             elif _adoptable(env, link, name):
                 b.add(actions.swap_link(places, ident, target, "-> %s (adopt the remote runtime's link)" % target))
                 entry["adopted"] = True
-            else:
-                b.conflict(link, "already exists")
+            elif not _adopt_dev_link(b, link, ident, target, adopt, entry):
                 continue
             owned.append(entry)
 
@@ -244,7 +265,43 @@ def _switch(env, installed, name, previous):
     return new
 
 
-def plan_upgrade(env, source, python):
+def _formats_of(env, origin):
+    """The format versions of the code a run was started from: a release declares them, a copy that is not a
+    release (the frozen copy) is version 1 (release.md 3)."""
+    kind, name = origin
+    return releases.FROZEN_FORMATS if kind == "other" else releases.read_formats(env.releases / name)
+
+
+def _require_compatible(env, root, target_root, target_name):
+    """Refuse when a run that is up uses code whose format versions differ from the target release's (contract
+    7.1 item 5). Nothing is read when no run is up, so the target's declaration is needed only then."""
+    slots = runs.run_slots(env, root)
+    used = runs.origins_in_use(env, slots)
+    if not used:
+        return
+    target = releases.read_formats(target_root)
+    states = {"%s/%s" % (item["project"], item["slot"]): item["state"] for item in runs.live(slots)}
+    refused = []
+    for origin, labels in sorted(used.items()):
+        found = _formats_of(env, origin)
+        if found != target:
+            where = "release " + origin[1] if origin[0] == "release" else "a copy that is not a release"
+            differing = ", ".join("%s %d (target %d)" % (key, found[key], target[key])
+                                  for key in releases.FORMAT_KEYS if found[key] != target[key])
+            for label in labels:
+                project, slot = label.split("/", 1)
+                refused.append({"project": project, "slot": slot, "state": states[label],
+                                "note": "runs %s: %s" % (where, differing)})
+    if refused:
+        raise InstallerError("formats_differ", "The target release %s uses other format versions than the runs "
+                             "that are up, which would write state, tmux options and CR files in two formats at "
+                             "once. Nothing was changed. Restart the runs listed (`agent-session restart --job "
+                             "leader` or `--job <CR ID>`) so that they use `current`, then run the command "
+                             "again; a run that already uses `current` must be ended instead (`agent-session "
+                             "stop`)." % target_name, {"runs": refused})
+
+
+def plan_upgrade(env, source, python, root):
     installed = _require_record(env)
     _require_current(env, installed)
     places = paths.record_places(env, installed)
@@ -252,6 +309,7 @@ def plan_upgrade(env, source, python):
     if source.name == installed["current"]:
         plan.notes.append("Release %s is already current. Nothing to change." % source.name)
         return plan
+    _require_compatible(env, root, source.root, source.name)
     release_dir = env.releases / source.name
     new = _switch(env, installed, source.name, installed["current"])
     python_env = releases.python_env(python)
@@ -277,12 +335,13 @@ def plan_upgrade(env, source, python):
     return plan
 
 
-def plan_rollback(env):
+def plan_rollback(env, root):
     installed = _require_record(env)
     _require_current(env, installed)
     previous = installed.get("previous")
     if not previous or not os.path.isdir(env.releases / previous):
         raise InstallerError("no_previous", "There is no previous release to roll back to.")
+    _require_compatible(env, root, env.releases / previous, previous)
     new = _switch(env, installed, previous, installed["current"])
     places = paths.record_places(env, installed)
     plan = Plan("rollback", places=places, journal_path=journal.path_for(env))
@@ -291,6 +350,47 @@ def plan_rollback(env):
     _changed_notes(env, installed, plan)
     plan.notes.append("Runs that are up keep the release they started with. Reopen Project Board to use %s."
                       % previous)
+    return plan
+
+
+# ---------------------------------------------------------------- prune
+
+def plan_prune(env, root):
+    """Remove the releases that are neither `current`, `previous`, nor used by a run that is up (contract 7.1
+    item 3). Each release goes with its record entry, one after the other, so that a run cut off leaves at most
+    one release half removed and the next `prune` finishes it."""
+    installed = _require_record(env)
+    _require_current(env, installed)
+    in_use = runs.releases_in_use(env, runs.run_slots(env, root))
+    places = paths.record_places(env, installed)
+    plan = Plan("prune", places=places, journal_path=journal.path_for(env))
+    for name in installed["releases"]:
+        directory = env.releases / name
+        reason = ("current" if name == installed["current"] else "previous" if name == installed.get("previous")
+                  else "used by " + ", ".join(in_use[name]) if name in in_use else None)
+        entry = records.find_owned(installed, env.display(directory))
+        if reason:
+            plan.notes.append("Kept release %s (%s)." % (name, reason))
+        elif os.path.lexists(directory) and (entry is None or entry.get("digest") is None):
+            plan.notes.append("Kept release %s: the install record has no listing to check it against." % name)
+        elif os.path.lexists(directory) and (os.path.islink(directory) or not os.path.isdir(directory)
+                                             or actions.tree_digest(directory) != entry["digest"]):
+            plan.notes.append("Kept release %s: it is not as the installer made it (changed by you)." % name)
+        else:
+            if os.path.lexists(directory):
+                plan.steps.append(actions.remove_tree(places, "release:" + name, entry["digest"]))
+            else:
+                plan.notes.append("Release %s was already gone; it is dropped from the install record." % name)
+            plan.steps.append(actions.forget_release(places, name))
+    if not plan.steps:
+        plan.notes.append("No release to remove.")
+        return plan
+    plan.notes.append("The install record drops each removed release.")
+    socket = os.environ.get("AGENT_SESSION_SOCKET") or None
+    if runs.server_option("@project_board_enabled", socket) == "1":
+        plan.notes.append("Project Board is on. A Board that started before this may call files of a removed release "
+                          "(it answers decisions through `agent-session` in the release it started from); reopen "
+                          "Board after pruning.")
     return plan
 
 
@@ -310,6 +410,7 @@ def plan_uninstall(env, source_root, socket=None):
     changed = {path for path, _, _ in records.mismatches(env, installed)}
     record_path = env.display(env.record)
     _plan_tmux_removal(env, installed, plan)             # first: a file that changed since the plan stops the run
+    after_tmux, restores = len(plan.steps), []
     for entry in installed["owned"]:                     # before anything else was removed
         if entry["path"] == record_path:
             continue
@@ -323,11 +424,15 @@ def plan_uninstall(env, source_root, socket=None):
             continue                                    # only the recorded backup file goes, then the directory
         if kind == "tree":
             plan.steps.append(actions.remove_tree(places, ident, entry["digest"]))
+        elif kind == "link" and entry.get("adopted_from"):
+            restores.append(actions.restore_link(places, ident, entry["target"], entry["adopted_from"]))
+            continue                                    # the link stays: its directory is not empty because of it
         elif kind == "link":
             plan.steps.append(actions.remove_link(places, ident, entry["target"]))
         else:
             plan.steps.append(actions.remove_file(places, ident, entry.get("sha256")))
         removed.add(path)
+    plan.steps[after_tmux:after_tmux] = restores         # before the release goes: no entry point is left dangling
     tmux = installed["tmux"]
     if any(entry["path"] == env.display(env.backup) for entry in installed["owned"]) and path_exists(env.backup):
         if tmux.get("backup") and path_exists(env.expand(tmux["backup"])):

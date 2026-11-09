@@ -31,8 +31,20 @@ python -m pytest -q -n 8 install/tests
 ```
 
 - 다섯 명령은 서로 독립이며 pytest 설정 파일 없이 각 디렉터리의 `conftest.py`로 동작합니다.
+- 다섯 명령을 모두 실행하는 것은 release를 낼 때 한 번입니다([버전 규칙 5절](docs/project-team/release.md#5-변경-기록과-release-절차)). 평소 변경은 아래 표에서 바꾼 경로에 해당하는 명령만 실행합니다(focused check와 직접 영향 회귀). 표의 의존은 [제품 지도의 의존 관계](docs/project-team/README.md#의존-관계)를 따릅니다. `origin/main`을 merge한 뒤에는 merge가 고른 명령의 입력을 바꿨을 때만 다시 실행합니다.
+
+| 바꾼 경로 | 실행할 명령 |
+| --- | --- |
+| `install/**` | `install/tests` |
+| `integrations/tmux/**` | 네 번째 명령, `tools/project-board/tests/test_tmux_control.py`, `install/tests` |
+| `tools/python-launcher.sh`, `tools/formats.json`, `VERSION` | 네 번째 명령, `install/tests` |
+| `tools/project-board/**` | `tools/project-board/tests` |
+| `tools/project-item/**` | `tools/project-item/tests`. `project_item/api.py` 또는 CR·결정 형식(`cr.py`, `decide.py`, `kinds.py`)을 바꾸면 agent-session·project-board test와 네 번째 명령도 |
+| `tools/agent-session/**` | `tools/agent-session/tests`. `agent_session/api.py`, state 형식(`state.py`), tmux option 이름을 바꾸면 project-item·project-board test와 `install/tests`도 |
+| `tools/conftest.py`, 여러 도구가 함께 쓰는 test helper | 다섯 명령 모두 |
+| `skills/**`, `docs/**`, `README.md`, `AGENTS.md` | 고친 문서의 상대 link 검사, `tools/test_distribution_boundary.py`. `skills/project-item`의 형식 문서를 바꾸면 `tools/project-item/tests/test_doc_contract.py`, 원격 guidance 문서(`skills/**`, `docs/project-team/spec.md`)를 바꾸면 `tools/agent-session/tests/test_remote.py`도 |
 - Agent-session test는 seat 여럿이 같은 host에서 동시에 검증하는 평소 부하에서 같은 결과를 냅니다. 한도(`AGENT_SESSION_TEST_TIMEOUT`, 기본 120초)는 host가 이보다 심하게 느릴 때만 늘립니다. 자세한 사용법은 [agent-session README](tools/agent-session/README.md#프로젝트-api와-검사)가 설명합니다.
-- 설치기 test(`install/tests`)는 격리 HOME에서만 설치기를 실행합니다. 개발 중 설치기를 실제 HOME에 실행하지 않습니다. `tmux`와 `git`이 필요하고 계약 8절의 T1~T23을 구현합니다.
+- 설치기 test(`install/tests`)는 격리 HOME에서만 설치기를 실행합니다. 개발 중 설치기를 실제 HOME에 실행하지 않습니다. `tmux`와 `git`이 필요하고 계약 8절의 T1~T32을 구현합니다.
 - Test가 사용자 계정에 남기는 자원은 test가 끝나면(통과·실패·중단 모두) test 전 수준으로 돌아갑니다.
   - tmux server: 모든 test server는 [`tools/tests/tmux_test_server.py`](tools/tests/tmux_test_server.py)의 `claim`으로 이름을 받고 `release`로 끝냅니다. `release`는 server와 pane의 process, `/tmp/tmux-<uid>`의 socket 파일, Board가 server마다 만드는 `/tmp/project-board-<uid>-<server pid>`를 지웁니다. `claim`은 소유 pytest process가 사라지면(SIGKILL·SIGTERM 포함) 같은 정리를 하는 watchdog을 함께 띄웁니다. Test에서 `kill-server`를 직접 부르지 않습니다.
   - 임시 디렉터리: `tools/conftest.py`가 만드는 `TMPDIR/pt-*`는 통과한 run이 끝날 때 지웁니다. 실패·중단한 run의 것은 조사용으로 남고, 다음 run이 시작할 때 소유 run이 끝난 것 중 최근 5개만 남기고 지웁니다. 진행 중인 run의 것은 지우지 않습니다. 소유자 표시가 없는 옛 디렉터리는 24시간 넘게 손대지 않았을 때만 지웁니다. 규칙과 이유는 [`tools/tests/private_root.py`](tools/tests/private_root.py)가 소유합니다.
@@ -42,6 +54,7 @@ python -m pytest -q -n 8 install/tests
 
 - [제품 지도](docs/project-team/README.md): 구성 요소, 공개 진입점, 의존 관계, 실행 경로 계약
 - [동작 명세](docs/project-team/spec.md): 등록, state, start·stop·restart·shutdown·resume
+- [설치 안내](docs/install.md): 직원용. 전제, 한 줄 설치, 설치가 만드는 경로, 갱신·제거, tmux 연결
 - [설치 계약](docs/project-team/install-contract.md): 설치·갱신·되돌리기·제거의 경계
 - [버전 규칙](docs/project-team/release.md): 버전 값, 형식 버전과 호환 범위, git tag 이름, 변경 기록 작성
 - [변경 기록](CHANGELOG.md): 버전별 CR ID 목록과 형식 변경 여부

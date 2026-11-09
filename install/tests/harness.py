@@ -266,6 +266,15 @@ class Runs:
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout)["data"]
 
+    def start_leader_from(self, root):
+        """Start the Leader with the `agent-session` of a checkout (not a release): the frozen-copy case."""
+        library = Path(root) / "tools" / "agent-session"
+        result = subprocess.run([str(library / "bin" / "agent-session"), "--socket-path", str(self.socket), "start",
+                                 "--job", "leader"], capture_output=True, text=True, timeout=120, cwd=self.base,
+                                env={**self.cli_env(), "FAKE_PROVIDER_LIB": str(library), "PYTHONDONTWRITEBYTECODE": "1"})
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout)["data"]
+
     def stop_leader(self):
         result = self.agent("stop", "--job", "leader")
         assert result.returncode == 0, result.stdout + result.stderr

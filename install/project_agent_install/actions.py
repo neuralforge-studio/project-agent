@@ -416,6 +416,25 @@ def _op_rm_tree(ctx, spec):
         _leave(ctx, path)
 
 
+def _op_forget(ctx, spec):
+    """Drop a release from the install record once its directory is gone. A release that is still there (its
+    removal left it, because it was no longer what the installer made) stays in the record."""
+    from . import record as records                 # record.py imports this module
+    places = ctx.places
+    name = places.release_name(spec["id"])
+    if inspect(places.tree(spec["id"]))[0] != "absent" or os.path.lexists(places.release_temp(name)):
+        return
+    path = places.file("record")
+    unlink(temp_of(path))
+    if inspect(path)[0] != "file":
+        return
+    installed = records.read(places.env)
+    if name not in installed["releases"]:
+        return
+    replace_atomic(path, records.encode(records.without_release(places.env, installed, name)),
+                   stat.S_IMODE(os.lstat(path).st_mode))
+
+
 def _op_rm_dir(ctx, spec):
     path = ctx.places.dir(spec["id"])
     if inspect(path)[0] == "dir":
@@ -456,7 +475,7 @@ def _op_drop_journal(ctx, spec):
 
 OPERATIONS = {"dir": _op_dir, "file": _op_file, "link": _op_link, "swap": _op_swap, "record": _op_record,
               "release": _op_release, "tmux": _op_tmux, "rm_link": _op_link, "rm_file": _op_rm_file,
-              "rm_tree": _op_rm_tree, "rm_dir": _op_rm_dir, "cut": _op_cut, "drop_journal": _op_drop_journal}
+              "rm_tree": _op_rm_tree, "forget": _op_forget, "rm_dir": _op_rm_dir, "cut": _op_cut, "drop_journal": _op_drop_journal}
 
 
 def apply_spec(ctx, spec):
@@ -485,9 +504,31 @@ def new_link(places, ident, target):
 
 
 def swap_link(places, ident, target, detail=""):
+    """Point a link the installer owns or takes over at `target`. The link must still be what the plan read (its
+    text and owner): one that changed since is the user's and is not overwritten (principle B); the run then fails
+    and is undone."""
     path = places.link(ident)
-    return Step("replace", path, "symlink", detail or "-> " + str(target), lambda ctx: swap_path(path, target),
-                undo={"op": "swap", "id": ident, "previous": os.readlink(path), "new": str(target)})
+    previous, owner = os.readlink(path), os.lstat(path).st_uid
+
+    def run(ctx):
+        try:
+            same = os.readlink(path) == previous and os.lstat(path).st_uid == owner
+        except OSError:
+            same = False
+        if not same:
+            raise Changed(errno.EBUSY, "%s changed after the plan; it was not replaced" % path)
+        swap_path(path, target)
+    return Step("replace", path, "symlink", detail or "-> " + str(target), run,
+                undo={"op": "swap", "id": ident, "previous": previous, "new": str(target)})
+
+
+def restore_link(places, ident, installed, previous):
+    """Uninstall: point a link the installer took over back at the target it had (one rename, never missing).
+    Only a link that still points where the installer put it is changed (the swap operation)."""
+    path = places.link(ident)
+    spec = {"op": "swap", "id": ident, "previous": previous, "new": installed}
+    return Step("replace", path, "symlink", "-> %s (restore the link as it was before the install)" % previous,
+                lambda ctx: apply_spec(ctx, spec), redo=spec)
 
 
 def replace_record(places, data):
@@ -582,6 +623,13 @@ def remove_file(places, ident, expected_sha=None):
 
 def remove_tree(places, ident, digest):
     return _removal("remove", places.tree(ident), "tree", "", {"op": "rm_tree", "id": ident, "digest": digest})
+
+
+def forget_release(places, name):
+    """Drop a removed release from the install record. The plan does not list it (the record is bookkeeping)."""
+    spec = {"op": "forget", "id": "release:" + name}
+    return Step("modify", places.file("record"), "file", "forget release " + name,
+                lambda ctx: apply_spec(ctx, spec), redo=spec, internal=True)
 
 
 def remove_dir(places, ident):

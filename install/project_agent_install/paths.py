@@ -13,6 +13,7 @@ Identifiers:
 """
 
 import base64
+import os
 import re
 
 from .layout import PROVIDERS, SKILLS, TOOLS, InstallerError
@@ -102,6 +103,23 @@ class Places:
             self.bad("The target of current", text)
         return text
 
+    # links of the old development checkout (contract section 2, rule 8)
+    def dev_target(self, ident, checkout):
+        """Where a shim or skill link points when it is a link into the development checkout `checkout`."""
+        parts = ident.split(":")
+        if parts[0] == "shim" and len(parts) == 2 and parts[1] in TOOLS:
+            return os.path.join(checkout, "codex/tools", parts[1], "bin", parts[1])
+        if parts[0] == "skill" and len(parts) == 3 and parts[2] in SKILLS:
+            return os.path.join(checkout, "codex/skills", parts[2])
+        self.bad("A development link", ident)
+
+    def dev_shaped(self, ident, text):
+        """The text of such a link ends in the known shape (`codex/tools/<tool>/bin/<tool>`, `codex/skills/<name>`);
+        what comes before it is the user's checkout, absolute or relative. The record may hold only such a text."""
+        tail = self.dev_target(ident, "").lstrip("/").split("/")
+        parts = text.split("/") if isinstance(text, str) and text and "\0" not in text else []
+        return len(parts) > len(tail) and parts[-len(tail):] == tail
+
     # files
     def file(self, ident):
         env = self.env
@@ -189,6 +207,9 @@ def validate_record(env, record):
                 require(target == places.link_target(ident), "A link target", target)
                 if ident.startswith("skill:"):
                     require(entry.get("provider") == ident.split(":")[1], "A skill link provider", entry.get("provider"))
+                if "adopted_from" in entry:
+                    require(places.dev_shaped(ident, entry["adopted_from"]), "A link target before adoption",
+                            entry["adopted_from"])
         elif ident.startswith("release:"):
             require(ident[len("release:"):] in releases, "A release directory", ident)
             require(isinstance(entry.get("digest"), str) and HEX.fullmatch(entry["digest"]), "A release digest",
@@ -217,7 +238,7 @@ SPEC_KEYS = {
     "dir": {"id"}, "file": {"id", "sha"}, "link": {"id", "target"}, "swap": {"id", "previous", "new"},
     "record": {"previous", "before_sha", "after_sha", "mtime_ns"}, "release": {"id", "digest"},
     "tmux": {"id", "before_bytes", "before_sha", "after_sha", "mtime_ns"},
-    "rm_link": {"id", "target"}, "rm_file": {"id", "sha"}, "rm_tree": {"id", "digest"}, "rm_dir": {"id"},
+    "rm_link": {"id", "target"}, "rm_file": {"id", "sha"}, "rm_tree": {"id", "digest"}, "forget": {"id"}, "rm_dir": {"id"},
     "cut": {"id", "before_sha", "after_sha", "delete"}, "drop_journal": set(),
 }
 OPTIONAL_HEX = {("rm_file", "sha"), ("record", "before_sha")}      # these two may be null
@@ -262,7 +283,7 @@ def validate_spec(places, spec):
             places.current_target(spec["new"])
         elif spec["new"] != places.link_target(ident) or not isinstance(spec["previous"], str):
             places.bad("A link target", spec["new"])
-    elif op in ("release", "rm_tree"):
+    elif op in ("release", "rm_tree", "forget"):
         places.release_name(ident)
     elif op in ("tmux", "cut"):
         if not ident.startswith("tmux:"):
