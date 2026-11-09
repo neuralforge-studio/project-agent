@@ -321,10 +321,7 @@ def dispatch(seat, operation, payload, source):
         if not meta:
             return {"ready": False}
         manager, meta = _current(root, payload)
-        if meta.get("registered") and not meta.get("ready"):
-            with manager._lock("seat-0"):
-                manager._wait_ready(meta)
-                meta = manager.tmux.get_current(manager.project.project_id, "seat-0")
+        # The capsule's registration publishes its own cache (internal._register); poll only reports it.
         return {"ready": bool(meta.get("ready")), "native": meta,
                 "dialog": manager.provider.startup_dialog(manager.tmux.capture_pane(meta["pane_id"]))}
     manager, meta = _current(root, payload)

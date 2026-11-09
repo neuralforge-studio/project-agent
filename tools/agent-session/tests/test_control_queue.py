@@ -39,6 +39,7 @@ def manager(tmp_path):
                                     project_id="fixture", config_path=tmp_path / "projects.json", seats=(tmp_path / "seat",))
     value.timeout = 10
     value.end = time.monotonic() + 10
+    value._held = {}
     value.store = SimpleNamespace(timeout=10, read=lambda: state)
     value.tmux = Tmux()
     return value, meta
