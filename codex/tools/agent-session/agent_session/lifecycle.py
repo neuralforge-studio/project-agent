@@ -40,6 +40,18 @@ def _completed(result_file):
         return False
 
 
+def check_start_arguments(job, prompt_file=None, seat=None):
+    """The start rules that need no project: a prompt file is for the Leader, a seat for a Worker JOB.
+
+    The one owner of these two rules. `Manager.start` applies them, and the CLI applies them before it
+    builds a Manager, so a bad request gets the same error whether or not the project resolves."""
+    leader = job == "leader"
+    if prompt_file is not None and not leader:
+        raise SessionError("invalid_arguments", "--prompt-file is only valid for --job leader.", 2)
+    if leader and seat is not None:
+        raise SessionError("invalid_arguments", "--seat is only valid for a Worker JOB.", 2)
+
+
 class Manager(SuspendMixin):
     def __init__(self, cwd=None, config_path=None, socket_name=None, socket_path=None, timeout=600):
         self.project = current_project(cwd, config_path)
@@ -582,13 +594,10 @@ class Manager(SuspendMixin):
 
     def start(self, job, prompt_file=None, seat=None):
         leader = job == "leader"
-        if leader and seat is not None:
-            raise SessionError("invalid_input", "--seat is only valid for a Worker JOB.", 2)
+        check_start_arguments(job, prompt_file, seat)
         if seat is not None and (isinstance(seat, bool) or not isinstance(seat, int)
                                  or not 0 <= seat < len(self.project.seats)):
             raise SessionError("seat_invalid", "The seat number is outside the registry.", 2)
-        if prompt_file is not None and not leader:
-            raise SessionError("invalid_input", "--prompt-file is only valid for the Leader.", 2)
         request = Path(prompt_file).read_text(encoding="utf-8") if prompt_file else None
         if leader:
             self._authorize("start", "leader")

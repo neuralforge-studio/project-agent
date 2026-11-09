@@ -417,6 +417,8 @@ Tmux server를 다시 띄운 뒤의 resume·start는 이전 window가 없으므�
 
 Worker는 CR 본문을 지시 원본으로 사용하며 추가 prompt-file을 받지 않습니다.
 
+`--prompt-file`을 Worker JOB에 주거나 `--seat`를 Leader에 주면 `invalid_arguments`·exit 2이며 어떤 효과도 생기기 전에 거절합니다. 이 검사는 `lifecycle.check_start_arguments` 한 곳이 소유합니다. `Manager.start`와 CLI(`Manager`를 만들기 전)가 부르므로, 등록 밖 cwd에서도 CLI와 Python 호출이 같은 오류를 받습니다.
+
 ### Leader
 
 ```sh
