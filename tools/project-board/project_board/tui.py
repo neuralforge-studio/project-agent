@@ -96,6 +96,18 @@ def _decide_stages(project: dict) -> tuple[int, int, int, int]:
                  for stage in ("결정 대기", "답변 접수", "반영 중", "완료"))
 
 
+def format_elapsed(seconds: int | None) -> str | None:
+    """`2d 01h 00m`, `3h 05m`, `12m`: whole minutes, without leading zero units. The rule is owned by
+    docs/project-board-tui-plan.md section 3 (BOARD-008)."""
+    if seconds is None:
+        return None
+    days, rest = divmod(max(0, seconds) // 60, 24 * 60)
+    hours, minutes = divmod(rest, 60)
+    if days:
+        return f"{days}d {hours:02d}h {minutes:02d}m"
+    return f"{hours}h {minutes:02d}m" if hours else f"{minutes}m"
+
+
 def _seat_text(seat: dict) -> str:
     if seat.get("status") == "reviewing":
         prefix = "R "
@@ -106,7 +118,9 @@ def _seat_text(seat: dict) -> str:
     else:
         prefix = "  "
     host = "@" + seat["host"] if seat.get("host") else ""
-    return f"{prefix}{seat['index']}{host} {seat.get('job_id') or '-'}"
+    text = f"{prefix}{seat['index']}{host} {seat.get('job_id') or '-'}"
+    elapsed = format_elapsed(seat.get("elapsed"))
+    return f"{text} {elapsed}" if elapsed else text
 
 
 class SidebarApp(App):
@@ -131,6 +145,7 @@ class SidebarApp(App):
     .decision { color: #ffd479; }
     .decision-open { color: #ff8f8f; }
     .seat { color: #c7dbf1; }
+    .leader { width: auto; min-width: 100%; height: 1; color: #c7dbf1; }
     .seat-empty { color: #778596; }
     .seat-pending, .seat-release-pending { color: #ffcb84; }
     .seat-stopped { color: #ff8f8f; }
@@ -180,6 +195,7 @@ class SidebarApp(App):
         self._snapshot_busy = False
         self._live_busy = False
         self._stopping = False
+        self._tooltip_expiry = None
         self._click_server: asyncio.AbstractServer | None = None
 
     def compose(self) -> ComposeResult:
@@ -229,6 +245,26 @@ class SidebarApp(App):
         if shown:                                    # a window shown again is read at once
             self._queue(self.refresh_snapshot())
             self._queue(self.refresh_liveness())
+
+    # A hover tooltip is hidden only by the next mouse move over this pane. When tmux moves focus to
+    # another pane, or the mouse leaves with focus unchanged, no such event follows and the tooltip
+    # would stay (BOARD-005). Focus loss hides it at once; otherwise it expires this long after the
+    # last mouse motion. The value is owned by docs/project-board-tui-plan.md section 3.
+    TOOLTIP_IDLE = 5.0
+
+    def _hide_tooltip(self) -> None:
+        screen = self.screen
+        if screen._tooltip_timer is not None:      # a tooltip still waiting for its delay
+            screen._tooltip_timer.stop()
+        screen._clear_tooltip()
+
+    def on_app_blur(self, event) -> None:
+        self._hide_tooltip()
+
+    def on_mouse_move(self, event) -> None:
+        if self._tooltip_expiry is not None:
+            self._tooltip_expiry.stop()
+        self._tooltip_expiry = self.set_timer(self.TOOLTIP_IDLE, self._hide_tooltip)
 
     def on_unmount(self) -> None:
         self._stopping = True
@@ -373,12 +409,13 @@ class SidebarApp(App):
         for project in self.snapshot_data.get("projects", []):
             seats = tuple((seat.get("index"), seat.get("job_id"), seat.get("status"),
                            seat.get("session_id"), seat.get("host"), seat.get("path"),
-                           self._seat_liveness(project, seat))
+                           self._seat_liveness(project, seat), _seat_text(seat))
                           for seat in project.get("seats", []))
             errors = tuple((error.get("source"), error.get("message")) for error in project.get("errors", []))
             projects.append((project["id"], project["id"] in self._expanded_projects,
                              tuple(_count(project, state) for state in model.CR_STATES),
-                             _decide_count(project), _decide_stages(project), seats, errors))
+                             _decide_count(project), _decide_stages(project), seats, errors,
+                             format_elapsed((project.get("leader") or {}).get("elapsed"))))
         error = self.snapshot_data.get("error")
         return (tuple(projects), error.get("message") if error else None)
 
@@ -426,6 +463,11 @@ class SidebarApp(App):
             counters.append(fold)
             self._actions[fold_id] = ("seats", project["id"])
             children = [name, decision, Horizontal(*counters, classes="counts")]
+            leader_time = format_elapsed((project.get("leader") or {}).get("elapsed")) if expanded else None
+            if leader_time:
+                leader_row = Static(f"  Leader {leader_time}", classes="leader")
+                leader_row.tooltip = "Leader session이 게시된 뒤 지난 시간"
+                children.append(leader_row)
             for seat in (project.get("seats", []) if expanded else []):
                 button_id = f"project-{number}-seat-{seat['index']}"
                 classes = "seat"

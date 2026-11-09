@@ -11,6 +11,8 @@
 - SESSION-006
 - SESSION-007
 - BOARD-002
+- BOARD-008
+- BOARD-005
 
 형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
 
