@@ -4,6 +4,7 @@ Every server is private (`tmux -L <unique name> -f /dev/null`) and is ended by `
 end of the test (or when pytest dies), so the user's default server never gets a binding or a hook.
 """
 
+import contextlib
 import fcntl
 import os
 from pathlib import Path
@@ -21,7 +22,7 @@ import pytest
 TMUX_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TMUX_DIR.parents[1] / "tools" / "tests"))  # tmux_test_server, shared by every tool's tests
 import tmux_test_server  # noqa: E402
-FILES = ("project-agent.conf", "project-agent-main.conf", "project_agent_bind.sh", "project_board_visibility.sh", "tmux_project_board.sh", "tmux_decide_status.sh", "tmux_decide_status.py")
+FILES = ("project-agent.conf", "project-agent-main.conf", "project_agent_bind.sh", "project_agent_run.sh", "project_board_visibility.sh", "tmux_project_board.sh", "tmux_decide_status.sh", "tmux_decide_status.py")
 LAUNCHER = TMUX_DIR.parents[1] / "tools" / "python-launcher.sh"
 PRODUCT_PREFIX = "tmux_project_board.sh toggle"
 PRODUCT_MOUSE = "tmux_project_board.sh click"
@@ -113,6 +114,51 @@ def make_release(root, tag, log):
     return root
 
 
+class Client:
+    """A client of the server on a pty: what it types, and what tmux draws on it."""
+
+    def __init__(self, master):
+        self.master = master
+
+    def send(self, data):
+        os.write(self.master, data)
+
+    def screen(self):
+        data = b""
+        while True:
+            try:
+                chunk = os.read(self.master, 65536)
+            except BlockingIOError:
+                return data.decode(errors="replace")
+            if not chunk:
+                return data.decode(errors="replace")
+            data += chunk
+
+
+@contextlib.contextmanager
+def attached(tmux):
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    os.set_blocking(master, False)
+    env = {**os.environ, "TERM": "xterm-256color"}
+    env.pop("TMUX", None)
+    client = subprocess.Popen(["tmux", "-L", tmux.name, "-f", "/dev/null", "attach-session", "-t", "home"],
+                              stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env=env)
+    os.close(slave)
+    try:
+        yield Client(master)
+    finally:
+        client.terminate()
+        os.close(master)
+
+
+def assert_no_view(tmux, *panes):
+    """No pane shows the output of a job: not in view mode, and nothing is in its mode buffer."""
+    for target in panes:
+        assert tmux.run("display-message", "-p", "-t", target, "#{pane_mode}") == ""
+        assert tmux.run("capture-pane", "-M", "-p", "-t", target).strip() == ""
+
+
 def wait_for(path, text, timeout=10):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -175,25 +221,112 @@ def test_a_click_on_the_board_leaves_no_output_in_the_active_pane(server, tmp_pa
     pane = tmux.run("split-window", "-d", "-h", "-b", "-l", "20", "-P", "-F", "#{pane_id}", "sleep", "300")
     tmux.run("set-option", "-w", "@project_board_pane", pane)
 
-    master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-    env = {**os.environ, "TERM": "xterm-256color"}
-    env.pop("TMUX", None)
-    client = subprocess.Popen(["tmux", "-L", tmux.name, "-f", "/dev/null", "attach-session", "-t", "home"],
-                              stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env=env)
-    os.close(slave)
-    try:
+    with attached(tmux) as client:
         time.sleep(1.0)
-        os.write(master, b"\x1b[<0;5;5M\x1b[<0;5;5m")           # press and release inside the Board pane
+        client.send(b"\x1b[<0;5;5M\x1b[<0;5;5m")               # press and release inside the Board pane
         wait_for(log, "board click --client")
         time.sleep(1.0)                                         # run-shell reports when the job ends
         assert tmux.run("display-message", "-p", "#{pane_id}") == work   # the click did not select the Board
-        for target in (work, pane):
-            assert tmux.run("display-message", "-p", "-t", target, "#{pane_mode}") == ""
-            assert tmux.run("capture-pane", "-M", "-p", "-t", target).strip() == ""
-    finally:
-        client.terminate()
-        os.close(master)
+        assert_no_view(tmux, work, pane)
+
+
+RUN_SHELL = re.compile(r"""run-shell(?P<flags>(?: -[a-zA-Z]+)*) (?P<quote>['"])(?P<job>[^'"]*)(?P=quote)""")   # tmux shows what it keeps with """
+
+
+def failing_release(tmp_path, log):
+    """A release whose Board entry point fails at every call, as a Board that cannot reach its session does."""
+    release = make_release(tmp_path / "releases" / "r1", "r1", log)
+    board = release / "tools" / "project-board" / "bin" / "project-board"
+    board.write_text('#!/bin/sh\necho "board $*" >> "%s"\necho Board cannot reach its session >&2\nexit 1\n' % log)
+    return release
+
+
+def test_every_run_shell_job_goes_through_the_run_script(server, conf):
+    """BOARD-010: a `run-shell` job shows its output and a nonzero exit in the user's active pane, so the
+    job of the integration (a shell command, `run-shell -C` is a tmux command) starts with project_agent_run.sh."""
+    shell_jobs = 0
+    for path in sorted(TMUX_DIR.glob("*.conf")) + sorted(TMUX_DIR.glob("*.sh")):
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if line.lstrip().startswith("#") or "run-shell" not in line:
+                continue
+            found = RUN_SHELL.search(line)
+            assert found, "%s:%d: a run-shell the rule cannot read: %s" % (path.name, number, line)
+            if " -C" in found["flags"]:
+                continue
+            shell_jobs += 1
+            assert re.match(r"#\{q:@project_agent_tmux_dir\}/project_agent_run\.sh (hook|key|drop) ", found["job"]) \
+                or path.name == "project_agent_bind.sh" and found["job"].startswith("$RUN "), \
+                "%s:%d: a run-shell job outside project_agent_run.sh: %s" % (path.name, number, line)
+    assert shell_jobs >= 14
+    # What the server keeps says the same, with the mode each kind of job needs.
+    tmux = server()
+    tmux.read(conf)
+    shell_hooks = [found for line in tmux.hooks() for found in RUN_SHELL.finditer(line) if " -C" not in found["flags"]]
+    assert shell_hooks and all("project_agent_run.sh hook " in found["job"].replace("\\", "") for found in shell_hooks)
+    assert "project_agent_run.sh key " in tmux.key("prefix", "B").replace("\\", "")
+    assert "project_agent_run.sh drop " in tmux.key("root", "MouseDown1Pane").replace("\\", "")
+
+
+def test_a_failing_hook_job_leaves_nothing_in_the_active_pane_and_is_recorded(server, tmp_path):
+    """BOARD-010: the hooks run at every window change, so a failure that repeats must not cover the work pane."""
+    log = tmp_path / "log"
+    release = failing_release(tmp_path, log)
+    tmux = server()
+    tmux.read(release / "integrations" / "tmux" / "project-agent.conf")
+    tmux.run("set-option", "-g", "@project_board_enabled", "1")   # the Board is on and this window has no Board pane: sync runs
+    work = tmux.run("display-message", "-p", "#{pane_id}")
+    with attached(tmux):
+        time.sleep(1.0)
+        tmux.run("new-window", "-d")                              # window-created runs sync, which fails
+        wait_for(log, "board sync")
+        time.sleep(1.0)                                           # run-shell reports when the job ends
+        assert_no_view(tmux, work)
+    assert re.fullmatch(r"\S+ \S+ tmux_project_board.sh failed \(exit 1\): Board cannot reach its session",
+                        tmux.option("@project_agent_last_error"))
+
+
+def test_a_failing_board_key_tells_the_user_without_covering_a_pane(server, tmp_path):
+    log = tmp_path / "log"
+    release = failing_release(tmp_path, log)
+    tmux = server()
+    tmux.read(release / "integrations" / "tmux" / "project-agent.conf")
+    work = tmux.run("display-message", "-p", "#{pane_id}")
+    with attached(tmux) as client:
+        time.sleep(1.0)
+        client.screen()
+        client.send(b"\x02B")                                    # prefix, then the Board key
+        wait_for(log, "board toggle")
+        time.sleep(1.0)
+        screen = client.screen()
+        assert_no_view(tmux, work)
+    assert "project-agent: tmux_project_board.sh failed (exit 1): Board cannot" in screen   # the status line is 80 columns wide
+    assert "tmux_project_board.sh failed (exit 1)" in tmux.option("@project_agent_last_error")
+
+
+def run_script(*args, socket="/nonexistent/socket"):
+    return subprocess.run([str(TMUX_DIR / "project_agent_run.sh"), *args[:1], socket, *args[1:]],
+                          capture_output=True, text=True, timeout=20)
+
+
+def test_the_run_script_prints_nothing_and_exits_zero_whatever_the_job_does():
+    for mode in ("hook", "key", "drop"):
+        for job in (["true"], ["sh", "-c", "echo out; echo err >&2; exit 7"], ["/nonexistent/job"]):
+            proc = run_script(mode, *job)
+            assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", ""), (mode, job)
+
+
+def test_the_run_script_rejects_a_call_the_integration_does_not_make():
+    assert run_script("loud", "true").returncode == 2
+    assert subprocess.run([str(TMUX_DIR / "project_agent_run.sh"), "hook"], capture_output=True).returncode == 2
+
+
+def test_a_drop_job_records_nothing_and_a_hook_job_records_its_first_line(server):
+    tmux = server()
+    socket = tmux.run("display-message", "-p", "#{socket_path}")
+    assert run_script("drop", "sh", "-c", "echo gone >&2; exit 1", socket=socket).returncode == 0
+    assert tmux.option("@project_agent_last_error") == ""
+    assert run_script("hook", "sh", "-c", "printf '\\n  first #{x}\\nsecond\\n'; exit 4", socket=socket).returncode == 0
+    assert re.fullmatch(r"\S+ \S+ sh failed \(exit 4\): first #\{x\}", tmux.option("@project_agent_last_error"))
 
 
 def test_board_key_option_selects_the_prefix_key(server, conf):
