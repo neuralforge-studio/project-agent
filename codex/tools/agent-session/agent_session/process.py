@@ -126,3 +126,23 @@ def descendants(pid):
         found.update(children)
         parents = children
     return sorted(child for child in found if not rows[child]["state"].startswith(("Z", "X")))
+
+
+def cli_alive(meta, pane):
+    """Whether the run's CLI process (or the pane process before it marked one) still runs."""
+    pid = meta.get("cli_pid") or pane.get("pane_pid")     # a window handed to a new run holds cli_pid null
+    return bool(pid and alive(int(pid), meta.get("cli_birth")))
+
+
+def unlaunched_observation(meta, pane):
+    """The observation of a window whose provider CLI was never launched."""
+    if meta.get("provider_launch_attempted") is not False or meta.get("registered") is not False:
+        raise SessionError("session_unbound", "The target has no verified native conversation.", 4)
+    pid, fingerprint = meta.get("placeholder_pid"), meta.get("placeholder_birth")
+    group = meta.get("placeholder_process_group")
+    if not pid or not fingerprint or not group:
+        raise SessionError("execution_unknown", "The waiting pane process identity is incomplete.", 4)
+    placeholder_alive = alive(int(pid), fingerprint)
+    stopped = bool(pane["pane_dead"] and not placeholder_alive and not group_alive(int(group)))
+    return {"known": True, "terminal": True, "active_turn": False, "pending": [],
+            "background": [], "idle": True, "cli_alive": False, "stopped": stopped, "pane": pane}

@@ -319,9 +319,9 @@ def dispatch(seat, operation, payload, source):
                 "dialog": manager.provider.startup_dialog(manager.tmux.capture_pane(meta["pane_id"]))}
     manager, meta = _current(root, payload)
     if operation == "liveness":
-        from .api import _cli_alive
+        from . import process
         pane = manager.tmux.pane_info(meta["pane_id"])
-        return "alive" if _cli_alive(meta, pane) and not pane["pane_dead"] else "stopped"
+        return "alive" if process.cli_alive(meta, pane) and not pane["pane_dead"] else "stopped"
     if operation == "observe":
         return manager._observe(meta)
     if operation == "check_binding":

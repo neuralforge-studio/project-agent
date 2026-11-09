@@ -1,24 +1,20 @@
-"""Integration for project task, verification, and CR code: state reads and the caller rule."""
+"""The one module other tools import from agent-session: state reads, the caller rule, and liveness."""
 
 import os
 from pathlib import Path
 
-from .config import RemoteSeat, resolve_project
+from . import config, process, providers, remote, tmux as tmux_module
+from .config import RemoteSeat, load_registry, resolve_project
 from .errors import SessionError
-from .state import StateStore, binding_identity
+from .state import StateStore, binding_identity, select_target
+from .tmux import PANE_ID_OPTION, Tmux
 
-
-def _project(cwd=None, config_path=None):
-    return resolve_project(cwd, config_path or os.environ.get("AGENT_SESSION_CONFIG"))
-
-
-def _tmux(socket=None):
-    from .tmux import Tmux
-
-    socket = socket or os.environ.get("AGENT_SESSION_SOCKET")
-    if isinstance(socket, dict):
-        return Tmux(**socket)
-    return Tmux(socket_path=str(socket)) if socket else Tmux()
+# The public names. spec 5 (docs/project-team/spec.md) records each one's input and result.
+__all__ = (
+    "PANE_ID_OPTION", "RemoteSeat", "SessionError", "Tmux",
+    "caller", "check_binding", "liveness", "load_registry", "read_state", "require_live",
+    "resolve_project",
+)
 
 
 def caller(project, tmux=None, store=None):
@@ -29,7 +25,7 @@ def caller(project, tmux=None, store=None):
     A conversation ID in the environment is matched with the state's bindings; without one, the
     tmux pane of the managed run names the slot. This is the one caller rule of the project tools.
     """
-    tmux = tmux or _tmux()
+    tmux = tmux or tmux_module.control()
     store = store or StateStore(project)
     identity = os.environ.get("CODEX_THREAD_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
     state = store.read(missing_ok=True)
@@ -57,14 +53,11 @@ def caller(project, tmux=None, store=None):
 
 def require_live(project, slot, identity, tmux=None):
     """Reject a Leader or Worker caller whose slot no longer holds its live managed CLI."""
-    from . import process
-
-    own = (tmux or _tmux()).get_current(project.project_id, slot)
+    own = (tmux or tmux_module.control()).get_current(project.project_id, slot)
     if not own or own.get("session_id") != identity or not own.get("ready"):
         raise SessionError("caller_not_running", "The sender no longer owns a live managed CLI.")
     if own.get("remote_seat"):
-        from . import remote
-        _check_owner(project, slot, {"session_id": identity}, own)
+        tmux_module.check_owner(project, slot, {"session_id": identity}, own)
         alive = remote.liveness(own) == "alive"
     else:
         alive = bool(own.get("cli_pid") and process.alive(int(own["cli_pid"]), own.get("cli_birth")))
@@ -74,59 +67,7 @@ def require_live(project, slot, identity, tmux=None):
 
 def read_state(cwd=None, config_path=None):
     """Read an existing atomic snapshot without acquiring a control lock."""
-    return StateStore(_project(cwd, config_path)).read()
-
-
-def _select(state, target):
-    if target == "leader":
-        return None, state["leader"]
-    matches = [int(key) for key, item in state.items()
-               if key != "leader" and item["job_id"] == target]
-    if len(matches) != 1:
-        raise SessionError("job_not_assigned", "JOB has no unique current seat.")
-    seat = matches[0]
-    return seat, state[str(seat)]["session"]
-
-
-def _check_owner(project, slot, session, meta):
-    """Accept a tmux run only as this base's run of the slot and as the conversation the state names.
-
-    Session is the state's conversation for the slot; None leaves the conversation uncompared.
-    """
-    if Path(meta.get("base", "")).resolve() != project.base:
-        raise SessionError("owner_mismatch", "The tmux window belongs to another project.")
-    if meta.get("target") != slot or (session and meta.get("session_id") != session["session_id"]):
-        raise SessionError("owner_mismatch", "The native conversation does not match this slot.")
-    if slot.startswith("seat-"):
-        seat = project.seats[int(slot[5:])]
-        expected = {"host": seat.host, "path": str(seat.path), "python": seat.python} if isinstance(seat, RemoteSeat) else None
-        if meta.get("remote_seat") != expected:
-            raise SessionError("owner_mismatch", "The execution host differs from the registered seat.")
-        if expected and session and "endpoint" in session and session["endpoint"] != meta.get("endpoint"):
-            raise SessionError("owner_mismatch", "The remote provider endpoint differs from the published binding.")
-
-
-def _unlaunched_observation(meta, pane):
-    from . import process
-
-    if meta.get("provider_launch_attempted") is not False or meta.get("registered") is not False:
-        raise SessionError("session_unbound", "The target has no verified native conversation.", 4)
-    pid, fingerprint = meta.get("placeholder_pid"), meta.get("placeholder_birth")
-    group = meta.get("placeholder_process_group")
-    if not pid or not fingerprint or not group:
-        raise SessionError("execution_unknown", "The waiting pane process identity is incomplete.", 4)
-    alive = process.alive(int(pid), fingerprint)
-    stopped = bool(pane["pane_dead"] and not alive and not process.group_alive(int(group)))
-    return {"known": True, "terminal": True, "active_turn": False, "pending": [],
-            "background": [], "idle": True, "cli_alive": False, "stopped": stopped, "pane": pane}
-
-
-def _cli_alive(meta, pane):
-    """Whether the run's CLI process (or the pane process before it marked one) still runs."""
-    from . import process
-
-    pid = meta.get("cli_pid") or pane.get("pane_pid")     # a window handed to a new run holds cli_pid null
-    return bool(pid and process.alive(int(pid), meta.get("cli_birth")))
+    return StateStore(config.current_project(cwd, config_path)).read()
 
 
 def liveness(cwd=None, config_path=None, socket=None):
@@ -137,9 +78,9 @@ def liveness(cwd=None, config_path=None, socket=None):
     "stopped": that run's pane or CLI ended. "unknown": no current run, a run of another
     session, or a failed lookup. A caller drops a verdict whose session is no longer current.
     """
-    project = _project(cwd, config_path)
+    project = config.current_project(cwd, config_path)
     state = StateStore(project).read()
-    control = _tmux(socket)
+    control = tmux_module.control(socket)
     result = {}
     for key, entry in state.items():
         session = entry if key == "leader" else entry["session"]
@@ -151,12 +92,11 @@ def liveness(cwd=None, config_path=None, socket=None):
             meta = control.get_current(project.project_id, slot)
             if meta and meta.get("session_id") == session["session_id"]:
                 if meta.get("remote_seat"):
-                    from . import remote
-                    _check_owner(project, slot, session, meta)
+                    tmux_module.check_owner(project, slot, session, meta)
                     verdict = remote.liveness(meta)
                 else:
                     pane = control.pane_info(meta["pane_id"])
-                    verdict = "alive" if _cli_alive(meta, pane) and not pane["pane_dead"] else "stopped"
+                    verdict = "alive" if process.cli_alive(meta, pane) and not pane["pane_dead"] else "stopped"
         except SessionError:
             pass
         result[key] = {"session_id": session["session_id"], "state": verdict}
@@ -165,16 +105,13 @@ def liveness(cwd=None, config_path=None, socket=None):
 
 def check_binding(cwd, target, expected_session_id=None, config_path=None, socket=None):
     """Observe a binding, then reject concurrent changes to its identity."""
-    from . import process
-    from .providers import get_provider
-
-    project = _project(cwd, config_path)
+    project = config.current_project(cwd, config_path)
     store = StateStore(project)
     before = store.read()
-    seat, session = _select(before, target)
+    seat, session = select_target(before, target)
     if expected_session_id and (not session or session["session_id"] != expected_session_id):
         raise SessionError("owner_mismatch", "The conversation is not the current owner.")
-    control = _tmux(socket)
+    control = tmux_module.control(socket)
     slot = "leader" if seat is None else f"seat-{seat}"
     pointer = control.get_current(project.project_id, slot)
     if not pointer:
@@ -183,7 +120,7 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
     for field in ("run_id", "window_id", "pane_id"):
         if pointer.get(field) != meta.get(field):
             raise SessionError("owner_mismatch", "The tmux execution has changed.")
-    _check_owner(project, slot, session, meta)
+    tmux_module.check_owner(project, slot, session, meta)
     context = {
         "base": str(project.base), "project_id": project.project_id,
         "provider": project.provider, "target": slot, "seat": seat,
@@ -196,7 +133,6 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
     }
     ready = bool(meta.get("ready"))
     if meta.get("remote_seat") and meta.get("provider_launch_attempted") is not False:
-        from . import remote
         native = remote.run_call(meta, "check_binding", timeout=15)
         if (not isinstance(native, dict) or not isinstance(native.get("observation"), dict)
                 or any(type(native.get(key)) is not bool for key in ("alive", "ready", "termination_confirmed"))):
@@ -208,17 +144,17 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
         context.update(remote_seat=meta["remote_seat"], remote_native=meta.get("remote_native"))
     else:
         info = control.pane_info(meta["pane_id"])
-        cli_alive = _cli_alive(meta, info)
+        cli_alive = process.cli_alive(meta, info)
         meta = {**meta, "pane_dead": info["pane_dead"]}
         if session:
-            provider = get_provider(project.provider)
+            provider = providers.get_provider(project.provider)
             if not info["pane_dead"]:
                 provider.verify_binding(session, context, meta, timeout=15)
             elif not meta.get("registered"):
                 raise SessionError("execution_unknown", "The dead pane never established its conversation.", 4)
             observation = provider.observe(session, context, meta, timeout=15)
         else:
-            observation = _unlaunched_observation(meta, info)
+            observation = process.unlaunched_observation(meta, info)
             cli_alive = False
         group = meta.get("process_group")
         group_alive = bool(group and process.group_alive(int(group)))
@@ -235,7 +171,7 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
     after = store.read()
     after_pointer = control.get_current(project.project_id, slot)
     try:
-        after_seat, after_session = _select(after, target)
+        after_seat, after_session = select_target(after, target)
         # Review marks and connection times may change during observation; the connection may not.
         same_assignment = (after_seat == seat and binding_identity(after_session, project.provider)
                            == binding_identity(session, project.provider))

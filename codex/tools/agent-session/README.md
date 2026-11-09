@@ -105,16 +105,8 @@ Provider 실행 전 준비 실패는 원인을 고친 뒤 같은 start로 재시
 ## 프로젝트 API와 검사
 
 프로젝트 consumer는 `~/.local/lib/agent-session`을 import 경로로 사용합니다.
-`agent_session.api`는 다음 읽기 전용 함수를 제공합니다.
-
-| 함수 | 결과 |
-| --- | --- |
-| `read_state(cwd, config_path=None)` | 선택한 프로젝트의 현재 state snapshot |
-| `check_binding(cwd, target, expected_session_id=None, config_path=None, socket=None)` | 현재 JOB·run·실제 session의 대조 결과와 ready·alive·종료 확인 |
-| `liveness(cwd=None, config_path=None, socket=None)` | Session이 있는 slot마다 판정한 `session_id`와 `alive`·`stopped`·`unknown`. Provider를 호출하지 않음 |
-
-Target은 `leader` 또는 현재 배정된 CR ID입니다.
-두 함수는 업무·배정을 변경하지 않으며 제어 잠금을 획득하지 않습니다.
+다른 도구는 `agent_session.api`만 import합니다. 공개 이름의 목록은 `api.py`의 `__all__`이고 이름별 입력·결과는 [명세 5절](../../../docs/project-team/spec.md#프로젝트-consumer용-python-api)이 기록합니다.
+조회 함수는 업무·배정을 변경하지 않으며 제어 잠금을 획득하지 않습니다.
 실행 관찰 실패를 빈 배정이나 종료 완료로 바꾸지 않습니다.
 
 환경 표의 Python을 PY로 지정한 뒤 원본 repo에서 focused 검사를 실행합니다.

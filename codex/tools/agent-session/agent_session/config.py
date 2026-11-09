@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 
@@ -226,3 +227,8 @@ def resolve_project(cwd=None, config_path=None):
         raise SessionError("base_unavailable", "The registered project base is unavailable.", 3,
                            {"base": str(project.base)})
     return project
+
+
+def current_project(cwd=None, config_path=None):
+    """resolve_project with the AGENT_SESSION_CONFIG registry when no config path is given."""
+    return resolve_project(cwd, config_path or os.environ.get("AGENT_SESSION_CONFIG"))

@@ -18,8 +18,7 @@ for _name in ("agent-session", "project-item"):
         sys.path.insert(0, _path)
 
 from agent_session import api  # noqa: E402
-from agent_session.config import RemoteSeat, load_registry  # noqa: E402
-from agent_session.errors import SessionError  # noqa: E402
+from agent_session.api import RemoteSeat, SessionError, load_registry  # noqa: E402
 from project_item.api import (CR, DECIDE, cr_states, decision_stage, file_id,  # noqa: E402
                               item_files, sections, submitted_hash)
 

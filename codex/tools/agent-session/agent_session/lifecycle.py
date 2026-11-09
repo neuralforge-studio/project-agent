@@ -9,13 +9,12 @@ import uuid
 from pathlib import Path
 
 from . import api, git_ops, jobs, process, workspace
-from .api import _check_owner, _project, _unlaunched_observation
-from .config import RemoteSeat, load_registry
+from .config import RemoteSeat, current_project, load_registry
 from .errors import SessionError
 from .providers import get_provider
 from .state import StateStore, locked, utc_now
 from .suspend import SuspendMixin, SuspendStore
-from .tmux import Tmux
+from .tmux import Tmux, check_owner
 from .util import write_json
 
 SWEEP_SECONDS = 30                                 # after this, a cleanup leaves later windows to the next sweep
@@ -43,7 +42,7 @@ def _completed(result_file):
 
 class Manager(SuspendMixin):
     def __init__(self, cwd=None, config_path=None, socket_name=None, socket_path=None, timeout=600):
-        self.project = _project(cwd, config_path)
+        self.project = current_project(cwd, config_path)
         self.timeout = timeout
         self.end = time.monotonic() + timeout
         self.store = StateStore(self.project, timeout=timeout)
@@ -200,7 +199,7 @@ class Manager(SuspendMixin):
         if state is not None and meta.get("session_id"):
             # A run without a conversation, such as a failed restart's waiting pane, has none to misdirect.
             session = state["leader"] if slot == "leader" else state[slot[5:]]["session"]
-        _check_owner(self.project, slot, session, meta)
+        check_owner(self.project, slot, session, meta)
         return meta
 
     def _adopted(self, meta, slot):
@@ -225,7 +224,7 @@ class Manager(SuspendMixin):
             return observe(meta, timeout=self.remaining())
         pane = self.tmux.pane_info(meta["pane_id"])
         if not meta.get("registered"):
-            return _unlaunched_observation(meta, pane)
+            return process.unlaunched_observation(meta, pane)
         context = {**meta, "pane_dead": pane["pane_dead"], "meta": {**meta, "pane_dead": pane["pane_dead"]}}
         session = self._session(meta)
         observed = self.provider.observe(session, context, context["meta"], timeout=self.remaining())

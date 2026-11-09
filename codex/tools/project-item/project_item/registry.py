@@ -17,8 +17,7 @@ if _AGENT_SESSION not in sys.path:
     sys.path.insert(0, _AGENT_SESSION)
 
 from agent_session import api  # noqa: E402
-from agent_session.config import load_registry, resolve_project  # noqa: E402
-from agent_session.errors import SessionError  # noqa: E402
+from agent_session.api import SessionError, load_registry, resolve_project  # noqa: E402
 
 from .errors import ItemError  # noqa: E402,F401  (project_item.registry.ItemError stays importable)
 
