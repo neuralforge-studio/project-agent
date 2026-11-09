@@ -490,7 +490,7 @@ def test_pointer_is_cleared_only_for_the_named_run(tmp_path, tmux):
     assert tmux.read_meta(meta["window_id"])["run_id"] == "run-one"
 
 
-def test_retired_window_closes_only_with_one_dead_managed_pane(tmp_path, tmux):
+def test_retired_window_closes_only_with_a_dead_managed_pane(tmp_path, tmux):
     survivor = new_window(tmux, tmp_path, run="leader-run", target="leader", job=None)
     retired = new_window(tmux, tmp_path)
     other = new_window(tmux, tmp_path, run="run-two", target="seat-1", job="J-20261103-02")
@@ -500,18 +500,28 @@ def test_retired_window_closes_only_with_one_dead_managed_pane(tmp_path, tmux):
     assert error.value.code == "target_running"
     os.kill(retired["placeholder_pid"], 15)
     assert wait_for(lambda: tmux.pane_info(retired["pane_id"])["pane_dead"])
-    extra = tmux.command("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", retired["window_id"], "sleep", "86400")
-    with pytest.raises(SessionError) as error:
-        tmux.close_window(retired["window_id"], retired)
-    assert error.value.code == "window_shared"
-    tmux.command("kill-pane", "-t", extra)
     with pytest.raises(SessionError) as error:
         tmux.close_window(retired["window_id"], {**retired, "run_id": "another-run"})
     assert error.value.code == "target_changed"
-    assert tmux.close_window(retired["window_id"], retired) is True
+    assert tmux.close_window(retired["window_id"], retired) == "window"
     windows = tmux.command("list-windows", "-t", "demo", "-F", "#{window_id}").splitlines()
     assert windows == [survivor["window_id"], other["window_id"]]
     assert tmux.managed_windows("demo", "seat-0") == []
+
+
+def test_a_retired_window_with_a_persons_pane_loses_only_the_managed_pane_and_stops_being_managed(tmp_path, tmux):
+    new_window(tmux, tmp_path, run="leader-run", target="leader", job=None)
+    retired = new_window(tmux, tmp_path)
+    os.kill(retired["placeholder_pid"], 15)
+    assert wait_for(lambda: tmux.pane_info(retired["pane_id"])["pane_dead"])
+    person = tmux.command("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", retired["window_id"], "sleep", "86400")
+    assert tmux.close_window(retired["window_id"], retired) == "pane"
+    assert tmux.command("list-panes", "-t", retired["window_id"], "-F", "#{pane_id}").splitlines() == [person]
+    assert tmux.managed_windows("demo", "seat-0") == []
+    left = tmux.command("show-options", "-w", "-t", retired["window_id"])
+    assert "agent_session" not in left and "remain-on-exit" not in left
+    tmux.command("kill-pane", "-t", person)         # the person's last pane ends: tmux closes the window, as for any window
+    assert retired["window_id"] not in tmux.command("list-windows", "-a", "-F", "#{window_id}").splitlines()
 
 
 def test_notify_reaches_each_attached_client_and_says_none_when_nobody_is_attached(tmux, tmp_path):
