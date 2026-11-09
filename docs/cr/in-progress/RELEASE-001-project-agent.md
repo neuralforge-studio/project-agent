@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Requester: agent, /primehome/swain/Utils/agent/agent.base, 2026-11-09
+- Base: 9458aba01535c1a12ee034ce725048aca5448c10 2026-11-09T14:40:54+09:00
 
 ## Symptom
 project-agent에는 버전 규칙, 변경 기록, 다른 직원이 읽을 설치 안내가 없습니다. 새 계정에서 설치해 계약 밖 변경이 없는지 확인한 기록도 없습니다.
