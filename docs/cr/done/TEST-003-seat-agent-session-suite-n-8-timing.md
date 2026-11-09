@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: 3781d7baf6dcb7569834bb4c4e3c82f053ce1acf 2026-11-09T15:24:38+09:00
+- Outcome: fixed
 
 ## Symptom
 project-agent seat 3~4개가 동시에 test를 돌리는 평소 운영 부하에서, README의 `python -m pytest -q -n 8 tools/agent-session/tests`가 여러 test를 실패시킵니다. 병렬 수를 줄이면 통과합니다. 검증 결과가 실행 때의 부하에 따라 달라져 회귀 판정을 흐립니다. TEST-001은 시간 단언 두 개만 고쳤고, 같은 부하에서 남은 실패는 원인이 다릅니다.
@@ -19,6 +20,7 @@ project-agent seat 3~4개가 동시에 test를 돌리는 평소 운영 부하에
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). INSTALL-002·TEST-001 Result에 재현 근거가 있는 검증 신뢰성 결함이므로 위임 범위입니다. TEST-001 인수 때 정한 다시 볼 조건이 충족되었습니다.
 - 2026-11-09 Leader: 제출 56b7035efb5477623b5bc424eabfd10432d6eb45를 인수합니다. Leader review: fixture 한도·test UUID·README만 바꾼 diff를 확인했습니다. 원인 (b)는 3개 동시 실행의 실패 285건 전부가 같은 timeout code이고 Manager 명령 1350개 계측(p99 29.8초, 최대 38.0초)으로 확정, 120초는 측정 최대의 약 3배이며 보장 내용(끝나지 않는 명령을 실패로 바꿈)이 fixture 주석과 README에 있습니다. 원인 (d)는 host 전체 /proc 검색과 고정 UUID로 확정. 수정 후 같은 조건 3회 704 passed. 제품 한도는 바꾸지 않음.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 b3681f2(Merge cr/TEST-003, 제출 56b7035). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README의 검증](../../../README.md#검증), [agent-session README](../../../tools/agent-session/README.md)의 test 절, `tools/agent-session/tests/fixtures/`.
