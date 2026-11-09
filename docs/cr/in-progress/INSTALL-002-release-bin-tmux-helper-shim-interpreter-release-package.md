@@ -48,3 +48,33 @@
    - 파일이 없으면 기존 개발 checkout test가 그대로 통과합니다.
    - 격리 tmux server에서 가짜 release의 `project-agent.conf`를 읽고 `#{E:@project_agent_decide_status}`를 펼치면, 결정 표시 script가 `python.env`의 interpreter로 실행됩니다.
 3. 영향 회귀: README의 네 명령이 통과합니다(알려진 timing test 2개는 단독 실행 통과 확인).
+
+## Result
+- 제출 commit: 5c41f2d9bc416f73ed747e9f847789753619fa71
+
+변경(Base 9458aba 위 1 commit, `origin/cr/INSTALL-002`에 push):
+- `tools/python-launcher.sh`: 환경 변수에 값이 없는 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`를 같은 디렉터리의 `python.env`에서 읽습니다. 두 이름의 줄만 `case`로 읽고 `source`하지 않습니다. 환경 변수(빈 값은 없는 것으로 봄)가 파일보다 우선하며 변수마다 따로 판단합니다. 파일이 없으면 기존 개발 checkout 규칙 그대로입니다. interpreter가 없으면 기존 `python_unavailable`·종료 코드 5입니다.
+- `integrations/tmux/tmux_decide_status.sh`(신규): launcher로 interpreter를 골라 `PYTHONNOUSERSITE=1`로 `tmux_decide_status.py`를 실행합니다. 실패하면 stderr 한 줄과 종료 코드 5입니다. `project-agent.conf`의 `@project_agent_decide_status`가 이 wrapper를 부릅니다. 표시 형식은 그대로입니다.
+- `tmux_project_board.sh`는 코드를 바꾸지 않았습니다. release의 `bin/project-board`가 launcher를 쓰므로 1단계로 해결되며 test로 확인했습니다.
+- 계약 6.1절(`python.env`의 위치·형식·우선순위·오류), 5.3절의 결정 표시 설명과 5.1절의 cache 행, 9절 표를 고쳤습니다. `docs/project-team/README.md`의 진입점·tmux 연결 행도 맞췄습니다.
+- root `.gitignore`(신규)에 `tools/python.env` 한 줄을 두었습니다.
+
+검증:
+1. 재현(수정 전): 가짜 release(`tools/`·`integrations/` 복사, `tools/python.env`가 설치 interpreter를 지정, PATH의 `python3`는 가짜)에서 shim 환경 변수 없이 실행했습니다. `project-board --help`는 workstation 사내 Python으로 실제 실행됐고, `tmux_decide_status.py`는 PATH의 가짜 `python3`로 실행됐습니다. 둘 다 `python.env`의 interpreter를 쓰지 않았습니다. 수정 뒤 같은 배치에서 `project-board`·`project-item`·`agent-session`·결정 표시가 모두 설치 interpreter로 실행되고, 환경 변수가 파일보다 우선하며, 없는 interpreter는 종료 코드 5였습니다.
+2. 자동 test(`tools/test_python_launcher.py` 27개, `integrations/tmux/test_project_agent_conf.py`):
+   - `python.env`만 있을 때 세 CLI와 `tmux_project_board.sh`·`tmux_decide_status.sh`가 그 interpreter·package 경로로 실행되고 `PYTHONNOUSERSITE=1`입니다(`agent-session`은 기존대로 설정하지 않음). 공백이 있는 interpreter 경로도 통과합니다.
+   - 환경 변수가 파일보다 우선합니다. 파일의 interpreter가 없으면 다섯 진입점 모두 종료 코드 5와 기존 오류 형식입니다.
+   - 다른 이름·`$(…)`·백틱 줄은 실행되지 않고, 값의 `$(…)`도 글자 그대로입니다. 파일에 다른 이름만 있으면 그 값을 interpreter로 쓰지 않습니다.
+   - 파일이 없을 때는 기존 `test_development_checkout_runs_without_installer_values`가 그대로 통과합니다.
+   - 격리 tmux server에서 가짜 release의 `project-agent.conf`를 읽고 `#{E:@project_agent_decide_status}`를 펼치면 `python.env`의 interpreter가 `tmux_decide_status.py`를 실행합니다. conf를 옛 호출(`.py` 직접)로 되돌리면 이 test가 실패함을 확인했고 복원했습니다.
+3. 영향 회귀(README의 네 명령, 제출 commit):
+   - `integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py`: 68 passed.
+   - `tools/project-item/tests`: 120 passed.
+   - `tools/agent-session/tests`: `-n 4`로 704 passed. 첫 실행(`-n 8`)은 695 passed·9 failed였는데, 부하 때문인 timing 실패입니다. `test_suspend.py`·`test_lifecycle.py`를 `-n 2`로 다시 돌리면 1개(`test_the_most_recent_runs_window_is_the_one_a_slot_takes`)만 실패했고, 그 test는 단독 실행에서 변경본과 base 모두 통과했습니다. 마지막으로 `-n 4` 전체 실행이 모두 통과했습니다.
+   - `tools/project-board/tests`: 113 passed·1 failed(`test_tui.py::test_popup_renders_markdown_and_csv_and_closes_editor_after_acceptance`). 이 CR의 변경과 무관한 기존 실패입니다. base(`git archive 9458aba`)에서도 단독 실행으로 같은 test가 실패합니다. 알려진 timing test 2개와는 다른 test입니다.
+4. 근거 재사용·재실행: 변경은 launcher·tmux helper와 문서뿐이므로 `agent-session`·`project-item`·`project-board`의 Python 코드는 바뀌지 않았습니다. 위 회귀는 그 범위의 영향 확인입니다. merge는 없었습니다(`origin/main`이 진행하지 않음).
+
+알려 둘 점:
+- 계약 6.1절에 "변수마다 따로 판단"을 적었습니다(CR 문구의 "환경 변수가 있으면 환경 변수가 이긴다"의 해석). 예: 환경에 `PROJECT_AGENT_PYTHON`만 있고 `PROJECT_AGENT_PYTHONPATH`가 없으면 후자는 파일에서 읽습니다.
+- 같은 이름이 여러 번 나오면 마지막 줄이 이긴다는 규칙을 계약에 적었습니다(CR이 정하지 않은 부분입니다. INSTALL-001이 이 형식으로 쓰므로 중복은 없을 것입니다).
+- `__pycache__`가 untracked로 보입니다. `.gitignore`에는 CR이 요구한 한 줄만 두었습니다.
