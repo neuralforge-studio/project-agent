@@ -20,6 +20,7 @@
 - 2026-11-10 Leader: 선행 BOARD-002가 61e881e로 통합되었습니다(BOARD-003·004 병합). 그 구조를 따르십시오: Board pane은 본 window에 남고(최대 8개, 최근 본 순서), 보이지 않는 pane은 갱신하지 않으며(`project_board_visibility.sh`의 SIGUSR1), 파일은 바뀐 것만 다시 읽습니다(TUI 계획 2·5절). Board CR 다섯 개가 같은 `tui.py`·`tmux_control.py`를 고칠 수 있으므로 제출 전에 `origin/main`을 merge하십시오.
 - 2026-11-10 Leader: 제출 60dc6f8 검토. 동작(지금 보는 관리 window의 project와 slot 강조, 숨은 pane은 읽지 않음, 읽기 실패 시 이전 강조 유지)과 test 157 passed를 확인했습니다. CR Evidence의 option 이름(`@agent_session_role`·`@agent_session_seat`)은 Leader가 잘못 적은 것이며 실제 이름(`@agent_session_project_id`·`@agent_session_target`)을 쓴 것이 맞습니다. 수정 요청 한 가지: option 이름과 `leader|seat-N` 문법을 `tmux_control`에 같은 문자열로 따로 두면 원본이 둘이 되어, agent-session이 바꿀 때 Board가 말없이 깨집니다(SSOT, 도구 경계 규칙: 다른 도구는 `agent_session.api`만 씀). `PANE_ID_OPTION` 선례대로 `agent_session.api`에 이름 또는 window의 (project, slot)을 돌려주는 함수를 공개하고(`__all__`, 명세 5절 표), Board는 그것을 쓰십시오.
 - 2026-11-10 Leader: 수정 제출 74e52c7 검토. `Tmux.pane_slot`·`api.pane_slot`(`__all__`, 명세 5절 표)과 Board가 반환값만 쓰는 구조, option 이름·`leader|seat-N` 문법이 `tmux.py` 한 곳에만 있는 것을 확인했습니다. 코드 수정 요청은 없습니다. 검증 보완 요청 두 가지: (1) 제출 뒤 `origin/main`(8d070b2)이 `integrations/tmux/**`(BOARD-010, `test_tmux_control.py`가 읽는 통합 파일)와 `tools/agent-session/**`를 바꿨으므로 merge하고 그 commit에서 다시 검증하십시오. (2) 직전 Leader 지시가 README 검증 표보다 좁았습니다(Leader 잘못). `agent_session/api.py`를 바꾼 행의 명령 전부, 곧 `tools/agent-session/tests` 전체·`tools/project-item/tests`·`tools/project-board/tests`·`install/tests`를 merge commit에서 실행하십시오. `test_control_queue`의 `require_version` 실패는 TEST-007이 다루는 기존 실패로 인정합니다.
+- 2026-11-10 Leader: 제출 5cff69ca1432ab3d906c4118d477849df0b3a7e1를 인수합니다. Leader review: 재제출 5cff69c는 74e52c7 위의 origin/main(bb0e0e2까지) merge뿐이며, 충돌은 두 test 파일 끝에 양쪽이 덧붙인 test를 모두 남겨 해결했습니다. README 표의 agent_session/api.py 행 네 묶음을 merge commit에서 실행: agent-session 790 passed·1 failed, project-item 125, project-board 159, install 261+2 skipped. 실패 test_self_ended::test_a_claude_cli_that_still_has_a_live_process_group_is_not_confirmed(control_active != termination_unconfirmed)는 seat3 환경에서 origin/main bb0e0e2 사본으로도 실패하고, Leader가 base에서 bb0e0e2로 단독 실행하면 통과(1 passed)하며, TEST-007의 0530de3 실행(seat0)에서도 통과했습니다. 이 CR의 변경과 무관한 환경 의존 결함으로 판정하고 TEST-008로 엽니다. 앞 검토(60dc6f8·74e52c7)의 코드 판정을 재사용합니다.
 
 ## Implementation
 읽을 문서: [project-board README](../../../tools/project-board/README.md), [TUI 계획](../../project-board-tui-plan.md), [설치 계약 5.3·5.4절](../../project-team/install-contract.md), [README 검증 표](../../../README.md#검증).
@@ -37,7 +38,7 @@
 
 ## Result
 
-- 제출 commit: 74e52c78453653ca16eef4c289ef6ce4e9ca8fc2
+- 제출 commit: 5cff69ca1432ab3d906c4118d477849df0b3a7e1
 
 구현 (`cr/BOARD-009`, 기능 commit은 merge의 첫 부모, 두 번째 부모는 `origin/main` 3581f1f):
 - 규칙을 [TUI 계획](../../project-board-tui-plan.md) 3절 "지금 보는 창 강조"에 먼저 적었고 README에 요약을 더했습니다.
@@ -67,3 +68,14 @@ CR 본문과 다른 점(확인 필요):
 - `python -m pytest -q -n 8 tools/agent-session/tests` (README 표의 `tools/agent-session/**` 행): 773 passed, 1 failed. 실패는 `test_control_queue.py::test_external_control_cannot_overtake_a_pending_self_request`(`AttributeError: 'Tmux' object has no attribute 'require_version'`, `lifecycle.py:826`)입니다. 이 변경 전 HEAD(60dc6f8의 기능 commit 상태)와 `origin/main` 3581f1f를 각각 `git archive`로 푼 사본에서도 같은 오류로 실패하므로 이 CR의 변경과 무관한 기존 실패입니다. 고치지 않았습니다. Leader 판단이 필요합니다.
 - `python -m pytest -q tools/project-board/tests`: 157 passed. `git diff --check` 깨끗.
 - `api.py`에는 이름만 더했고 기존 함수는 바꾸지 않았으므로 `project-item`·`install/tests`는 재실행하지 않았습니다(Leader 지시: `tools/project-board/**`, `test_api_boundary`, `test_import_cycle`, 공개 API 사용 test).
+
+### 재제출: `origin/main` merge와 README 표 전체 검증 (Leader 검토 피드백)
+
+- 제출 commit은 위 `5cff69c`입니다. 코드 변경 없이 `origin/main`(BOARD-010·011·TEST-007 통합, 마지막은 bb0e0e2까지)을 `cr/BOARD-009`에 merge했습니다. 충돌은 `tools/project-board/tests/test_tmux_control.py`와 `tools/agent-session/tests/test_tmux.py`에서 났고, 양쪽이 파일 끝에 test를 덧붙인 것이라 두 쪽 test를 모두 남겨 해결했습니다(`74e52c7`의 `pane_slot` test·Board 강조 test와 BOARD-011의 popup·`run-shell` test).
+- `agent_session/api.py`를 바꾼 행(README 검증 표)대로 최종 merge commit `5cff69c`에서 실행했습니다. 앞선 merge commit(f47d34d, 90e697e)에서 돌리던 검증은 main이 진행해 중단했고, 그 근거는 쓰지 않았습니다.
+  - `python -m pytest -q -n 8 tools/agent-session/tests`: 790 passed, 1 failed.
+  - `python -m pytest -q tools/project-item/tests`: 125 passed.
+  - `python -m pytest -q tools/project-board/tests`: 159 passed.
+  - `python -m pytest -q -n 8 install/tests`: 261 passed, 2 skipped.
+  - `git diff --check` 깨끗.
+- agent-session의 실패 1건은 `test_self_ended.py::test_a_claude_cli_that_still_has_a_live_process_group_is_not_confirmed`입니다(`{'reason': 'control_active'} != {'reason': 'termination_unconfirmed'}`, `test_self_ended.py:225`). 단독 실행에서도 3번 모두 실패하고, `origin/main` bb0e0e2를 `git archive`로 푼 사본에서도 같은 오류로 실패하므로 이 CR의 변경과 무관한 기존 실패입니다. 고치지 않았습니다. `test_control_queue`의 `require_version` 실패는 TEST-007로 고쳐져 이번에는 통과했습니다. 위 `test_self_ended` 실패는 TEST-007에 포함된 것이 아니므로 Leader 판단이 필요합니다(별도 CR 필요 여부).
