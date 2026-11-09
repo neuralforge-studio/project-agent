@@ -191,7 +191,7 @@ def append_plan(home, monkeypatch, original):
     path = home.path(".tmux.conf")
     home.path(LIB + "/backup").mkdir(parents=True, exist_ok=True)
     name = "20261109T000000Z-.tmux.conf"
-    steps = [actions.backup_file(places, name, path, original),
+    steps = [actions.backup_file(places, name, path, original, 0o644),
              actions.append_block(places, "tmux:0", original, BLOCK, os.lstat(path))]
     return env, commands.Plan("install", steps, journal_path=home.path(".pi-journal"), places=places), home.path(
         LIB + "/backup/" + name)

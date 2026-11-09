@@ -397,12 +397,19 @@ def _op_rm_file(ctx, spec):
 
 
 def _op_rm_tree(ctx, spec):
-    """Remove a release: only if it is still exactly what the installer built (its listing digest)."""
-    path = ctx.places.tree(spec["id"])
+    """Remove a release: only if it is still exactly what the installer built (its listing digest). The release is
+    first renamed to its reserved temporary name, so that a removal that fails half way is finished by the next run
+    and never leaves a release that no longer matches its digest."""
+    places = ctx.places
+    path = places.tree(spec["id"])
+    temporary = places.release_temp(places.release_name(spec["id"]))
+    if os.path.isdir(temporary) and not os.path.islink(temporary):
+        force_rmtree(temporary)                       # an earlier removal was cut off after the rename
     state, _ = inspect(path)
     if state == "dir":
         if tree_digest(path) == spec["digest"]:
-            force_rmtree(path)
+            os.rename(path, temporary)
+            force_rmtree(temporary)
         else:
             ctx.notes.append("%s holds files that are not the installer's; the release is left as it is." % path)
     elif state != "absent":
