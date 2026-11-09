@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Base: 5af70aba1765dd5f043b6e4aaa1003d1e75d90e6 2026-11-09T20:55:46+09:00
+- Outcome: fixed
 
 ## Symptom
 SESSION-001이 더한 `tools/agent-session/tests/test_lifecycle.py::test_registration_publishes_when_the_controller_ends_before_it[sigint]`가 `-n 8` 병렬 실행에서 실패하고 단독 실행에서는 통과합니다. 세 CR의 검증에서 같은 실패가 나왔고 매번 단독 재실행으로 넘어갔습니다.
@@ -20,6 +21,7 @@ SESSION-001이 더한 `tools/agent-session/tests/test_lifecycle.py::test_registr
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). 재현 근거가 세 번 있는 검증 신뢰성 결함이므로 위임 범위입니다.
 - 2026-11-09 Leader: 제출 456f3d37347f8897966e492bd8d98eadd28ba112를 인수합니다. Leader review: 원인을 SIGINT 무시 상속(background로 띄운 pytest의 자식 controller가 KeyboardInterrupt 없이 시작)으로 확정한 근거를 확인했습니다. 부하 가설은 전경 실행에서 load 185~395에도 0 실패, 대기 계측(최대 25.1초 < 60초)으로 기각. 수정은 test CONTROLLER 첫머리의 SIGINT 기본 처리 복원 한 곳, 제품 코드·한도 변경 없음. 같은 조건 수정 전 8/8 실패 → 수정 뒤 0/8, agent-session -n 8 742 passed(원래 실패 조건), merge 뒤 해당 test 4 passed.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 58679c7(Merge cr/TEST-005, 제출 456f3d3). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README 검증 표](../../../README.md#검증), `tools/agent-session/tests/test_lifecycle.py`의 해당 test와 그 fixture, TEST-003 Result(부하 원인 분류 방법).
