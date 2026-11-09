@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: 602108469ce970b91db06ed991c72fc38c96a022 2026-11-10T02:36:23+09:00
+- Outcome: fixed
 
 ## Symptom
 `tools/agent-session/tests/test_self_ended.py::test_a_claude_cli_that_still_has_a_live_process_group_is_not_confirmed`가 실행 환경에 따라 결과가 다릅니다. seat3 Worker 환경에서는 `{'reason': 'control_active'} != {'reason': 'termination_unconfirmed'}`(`test_self_ended.py:225`)로 실패합니다. 같은 commit을 base의 Leader 환경에서 실행하면 통과합니다. release 검증(다섯 명령)이 실행 환경에 따라 다른 결과를 냅니다.
@@ -21,6 +22,7 @@
 ## Disposition
 - 2026-11-10 Leader: 고친다(Leader 판정). 재현 근거가 있는 결함입니다(seat3에서 3/3 실패, base에서 통과). v0.2.0 release 검증의 전제입니다.
 - 2026-11-10 Leader: 제출 a4a7f12d824e04c87594ef1be4604e0e238877d4를 인수합니다. Leader review: 원인을 관찰로 확정했습니다. test와 server의 실제 pane-died hook(별도 interpreter)이 같은 run의 finish_ended를 경합하고, 실패한 run의 finish-result.json(finished: true, basis: process)과 ended.json 시각이 hook이 먼저 마무리했다는 직접 증거입니다. 두 마무리의 상호 배제는 control_lock이 정하므로 제품 결함이 아니고, 결과(control_active)도 명세대로입니다. 수정은 finish_ended를 직접 부르며 CLI를 죽이는 두 test에서만 hook을 빼는 no_exit_hook이며, 다른 직접 호출 test에는 경합이 없다는 판정을 확인했습니다. 같은 seat3 환경에서 6회 반복 통과, README 표 tools/agent-session/** 행 791 passed. 환경 변수(PYTHONNOUSERSITE 등)는 원인이 아니라 interpreter 시동 속도로만 영향을 준다는 판정을 인정합니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 657f286(Merge cr/TEST-008, 제출 a4a7f12). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [동작 명세 3절 스스로 끝난 run의 마무리](../../project-team/spec.md#스스로-끝난-run의-마무리), [project-team Worker 절](../../../skills/project-team/SKILL.md).
