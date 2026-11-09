@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Base: 9680c181adfe8581eac20844e8c00998be5de8b6 2026-11-10T00:29:30+09:00
+- Outcome: fixed
 
 ## Symptom
 사용자 요청: "현재 활성화 중인 session, window가 sidebar에 있는 것이 라면 해당 부분 high light ( ex: project-agent leader window가 활성화 되어 있으면 side bar에서 project-agent 부분이 highlight )"
@@ -21,6 +22,7 @@
 - 2026-11-10 Leader: 제출 60dc6f8 검토. 동작(지금 보는 관리 window의 project와 slot 강조, 숨은 pane은 읽지 않음, 읽기 실패 시 이전 강조 유지)과 test 157 passed를 확인했습니다. CR Evidence의 option 이름(`@agent_session_role`·`@agent_session_seat`)은 Leader가 잘못 적은 것이며 실제 이름(`@agent_session_project_id`·`@agent_session_target`)을 쓴 것이 맞습니다. 수정 요청 한 가지: option 이름과 `leader|seat-N` 문법을 `tmux_control`에 같은 문자열로 따로 두면 원본이 둘이 되어, agent-session이 바꿀 때 Board가 말없이 깨집니다(SSOT, 도구 경계 규칙: 다른 도구는 `agent_session.api`만 씀). `PANE_ID_OPTION` 선례대로 `agent_session.api`에 이름 또는 window의 (project, slot)을 돌려주는 함수를 공개하고(`__all__`, 명세 5절 표), Board는 그것을 쓰십시오.
 - 2026-11-10 Leader: 수정 제출 74e52c7 검토. `Tmux.pane_slot`·`api.pane_slot`(`__all__`, 명세 5절 표)과 Board가 반환값만 쓰는 구조, option 이름·`leader|seat-N` 문법이 `tmux.py` 한 곳에만 있는 것을 확인했습니다. 코드 수정 요청은 없습니다. 검증 보완 요청 두 가지: (1) 제출 뒤 `origin/main`(8d070b2)이 `integrations/tmux/**`(BOARD-010, `test_tmux_control.py`가 읽는 통합 파일)와 `tools/agent-session/**`를 바꿨으므로 merge하고 그 commit에서 다시 검증하십시오. (2) 직전 Leader 지시가 README 검증 표보다 좁았습니다(Leader 잘못). `agent_session/api.py`를 바꾼 행의 명령 전부, 곧 `tools/agent-session/tests` 전체·`tools/project-item/tests`·`tools/project-board/tests`·`install/tests`를 merge commit에서 실행하십시오. `test_control_queue`의 `require_version` 실패는 TEST-007이 다루는 기존 실패로 인정합니다.
 - 2026-11-10 Leader: 제출 5cff69ca1432ab3d906c4118d477849df0b3a7e1를 인수합니다. Leader review: 재제출 5cff69c는 74e52c7 위의 origin/main(bb0e0e2까지) merge뿐이며, 충돌은 두 test 파일 끝에 양쪽이 덧붙인 test를 모두 남겨 해결했습니다. README 표의 agent_session/api.py 행 네 묶음을 merge commit에서 실행: agent-session 790 passed·1 failed, project-item 125, project-board 159, install 261+2 skipped. 실패 test_self_ended::test_a_claude_cli_that_still_has_a_live_process_group_is_not_confirmed(control_active != termination_unconfirmed)는 seat3 환경에서 origin/main bb0e0e2 사본으로도 실패하고, Leader가 base에서 bb0e0e2로 단독 실행하면 통과(1 passed)하며, TEST-007의 0530de3 실행(seat0)에서도 통과했습니다. 이 CR의 변경과 무관한 환경 의존 결함으로 판정하고 TEST-008로 엽니다. 앞 검토(60dc6f8·74e52c7)의 코드 판정을 재사용합니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 69034f2(Merge cr/BOARD-009, 제출 5cff69c). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [project-board README](../../../tools/project-board/README.md), [TUI 계획](../../project-board-tui-plan.md), [설치 계약 5.3·5.4절](../../project-team/install-contract.md), [README 검증 표](../../../README.md#검증).
