@@ -33,7 +33,7 @@
 3. README 검증 표의 `tools/agent-session/**` 행.
 
 ## Result
-- 제출 commit: PLACEHOLDER
+- 제출 commit: a404b10618c5dd1acb52a1ad0999554a2549656e
 
 ### 원인 (e 제품 경합, 계측으로 확정)
 - stop이 관리 pane을 죽이면 tmux `pane-died` hook이 `finish_ended`를 별도 process로 띄웁니다(SESSION-007). 이 process가 seat-0 제어 lock을 잡고 `get_current`로 확인한 뒤 `not_current`로 끝냈습니다(stop이 이미 포인터를 지움). 그 사이 다음 `start`가 seat 0을 non-blocking으로 시도하면 "target control is busy"로 건너뛰고 seat 1을 받았습니다(`lifecycle.py` start의 candidate lock).
