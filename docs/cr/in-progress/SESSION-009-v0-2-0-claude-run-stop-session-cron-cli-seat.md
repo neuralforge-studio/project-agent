@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S1
 - Requester: agent, /primehome/swain/Utils/agent/agent.base, 2026-11-10
+- Base: 06ecfadb5ad973dca22d39bc2d99a8d4d9a55703 2026-11-10T03:20:17+09:00
 
 
 ## Symptom
@@ -34,6 +35,7 @@ v0.2.0 설치본(`releases/0.2.0-e87364816d43`)에서 시작한 Claude Worker를
   - shutdown(`suspend.py` `_end_for_shutdown`): `idle and terminal`일 때만 종료를 요청하는데 `terminal`이 session cron을 background로 셉니다. 그래서 `--force` 없이는 0.2.0 Claude run마다 `target_busy`입니다.
   - session cron을 background로 센 이유는 CLI가 session cron을 가진 채 끝나면 대화를 background session으로 넘기기(exit handoff, 명세 3절) 때문이었습니다. 관리 Claude CLI는 `CLAUDE_DISABLE_ADOPT=1`로 그 이전을 막습니다. 그러면 session cron은 instance와 함께 사라집니다(명세 7절). 그 근거가 바뀌었는데 판정이 따라가지 않은 것이 근본 원인입니다.
   - 지금 할 수 있는 회피: stop·restart·shutdown 전에 그 대화가 `CronList`의 자기 점검 cron을 `CronDelete`하면 걸리지 않습니다(project-agent INSTALL-007 Worker가 그렇게 해서 정상 반납). 이미 걸린 agent seat 0은 고친 release로 다시 stop합니다(Contract 2).
+- 2026-11-10 Leader: 제출 123ebfa765ab0d7cfd36e45a4de73d193c08263c를 인수합니다. Leader review: 판정을 providers/claude.py report_background 한 곳에 두고(run의 launch.sh에 export CLAUDE_DISABLE_ADOPT=1이 있으면 session cron을 background로 세지 않고 session_crons로만 보고, 근거가 없으면 이전 판정, background_tasks는 항상 셈), observe를 거쳐 stop·restart·shutdown·finish_ended가 같은 판정을 쓰는 것을 확인했습니다. export 줄의 형식이 launch_artifacts.launch_script와 adopt_disabled 두 곳에 있지만, lifecycle test가 실제 launch.sh로 이 판정을 거치므로 형식이 바뀌면 test가 실패합니다(인정). 명세 3·7절 갱신, 수정 전 재현(신규 7개 중 5개 실패, 옛 동작 2개 통과), 신규 8개 통과, agent-session 전체 798 passed, distribution boundary 9 passed. 이미 걸린 agent seat 0 run(49b24581)의 launch.sh에 그 줄이 있음을 Leader가 확인했습니다. 실제 반납 확인은 release 설치 뒤 합니다. exit_wait에 JSON 필드(session_crons)를 더하므로 버전 규칙상 MINOR입니다.
 
 ## Implementation
 읽을 문서: [동작 명세 3절](../../project-team/spec.md)(background로 옮겨진 대화, stop의 종료 판정, 스스로 끝난 run의 마무리), [명세 7절 자기 점검](../../project-team/spec.md), [self-check](../../../skills/project-team/references/self-check.md), [README 검증](../../../README.md#검증), [project-team Worker 절](../../../skills/project-team/SKILL.md).
@@ -52,3 +54,21 @@ v0.2.0 설치본(`releases/0.2.0-e87364816d43`)에서 시작한 Claude Worker를
 2. 수정 뒤: 같은 조합에서 stop·restart가 종료로 끝나고 반납합니다. shutdown은 force 없이 끝납니다. 이미 `stopping`이 남은 run을 다시 stop하면 반납합니다. background shell이 남은 경우의 동작은 그대로입니다.
 3. README 검증 표의 `tools/agent-session/**` 행(`tools/agent-session/tests` 전체, `-n 8`). `api.py`·state 형식·tmux option 이름을 바꾸면 그 행의 나머지 명령도 실행합니다. 명세 등 원격 guidance 문서를 고치면 그 행의 test도 실행합니다(표의 docs 행).
 
+
+## Result
+- 제출 commit: 123ebfa765ab0d7cfd36e45a4de73d193c08263c
+
+변경
+- `providers/claude.py`: 판정을 `report_background(stopped, meta)` 한 곳에 뒀습니다. run 자신의 `launch.sh`(window option `launch_file`)가 `export CLAUDE_DISABLE_ADOPT=1`을 담으면 session cron을 `background`에 세지 않고 새 관찰 필드 `session_crons`로만 보고합니다. 근거가 없거나 `launch.sh`를 읽을 수 없는 run은 지금 판정을 유지하고, `background_tasks`는 어느 경우에나 셉니다. `observe`가 이 판정을 쓰므로 stop·restart·shutdown(`_end_for_shutdown`)·`finish_ended`가 같은 판정을 씁니다(lifecycle·suspend 코드는 바꾸지 않음). `launch_spec`의 환경 변수 이름·값은 `ADOPT_ENV` 한 곳으로 모았습니다.
+- `docs/project-team/spec.md`: 7절 `exit_wait` 표에 `session_crons`와 session cron 규칙을 추가하고, 3절 exit handoff 설명과 7절 자기 점검 설명을 맞췄습니다.
+- test: `test_providers.py` 4개(근거 있음·없음·`background_tasks` 병존·SessionEnd 후 CLI 종료), `test_lifecycle.py` 2개(stop, `stopping`이 남은 run의 재stop), `test_suspend.py` 1개(shutdown, force 없음). fixture(`agent_session_fake_provider.py`)에 `fixture-cron-<target>` 표지를 추가해 실제 `report_background`를 거치게 했고, fake claude 실행이 `CLAUDE_DISABLE_ADOPT=1`을 export하게 했습니다.
+
+판단
+- Contract 1의 "사용자가 만든 다른 session cron"은 자기 점검 cron과 구별하지 않았습니다. Implementation 1·Disposition대로 exit handoff가 꺼진 run에서는 모든 session cron이 instance와 함께 사라지므로 어느 것도 종료를 막지 않습니다. 구별하려면 cron prompt를 해석해야 하고, 막을 근거도 없습니다.
+- 이미 걸린 run(agent seat 0): 마지막 Stop 관찰의 `session_crons`만 있고 SessionEnd가 있으며 `launch_file`이 남은 run은 고친 release의 같은 `stop`이 종료로 판정합니다(`..._left_stopping_...` test가 `stopping` 유지·pane dead 상태에서 재현). 실제 agent project의 설치본 적용은 하지 않았습니다.
+
+검증(commit 123ebfa에서)
+1. 수정 전 재현: `report_background`의 handoff 분기를 임시로 뺀 상태에서 신규 test 7개 중 5개(provider 2, stop 1, 재stop 1, shutdown 1)가 실패했고, 나머지 2개(근거 없음, background shell)는 통과해 옛 동작이 그대로임을 보였습니다. 원복했습니다.
+2. 수정 뒤 신규 test 8개 통과(`-k "session_cron or only_a_session or background_task_keeps"`).
+3. `python -m pytest -q -n 8 tools/agent-session/tests`: 798 passed (388s). 명세를 고쳤으므로 `test_remote.py`가 포함돼 있습니다. `python -m pytest -q tools/test_distribution_boundary.py`: 9 passed. `api.py`·state 형식·tmux option 이름은 바꾸지 않아 나머지 명령은 실행하지 않았습니다.
+- 근거 재사용: origin/main merge 없음(Base 06ecfad 그대로).
