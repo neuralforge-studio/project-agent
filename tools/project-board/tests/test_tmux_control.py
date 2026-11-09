@@ -72,6 +72,143 @@ def test_ending_a_test_server_removes_the_runtime_directory_the_board_made_for_i
     assert not tmux_test_server.socket_path(name).exists()
 
 
+SOCK = "0123456789abcdef.sock"
+
+
+def _runtime_directory(root, pid, uid=None, mode=0o700, files=("control.lock",)):
+    """A Board runtime directory as `_private_dir` leaves it; `.sock` names are real sockets."""
+    directory = root / f"project-board-{os.getuid() if uid is None else uid}-{pid}"
+    directory.mkdir(mode=0o700)
+    for name in files:
+        if name.endswith(".sock"):
+            # A unix socket path is limited to ~100 bytes; bind by a relative name from inside.
+            here = os.getcwd()
+            os.chdir(directory)
+            try:
+                with socket.socket(socket.AF_UNIX) as bound:
+                    bound.bind(name)
+            finally:
+                os.chdir(here)
+        else:
+            (directory / name).write_text("")
+    directory.chmod(mode)
+    return directory
+
+
+def _dead_pid():
+    process = subprocess.Popen(["true"])
+    process.wait()
+    return process.pid
+
+
+def _server_pid(name):
+    _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "home", "sleep", "60")
+    return int(_tmux(name, "display-message", "-p", "#{pid}"))
+
+
+@pytest.fixture
+def runtime_root(tmp_path, monkeypatch):
+    """A private stand-in for `/tmp`, so a sweep never sees the user's real directories."""
+    root = tmp_path / "t"
+    root.mkdir()
+    monkeypatch.setattr(tmux_control, "RUNTIME_ROOT", root)
+    return root
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_next_board_start_removes_the_directory_of_a_server_that_was_killed(runtime_root):
+    ended = tmux_test_server.claim("board-test")
+    running = tmux_test_server.claim("board-test")
+    try:
+        _server_pid(ended)
+        _server_pid(running)
+        gone = tmux_control._private_dir(Tmux(socket_name=ended))
+        kept = tmux_control._private_dir(Tmux(socket_name=running))
+        assert gone.is_dir() and kept.is_dir()
+        tmux_test_server.release(ended)
+        assert gone.is_dir(), "kill-server leaves the directory; only the next Board start removes it"
+
+        assert tmux_control._private_dir(Tmux(socket_name=running)) == kept
+        assert not gone.exists()
+        assert kept.is_dir(), "a live server's directory stays"
+    finally:
+        tmux_test_server.release(ended)
+        tmux_test_server.release(running)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_sweep_removes_directories_of_ended_servers_and_of_pids_tmux_no_longer_holds(runtime_root):
+    live, recycled = tmux_test_server.claim("board-test"), tmux_test_server.claim("board-test")
+    stranger = subprocess.Popen(["sleep", "60"])
+    try:
+        live_pid, recycled_pid = _server_pid(live), _server_pid(recycled)
+        kept = _runtime_directory(runtime_root, live_pid, files=("control.lock", SOCK))
+        gone = [
+            _runtime_directory(runtime_root, _dead_pid(), files=("control.lock", SOCK)),
+            _runtime_directory(runtime_root, _dead_pid(), files=()),
+            _runtime_directory(runtime_root, stranger.pid),  # the pid is alive but is not tmux
+            _runtime_directory(runtime_root, recycled_pid),  # tmux, but newer than the directory
+        ]
+        old = time.time() - 3600
+        os.utime(gone[-1], (old, old))
+
+        assert sorted(tmux_control.reap_runtime_directories(runtime_root)) == sorted(gone)
+        assert [path.exists() for path in gone] == [False] * 4
+        assert kept.is_dir() and (kept / SOCK).exists()
+    finally:
+        stranger.kill()
+        stranger.wait()
+        tmux_test_server.release(live)
+        tmux_test_server.release(recycled)
+
+
+def test_sweep_leaves_everything_that_is_not_an_ended_boards_own_directory(runtime_root, tmp_path):
+    pid = _dead_pid()
+    uid = os.getuid()
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (target / "control.lock").write_text("")
+    stray = _runtime_directory(runtime_root, pid + 1, files=("control.lock", "notes.txt"))
+    odd_socket = _runtime_directory(runtime_root, pid + 2, files=("control.lock",))
+    (odd_socket / SOCK).write_text("not a socket")
+    nested = _runtime_directory(runtime_root, pid + 3, files=("control.lock",))
+    (nested / "sub").mkdir()
+    (runtime_root / f"project-board-{uid}-{pid + 4}").symlink_to(target)
+    kept = [
+        stray, odd_socket, nested, target,
+        _runtime_directory(runtime_root, pid + 5, mode=0o755),
+        _runtime_directory(runtime_root, pid + 6, uid=uid + 1),
+        runtime_root / f"project-board-{uid}-{pid + 4}",
+    ]
+    for name in (f"project-board-{uid}-abc", f"project-board-{uid}-{pid}-x", f"project-board-{uid}",
+                 f"x-project-board-{uid}-{pid}", f"project-board-ui-{pid}"):
+        (runtime_root / name).mkdir()
+        kept.append(runtime_root / name)
+
+    assert tmux_control.reap_runtime_directories(runtime_root) == []
+    assert all(path.exists() for path in kept)
+    assert (target / "control.lock").exists()
+
+
+def test_concurrent_sweeps_of_the_same_directory_both_finish(runtime_root):
+    for _ in range(20):
+        directory = _runtime_directory(runtime_root, _dead_pid(), files=("control.lock", SOCK))
+        errors = []
+
+        def sweep():
+            try:
+                tmux_control.reap_runtime_directories(runtime_root)
+            except BaseException as error:  # noqa: BLE001 - any escape is the failure
+                errors.append(error)
+
+        threads = [threading.Thread(target=sweep) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert errors == [] and not directory.exists()
+
+
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_remote_seat_switch_uses_its_local_display_window_for_only_clicking_client(tmp_path):
     board = Board(tmp_path)
