@@ -195,6 +195,7 @@ class SidebarApp(App):
         self._snapshot_busy = False
         self._live_busy = False
         self._stopping = False
+        self._tooltip_expiry = None
         self._click_server: asyncio.AbstractServer | None = None
 
     def compose(self) -> ComposeResult:
@@ -244,6 +245,26 @@ class SidebarApp(App):
         if shown:                                    # a window shown again is read at once
             self._queue(self.refresh_snapshot())
             self._queue(self.refresh_liveness())
+
+    # A hover tooltip is hidden only by the next mouse move over this pane. When tmux moves focus to
+    # another pane, or the mouse leaves with focus unchanged, no such event follows and the tooltip
+    # would stay (BOARD-005). Focus loss hides it at once; otherwise it expires this long after the
+    # last mouse motion. The value is owned by docs/project-board-tui-plan.md section 3.
+    TOOLTIP_IDLE = 5.0
+
+    def _hide_tooltip(self) -> None:
+        screen = self.screen
+        if screen._tooltip_timer is not None:      # a tooltip still waiting for its delay
+            screen._tooltip_timer.stop()
+        screen._clear_tooltip()
+
+    def on_app_blur(self, event) -> None:
+        self._hide_tooltip()
+
+    def on_mouse_move(self, event) -> None:
+        if self._tooltip_expiry is not None:
+            self._tooltip_expiry.stop()
+        self._tooltip_expiry = self.set_timer(self.TOOLTIP_IDLE, self._hide_tooltip)
 
     def on_unmount(self) -> None:
         self._stopping = True

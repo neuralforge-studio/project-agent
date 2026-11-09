@@ -59,6 +59,7 @@ R 0 GPU-007
 - 제출 후 검토 대기(`review_wait`)는 `R`이 아닙니다. 필요하면 행의 색과 도움말로 구분합니다.
 - `path_cr` 또는 `path_decide`가 없는 project는 해당 개수를 `-`로 표시합니다. 읽기 오류도 `0`으로 바꾸지 않습니다.
 - 화면은 등록 순서를 유지합니다. 긴 project 이름과 CR ID는 tooltip과 가로 스크롤로 전체 값을 볼 수 있게 합니다.
+- Tooltip은 pane이 focus를 잃으면(`AppBlur`) 곧바로, 그 밖에는 마지막 mouse motion 5초 뒤에 지웁니다(`SidebarApp.TOOLTIP_IDLE`). Mouse가 다른 pane으로 나가면 tmux는 이 pane에 아무 event도 보내지 않아 Textual이 tooltip을 지울 계기가 없습니다. 그래서 모든 경우에 tooltip이 남아 사용자가 따로 치울 일이 없게 시간으로 닫습니다. 5초는 표시 지연(0.5초) 뒤 가장 긴 tooltip(seat의 CR 제목·호스트·원격 경로)을 읽기에 충분하고, 움직이지 않는 mouse 때문에 오래 남지는 않는 값입니다. Motion이 이어지면 시간을 다시 잽니다. 닫은 tooltip은 mouse를 다시 움직여야 다시 뜹니다.
 
 마우스 클릭은 필수 조작입니다. tmux 설정은 이미 `mouse on`입니다. Sidebar pane 안의 클릭과 휠은 TUI가 처리합니다. tmux 상태줄의 별도 `Board` 영역은 기존 session·cswap 클릭 동작을 유지하면서 sidebar toggle에 사용합니다.
 
