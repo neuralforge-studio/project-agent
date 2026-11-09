@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: afc5dc25ff13e85251ff5e46ebfd3fb33f0653ca 2026-11-09T21:09:33+09:00
+- Outcome: fixed
 
 ## Symptom
 SESSION-005가 만든 `agent-session watch --all`은 운영자가 system crontab에 한 줄을 넣어야 동작합니다. 설치기는 crontab을 고치지 않으므로(설치 계약 3절: 고치는 기존 파일은 tmux 설정 하나) 사람이 따로 등록·해제해야 하고, 팀이 없을 때도 계속 돌며, Leader·tmux window의 수명과 묶여 있지 않습니다. 또 감시하는 process가 멈추거나 등록이 빠져도 아무도 알 수 없습니다.
@@ -23,6 +24,7 @@ SESSION-005가 만든 `agent-session watch --all`은 운영자가 system crontab
 - 2026-11-09 Leader: 고친다(Leader 판정). SESSION-005 인수 때 실행 방식의 수명 문제를 검토하지 않은 Leader의 누락입니다. 사용자가 원한 동작(window가 끝나면 함께 끝나는 주기 실행)을 결정적으로 만드는 방법으로, Claude session cron 대신 agent-session이 Leader run에 묶인 감시 process를 직접 띄우는 방식을 택합니다. 이유: session cron은 Leader가 긴 turn 중이면 실행되지 않고, 최대 30분 늦고, 7일 뒤 만료되며, Codex에 없고, Leader 모델이 만들어야만 생깁니다. 사용자는 이 판정을 되돌릴 수 있습니다.
 - 2026-11-09 Leader: 이전 판정(agent-session이 Leader run에 묶인 감시 process를 띄움)을 철회합니다. 사용자 원문: "아니야 잘못되었어. TUI 자체적인 cron 기능은 없나? 정확하게 instance적으로 돌아가길 바래. WOrker의 cron을 이용해도 되잖아." 새 판정: 감시는 각 Claude instance(Leader와 각 Worker)가 자기 TUI의 session cron(CronCreate)으로 스스로 합니다. session cron은 그 instance가 쉬고 있을 때만 실행되고(turn 중에는 끼어들지 않음) instance가 끝나면 사라지므로, 잡으려는 상태(turn이 끝난 채 멈춤)에만 깨어나고 수명이 instance와 정확히 같습니다. 중앙 감시 process와 system crontab은 두지 않습니다.
 - 2026-11-09 Leader: 제출 a4490fcef4ab0596fc7399edf554ef3f4da708d4를 인수합니다. Leader review: self-check.md가 cron 식·점검 prompt의 유일한 원본이고, Claude Leader·Worker 첫 prompt와 모든 resume 메시지가 그것을 가리킴(Codex 제외), watch의 Leader 실행 허용(자기 project 하나, 나머지 거절)과 Leader 호출 시 자기에게 메시지 없이 evidence 반환, system crontab 안내 제거를 확인했습니다. Worker 확인 요청 2건(Leader 호출 watch의 evidence 반환, 반납 대기·빈 seat는 project-item ls·state로)은 맞는 판정입니다. 바꾼 모듈에 닿는 test 325 passed(merge 뒤), 경계 test 9. 실제 CronList 확인은 upgrade 뒤.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 189d1e7(Merge cr/SESSION-006, 제출 a4490fc). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [동작 명세](../../project-team/spec.md) 4절·7절 watch·resume, [project-team skill](../../../skills/project-team/SKILL.md), `tools/agent-session/agent_session/launch_artifacts.py`의 `prompt_text`, [README 검증 표](../../../README.md#검증).

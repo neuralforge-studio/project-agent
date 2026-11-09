@@ -8,6 +8,7 @@
 - SESSION-004
 - SESSION-003
 - TEST-005
+- SESSION-006
 
 형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
 
