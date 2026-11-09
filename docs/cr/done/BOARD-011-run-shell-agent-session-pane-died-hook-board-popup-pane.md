@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Base: 8d070b2be0c5a8a5c396c8c63713d8e044569dc7 2026-11-10T00:57:30+09:00
+- Outcome: fixed
 
 ## Symptom
 BOARD-010은 tmux 통합 파일의 `run-shell` 작업을 모두 `project_agent_run.sh`로 감싸 작업 pane에 출력·종료 상태가 보이지 않게 했습니다. 같은 원인의 `run-shell`이 통합 파일 밖의 제품 코드에 두 곳 남아 있습니다. 실패하면 활성 작업 pane에 `'…' returned N`이 view-mode로 보일 수 있습니다.
@@ -18,6 +19,7 @@ BOARD-010은 tmux 통합 파일의 `run-shell` 작업을 모두 `project_agent_r
 ## Disposition
 - 2026-11-10 Leader: 고친다(Leader 판정). BOARD-006·010과 같은 원인의 결함이며 근거가 있으므로 위임 범위입니다. 이 CR로 이 결함 종류를 제품 전체에서 닫습니다.
 - 2026-11-10 Leader: 제출 e9ec0bc211837a6f65bfa42e35210065e21ec209를 인수합니다. Leader review: 제품의 run-shell 작성 지점 세 곳(pane-died[agent-session] hook, stop·restart controller(본문에 없던 지점, 같은 결함 종류라 범위 안), Board popup)이 모두 quiet_shell을 거치는 것을 확인했습니다. controller에서 exec를 뺀 것은 결과 파일 계약을 바꾸지 않고, agent_session에 controller의 process 계보를 가정하는 코드가 없음도 확인했습니다. 규칙의 구현이 project_agent_run.sh(통합 파일)와 quiet_shell(도구) 둘인 것은 원격 bundle과 원격 host의 hook이 script를 가질 수 없기 때문이며, 규칙의 원본은 계약 5.3절 한 곳이고 option 이름은 test가 두 구현을 맞춥니다(인정). pane-died hook의 view-mode는 재현되지 않았다는 정직한 기록과 실패 기록 개선을 인정합니다. ast로 tools/**·integrations/**의 모든 run-shell을 검사하는 test, controller·popup 형태의 수정 전 재현, README 표의 네 행(agent-session 787+기존 실패 1(TEST-007), project-board 154, 네 번째 명령 103, install 261+2 skipped) 확인.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 61d4d95(Merge cr/BOARD-011, 제출 e9ec0bc). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 1. 두 곳을 계약 5.3절 규칙에 맞춥니다: agent-session의 `pane-died[agent-session]`(자동 이벤트 → `hook` 방식), Board popup(사람이 연 것 → 실패를 작업 pane을 덮지 않고 알림). 통합 파일의 `project_agent_run.sh`를 쓸 수 없는 경로(원격 bundle, 통합 파일이 없는 tree)면 같은 규칙을 그 도구 안에서 지킵니다.
