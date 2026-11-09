@@ -11,7 +11,7 @@ project-agent는 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로
 | `tools/project-board/` | 모든 프로젝트의 상황을 보이는 tmux 화면 | [README](tools/project-board/README.md) |
 | `tools/` 바로 아래 | 세 CLI가 공유하는 `python-launcher.sh`와 저장소 수준 test(`conftest.py`, `test_*.py`) | [설치 계약 6.1절](docs/project-team/install-contract.md#61-python-선택) |
 | `skills/project-team/`, `skills/project-item/` | Leader·Worker·운영자 절차와 CR·결정 항목 형식 | [SKILL.md](skills/project-team/SKILL.md), [SKILL.md](skills/project-item/SKILL.md) |
-| `integrations/tmux/` | Board binding, status 표시, 결정 대기 알림 | 각 script의 머리말, [project-board README](tools/project-board/README.md) |
+| `integrations/tmux/` | Board binding, status 표시, 결정 대기 알림. 설치본은 `project-agent.conf`를 읽습니다 | 각 script의 머리말, [project-board README](tools/project-board/README.md) |
 | `docs/project-team/` | 제품 지도, 동작 명세, 설치 계약, 예제 JSON | [제품 지도](docs/project-team/README.md) |
 | `docs/project-board-*` | Project Board 계획과 화면 시안 | [TUI 계획](docs/project-board-tui-plan.md) |
 | `docs/cr/` | 이 저장소의 CR | [CR 계약](skills/project-item/references/cr.md) |
@@ -24,7 +24,7 @@ project-agent는 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로
 python -m pytest -q -n 8 tools/agent-session/tests
 python -m pytest -q tools/project-item/tests
 python -m pytest -q tools/project-board/tests
-python -m pytest -q integrations/tmux/test_tmux_decide_status.py tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py
+python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py
 ```
 
 - 네 명령은 서로 독립이며 pytest 설정 파일 없이 각 디렉터리의 `conftest.py`로 동작합니다.

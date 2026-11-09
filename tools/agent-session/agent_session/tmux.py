@@ -16,7 +16,7 @@ from . import process
 
 
 _PREFIX = "@agent_session_"
-PANE_ID_OPTION = _PREFIX + "pane_id"    # window option naming the managed pane; project_board.conf repeats it
+PANE_ID_OPTION = _PREFIX + "pane_id"    # window option naming the managed pane; project-agent.conf repeats it
 _IDENTITY = ("base", "target", "job_id", "run_id", "project_id", "window_id", "pane_id",
              "server_pid", "server_started", "server_birth", "socket_path")
 

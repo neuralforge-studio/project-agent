@@ -13,7 +13,7 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 PRODUCT_PATHS = (
     "tools/agent-session", "tools/project-item", "tools/project-board",
     "tools/python-launcher.sh", "skills/project-team", "skills/project-item",
-    "docs/project-team",
+    "docs/project-team", "integrations/tmux",
 )
 SUFFIXES = {".py", ".md", ".sh", ".json", ".yaml", ".yml", ".txt", ".conf", ""}
 # Personal guidance files and the repository's common principle documents. The common principle

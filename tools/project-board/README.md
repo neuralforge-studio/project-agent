@@ -21,10 +21,23 @@ with the standard virtual environment:
 ln -s <project-agent 저장소>/tools/project-board/bin/project-board ~/.local/bin/project-board
 ```
 
-Source `~/.tmux/scripts/project_board.conf` from a custom `~/.tmux.conf`. If that file
-uses tmux's one-line default status, also source `project_board_home_status.conf` to add
-the clickable `Board` range. The repository's `tmux/tmux.conf` already includes the Board
-binding and status range.
+Read `integrations/tmux/project-agent.conf` with `source-file`. An installation reads it
+through `~/.local/lib/project-agent/current/integrations/tmux/project-agent.conf`; a
+development checkout reads the file in the repository. The file finds its helpers next to
+itself and needs no copy under `~/.tmux`.
+
+It binds prefix `B` (set the option `@project_agent_board_key` before reading to use another
+key) and root `MouseDown1Pane` only when they are unbound or have tmux's default. A key
+that has another binding is left as it is and is listed in `@project_agent_board_skipped`.
+Its hooks are named `[project-agent]`, so other hooks stay. It does not change your status
+layout. To show the open decisions, add one line to your own tmux configuration:
+
+```tmux
+set-option -ag status-right '#{E:@project_agent_decide_status}'
+```
+
+The binding, hook and option list is in
+[the install contract](../../docs/project-team/install-contract.md#53-tmux-server).
 
 On Workstation, use `/primehome/tools/Inhouse/Python3/latest/` and request a missing package
 instead of creating a virtual environment.

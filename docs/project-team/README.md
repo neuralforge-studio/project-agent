@@ -17,7 +17,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | `project-item` skill | CR·결정 항목 사용 시점과 상태·전이, 형식 규칙 | `skills/project-item/` |
 | 동작 명세 | 등록, state, start·stop·restart·shutdown·resume, CR과 JOB의 연결 | `docs/project-team/spec.md` |
 | 설치 계약 | 설치·갱신·되돌리기·제거가 만들고 고치고 건드리지 않는 경로, 실행 중 HOME 쓰기 목록, 인수 test 명세. 설치기는 DIST-001 4단계에서 구현 | `docs/project-team/install-contract.md` |
-| tmux 연결 | Board 열기·닫기 binding, status 표시, 결정 대기 알림 | `integrations/tmux/tmux_project_board.sh`, `project_board.conf`, `project_board_home_status.conf`, `tmux_decide_status.py` |
+| tmux 연결 | Board 열기·닫기 binding, status 표시, 결정 대기 알림 | `integrations/tmux/tmux_project_board.sh`, `project-agent.conf`, `project_agent_bind.sh`, `tmux_decide_status.py` |
 | 원격 seat 실행본 | SSH Worker seat에 보내는 Python helper와 guidance 문서 | `tools/agent-session/agent_session/remote.py`의 `source_archive()` |
 
 ## 구성 요소별 문서와 검증 위치
@@ -28,7 +28,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | `project-item` | 형식·상태: [SKILL.md](../../skills/project-item/SKILL.md), [cr.md](../../skills/project-item/references/cr.md), [decide.md](../../skills/project-item/references/decide.md). 명령 사용: [README](../../tools/project-item/README.md)와 `--help` | `tools/project-item/tests/` |
 | `project-board` | [README](../../tools/project-board/README.md). 화면 계약: [TUI 계획](../project-board-tui-plan.md) | `tools/project-board/tests/` |
 | `project-team` skill | [SKILL.md](../../skills/project-team/SKILL.md) | 위 세 도구의 test와 skill 검사(아래) |
-| tmux 연결 | 각 script의 머리말과 `project-board` README | `integrations/tmux/test_tmux_decide_status.py` |
+| tmux 연결 | 각 script의 머리말과 `project-board` README | `integrations/tmux/test_tmux_decide_status.py`, `integrations/tmux/test_project_agent_conf.py` |
 
 명령과 옵션의 원본은 각 CLI의 `--help`입니다. README와 SKILL.md는 옵션을 다시 쓰지 않습니다.
 
@@ -108,7 +108,7 @@ CR ARCH-001이 합의한 목표는 모두 위 현행에 옮겼습니다(2026-11-
 3. `agent_session.internal`의 `register_from_hook`, `register_current`, `mark_process`, `run_controller`. Hook command, Codex 등록 command, `launch.sh`, `controller.sh`가 `tools/agent-session`의 절대 경로로 호출합니다.
 4. `python -m agent_session.remote_runtime`과 `python -m agent_session.remote_bridge`.
 5. 원격 zip의 배치. `agent-session/`, `project-item/`, `guidance/<저장소 상대 경로>`입니다. 어떤 guidance 문서를 싣는지는 `remote.py`의 `GUIDANCE_FILES`가 정하고, test가 skill 문서의 link와 맞는지 확인합니다.
-6. tmux script는 저장소 상대 경로로 도구를 부릅니다(`tmux_project_board.sh`는 `../../tools/project-board/bin/project-board`, `tmux_decide_status.py`는 `tools/project-item`).
+6. tmux 연결은 자기 디렉터리 기준의 상대 경로로 도구를 부릅니다(`tmux_project_board.sh`는 `../../tools/project-board/bin/project-board`, `tmux_decide_status.py`는 `tools/project-item`). `project-agent.conf`는 읽힌 디렉터리를 `@project_agent_tmux_dir`에 두고 binding·hook이 그 디렉터리의 `tmux_project_board.sh`와 `project_agent_bind.sh`를 부릅니다. 파일 이름 `integrations/tmux/project-agent.conf`는 설치 계약(2절)이 읽습니다.
 
 ## 검증
 

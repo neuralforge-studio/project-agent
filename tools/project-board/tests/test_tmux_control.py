@@ -395,7 +395,7 @@ def test_resize_hook_records_only_board_pane_width():
         _tmux(name, "-f", "/dev/null", "new-session", "-d", "-x", "100", "-y", "30",
               "sleep", "60")
         _tmux(name, "source-file", str(Path(__file__).resolve().parents[3] /
-                                       "integrations/tmux/project_board.conf"))
+                                       "integrations/tmux/project-agent.conf"))
         board = _tmux(name, "split-window", "-h", "-b", "-l", "25", "-P", "-F", "#{pane_id}",
                       "sleep", "60")
         window = _tmux(name, "display-message", "-p", "#{window_id}")
@@ -419,7 +419,7 @@ def test_managed_pane_death_removes_board_and_restore_state(monkeypatch):
         _tmux(name, "set-option", "-g", "remain-on-exit", "on")
         clients.append(_attached(name, "one"))
         _tmux(name, "source-file", str(Path(__file__).resolve().parents[3] /
-                                       "integrations/tmux/project_board.conf"))
+                                       "integrations/tmux/project-agent.conf"))
         window = _tmux(name, "display-message", "-p", "-t", "one", "#{window_id}")
         managed = _tmux(name, "display-message", "-p", "-t", "one", "#{pane_id}")
         _tmux(name, "set-option", "-w", "-t", window, "@agent_session_pane_id",
