@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Base: b2038ee30d386a2a7b0730df7abb7fd96a6410c5 2026-11-10T00:19:24+09:00
+- Outcome: fixed
 
 ## Symptom
 사용자 보고: "Decision / CR을 위한 popup 창에서 item의 list, selected item에 대한 표시가 너무 이상함." 구체적인 화면은 아직 받지 않았습니다.
@@ -19,6 +20,7 @@
 - 2026-11-09 Leader: 고친다(Leader 판정). 사용자가 표시 결함을 보고했고 위임 범위입니다. 구체 화면이 없으므로 Worker가 지금 화면을 capture해 문제를 목록으로 만들고, 고친 화면과 함께 Result에 둡니다. BOARD-002 뒤에 시작합니다. 사용자 지시(2026-11-09 대화): "위와 같이 11개의 개선 요청 사항이 있어."
 - 2026-11-10 Leader: 선행 BOARD-002가 61e881e로 통합되었습니다(BOARD-003·004 병합). 그 구조를 따르십시오: Board pane은 본 window에 남고(최대 8개, 최근 본 순서), 보이지 않는 pane은 갱신하지 않으며(`project_board_visibility.sh`의 SIGUSR1), 파일은 바뀐 것만 다시 읽습니다(TUI 계획 2·5절). Board CR 다섯 개가 같은 `tui.py`·`tmux_control.py`를 고칠 수 있으므로 제출 전에 `origin/main`을 merge하십시오.
 - 2026-11-10 Leader: 제출 1d85bbf551541ad9b92152bf09b94336d7fb7d17를 인수합니다. Leader review: TUI 계획의 'Popup 목록 행과 선택 표시' 규칙과 80·120열 고치기 전·뒤 capture, 문제 7개의 해결(선택 ▶·파란 배경, 한 줄 행과 … 줄임, 결정 상태 색, 목록 폭 40%, 초점과 선택 구분, 제목 markup 차단, review_wait 표시)을 확인했습니다. 가정(CR 행 상태는 목록 머리줄이 표시하므로 행에는 review_wait만)은 받아들입니다. merge 없음(origin/main 진행 없음).
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 c5f8e3e(Merge cr/BOARD-007, 제출 1d85bbf). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [project-board README](../../../tools/project-board/README.md), [TUI 계획](../../project-board-tui-plan.md), [설치 계약 5.3·5.4절](../../project-team/install-contract.md), [README 검증 표](../../../README.md#검증).
