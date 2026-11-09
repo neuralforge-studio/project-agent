@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: 4c4168325298d1ae1515696acbc16417de5d152e 2026-11-09T17:40:07+09:00
+- Outcome: fixed
 
 ## Symptom
 설치·갱신·되돌리기는 관리 run이 떠 있는 동안 합니다. 옛 release와 새 release가 한동안 같은 state·tmux option·CR 파일을 함께 씁니다. 형식이 호환되지 않는 갱신을 막는 장치가 없습니다. 또 `upgrade`는 이전 release를 지우지 않으므로 release가 계속 쌓이고, 정리 명령이 없습니다.
@@ -23,6 +24,7 @@
 - 2026-11-09 Leader: 고친다(Leader 판정). INSTALL-001 Contract 4항과 설치 계약 7.1절 3항이 정한 일을 INSTALL-001에서 떼어 냈습니다(사용자 지시 2026-11-09 "병렬로 진행 가능 한 것은 병렬로 진행해. 남은 CR은 전부 등록해서…"). 승인한 계획(agent DIST-001 4단계)의 하위 작업이므로 위임 범위입니다. INSTALL-001과 RELEASE-001이 통합된 뒤 시작합니다.
 - 2026-11-09 Leader: 선행 INSTALL-001이 ecc5bce로 통합되었습니다. 설치기 구조를 따르십시오: 경로는 `paths.Places`의 닫힌 식별자에서만 계산(원칙 A), 되돌림·제거는 설치기가 만든 상태일 때만(원칙 B), 사용자 tmux 파일은 원자적 교체(원칙 C), journal format 2(계약 2절 규칙 5). INSTALL-004와 INSTALL-005는 병렬로 진행하므로 같은 설치기 파일을 고칠 수 있습니다. 제출 전에 `origin/main`을 merge하십시오.
 - 2026-11-09 Leader: 제출 cf29dcc4d55aaec355b3bd5cfc94e93582d66908를 인수합니다. Leader review: 삭제는 이미 검토한 _op_rm_tree(digest 대조 뒤 예약 임시 이름으로 rename·삭제)를 그대로 씁니다. plan_prune은 current·previous·사용 중 release와 digest가 없거나 다른 release를 남기고 알림만 하며, origins_in_use는 alive·unknown slot을 쓰는 것으로 보고 script를 못 찾으면 그 project의 모든 run 디렉터리를 쓰는 것으로 셉니다(보수적). 계획 뒤 시작하는 run은 current를 쓰므로 겹치지 않습니다. 형식 버전 거절(formats_differ, 동결 사본=1)과 Worker 판단 5건을 확인했습니다. install/tests 239 passed·2 skipped(merge 뒤 commit), 다른 suite는 53ce59a 근거 재사용(merge가 tools를 바꾸지 않음).
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 0d6e99b(Merge cr/INSTALL-004, 제출 cf29dcc). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 7절·7.1절·7.2절·8절, INSTALL-001의 설치기 코드와 test 하네스, RELEASE-001이 정한 형식 버전의 선언.
