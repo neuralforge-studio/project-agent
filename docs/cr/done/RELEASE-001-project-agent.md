@@ -5,6 +5,7 @@
 - Severity: S3
 - Requester: agent, /primehome/swain/Utils/agent/agent.base, 2026-11-09
 - Base: 9458aba01535c1a12ee034ce725048aca5448c10 2026-11-09T14:40:54+09:00
+- Outcome: fixed
 
 ## Symptom
 project-agent에는 버전 규칙, 변경 기록, 다른 직원이 읽을 설치 안내가 없습니다. 새 계정에서 설치해 계약 밖 변경이 없는지 확인한 기록도 없습니다.
@@ -24,6 +25,7 @@ project-agent에는 버전 규칙, 변경 기록, 다른 직원이 읽을 설치
 - 2026-11-09 Leader: 판정 보류(open 유지). REPO-001·TMUX-001·INSTALL-001이 통합된 release를 기준으로 Implementation·Verification을 써서 판정합니다. 판정에 필요한 입력은 세 CR이 통합한 release입니다. 순서는 사용자가 2026-11-09 대화에서 지시했습니다. 사용자 원문: "제안 진행 순서대로 진행". 새 계정에서 하는 시범 설치의 계정 준비는 판정할 때 결정 항목으로 사용자에게 묻습니다.
 - 2026-11-09 Leader: 고친다(Leader 판정), 범위를 나눕니다. 사용자 지시(2026-11-09 대화): "seat 3자리인데, 4자리 만들어서, 병렬로 진행 가능 한 것은 병렬로 진행해. 남은 CR은 전부 등록해서 얼마나 남았는지 알 수 있게 해줘." 이 CR은 버전 규칙, `VERSION` 파일, 형식 버전 선언, 변경 기록만 맡고 INSTALL-001과 병렬로 진행합니다. 직원용 안내문은 RELEASE-002, 새 계정 시범 설치는 RELEASE-003으로 떼어 냈습니다. 승인한 계획 agent DIST-001 7단계의 하위 작업이므로 위임 범위입니다. 버전 체계는 아래 Implementation의 기본값(SemVer, 첫 값 0.1.0)으로 정합니다. 사용자는 이 판정을 되돌릴 수 있습니다.
 - 2026-11-09 Leader: 제출 15f01a3e6bf947ab22f19638bdbfce83b27fe765를 인수합니다. Leader review: VERSION·tools/formats.json·release.md·CHANGELOG·link diff를 확인했습니다. 제출 snapshot에서 test_release_files·test_distribution_boundary 통과. Worker 보고(tmux_options 1 유지)는 맞습니다: TMUX-001은 @project_agent_* option 4개를 더했을 뿐이고 기존 @project_board_*·@agent_session_* 이름과 의미는 같으므로 release.md 3절의 '이전 release가 무시하는 추가'입니다. 이 workstation 전환(agent DIST-001 6단계) 때 옛 통합 파일의 [board] hook이 server에 남으면 새 [project-agent] hook과 함께 sync가 두 번 돕니다. 이는 형식 문제가 아니라 전환 절차 문제이므로 INSTALL-005 Disposition에 전달 사항으로 남깁니다.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 0cbacc6(Merge cr/RELEASE-001, 제출 15f01a3). origin/main 반영 확인. CHANGELOG Unreleased에 RELEASE-001을 더했습니다.
 
 ## Implementation
 읽을 문서: [CR 계약의 "release와 CR"](../../../skills/project-item/references/cr.md), [설치 계약](../../project-team/install-contract.md) 1절(release)·7.1절, INSTALL-001·INSTALL-004의 Implementation(이 CR이 정한 값을 씁니다).
