@@ -32,6 +32,13 @@ def fixture_hook(monkeypatch, kind="codex"):
     monkeypatch.setattr(Tmux, "install_exit_hook", install)
 
 
+def no_exit_hook(monkeypatch):
+    """Leave the server's pane-died hook out: a test that kills the CLI and calls `finish_ended` itself decides what
+    the wrap-up sees (a held lock, a monkeypatched process fact). The real hook runs in another interpreter that
+    no monkeypatch reaches, so it would wrap the same run up concurrently, on the real facts (TEST-008)."""
+    monkeypatch.setattr(Tmux, "install_exit_hook", lambda self, python, library: False)
+
+
 def result_file(env, run_id):
     return env.base / "agent" / "runs" / run_id / "finish-result.json"
 
@@ -141,6 +148,7 @@ def test_the_wrap_up_leaves_a_run_to_the_command_that_controls_it(session_env, m
     import agent_session.lifecycle as lifecycle
 
     env = session_env
+    no_exit_hook(monkeypatch)
     cr = env.cr()
     worker = env.manager().start(cr)
     kill_cli(env, worker["window_id"])
@@ -213,6 +221,7 @@ def test_a_claude_cli_that_still_has_a_live_process_group_is_not_confirmed(sessi
 
     env = session_env
     claude_project(env, monkeypatch)
+    no_exit_hook(monkeypatch)
     monkeypatch.setattr(lifecycle, "FINISH_END_SECONDS", 1)
     cr = env.cr()
     worker = env.manager().start(cr)
