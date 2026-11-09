@@ -7,7 +7,7 @@ import json
 import os
 import subprocess
 
-from . import actions, record as records, release as releases, runs, tmuxconf
+from . import actions, journal, record as records, release as releases, runs, tmuxconf
 from .layout import SKILLS, TOOLS, InstallerError
 
 
@@ -16,20 +16,7 @@ class Plan:
     command: str
     steps: list = field(default_factory=list)
     notes: list = field(default_factory=list)
-
-
-def execute(plan):
-    """Apply the steps in order. A failure undoes the steps already applied and raises."""
-    journal = actions.Journal()
-    for step in plan.steps:
-        try:
-            step.run(journal)
-        except BaseException as error:
-            failures = journal.rollback()
-            undone = "" if not failures else " (not undone: %s)" % "; ".join(failures)
-            raise InstallerError("command_failed", "%s failed at %s: %s. The changes made so far were undone%s."
-                                 % (plan.command, step.path, error, undone), {"path": str(step.path)},
-                                 exit_code=4) from error
+    journal_path: object = None          # where the run keeps its journal (journal.path_for)
 
 
 class Builder:
@@ -37,7 +24,7 @@ class Builder:
 
     def __init__(self, env, command):
         self.env = env
-        self.plan = Plan(command)
+        self.plan = Plan(command, journal_path=journal.path_for(env))
         self.conflicts = []
         self.created_dirs = []
         self._planned = set()
@@ -206,8 +193,8 @@ def _plan_tmux_block(env, b, new):
     if not os.path.lexists(env.backup):
         b.add(actions.mkdir(env.backup))
         new["owned"].append(records.owned(env.display(env.backup), "dir"))
-    b.add(actions.write_file(backup, data, "backup of %s" % display))
-    b.add(actions.append_block(target, tmuxconf.BLOCK))
+    b.add(actions.backup_file(backup, target, data))
+    b.add(actions.append_block(target, tmuxconf.BLOCK, data, os.lstat(target)))
     tmux.update(state="inserted", file=display, created=False, backup=env.display(backup))
     b.note(reload)
 
@@ -302,11 +289,12 @@ def plan_uninstall(env, source_root, socket=None):
                              "(`agent-session stop`, or `resume` and then `stop`). Nothing was changed.",
                              {"runs": [{"project": item["project"], "slot": item["slot"], "state": item["state"]}
                                        for item in live]})
-    plan = Plan("uninstall")
+    plan = Plan("uninstall", journal_path=journal.path_for(env))
     removed = set()
     changed = {path for path, _, _ in records.mismatches(env, installed)}
     record_path = env.display(env.record)
-    for entry in installed["owned"]:
+    _plan_tmux_removal(env, installed, plan)             # first: a file that changed since the plan stops the run
+    for entry in installed["owned"]:                     # before anything else was removed
         if entry["path"] == record_path:
             continue
         path = env.expand(entry["path"])
@@ -314,18 +302,29 @@ def plan_uninstall(env, source_root, socket=None):
             if os.path.lexists(path):
                 plan.notes.append("%s was changed by you; it is left as it is." % entry["path"])
             continue
-        plan.steps.append(actions.remove_tree(path) if entry["kind"] == "dir"
-                          else actions.remove_path(path, entry["kind"]))
+        if entry["kind"] == "dir":
+            plan.steps.append(actions.remove_tree(path))
+        elif entry["kind"] == "symlink":
+            plan.steps.append(actions.remove_link(path, entry["target"]))
+        else:
+            plan.steps.append(actions.remove_file(path, entry.get("sha256")))
         removed.add(path)
-    _plan_tmux_removal(env, installed, plan)
-    plan.steps.append(actions.remove_path(env.record, "file"))
     removed.add(env.record)
+    removed.add(plan.journal_path)
+    # A directory that holds the journal can only go after it; every other created directory goes before the
+    # record, so that a run cut off in between never leaves "a library without a record".
+    holding = plan.journal_path.parent
+    early, late = [], []
     for text in reversed(installed["created_dirs"]):
         directory = env.expand(text)
         if os.path.isdir(directory) and not directory.is_symlink() and all(
                 directory / child in removed for child in os.listdir(directory)):
-            plan.steps.append(actions.remove_dir(directory))
+            (late if directory == holding or directory in holding.parents else early).append(directory)
             removed.add(directory)
+    plan.steps += [actions.remove_dir(directory) for directory in early]
+    plan.steps.append(actions.remove_file(env.record))     # the record goes after everything it lists
+    plan.steps.append(actions.drop_journal(plan.journal_path))
+    plan.steps += [actions.remove_dir(directory) for directory in late]
     _kept_notes(env, plan)
     return plan
 
@@ -338,7 +337,7 @@ def _plan_tmux_removal(env, installed, plan):
     if path.is_symlink() or not path.is_file() or tmuxconf.BLOCK not in path.read_bytes():
         plan.notes.append("The project-agent block was not found in %s; it is left as it is." % tmux["file"])
         return
-    plan.steps.append(actions.remove_block(path, tmuxconf.BLOCK, bool(tmux.get("created"))))
+    plan.steps.append(actions.remove_block(path, tmuxconf.BLOCK, bool(tmux.get("created")), path.read_bytes()))
 
 
 def _kept_notes(env, plan):
@@ -382,6 +381,9 @@ def binding_undo(key, skipped):
 def run_check(env):
     """Read-only. Returns (failures, notices): any failure makes the command exit 1."""
     failures, notices = [], []
+    pending = journal.find(env)
+    if pending:
+        failures.append("A run was interrupted (%s). Run any command but `check` to recover it." % env.display(pending))
     installed = records.read(env)
     if installed is None:
         return ["project-agent is not installed (no %s)." % env.display(env.record)], notices

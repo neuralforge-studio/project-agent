@@ -6,6 +6,7 @@ The record keeps no time, so that installing again from the same release changes
 import json
 import os
 
+from . import paths
 from .actions import sha256
 from .layout import InstallerError
 
@@ -40,6 +41,7 @@ def read(env):
     if not ok:
         raise InstallerError("record_invalid", "The install record is not valid. Preserve it and ask for help.",
                              {"path": env.display(env.record)})
+    paths.validate_record(env, record)
     return record
 
 

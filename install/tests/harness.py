@@ -16,7 +16,9 @@ import sys
 import tempfile
 
 REPO = Path(__file__).resolve().parents[2]
-INSTALLER = REPO / "install" / "project-agent-install"
+# PROJECT_AGENT_INSTALLER points the tests at another copy of the installer (to show that a test fails on an
+# older one); by default it is the checkout's.
+INSTALLER = Path(os.environ.get("PROJECT_AGENT_INSTALLER") or REPO / "install" / "project-agent-install")
 LIB = ".local/lib/project-agent"
 # The names the contract gives (section 2). Written here, not imported from the installer.
 SHIMS = (".local/bin/agent-session", ".local/bin/project-item", ".local/bin/project-board")
@@ -285,3 +287,28 @@ class Runs:
     def close(self):
         self.kill_server()
         shutil.rmtree(self.socket_dir, ignore_errors=True)
+
+
+STOP_HOOK = '''\
+import os, signal, sys
+spec = os.environ.get("INSTALLER_STOP")
+if spec:
+    sys.path.insert(0, os.environ["INSTALLER_DIR"])
+    from project_agent_install import actions
+    position, index, name = spec.split(":")
+
+    def checkpoint(where, number):
+        if where == position and number == int(index):
+            os.kill(os.getpid(), getattr(signal, name))
+    actions.checkpoint = checkpoint
+'''
+
+
+def stop_at(home, position, index, signal_name="SIGKILL"):
+    """Environment for `Home.run` that sends `signal_name` to the installer at a step boundary
+    (`position` is "before" or "after" step number `index`)."""
+    hook = home.root / "stop-hook"
+    hook.mkdir(exist_ok=True)
+    (hook / "sitecustomize.py").write_text(STOP_HOOK)
+    return {"PYTHONPATH": str(hook), "INSTALLER_DIR": str(INSTALLER.parent),
+            "INSTALLER_STOP": "%s:%d:%s" % (position, index, signal_name)}

@@ -10,6 +10,7 @@ from pathlib import Path
 
 if sys.version_info < (3, 10):
     sys.exit("project-agent-install: Python 3.10 or later is required.")
+sys.dont_write_bytecode = True          # neither the installer nor what it imports writes __pycache__
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from project_agent_install.cli import main  # noqa: E402
