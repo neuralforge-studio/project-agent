@@ -53,9 +53,12 @@ fi
     fi
     if [ "$bind_mouse" = 1 ]; then
         # Clicks on the Board pane go to Board. Every other pane keeps tmux's default forwarding.
+        # run-shell shows a job's output and a nonzero exit in the active pane, which is not the Board
+        # pane (a click on it does not select it). Board reports a click that hit no item as an error,
+        # so the job's output and status are dropped: a click on the Board leaves nothing elsewhere.
         cat <<'BINDING'
 bind-key -T root MouseDown1Pane if-shell -F '#{==:#{@project_board_pane},#{mouse_pane}}' {
-    run-shell -b '#{q:@project_agent_tmux_dir}/tmux_project_board.sh click --client #{q:client_name} --pane #{q:mouse_pane} --x #{mouse_x} --y #{mouse_y} --socket #{q:socket_path}'
+    run-shell -b '#{q:@project_agent_tmux_dir}/tmux_project_board.sh click --client #{q:client_name} --pane #{q:mouse_pane} --x #{mouse_x} --y #{mouse_y} --socket #{q:socket_path} >/dev/null 2>&1; true'
 } {
     select-pane -t =
     send-keys -M
