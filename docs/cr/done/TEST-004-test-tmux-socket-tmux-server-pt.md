@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: 8ead20ab6917371f1a2415e89ce02422dca96e97 2026-11-09T17:00:26+09:00
+- Outcome: fixed
 
 ## Symptom
 운영자 항의(2026-11-09 16:30경 실측, `/primehome/swain/tmp/claude-1028/-primehome-swain-Utils-project-agent-project-agent-base/76a0fdc1-de2f-4592-908d-8a956e743da6/scratchpad/complaint.md`): 사용자가 서버 자원이 점점 줄어든다고 신고했고, 상당 부분이 project-agent test의 정리 누락입니다.
@@ -25,6 +26,7 @@
 - 2026-11-09 Leader: 고친다(Leader 판정). 운영 결함이며 재현 근거가 있으므로 위임 범위입니다(운영자 요청도 Leader 판정으로 진행하라고 함). 요구 D(지금 남은 누수 정리)는 Leader가 위 Evidence 마지막 항목대로 했습니다. TEST-003(b3681f2)이 같은 fixture를 고친 뒤이므로 그 위에서 시작합니다.
 - 2026-11-09 Leader: 범위 추가(같은 원인). INSTALL-001(ecc5bce)로 들어온 설치기 test도 `~/tmp/pi-*`(`install/tests/conftest.py`의 session fixture `pi-src-*`, `harness.Home()`)를 만들고 fixture finalizer에서만 지웁니다. pytest가 비정상 종료하면 `pt-*`와 같이 남습니다(2026-11-09 18시 기준 25개, 대부분 실행 중인 INSTALL-004 test). Implementation 3의 보존 규칙과 Verification 2의 전후 실측에 `install/tests`(README의 설치기 test 명령)와 `pi-*`를 포함합니다. 설치기 test가 띄우는 private tmux server도 1의 helper를 씁니다.
 - 2026-11-09 Leader: 제출 5b3274994efb11de5025af6bb9fc340572b146f4를 인수합니다. Leader review: 요구 A(tmux test server의 helper 하나, kill-server 직접 호출은 helper 안에만), B(owner pid watchdog: SIGKILL·SIGTERM 1초, SIGINT 8초 안에 server·pane·socket 소멸, 다른 owner 불간섭), C(pt-* 소유 pid와 끝난 run 최근 5개, 표시 없는 옛 것은 24시간), install/tests의 pi-*를 pt-* 아래로 옮김을 확인했습니다. 수정 전 재현 표와, suite마다 전용 TMUX_TMPDIR·TMPDIR로 격리한 전후 실측(다섯 명령 모두 실행 후 socket·server·pt-*·Board 디렉터리 0)을 근거로 인수합니다. 다섯 명령 실행은 README 표(공유 test helper 변경)대로입니다. 제품 결함(Board의 /tmp/project-board-<uid>-<pid> 미정리)은 별도 CR로 엽니다.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 91953ea(Merge cr/TEST-004, 제출 5b32749). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README의 검증](../../../README.md#검증), `tools/conftest.py`, `tools/agent-session/tests/fixtures/agent_session_fixture.py`, `tools/project-board/tests/test_tmux_control.py`, `tools/agent-session/tests/test_internal.py`.
