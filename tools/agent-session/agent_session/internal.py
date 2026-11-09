@@ -8,11 +8,13 @@ from pathlib import Path
 
 from .config import current_project
 from .errors import SessionError
-from .state import StateStore
+from .state import StateStore, control_lock, publish_session
 from .tmux import control as tmux_control
 
 
-_BINDING_TIMEOUT = 20      # seconds; inside the 30 second SessionStart hook limit
+_HOOK_BUDGET = 25          # seconds from the hook's start to its deadline; the SessionStart hook limit is 30
+_PUBLISH_RESERVE = 6       # seconds of that budget kept for the control lock, the state lock and the writes
+_BINDING_TIMEOUT = 20      # seconds at most for the binding check, which ends before the reserve
 _BINDING_INTERVAL = 1.0
 _HOST_TIMEOUT = 8          # seconds for the provider's background listing inside the hook
 _HOOK_FIELDS = ("session_id", "hook_event_name", "cwd", "source", "reason", "background_tasks", "session_crons")
@@ -65,26 +67,33 @@ def mark_process(run_id, config_path, socket_path, pid):
     })
 
 
-def _register(run_id, config_path, socket_path, session_id, endpoint=None, cwd=None):
+def _register(run_id, config_path, socket_path, session_id, endpoint=None, cwd=None, deadline=None):
+    """Bind the conversation and publish it, within one deadline (`_HOOK_BUDGET` from the start)."""
+    deadline = deadline or time.monotonic() + _HOOK_BUDGET
     project, control, context = _run(run_id, config_path, socket_path, cwd)
     try:
-        session = _bind(project, control, context, session_id, endpoint, cwd)
+        session = _bind(project, control, context, session_id, endpoint, cwd, deadline)
     except SessionError as error:
         _record_failure(control, context, error)
         raise
 
-    # Only the controller that holds the target lock publishes canonical state.
-    # A late hook can update its old window, but cannot replace a newer owner. The window may be
-    # handed to a newer run (reuse_window); naming this run makes write_meta refuse such a write.
-    # A registration that succeeds clears a failure an earlier attempt of this run recorded.
-    control.write_meta(context["window_id"], {
-        "run_id": context["run_id"], "session_id": session_id, "registered": True, "start_error": None,
-        **({"message_to": session["message_to"]} if project.provider == "claude" else {}),
-    })
+    # Registration and publication are one step (state.publish_session). The lock makes the publication wait
+    # for a command that holds the slot, and the run is checked again inside it: a late hook cannot replace a
+    # newer owner. A registration that succeeds clears a failure an earlier attempt of this run recorded.
+    claude = project.provider == "claude"
+    binding = {"session_id": session_id,
+               **({"message_to": session["message_to"]} if claude else {"endpoint": session["endpoint"]})}
+    try:
+        with control_lock(project, context["target"], max(0, deadline - time.monotonic())):
+            publish_session(project, control, StateStore(project, timeout=max(0, deadline - time.monotonic())),
+                            context, binding)
+    except SessionError as error:
+        _record_failure(control, context, error)
+        raise
     return project, control, context, session
 
 
-def _bind(project, control, context, session_id, endpoint, cwd):
+def _bind(project, control, context, session_id, endpoint, cwd, deadline):
     """Check that the actual provider conversation is this run's; return its session binding."""
     from . import process
     from .providers import get_provider
@@ -105,7 +114,8 @@ def _bind(project, control, context, session_id, endpoint, cwd):
         session["endpoint"] = endpoint
     provider = get_provider(project.provider)
     context["session_id"] = session_id
-    session = _verify_binding(provider, session, context) or session
+    ends = min(time.monotonic() + _BINDING_TIMEOUT, deadline - _PUBLISH_RESERVE)
+    session = _verify_binding(provider, session, context, max(ends, time.monotonic() + 0.1)) or session
     if project.provider == "claude" and not session.get("message_to"):
         raise SessionError("session_unbound", "The native Claude recipient is unverified.", 4)
     current = control.get_current(project.project_id, context["target"])
@@ -114,13 +124,12 @@ def _bind(project, control, context, session_id, endpoint, cwd):
     return session
 
 
-def _verify_binding(provider, session, context):
+def _verify_binding(provider, session, context, end):
     """Check the native binding; look again while the provider's listing has not shown this pane yet.
 
     Starting several conversations at once can leave a listing without the pane for a moment.
     Only a failure the provider marks retryable is repeated, and only until the hook's time is spent;
     every other failure (several rows, another name or UUID, no locator) stands at once."""
-    end = time.monotonic() + _BINDING_TIMEOUT
     while True:
         try:
             return provider.verify_binding(session, context, context, timeout=max(0.1, end - time.monotonic()))
@@ -146,28 +155,11 @@ def _record_failure(control, context, error):
 
 
 def register_current(run_id, config_path, socket_path, endpoint):
-    """Bind the actual Codex tool context, then wait for the launch controller."""
+    """Bind the actual Codex tool context and publish it."""
     session_id = os.environ.get("CODEX_THREAD_ID")
-    _, control, context, session = _register(
-        run_id, config_path, socket_path, session_id, endpoint,
-    )
-    return _wait_ready(control, context, session, output=True)
-
-
-def _wait_ready(control, context, session, output=False):
-    end = time.monotonic() + 120
-    while time.monotonic() < end:
-        latest = control.get_current(context["project_id"], context["target"])
-        if not latest or latest.get("run_id") != context["run_id"]:
-            raise SessionError("target_changed", "Registration was replaced by another run.")
-        if latest.get("ready"):
-            if output:
-                print(json.dumps({"ok": True, "session": session, "ready": True}))
-            return session
-        if latest.get("start_error"):
-            raise SessionError("start_failed", str(latest["start_error"]), 4)
-        time.sleep(0.1)
-    raise SessionError("registration_timeout", "The controller did not finish startup.", 4)
+    _, _, _, session = _register(run_id, config_path, socket_path, session_id, endpoint)
+    print(json.dumps({"ok": True, "session": session, "ready": True}))
+    return session
 
 
 def _foreign_session(run_id, config_path, socket_path, payload, expected_session_id):
@@ -198,6 +190,7 @@ def register_from_hook(run_id, config_path, socket_path, expected_session_id=Non
     """Read one native Claude event and reject a stale execution callback."""
     import sys
 
+    deadline = time.monotonic() + _HOOK_BUDGET
     payload = json.load(sys.stdin)
     session_id = payload.get("session_id")
     if not session_id or session_id != expected_session_id:
@@ -214,7 +207,7 @@ def register_from_hook(run_id, config_path, socket_path, expected_session_id=Non
             raise SessionError("hook_invalid", "This run binds only a " + ("resumed" if wanted == "resume" else "new")
                                + " conversation.")
         project, control, context, _ = _register(
-            run_id, config_path, socket_path, session_id, endpoint, cwd,
+            run_id, config_path, socket_path, session_id, endpoint, cwd, deadline,
         )
     elif context.get("session_id") != session_id:
         raise SessionError("owner_mismatch", "This event belongs to an old conversation.")
@@ -223,8 +216,6 @@ def register_from_hook(run_id, config_path, socket_path, expected_session_id=Non
     observed = {key: payload[key] for key in _HOOK_FIELDS if key in payload}
     observations[event] = {**observed, "observed_at": dt.datetime.now(dt.timezone.utc).isoformat()}
     control.write_meta(context["window_id"], {"run_id": run_id, "hook_observations": observations})
-    if event == "SessionStart":
-        _wait_ready(control, context, {"session_id": session_id}, output=False)
 
 
 def run_controller(request_file):

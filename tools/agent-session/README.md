@@ -69,7 +69,7 @@ Start는 todo의 CR을 in-progress로 옮기고 Worker seat를 자동 배정합�
 `--seat N`을 지정하면 해당 Worker seat만 검사합니다. 지정한 seat가 비어 있지 않거나 안전 검사를 통과하지 못하면 배정을 거절합니다.
 이미 배정한 CR의 재시도는 같은 seat만 지정할 수 있습니다. Leader에는 `--seat`를 사용할 수 없습니다.
 Claude·Codex seat를 새로 clone하면 그 seat의 workspace trust를 기록합니다.
-시작이 trust·login·권한 dialog에서 멈추면 `needs_user_action`(exit 3)과 `dialog`를 반환합니다. 사용자가 그 창에서 답한 뒤 같은 start를 다시 실행합니다.
+시작이 trust·login·권한 dialog에서 멈추면 `needs_user_action`(exit 3)과 `dialog`를 반환합니다. 사용자가 그 창에서 답하면 등록이 게시까지 마치므로 start를 다시 실행하지 않아도 됩니다.
 다른 명령은 CR ID 대신 `--seat N`으로 현재 배정 대상을 지정할 수 있습니다.
 옵션은 `agent-session --help`와 해당 하위 명령의 `--help`에서 확인합니다.
 Restart 전에 해당 session이 `<base>/agent/handoff/<slot>.md`를 씁니다.
@@ -122,8 +122,10 @@ Provider 실행 전 준비 실패는 원인을 고친 뒤 같은 start로 재시
 
 테스트는 서로 독립이므로 `-n 8`로 병렬 실행합니다. 직렬 실행은 `-n 0`입니다. Fixture는 git 저장소를
 pytest 프로세스(xdist worker)마다 한 번 만들고, 테스트마다 그 복사본을 씁니다.
-Machine load가 높으면 `AGENT_SESSION_TEST_TIMEOUT`(초, 기본 15)으로 fixture의 명령당 대기 한도를
-늘립니다. `tools/conftest.py`는 `--basetemp`가 없을 때 실행마다 `TMPDIR` 아래 전용 임시
+Fixture의 명령당 대기 한도(`AGENT_SESSION_TEST_TIMEOUT`(초), 기본 120)는 끝나지 않는 명령을 실패로
+바꾸는 상한이고 속도를 단언하지 않습니다. 기본값은 같은 host에서 suite 3개를 동시에 돌려 잰 명령 시간
+최대 38초의 약 3배입니다. 평소 운영 부하(seat 여럿이 동시에 검증)에서는 지정하지 않아도 됩니다.
+Host가 이보다 심하게 느릴 때만 이 값을 늘립니다. `tools/conftest.py`는 `--basetemp`가 없을 때 실행마다 `TMPDIR` 아래 전용 임시
 디렉터리를 쓰고, 통과하면 지웁니다. 실패하면 조사를 위해 남깁니다.
 macOS의 Unix socket 경로 제한에 걸리면 `--basetemp=/tmp/as-test`처럼 짧은 임시 경로를 지정합니다.
 

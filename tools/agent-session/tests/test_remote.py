@@ -322,27 +322,21 @@ def test_dead_report_bridge_reuses_its_token_and_replaces_its_stale_socket(tmp_p
         listen.unlink(missing_ok=True)
 
 
-def test_late_remote_binding_can_finish_after_a_user_dialog(tmp_path, monkeypatch):
-    from contextlib import nullcontext
-
-    native = {"run_id": "d" * 32, "job_id": "TOOL-001", "registered": True, "ready": False, "pane_id": "%1"}
+def test_late_remote_binding_is_reported_once_the_capsule_registration_published_it(tmp_path, monkeypatch):
+    native = {"run_id": "d" * 32, "job_id": "TOOL-001", "registered": False, "ready": False, "pane_id": "%1"}
     directory = tmp_path / "run"
     directory.mkdir()
-
-    def publish(meta):
-        native["ready"] = True
-        return {"ready": True}
-
     manager = SimpleNamespace(project=SimpleNamespace(project_id="remote-example"),
                               tmux=SimpleNamespace(get_current=lambda *args: dict(native), capture_pane=lambda pane: ""),
-                              provider=SimpleNamespace(startup_dialog=lambda screen: None),
-                              _lock=lambda slot: nullcontext(), _wait_ready=publish)
+                              provider=SimpleNamespace(startup_dialog=lambda screen: None))
     monkeypatch.setattr(remote_runtime, "_directory", lambda identity: directory)
     monkeypatch.setattr(remote_runtime, "_manager", lambda path: (manager, {"seat": "/remote/seat", "job_id": "TOOL-001"}))
-    result = remote_runtime.dispatch("/remote/seat", "poll", {"run_id": native["run_id"]}, tmp_path)
+    poll = lambda: remote_runtime.dispatch("/remote/seat", "poll", {"run_id": native["run_id"]}, tmp_path)
+    assert poll()["ready"] is False
+    native.update(registered=True, ready=True)       # the capsule's registration publishes its cache itself
+    result = poll()
     assert result["ready"] is True and result["dialog"] is None
     assert not (directory / "start-error.json").exists()
-
 
 def test_report_rechecks_the_run_under_control_lock_before_changing_result(tmp_path, monkeypatch):
     import socket

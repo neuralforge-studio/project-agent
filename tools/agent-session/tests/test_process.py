@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import uuid
 
 import pytest
 
@@ -122,7 +123,9 @@ def test_boot_time_is_a_past_instant_before_this_process_started():
 
 
 def test_session_holders_finds_a_process_that_names_the_conversation_and_not_this_one():
-    conversation = "5d0c3a2e-9d3f-4c1c-8a55-0f6d6f0e7b11"
+    # session_holders scans every process of the host, so an ID shared with a concurrent run of this suite
+    # (another seat's) would find that run's child; each run names its own conversation.
+    conversation = str(uuid.uuid4())
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "--resume", conversation])
     try:
         assert wait_for(lambda: process.session_holders(conversation) == [child.pid]) is True

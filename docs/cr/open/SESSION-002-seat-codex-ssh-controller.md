@@ -18,3 +18,4 @@ SESSION-001에서 확정한 결함(게시 책임이 호출자에 묶인 시작 c
 
 ## Disposition
 - 2026-11-09 Leader: 판정 보류(open 유지). 같은 결함이지만 등록이 Leader host 밖에서 일어나므로 고치는 경로(원격 등록을 uplink로 Leader host의 등록 함수에 올리는 방법 등)를 SESSION-001의 새 계약이 통합된 뒤 그 계약에 맞춰 설계합니다. 지금 원격 seat를 쓰는 project가 없어 SESSION-001과 따로 진행합니다.
+- 2026-11-09 Leader: SESSION-001(통합 a825c04)이 공유 `_register`를 바꿔 원격 capsule에서도 등록이 cache를 직접 게시하고, `remote_runtime` poll의 게시 단계를 없앴습니다. 실제 원격 host 검증은 하지 않았습니다. 이 CR이 그 검증과 Leader host 쪽 게시 경로를 함께 다룹니다.
