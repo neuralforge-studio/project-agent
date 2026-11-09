@@ -310,6 +310,11 @@ class CodexProvider:
             return "workspace_trust"
         return None
 
+    def screen_body(self, screen):
+        # No Codex pane capture backs a footer rule yet, so nothing is dropped. A footer that changes with the
+        # clock then keeps a resting Codex pane "changing": a missed stall, never a woken working instance.
+        return "\n".join(line.rstrip() for line in screen.splitlines()).rstrip()
+
     def registration_hooks(self, context):
         # SessionStart alone does not prove which tmux run created a thread.
         return {}

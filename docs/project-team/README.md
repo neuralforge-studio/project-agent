@@ -76,7 +76,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | `windows` | 한 slot의 run을 담는 tmux window: 이름, 반납된 window의 재사용, 생성·current 지정, 이름 바꾸기, 정리(sweep), 시작 실패한 대기 pane의 정리. 종료 판정은 호출자가 넘긴 `observe`로 합니다. slot 제어 잠금은 호출자가 잡습니다. | `lifecycle`·`suspend`를 import하지 않습니다. `launch_artifacts.run_directory`를 씁니다. |
 | `handoff` | slot의 인계 파일: 경로, 이번 run이 쓴 것인지(`launch.sh` 이후 갱신) 판단, restart의 `handoff_required`, 인계 문서 경로 검증. | `lifecycle`·`suspend`를 import하지 않습니다. `launch_artifacts.run_directory`를 씁니다. |
 | `suspend` | `SuspendStore`(shutdown 기록), `SuspendMixin`(한 대상의 shutdown·resume 단계), `Fleet`(운영자 명령). | `lifecycle`을 import하지 않습니다. `SuspendMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
-| `watch` | `WatchMixin`(한 Worker seat의 쉼 판정과 점검 전송), `Watch`(운영자 명령. `Fleet`을 확장). | `lifecycle`을 import하지 않습니다(`suspend`와 같은 방향). `WatchMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
+| `watch` | `WatchMixin`(한 seat·Leader의 화면 정체 판정과 점검 전송), `Watch`(운영자 명령. `Fleet`을 확장). | `lifecycle`을 import하지 않습니다(`suspend`와 같은 방향). `WatchMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
 
 ### `sys.path` 조작 위치
 

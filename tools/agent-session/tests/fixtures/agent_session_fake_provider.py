@@ -47,6 +47,10 @@ class FakeProvider:
         from agent_session.providers.claude import startup_dialog
         return startup_dialog(screen)
 
+    def screen_body(self, screen):
+        from agent_session.providers.claude import screen_body
+        return screen_body(screen)
+
     def verify_binding(self, session, context, meta, timeout=30):
         from agent_session.errors import SessionError
         expected = meta.get("session_id") or context.get("session_id")

@@ -89,6 +89,24 @@ def startup_dialog(screen):
     return next((kind for kind, pattern in STARTUP_DIALOGS if pattern.search(screen)), None)
 
 
+BOX_BORDER = "─" * 10                      # a line that starts with this is a border of the prompt box
+
+
+def screen_body(screen):
+    """The part of a Claude pane that changes only when the conversation does.
+
+    Claude draws the conversation and the spinner line (`✻ Working… (2m 24s · ↓ 8.2k tokens)`, whose time
+    runs while a turn runs), then the prompt box between two border lines, then two footer lines below the
+    box: the status line (usage percentages and reset times that change with the clock and with other
+    sessions) and the permission-mode line. Everything from the last border line down is dropped. Without a
+    border line the whole screen is the body. Trailing blanks do not count."""
+    lines = screen.splitlines()
+    borders = [index for index, line in enumerate(lines) if line.startswith(BOX_BORDER)]
+    if borders:
+        lines = lines[:borders[-1]]
+    return "\n".join(line.rstrip() for line in lines).rstrip()
+
+
 TRANSCRIPT_TAIL = 65536                    # bytes read from the end of a transcript to find its last record
 HOST_QUERY_SECONDS = 8                      # `claude agents` wait inside a hook's 30 seconds
 
@@ -247,6 +265,9 @@ class ClaudeProvider:
 
     def startup_dialog(self, screen):
         return startup_dialog(screen)
+
+    def screen_body(self, screen):
+        return screen_body(screen)
 
     def registration_hooks(self, context):
         required = ("python", "library_path", "run_id", "config_path", "socket_path")

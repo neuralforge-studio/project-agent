@@ -63,7 +63,7 @@ JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자�
 | restart | `agent-session restart --job TOOL-012` |
 | review | `agent-session review --job TOOL-012` 또는 `agent-session review --clear` |
 | shutdown | `agent-session shutdown --all` 또는 `--project NAME`. 서버를 내리기 전에 운영자가 실행합니다. `--timeout SECONDS`, `--force` |
-| watch | `agent-session watch --all` 또는 `--project NAME`. 운영자의 수동 점검과 Claude Leader의 자기 점검(session cron, [자기 점검](../../skills/project-team/references/self-check.md))이 실행합니다. in-progress CR을 맡고 30분(`--minutes`) 넘게 쉬는 Worker를 근거와 함께 깨우고 Leader에게 알립니다([명세](../../docs/project-team/spec.md#watch)) |
+| watch | `agent-session watch --all` 또는 `--project NAME`. 운영자의 수동 점검과 Claude Leader의 자기 점검(session cron, [자기 점검](../../skills/project-team/references/self-check.md))이 실행합니다. 관리 pane의 화면이 30분(`--minutes`) 넘게 바뀌지 않은 Worker(in-progress CR)와 Leader를 깨우고, Worker는 근거와 함께 Leader에게도 알립니다([명세](../../docs/project-team/spec.md#watch)) |
 | resume | `agent-session resume --all` 또는 `--project NAME`. 서버가 뜬 뒤 운영자가 실행합니다. shutdown 없이 서버가 내려갔으면 `--lost` |
 
 Start는 todo의 CR을 in-progress로 옮기고 Worker seat를 자동 배정합니다.
