@@ -113,7 +113,8 @@ def main():
         parser.add_argument("--" + key, required=True)
     parser.add_argument("--dialog", action="store_true")
     parser.add_argument("--codex-dialog", action="store_true")
-    parser.add_argument("--expire-registration", action="store_true")
+    parser.add_argument("--lock-timeout", type=float)               # how long the registration waits for the control lock
+    parser.add_argument("--fail-state-write", action="store_true")  # the registration cannot save state
     parser.add_argument("--fail-binding", action="store_true")      # ListAgents never lists this pane
     parser.add_argument("--session")                   # a resumed conversation keeps its recorded ID
     parser.add_argument("--claude", action="store_true")
@@ -151,23 +152,14 @@ def main():
     providers.get_provider = lambda name: fake
     from agent_session import internal
     os.environ["CODEX_THREAD_ID"] = args.session or str(uuid.uuid4())
-    clock = internal.time
-    if args.expire_registration:
-        from types import SimpleNamespace
-        # The clock jumps past the controller wait's limit only once the binding check is over,
-        # so that check's own deadline arithmetic does not use up the ticks.
-        ticks = iter((0, 0, 121))
-        bound = []
-        verify_binding = fake.verify_binding
+    if args.lock_timeout is not None:
+        internal._PUBLISH_TIMEOUT = args.lock_timeout
+    if args.fail_state_write:
+        from agent_session.state import StateStore
 
-        def verify_then_expire(*arguments, **keywords):
-            try:
-                return verify_binding(*arguments, **keywords)
-            finally:
-                bound.append(True)
-        fake.verify_binding = verify_then_expire
-        internal.time = SimpleNamespace(monotonic=lambda: next(ticks) if bound else 0.0,
-                                        sleep=lambda seconds: None)
+        def cannot_save(self, mutator):
+            raise SessionError("state_write_failed", "The fixture cannot save the project state.", 5)
+        StateStore.update = cannot_save
     try:
         internal.register_current(args.run, args.config, args.socket, args.endpoint)
     except SessionError as error:
@@ -175,8 +167,6 @@ def main():
         base = Path(os.environ["AGENT_SESSION_BASE"])
         path = base / "agent" / "runs" / args.run / "fixture-tool-error.json"
         path.write_text(json.dumps(error.as_dict()), encoding="utf-8")
-    finally:
-        internal.time = clock
     for line in sys.stdin:
         note({"input": line.rstrip("\n")})
         if line.strip() == "/exit":

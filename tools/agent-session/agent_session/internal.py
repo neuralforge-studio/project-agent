@@ -8,12 +8,13 @@ from pathlib import Path
 
 from .config import current_project
 from .errors import SessionError
-from .state import StateStore
+from .state import StateStore, control_lock, publish_session
 from .tmux import control as tmux_control
 
 
 _BINDING_TIMEOUT = 20      # seconds; inside the 30 second SessionStart hook limit
 _BINDING_INTERVAL = 1.0
+_PUBLISH_TIMEOUT = 8       # seconds for the control lock and the state lock; 20 + 8 stay inside the 30 second hook limit
 _HOST_TIMEOUT = 8          # seconds for the provider's background listing inside the hook
 _HOOK_FIELDS = ("session_id", "hook_event_name", "cwd", "source", "reason", "background_tasks", "session_crons")
 
@@ -73,14 +74,20 @@ def _register(run_id, config_path, socket_path, session_id, endpoint=None, cwd=N
         _record_failure(control, context, error)
         raise
 
-    # Only the controller that holds the target lock publishes canonical state.
-    # A late hook can update its old window, but cannot replace a newer owner. The window may be
-    # handed to a newer run (reuse_window); naming this run makes write_meta refuse such a write.
-    # A registration that succeeds clears a failure an earlier attempt of this run recorded.
-    control.write_meta(context["window_id"], {
-        "run_id": context["run_id"], "session_id": session_id, "registered": True, "start_error": None,
-        **({"message_to": session["message_to"]} if project.provider == "claude" else {}),
-    })
+    # Registration and publication are one step. The lock makes the publication wait for a command that
+    # holds the slot, and the run is checked again inside it: a late hook cannot replace a newer owner.
+    # The window may be handed to a newer run (reuse_window); naming this run makes write_meta refuse
+    # such a write. A registration that succeeds clears a failure an earlier attempt of this run recorded.
+    claude = project.provider == "claude"
+    binding = {"session_id": session_id,
+               **({"message_to": session["message_to"]} if claude else {"endpoint": session["endpoint"]})}
+    window = {"session_id": session_id, "registered": True, **({"message_to": binding["message_to"]} if claude else {})}
+    try:
+        with control_lock(project, context["target"], _PUBLISH_TIMEOUT):
+            publish_session(project, control, StateStore(project, timeout=_PUBLISH_TIMEOUT), context, binding, window)
+    except SessionError as error:
+        _record_failure(control, context, error)
+        raise
     return project, control, context, session
 
 
@@ -146,28 +153,11 @@ def _record_failure(control, context, error):
 
 
 def register_current(run_id, config_path, socket_path, endpoint):
-    """Bind the actual Codex tool context, then wait for the launch controller."""
+    """Bind the actual Codex tool context and publish it."""
     session_id = os.environ.get("CODEX_THREAD_ID")
-    _, control, context, session = _register(
-        run_id, config_path, socket_path, session_id, endpoint,
-    )
-    return _wait_ready(control, context, session, output=True)
-
-
-def _wait_ready(control, context, session, output=False):
-    end = time.monotonic() + 120
-    while time.monotonic() < end:
-        latest = control.get_current(context["project_id"], context["target"])
-        if not latest or latest.get("run_id") != context["run_id"]:
-            raise SessionError("target_changed", "Registration was replaced by another run.")
-        if latest.get("ready"):
-            if output:
-                print(json.dumps({"ok": True, "session": session, "ready": True}))
-            return session
-        if latest.get("start_error"):
-            raise SessionError("start_failed", str(latest["start_error"]), 4)
-        time.sleep(0.1)
-    raise SessionError("registration_timeout", "The controller did not finish startup.", 4)
+    _, _, _, session = _register(run_id, config_path, socket_path, session_id, endpoint)
+    print(json.dumps({"ok": True, "session": session, "ready": True}))
+    return session
 
 
 def _foreign_session(run_id, config_path, socket_path, payload, expected_session_id):
@@ -223,8 +213,6 @@ def register_from_hook(run_id, config_path, socket_path, expected_session_id=Non
     observed = {key: payload[key] for key in _HOOK_FIELDS if key in payload}
     observations[event] = {**observed, "observed_at": dt.datetime.now(dt.timezone.utc).isoformat()}
     control.write_meta(context["window_id"], {"run_id": run_id, "hook_observations": observations})
-    if event == "SessionStart":
-        _wait_ready(control, context, {"session_id": session_id}, output=False)
 
 
 def run_controller(request_file):

@@ -225,7 +225,7 @@ Session의 값은 provider에 따라 다릅니다.
 
 Session의 각 필수 값은 비어 있지 않은 문자열입니다.
 `connected_at`과 Leader의 `reviewing`은 선택 key입니다. 이 key가 없는 기존 state도 읽습니다.
-시작 controller는 session을 게시할 때 같은 slot의 기존 session과 session_id를 대조합니다.
+Provider 내부 등록은 session을 게시할 때 같은 slot의 기존 session과 session_id를 대조합니다.
 같으면 같은 대화의 재게시이므로 `connected_at`·`reviewing`을 보존하고 연결 주소만 갱신합니다.
 다르거나 없으면 새 대화이므로 현재 시각을 쓰고 Leader의 `reviewing`을 null로 씁니다.
 `connected_at`이 없는 기존 대화의 재게시는 시각을 추정해 채우지 않습니다.
@@ -238,8 +238,9 @@ Claude 이름·ref는 전송 시 현재 목록과 실제 대화에 대조합니�
 Codex endpoint는 TUI와 전송이 사용하는 같은 서버입니다.
 
 배정 시 JOB ID와 null hash·session을 기록합니다.
-Provider 내부 등록은 자기 window의 실제 native binding만 기록합니다.
-대상 제어 잠금을 가진 시작 controller가 현재 run과 binding을 대조한 뒤 state의 session을 게시합니다.
+Provider 내부 등록은 자기 window의 실제 native binding을 기록하고, 같은 단계에서 state의 session을 게시합니다(5절 Provider 내부 등록).
+게시하는 주체는 이 등록 하나입니다. 시작 controller는 state를 쓰지 않고 등록 결과를 기다려 보고만 합니다.
+예외는 원격 seat입니다. 등록이 원격 host에서 일어나 Leader 호스트에는 등록 함수가 없으므로, 아래 SSH Worker 절의 controller가 원본 state에 게시합니다.
 Git hash는 작업 시작 기준이며 이후 commit·조회로 덮어쓰지 않습니다.
 전체 commit hash를 사용하며 40자리와 64자리를 지원합니다.
 Commit 날짜·동기화 시각·제출 hash는 JOB 문서에 둡니다.
@@ -316,9 +317,9 @@ Leader 호스트의 SSH PID나 동명 로컬 경로로 원격 생존·Git 상태
 원격 `~/.cache/agent-session/runs/<run_id>/`는 실행 capsule입니다.
 Capsule의 등록 파일·state·CR snapshot은 native 등록과 관찰을 위한 실행 cache입니다.
 이 cache는 새 배정을 만들거나 원본 CR의 상태·Base·review를 결정하지 않습니다.
-원격 native 등록을 확인한 Leader 호스트의 controller가 현재 run·JOB과 대조한 뒤 원본 state에 session을 게시합니다.
-원격 controller는 SSH 응답과 독립적으로 native binding을 실행 cache에 게시할 수 있습니다.
-시작 dialog에서 대기한 뒤 native 등록이 늦게 끝나면 poll이 같은 run의 cache 게시를 마칩니다.
+원격 native 등록을 확인한 Leader 호스트의 controller가 현재 run·JOB과 대조한 뒤 원본 state에 session을 게시합니다. 이 controller는 확인하는 동안 대상 제어 잠금을 유지합니다.
+capsule에서는 로컬 run과 같이 등록 함수가 native binding을 실행 cache에 게시합니다. 원격 controller의 생존과 SSH 응답에 달려 있지 않습니다.
+시작 dialog에서 대기한 뒤 native 등록이 늦게 끝나도 같은 run의 등록 함수가 cache 게시를 마칩니다.
 이 비동기 cache 게시만으로 Leader 호스트의 배정이나 시작 성공을 확정하지 않습니다.
 같은 run의 SSH 재연결은 원격 실행을 새로 만들지 않습니다.
 Provider 준비 실패를 고친 뒤 같은 start로 재시도할 수 있습니다.
@@ -347,12 +348,13 @@ Result 반영과 메시지 수락은 별도 결과입니다. 전송 확인 실�
 CR 항목 루트 잠금은 재진입하지 않습니다. 잠금을 가진 호출이 같은 잠금을 다시 잡는 함수를 부르지 않습니다.
 배정 중 사용 중인 대상 제어 잠금은 기다리지 않고 해당 후보를 건너뜁니다.
 예약 뒤 배정 잠금은 풀며 대상 제어 잠금은 해당 제어가 끝날 때까지 유지합니다.
+단, 로컬 run의 시작 controller는 등록을 기다리는 동안 대상 제어 잠금을 놓습니다. 등록 함수가 같은 잠금을 잡고 게시하기 때문입니다. 기다림이 끝나면 다시 잡고 정리를 이어갑니다.
 State 잠금 안에서 provider·외부 명령을 호출하지 않습니다.
 Read-state와 check-binding은 잠금을 획득하지 않는 읽기 전용 API입니다.
 원자 교체한 snapshot을 읽고 외부 관찰 뒤 다시 읽어 JOB·run·연결 변경을 거절합니다.
-Hook은 대상 제어 잠금을 다시 획득하지 않습니다.
-Hook은 canonical state를 쓰지 않고 자기 window의 binding·관찰값만 갱신합니다.
-시작 controller는 게시 직전에 현재 run·JOB·window·실제 연결을 다시 대조합니다.
+내부 등록은 binding을 확인한 뒤 대상 제어 잠금을 잡고(hook 제한 30초 안의 한도) 게시합니다. 잠금 안에서 현재 run·JOB·window·pane을 다시 대조합니다.
+다르면 `target_changed`이고 state와 window에 아무것도 쓰지 않습니다. 같으면 state의 session과 window의 `registered`·`ready`를 함께 씁니다.
+Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않고 자기 window의 관찰값만 갱신합니다.
 늦은 hook이 옛 window를 갱신해도 새 실행의 state session을 덮어쓸 수 없습니다.
 
 ### 종료한 window 정리
@@ -450,7 +452,7 @@ agent-session start --job leader --prompt-file REQUEST.md
 Prompt 파일은 선택입니다.
 생략하면 프로젝트 지침과 Leader 역할로 시작합니다. Leader는 `project-item ls`로 결정 대기와 CR을 확인하고 사용자 지시를 기다립니다.
 현재 Leader가 실행 중이거나 종료를 확인할 수 없으면 새로 시작하지 않습니다.
-등록 전 시작 dialog에서 기다리는 Leader(5절 Provider 내부 등록)는 예외입니다. 다시 실행한 start는 새로 시작하지 않고 그 실행의 등록을 기다립니다.
+등록 전 시작 dialog에서 기다리는 Leader(5절 Provider 내부 등록)는 예외입니다. 사용자가 dialog에 답하면 등록이 게시까지 마칩니다. 다시 실행한 start는 새로 시작하지 않습니다. 답하기 전이면 그 실행의 등록을 기다립니다. 답한 뒤에는 실행 중인 Leader가 있으므로 `leader_exists`입니다.
 등록 전 hook이 실패해 `registration_failed`로 끝난 Leader도 같은 경로입니다. CLI가 살아 있으면 다시 실행한 start는 같은 오류를 바로 반환합니다. 새로 시작하지 않습니다. CLI가 끝난 것이 확인되면 새 대화로 시작합니다(3절 "Background로 옮겨진 대화와 등록되지 않은 run의 종료 판정").
 Background로 옮겨진 대화의 Leader는 그 대화와 CLI가 모두 끝난 것이 확인될 때만 새로 시작합니다. 아니면 start는 `conversation_backgrounded` 또는 `execution_unknown`입니다.
 정상 종료가 확인된 이전 Leader는 명시적인 새 시작을 막지 않습니다.
@@ -475,7 +477,7 @@ Leader는 사용자 합의를 CR의 Disposition에 기록한 뒤 todo로 옮깁�
 4. 새 run·대기 tmux 창(같은 seat의 종료한 window를 이어받을 수 있으면 그 window, 3절)·현재 실행 포인터와 state 예약을 기록합니다. 예약이 실패하면 이번 시작이 만든 대기 pane을 종료 확인하고 CR을 todo로 되돌립니다.
 5. Git 준비를 수행합니다.
 6. 공통 prompt와 등록의 `launch` Worker 인자로 실행 입력을 만듭니다(8절).
-7. 대화형 CLI를 시작하고 자기 window의 native binding을 확인합니다. 시작 controller가 state에 게시한 뒤 시작 완료를 표시합니다.
+7. 대화형 CLI를 시작하고 자기 window의 native binding을 확인합니다. 등록이 state에 게시한 것을 확인한 뒤 시작 완료를 표시합니다.
 8. Seat·CR·연결 결과를 반환합니다.
 
 사용 가능한 seat가 없으면 후보별 이유와 함께 오류를 반환합니다.
@@ -594,7 +596,7 @@ Provider 시작 전 기준 기록은 이 live 대조를 요구하지 않습니�
 ### Provider 내부 등록
 
 실제 provider 대화를 확인하고 자기 window에 native binding을 기록하는 처리는 필요합니다.
-이 내부 등록은 canonical state의 session 게시와 구분합니다.
+내부 등록은 binding 기록과 canonical state의 session 게시를 한 단계로 합니다. 등록됐지만 게시되지 않은 run은 없습니다.
 Claude SessionStart hook과 Codex 초기 도구 등록 코드가 호출합니다.
 선택한 등록·작업 위치·현재 run을 전달하며 사용자에게 ID 입력을 요구하지 않습니다.
 사용자가 호출하는 등록·이벤트 명령은 두지 않습니다.
@@ -606,7 +608,10 @@ Claude는 시작 때 지정한 UUID와 실제 hook의 session·cwd·source를 �
 run이 resume인지는 그 window의 `resume` option이 정합니다. hook의 matcher도 같은 값을 씁니다.
 Codex는 실제 도구 문맥의 CODEX_THREAD_ID와 endpoint를 확인합니다.
 내부 등록은 현재 run과 자기 window를 대조하고 그 window의 binding만 기록합니다.
-시작 controller는 대상 제어 잠금 아래 현재 포인터와 binding을 검증해 canonical state에 게시합니다.
+등록은 binding 확인 뒤 대상 제어 잠금(hook 제한 30초 안의 한도) 아래에서 현재 포인터·JOB과 binding을 다시 검증해 canonical state에 게시합니다.
+같은 slot의 기존 session과 비교해 `connected_at`·`reviewing`을 보존하는 규칙은 3절을 따릅니다. state와 window의 `registered`·`ready`는 함께 바뀝니다.
+잠금을 한도 안에 얻지 못하거나 state 쓰기가 실패하면 등록 실패입니다. `start_error`를 남기고 `registered`·`ready`는 거짓으로 둡니다.
+시작 controller의 게시 뒤 일은 옛 window 정리뿐입니다. controller가 먼저 끝나면 다음 start의 정리가 대신합니다.
 Record-ready가 끝나기 전에는 Worker의 일반 작업을 시작하지 않습니다.
 새 CLI 실행 전에 부모의 중첩 실행 표시·세션 ID·메시지 IPC 환경을 제거합니다.
 Claude의 CLAUDECODE·CLAUDE_CODE_SESSION_ID·CLAUDE_CODE_MESSAGING_*와 부모 CODEX_THREAD_ID가 대상입니다.
@@ -614,9 +619,9 @@ Claude의 CLAUDECODE·CLAUDE_CODE_SESSION_ID·CLAUDE_CODE_MESSAGING_*와 부모 
 공통 코드가 모델·추론 강도·권한 우회를 고정하지 않습니다.
 로그인·trust·권한 dialog로 시작이 멈추면 needs_user_action 오류를 반환합니다.
 이 오류는 exit 3이며 배정과 생성한 창을 보존합니다. 결과의 `dialog`는 provider가 판정한 dialog 종류입니다.
-시작 controller는 등록 전까지 1초마다 관리 pane의 보이는 화면을 읽어 provider의 dialog 문구와 대조합니다.
+시작 controller는 등록 전까지 잠금 없이 기다리며 1초마다 관리 pane의 보이는 화면을 읽어 provider의 dialog 문구와 대조합니다.
 이 화면 읽기는 dialog 탐지에만 사용합니다. 등록 뒤에는 읽지 않습니다.
-사용자가 그 창에서 dialog에 답한 뒤 같은 start를 다시 실행하면 그 실행의 등록을 기다려 게시합니다.
+시작 controller는 이 오류로 끝납니다. 사용자가 그 창에서 dialog에 답하면 등록이 게시까지 마치므로 start를 다시 실행하지 않아도 됩니다. 답한 뒤 다시 실행한 Worker start는 새로 시작하지 않고 이미 게시된 결과를 그대로 돌려줍니다(`connected_at` 불변). Leader start는 4절대로 `leader_exists`입니다.
 기존에 승인한 프로젝트 설정을 사용하며 새 승인을 대신하는 키 입력을 보내지 않습니다.
 
 내부 등록의 provider binding 확인은 ListAgents에 이 pane의 행이 하나도 없을 때만 다시 조회합니다.
@@ -627,7 +632,7 @@ send와 observe의 조회는 다시 시도하지 않습니다.
 이미 다른 run이 target을 이어받았으면(`target_changed`) 남기지 않습니다. 이어받은 window에는 쓰지 않습니다.
 시작 controller는 등록 전까지 이 option을 읽습니다. 기록이 있으면 기다림을 멈추고 `registration_failed`(exit 4)를 반환합니다.
 오류 details에는 run 정보와 `hook_error`(hook의 원래 `{code, message}`)가 들어갑니다. 배정과 생성한 window는 보존합니다.
-`registered`가 `start_error`보다 앞섭니다. 이미 보고한 실패 뒤에 이 run이 등록에 성공하면 성공한 등록이 `start_error`를 지웁니다. 다음 start는 그 등록을 게시합니다.
+`registered`가 `start_error`보다 앞섭니다. 이미 보고한 실패 뒤에 이 run이 등록에 성공하면 성공한 등록이 `start_error`를 지웁니다. 그 등록은 게시까지 마친 것입니다.
 Hook은 SessionStart마다 한 번 실행하므로 실패한 run이 스스로 다시 등록하지는 않습니다.
 
 ### Claude 실행·전송·관찰
@@ -721,8 +726,8 @@ Run·config·tmux socket·endpoint는 호출을 생성한 start가 확정한 값
 별도 사용자 명령이나 설치 callback script를 만들지 않습니다.
 모든 인자는 argv 단위로 안전하게 인용합니다.
 함수는 현재 run을 검증하고 자기 window의 native binding만 기록합니다.
-Canonical state는 시작 controller가 게시하며 등록 함수는 그 준비 결과를 기다립니다.
-업무 record-ready writer는 provider process 밖의 시작 controller가 호출합니다.
+Canonical state는 등록 함수가 게시합니다. 시작 controller는 그 결과(`ready` 또는 `start_error`)를 기다려 보고만 합니다.
+등록 함수는 게시가 끝난 뒤에만 반환합니다. 원격 seat만 Leader 호스트의 controller가 게시합니다(3절).
 
 Tmux 제어 권한은 host에서 명령을 실행하는 권한과 같습니다.
 이 권한으로 run-shell·new-window를 실행할 수 있으므로 filesystem sandbox의 격리를 보장하지 못합니다.
@@ -982,7 +987,7 @@ Restart는 다음 순서로 새 대화로 교체합니다.
 3. 같은 seat·JOB·Git 기준·branch를 유지하고 새 run을 발급합니다. 종료한 window를 이어받을 수 있으면 그 window와 pane 자리를 새 run이 씁니다(3절 종료한 window 재사용).
 4. 최신 프로젝트 지침으로 prompt·settings·환경을 다시 생성합니다.
 5. 인계 파일과 현재 CR 파일 경로를 최초 prompt에 넣고 새 대화를 시작합니다.
-6. 시작 controller가 새 run window의 실제 binding을 검증해 state에 게시한 뒤 시작 완료를 표시합니다.
+6. 새 run의 등록이 window의 실제 binding을 검증해 state에 게시한 것을 확인한 뒤 시작 완료를 표시합니다.
 7. 같은 target의 종료한 window를 정리합니다(3절). 이어받은 window는 현재 실행이므로 닫지 않습니다.
 
 이전 provider session_id와 새 session_id는 달라야 합니다. 이 원칙의 예외는 resume 하나입니다(아래 shutdown·resume).

@@ -97,29 +97,70 @@ def test_late_registration_cannot_replace_a_new_run_after_native_check(native_sl
     assert original(fixture["tmux"], "fixture", "seat-0")["run_id"] == "new-run"
 
 
-def test_registration_records_local_facts_without_publishing_canonical_state(native_slot, monkeypatch):
-    fixture = native_slot
-    old = fixture["store"].read()["0"]["session"].copy()
+def pending_run(fixture, monkeypatch, run_id="pending-run"):
+    """A launched run that took over seat-0 from the published old run and has not registered."""
     control = fixture["tmux"]
     pending = control.create_window("fixture", "new-conversation", fixture["seat"],
                                     {"base": str(fixture["base"]), "target": "seat-0",
-                                     "job_id": "J-20261103-01", "run_id": "pending-run",
+                                     "job_id": "J-20261103-01", "run_id": run_id,
                                      "provider": "codex", "endpoint": fixture["endpoint"],
                                      "config_path": str(fixture["config"])})
     control.set_current("fixture", "seat-0", pending)
     script = fixture["base"].parent / "next-provider.sh"
     script.write_text("#!/bin/bash\nexec sleep 86400\n")
     control.launch(pending["window_id"], fixture["seat"], script)
+
     class Provider:
         def verify_binding(self, session, context, metadata, timeout=20):
             return session
     monkeypatch.setattr(providers, "get_provider", lambda name: Provider())
+    return pending
+
+
+def test_registration_binds_and_publishes_in_one_step(native_slot, monkeypatch):
+    fixture = native_slot
+    old = fixture["store"].read()["0"]["session"].copy()
+    pending = pending_run(fixture, monkeypatch)
     native_id = str(uuid.uuid4())
     internal._register("pending-run", str(fixture["config"]), pending["socket_path"],
                        native_id, fixture["endpoint"], cwd=fixture["seat"])
-    assert fixture["store"].read()["0"]["session"] == old
-    assert control.get_current("fixture", "seat-0")["session_id"] == native_id
-    assert control.get_current("fixture", "seat-0")["ready"] is False
+    published = fixture["store"].read()["0"]["session"]
+    assert published["session_id"] == native_id != old["session_id"]
+    assert published["endpoint"] == fixture["endpoint"] and "connected_at" in published
+    current = fixture["tmux"].get_current("fixture", "seat-0")
+    assert current["session_id"] == native_id and current["registered"] is True and current["ready"] is True
+
+
+def test_session_start_hook_publishes_the_new_conversation(native_slot, monkeypatch):
+    fixture = native_slot
+    pending = pending_run(fixture, monkeypatch)
+    native_id = str(uuid.uuid4())
+    payload = {"session_id": native_id, "hook_event_name": "SessionStart", "cwd": str(fixture["seat"]),
+               "source": "startup"}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    internal.register_from_hook("pending-run", str(fixture["config"]), pending["socket_path"],
+                                expected_session_id=native_id, endpoint=fixture["endpoint"])
+    assert fixture["store"].read()["0"]["session"]["session_id"] == native_id
+    current = fixture["tmux"].get_current("fixture", "seat-0")
+    assert current["ready"] is True and "SessionStart" in current["hook_observations"]
+
+
+def test_registration_waits_for_the_control_lock_inside_its_limit(native_slot, monkeypatch):
+    from agent_session.state import control_lock
+
+    fixture = native_slot
+    pending = pending_run(fixture, monkeypatch)
+    monkeypatch.setattr(internal, "_PUBLISH_TIMEOUT", 1)
+    before = fixture["store"].read()
+    with control_lock(fixture["project"], "seat-0"):
+        with pytest.raises(SessionError) as error:
+            internal._register("pending-run", str(fixture["config"]), pending["socket_path"],
+                               str(uuid.uuid4()), fixture["endpoint"], cwd=fixture["seat"])
+    assert error.value.code == "lock_timeout"
+    current = fixture["tmux"].get_current("fixture", "seat-0")
+    assert current["registered"] is False and current["ready"] is False
+    assert current["start_error"]["code"] == "lock_timeout"
+    assert fixture["store"].read() == before
 
 
 @pytest.mark.parametrize("mismatch", ["cwd", "endpoint"])
@@ -172,7 +213,6 @@ def test_session_start_binds_only_the_source_that_fits_the_run(native_slot, monk
         return None, fixture["tmux"], fixture["tmux"].get_current("fixture", "seat-0"), None
 
     monkeypatch.setattr(internal, "_register", register)
-    monkeypatch.setattr(internal, "_wait_ready", lambda *arguments, **keywords: None)
     payload = {"session_id": old["session_id"], "hook_event_name": "SessionStart", "cwd": str(fixture["seat"]),
                "source": source}
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))

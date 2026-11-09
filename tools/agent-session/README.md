@@ -69,7 +69,7 @@ Start는 todo의 CR을 in-progress로 옮기고 Worker seat를 자동 배정합�
 `--seat N`을 지정하면 해당 Worker seat만 검사합니다. 지정한 seat가 비어 있지 않거나 안전 검사를 통과하지 못하면 배정을 거절합니다.
 이미 배정한 CR의 재시도는 같은 seat만 지정할 수 있습니다. Leader에는 `--seat`를 사용할 수 없습니다.
 Claude·Codex seat를 새로 clone하면 그 seat의 workspace trust를 기록합니다.
-시작이 trust·login·권한 dialog에서 멈추면 `needs_user_action`(exit 3)과 `dialog`를 반환합니다. 사용자가 그 창에서 답한 뒤 같은 start를 다시 실행합니다.
+시작이 trust·login·권한 dialog에서 멈추면 `needs_user_action`(exit 3)과 `dialog`를 반환합니다. 사용자가 그 창에서 답하면 등록이 게시까지 마치므로 start를 다시 실행하지 않아도 됩니다.
 다른 명령은 CR ID 대신 `--seat N`으로 현재 배정 대상을 지정할 수 있습니다.
 옵션은 `agent-session --help`와 해당 하위 명령의 `--help`에서 확인합니다.
 Restart 전에 해당 session이 `<base>/agent/handoff/<slot>.md`를 씁니다.

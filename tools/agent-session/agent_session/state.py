@@ -11,42 +11,76 @@ import tempfile
 import time
 
 from .errors import SessionError
+from .tmux import check_owner
 
 
-@contextmanager
+class FileLock:
+    """An OS lock on a file that stays in place after release.
+
+    `with` holds it for the block. `release` and `acquire` let a holder step out while it waits for
+    another process to act under the same lock; `release` of a lock that is not held does nothing."""
+
+    def __init__(self, path, timeout=600, blocking=True):
+        self.path = Path(path)
+        self.timeout = timeout
+        self.blocking = blocking
+        self._fd = None
+
+    def acquire(self, timeout=None, blocking=None):
+        timeout = self.timeout if timeout is None else timeout
+        blocking = self.blocking if blocking is None else blocking
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except OSError as exc:
+            raise SessionError("lock_unavailable", "Cannot open the command lock.", 5,
+                               {"path": str(self.path)}) from exc
+        deadline = time.monotonic() + max(0, timeout)
+        try:
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EINTR):
+                        raise SessionError("lock_unavailable", "Cannot acquire the command lock.", 5,
+                                           {"path": str(self.path)}) from exc
+                    if not blocking:
+                        raise SessionError("control_busy", "The target is controlled by another command.", 3,
+                                           {"path": str(self.path)}) from None
+                    if time.monotonic() >= deadline:
+                        raise SessionError("lock_timeout", "Timed out waiting for the command lock.", 4,
+                                           {"path": str(self.path)}) from None
+                    time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+        except BaseException:
+            os.close(fd)
+            raise
+        self._fd = fd
+
+    def release(self):
+        if self._fd is not None:
+            fd, self._fd = self._fd, None
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc_info):
+        self.release()
+
+
 def locked(path, timeout=600, blocking=True):
     """Acquire an OS lock. The lock file stays in place after release."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    except OSError as exc:
-        raise SessionError("lock_unavailable", "Cannot open the command lock.", 5,
-                           {"path": str(path)}) from exc
-    deadline = time.monotonic() + max(0, timeout)
-    acquired = False
-    try:
-        while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
-                break
-            except OSError as exc:
-                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EINTR):
-                    raise SessionError("lock_unavailable", "Cannot acquire the command lock.", 5,
-                                       {"path": str(path)}) from exc
-                if not blocking:
-                    raise SessionError("control_busy", "The target is controlled by another command.", 3,
-                                       {"path": str(path)}) from None
-                if time.monotonic() >= deadline:
-                    raise SessionError("lock_timeout", "Timed out waiting for the command lock.", 4,
-                                       {"path": str(path)}) from None
-                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
-        yield
-    finally:
-        if acquired:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+    return FileLock(path, timeout, blocking)
+
+
+def control_lock(project, slot, timeout=600, blocking=True):
+    """The target control lock of a slot (`leader` or `seat-N`): the one place that names its file."""
+    return locked(project.runtime_path / "control" / f"{slot}.lock", timeout, blocking)
 
 
 def empty_state(project):
@@ -60,6 +94,45 @@ _CONNECTED_AT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{
 def utc_now():
     """The connection time format: UTC, whole seconds."""
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def bound(previous, session, leader=False):
+    """A republished conversation keeps its connection time and review; a new one starts both."""
+    if previous and previous.get("session_id") == session["session_id"]:
+        return {**previous, **session}
+    fresh = {**session, "connected_at": utc_now()}
+    if leader:
+        fresh["reviewing"] = None
+    return fresh
+
+
+_RUN_IDENTITY = ("run_id", "window_id", "pane_id", "job_id", "remote_seat", "remote_native")
+
+
+def publish_session(project, tmux, store, meta, session, window=None):
+    """Write a run's connection to canonical state and mark its window ready, in one place.
+
+    The caller holds the target control lock. The slot's current run must still be `meta`'s run, JOB,
+    window and pane, and this project's; otherwise `target_changed` and nothing is written. A seat's JOB
+    must still own the seat. `window` options are written in the same tmux update as `ready`, so a
+    registered run is never unpublished. Publishing the same conversation again keeps its connection time."""
+    slot = meta["target"]
+    current = tmux.get_current(project.project_id, slot)
+    if not current or any(current.get(key) != meta.get(key) for key in _RUN_IDENTITY):
+        raise SessionError("target_changed", "The run is no longer the slot's current execution.")
+    check_owner(project, slot, None, current)
+
+    def publish(value):
+        if slot == "leader":
+            value["leader"] = bound(value["leader"], session, leader=True)
+        else:
+            key = slot[len("seat-"):]
+            if value[key]["job_id"] != current["job_id"]:
+                raise SessionError("target_changed", "The JOB changed before binding publication.")
+            value[key]["session"] = bound(value[key]["session"], session)
+    store.update(publish)
+    return tmux.write_meta(current["window_id"], {"run_id": current["run_id"], **(window or {}),
+                                                  "ready": True, "start_error": None})
 
 
 def binding_identity(session, provider):

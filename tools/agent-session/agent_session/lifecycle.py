@@ -1,5 +1,6 @@
 """Project session commands, Git preparation, and confirmed slot release."""
 
+from contextlib import contextmanager
 import os
 import shlex
 import sys
@@ -11,7 +12,7 @@ from . import api, background, git_ops, handoff, jobs, launch_artifacts, process
 from .config import RemoteSeat, current_project, load_registry
 from .errors import SessionError
 from .providers import get_provider
-from .state import StateStore, locked, utc_now
+from .state import StateStore, control_lock, locked, publish_session
 from .suspend import SuspendMixin, SuspendStore
 from .tmux import Tmux, check_owner
 from .util import write_json
@@ -19,16 +20,6 @@ from .util import write_json
 HOST_SECONDS = 8                                   # wait for the provider's background listing
 DIALOG_SCREEN_SECONDS = 1                          # how often an unregistered start reads its pane for a dialog
 PARKED_ALIVE = "The parked JOB still has a run; stop it before starting the JOB again."
-
-
-def _bound(previous, session, leader=False):
-    """A republished conversation keeps its connection time and review; a new one starts both."""
-    if previous and previous.get("session_id") == session["session_id"]:
-        return {**previous, **session}
-    fresh = {**session, "connected_at": utc_now()}
-    if leader:
-        fresh["reviewing"] = None
-    return fresh
 
 
 def _unregistered_ended(meta, pane):
@@ -61,6 +52,7 @@ class Manager(SuspendMixin):
         self.socket = {"socket_name": socket_name, "socket_path": socket_path}
         self.tmux = Tmux(**self.socket)
         self.provider = get_provider(self.project.provider)
+        self._held = {}                            # slot -> the control lock this command holds
 
     def remaining(self):
         value = self.end - time.monotonic()
@@ -69,8 +61,29 @@ class Manager(SuspendMixin):
         self.store.timeout = value
         return value
 
-    def _lock(self, slot):
-        return locked(self.project.runtime_path / "control" / f"{slot}.lock", self.remaining())
+    @contextmanager
+    def _lock(self, slot, blocking=True):
+        lock = control_lock(self.project, slot, self.remaining(), blocking)
+        with lock:
+            self._held[slot] = lock
+            try:
+                yield
+            finally:
+                del self._held[slot]
+
+    @contextmanager
+    def _unlocked(self, slot):
+        """Step out of this command's control lock on `slot` while another process acts under it.
+
+        The registration of a run takes the lock to publish it, so a command that waits for that
+        registration must not hold it. Without a held lock this does nothing."""
+        lock = self._held.get(slot)
+        if lock is None:
+            yield
+            return
+        lock.release()
+        yield                                      # after an error the lock stays released; the exit of `_lock` has nothing to do
+        lock.acquire(self.remaining(), blocking=True)   # even a lock first taken without waiting
 
     def _authorize(self, operation, slot):
         actor, identity = api.caller(self.project, self.tmux, self.store)
@@ -342,13 +355,20 @@ class Manager(SuspendMixin):
     def sweep_after_result(self, target, owner):
         """The self-controller's last cleanup, serialized with the slot's other commands."""
         try:
-            with locked(self.project.runtime_path / "control" / f"{target}.lock", self.remaining(),
-                        blocking=False):
+            with control_lock(self.project, target, self.remaining(), blocking=False):
                 return self._sweep(target, owner=owner)
         except SessionError as error:
             # A busy slot's command sweeps when it finishes; nothing is closed without the lock.
             return {"closed": [], "kept": [{"window_id": None, "reason": error.code}]}
     def _wait_ready(self, context):
+        """Wait until the run is published or fails, and report it. A local run is published by its own
+        registration (`internal._register`), so this command holds no control lock while it waits."""
+        if context.get("remote_seat"):
+            return self._observe_ready(context)
+        with self._unlocked(context["target"]):
+            return self._observe_ready(context)
+
+    def _observe_ready(self, context):
         screened = 0.0
         while True:
             self.remaining()
@@ -358,24 +378,15 @@ class Manager(SuspendMixin):
             if meta.get("remote_seat"):
                 from .remote_lifecycle import poll
                 meta = poll(self, meta)
-            if meta.get("registered"):
-                if not meta.get("ready"):
-                    session = self._session(meta)
-                    self._same(meta, published=False)
-                    def publish(value):
-                        if meta["seat"] is None:
-                            value["leader"] = _bound(value["leader"], session, leader=True)
-                        else:
-                            key = str(meta["seat"])
-                            if value[key]["job_id"] != meta["job_id"]:
-                                raise SessionError("target_changed", "The JOB changed before binding publication.")
-                            value[key]["session"] = _bound(value[key]["session"], session)
-                    self.store.update(publish)
-                    meta = self.tmux.write_meta(meta["window_id"], {"ready": True, "start_error": None})
+                if meta.get("registered") and not meta.get("ready"):
+                    # The registration ran on the remote host, so no registration function of this host
+                    # publishes it; this controller does, while its caller holds the control lock.
+                    meta = publish_session(self.project, self.tmux, self.store, meta, self._session(meta))
+            if meta.get("ready"):
                 return self._result(meta, ready=True)
             failure = meta.get("start_error")
             if isinstance(failure, dict):
-                # The registration hook recorded why it failed; the run's CLI stays alive, so nothing else ends this wait.
+                # The registration recorded why it failed; the run's CLI stays alive, so nothing else ends this wait.
                 raise SessionError("registration_failed", "The provider's registration was rejected: "
                                    f"{failure.get('message')}", 4,
                                    {**self._result(meta), "hook_error": failure})
@@ -387,7 +398,7 @@ class Manager(SuspendMixin):
                 dialog = self.provider.startup_dialog(self.tmux.capture_pane(meta["pane_id"]))
                 if dialog:
                     raise SessionError("needs_user_action", f"The CLI waits at its {dialog} dialog. Answer it in "
-                                       "the window, then run the same start again.", 3,
+                                       "the window; the registration then publishes it.", 3,
                                        {**self._result(meta), "dialog": dialog})
             time.sleep(min(0.1, self.remaining()))
 
@@ -521,8 +532,7 @@ class Manager(SuspendMixin):
                         reasons[str(index)] = ["JOB assigned"]
                         continue
                     slot = f"seat-{index}"
-                    candidate_guard = locked(self.project.runtime_path / "control" / f"{slot}.lock",
-                                             self.remaining(), blocking=False)
+                    candidate_guard = self._lock(slot, blocking=False)
                     try:
                         candidate_guard.__enter__()
                     except SessionError as error:
