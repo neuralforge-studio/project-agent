@@ -24,11 +24,17 @@ from project_item import store as item_store  # noqa: E402
 from project_item.kinds import CR  # noqa: E402
 
 
-DEFAULT_TIMEOUT = 15
+# The wait limit is a ceiling for a command that never finishes, so a hung test fails instead of
+# stalling the run; it asserts no speed. A fixture `start` runs a real tmux pane and a Python child that
+# imports agent_session, so its time follows the host's load. Measured on this workstation (TEST-003):
+# with three `-n 8` suites running at once on a host already at load 75-100 on 64 cores, one command
+# took p50 9.8 s, p90 21.4 s, p99 29.8 s and at most 38.0 s over 1350 commands, so 15 s failed about
+# 95 of 704 tests per run. 120 s is about three times that maximum.
+DEFAULT_TIMEOUT = 120
 
 
 def command_timeout():
-    """The wait limit for one fixture Manager command; AGENT_SESSION_TEST_TIMEOUT raises it under machine load."""
+    """The wait limit for one fixture Manager command; AGENT_SESSION_TEST_TIMEOUT overrides it."""
     return float(os.environ.get("AGENT_SESSION_TEST_TIMEOUT", DEFAULT_TIMEOUT))
 
 
