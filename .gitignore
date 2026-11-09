@@ -1,0 +1,2 @@
+# The installer writes python.env into a release. A development checkout has none.
+tools/python.env
