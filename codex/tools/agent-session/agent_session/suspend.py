@@ -9,14 +9,16 @@ module never imports `lifecycle`. `Fleet` gets the `Manager` class from the code
 it (`cli._default_fleet`) as `manager_factory`.
 """
 
+import datetime as dt
 import json
 import shlex
 import threading
 import time
 
-from . import jobs
-from .config import load_registry
+from . import jobs, process
+from .config import RemoteSeat, load_registry
 from .errors import SessionError
+from .providers.claude import transcript_files
 from .state import StateStore, locked, utc_now
 from .tmux import Tmux
 from .util import write_json
@@ -34,11 +36,15 @@ NEW_CONVERSATION = ("서버를 내리기 전의 대화를 재개하지 못해 �
                     "seat의 작업 파일·branch와 CR의 `## Result`를 확인하고 이어서 작업하십시오.")
 
 
-def resume_text(slot, forced, resumed=(), failed=()):
+def resume_text(slot, forced, resumed=(), failed=(), lost=False):
     """The one message a resumed conversation gets. The Leader's also names the other targets."""
     text = ("서버를 내리는 shutdown으로 이 대화의 CLI가 종료됐다가 같은 대화로 재개됐습니다. "
             "그 전에 실행하던 background 작업과 monitor는 모두 끝났습니다. 상태를 확인하고 하던 일을 이어 가십시오.")
-    if forced:
+    if lost:
+        text = ("서버가 shutdown 없이 내려가(정전·crash 등) 이 대화의 CLI가 재부팅과 함께 종료됐다가 같은 대화로 재개됐습니다. "
+                "그 전에 실행하던 background 작업과 monitor는 모두 끝났고, 실행 중이던 명령은 중간에 끊겨 결과가 없으니 "
+                "다시 확인하십시오. 상태를 확인하고 하던 일을 이어 가십시오.")
+    elif forced:
         text += (" shutdown이 제한 시간 안에 쉬지 않아 CLI를 강제 종료했습니다. 그때 실행 중이던 명령은 "
                  "중간에 끊겨 결과가 없으니 다시 확인하십시오.")
     if slot == "leader":
@@ -73,7 +79,8 @@ class SuspendStore:
         for slot, entry in value.items():
             if (not isinstance(entry, dict) or not isinstance(slot, str)
                     or not (slot == "leader" or (slot.startswith("seat-") and slot[5:].isdigit()))
-                    or set(entry) != {"job_id", "run_id", "session_id", "suspended_at", "forced"}
+                    or set(entry) - {"lost"} != {"job_id", "run_id", "session_id", "suspended_at", "forced"}
+                    or not isinstance(entry.get("lost", {}), dict)
                     or not all(isinstance(entry[key], str) and entry[key] for key in ("run_id", "session_id", "suspended_at"))
                     or not (entry["job_id"] is None or isinstance(entry["job_id"], str))
                     or not isinstance(entry["forced"], bool)):
@@ -88,9 +95,12 @@ class SuspendStore:
             write_json(self.path, value)
             return value
 
-    def record(self, slot, job_id, run_id, session_id, forced):
+    def record(self, slot, job_id, run_id, session_id, forced, lost=None):
+        """Record a slot. `lost` is the evidence of a `resume --lost` judgement; such a record is forced."""
         entry = {"job_id": job_id, "run_id": run_id, "session_id": session_id,
                  "suspended_at": utc_now(), "forced": bool(forced)}
+        if lost is not None:
+            entry["lost"] = lost
         self.update(lambda value: value.__setitem__(slot, entry))
         return entry
 
@@ -253,6 +263,97 @@ class SuspendMixin:
         except SessionError:
             pass                           # the launch failure is the result
 
+    def record_lost(self, slot):
+        """Judge a slot that has a conversation and no shutdown record, and record it when a reboot ended it.
+
+        The record is the one a forced shutdown leaves, plus the evidence of the judgement under `lost`, so the
+        resume and start paths that follow need no other case. All of these must hold, and each one that does
+        not is reported: no current execution pointer of the slot; the system booted after the conversation
+        record was last written; no process names the conversation ID; a last run of the conversation exists.
+        A check that cannot be made counts as not held. Raise lost_not_confirmed with `reasons` and `evidence`
+        when any check fails; nothing is changed then. Return the record."""
+        with self._lock(slot):
+            state = self.store.read(missing_ok=True)
+            session, job_id = self._slot_entry(slot, state)
+            if not session:
+                raise SessionError("session_unbound", "The slot has no bound conversation.", 4)
+            conversation = session["session_id"]
+            evidence, reasons, seconds = {}, [], {}
+
+            def check(name, probe):
+                try:
+                    evidence.update(probe())
+                except SessionError as error:
+                    reasons.append({"check": name, "code": error.code, "message": error.message})
+
+            def pointer():
+                try:
+                    current = self.tmux.get_current(self.project.project_id, slot)
+                except SessionError as error:
+                    if error.code != "execution_evidence_missing":
+                        raise
+                    raise SessionError("execution_present", "The slot's execution pointer remains; its window is gone.") from error
+                if current:
+                    raise SessionError("execution_present", "The slot has a current execution pointer.")
+                return {"execution_pointer": None}
+
+            def boot():
+                seconds["boot"] = process.boot_time()
+                return {"boot_time": _iso(seconds["boot"])}
+
+            def transcript():
+                root = self.project.base if slot == "leader" else self.project.seats[int(slot[5:])]
+                if isinstance(root, RemoteSeat):
+                    raise SessionError("remote_seat", "The conversation record of an SSH seat is on another host.")
+                cwds = [root]
+                if slot != "leader":
+                    try:
+                        cwds.append(self._context(slot, jobs.lookup(self.project, job_id, ("in-progress",)))["cwd"])
+                    except SessionError as error:
+                        raise SessionError("target_changed", "The Worker's CR is no longer in progress.") from error
+                files = transcript_files(cwds, conversation)
+                if not files:
+                    raise SessionError("transcript_missing", "The conversation record file was not found.")
+                latest = max(files, key=lambda path: path.stat().st_mtime)
+                seconds["transcript"] = latest.stat().st_mtime
+                return {"transcript": str(latest), "transcript_updated": _iso(seconds["transcript"])}
+
+            def holders():
+                found = process.session_holders(conversation)
+                if found:
+                    raise SessionError("cli_alive", "A process names the conversation ID.", 4, {"pids": found})
+                return {"processes": []}
+
+            def last_run():
+                found = self._last_run(conversation)
+                if not found:
+                    raise SessionError("run_unknown", "No run of this conversation was found.")
+                return {"run_id": found}
+
+            for name, probe in (("pointer", pointer), ("boot", boot), ("transcript", transcript),
+                                ("processes", holders), ("run", last_run)):
+                check(name, probe)
+            if "boot" in seconds and "transcript" in seconds and seconds["transcript"] >= seconds["boot"]:
+                reasons.append({"check": "transcript", "code": "updated_after_boot",
+                                "message": "The conversation record changed at or after the system boot."})
+            if reasons:
+                raise SessionError("lost_not_confirmed", "The slot is not confirmed as lost to a reboot.", 4,
+                                   {"reasons": reasons, "evidence": evidence})
+            lost = {"checked_at": utc_now(), **{key: value for key, value in evidence.items() if key != "run_id"}}
+            return SuspendStore(self.project, self.remaining()).record(
+                slot, job_id, evidence["run_id"], conversation, True, lost=lost)
+
+    def _last_run(self, conversation):
+        """The newest run whose launch script names the conversation, or None."""
+        newest, found = -1.0, None
+        for script in (self.project.runtime_path / "runs").glob("*/launch.sh"):
+            try:
+                if conversation in script.read_text(encoding="utf-8") and script.stat().st_mtime > newest:
+                    newest, found = script.stat().st_mtime, script.parent.name
+            except (OSError, UnicodeError):
+                continue
+        return found
+
     def is_suspended(self, slot, item):
         """Whether a shutdown record, and nothing else, names this slot's JOB and conversation."""
         record = SuspendStore(self.project, self.remaining()).read().get(slot)
@@ -276,6 +377,10 @@ class SuspendMixin:
         if slot == "leader":
             return self.send(job="leader", message=text)
         return self.send(seat=int(slot[5:]), message=text)
+
+
+def _iso(seconds):
+    return dt.datetime.fromtimestamp(seconds, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class Alarm:
@@ -463,18 +568,51 @@ class Fleet:
 
     # resume
 
-    def _resume_project(self, project, end, outcome):
+    def _judge_lost(self, project, end, records, outcome):
+        """For `resume --lost`: add a record for each slot with a conversation, no record, and a reboot behind it.
+
+        The slots that fail the judgement go to `outcome["rejected"]` with their reasons and keep their assignment."""
+        state = self._manager(project, max(1.0, end - time.monotonic())).store.read(missing_ok=True)
+        slots = [("leader", state["leader"], None)] + [(f"seat-{key}", row["session"], row["job_id"])
+                                                        for key, row in state.items()
+                                                        if key != "leader" and row["job_id"] is not None]
+        for slot, session, job_id in slots:
+            if slot in records or (slot == "leader" and not session):
+                continue
+            if not session:
+                outcome.setdefault("skipped", []).append({
+                    "slot": slot, "reason": "no_conversation",
+                    "message": "The seat is reserved but its conversation never registered."})
+                continue
+            try:
+                manager = self._manager(project, max(1.0, end - time.monotonic()))
+                manager.end = end
+                records[slot] = manager.record_lost(slot)
+            except SessionError as error:
+                outcome.setdefault("rejected", []).append({"slot": slot, "job_id": job_id,
+                                                           "session_id": session["session_id"],
+                                                           "error": error.as_dict()})
+            except Exception as error:
+                outcome.setdefault("rejected", []).append({
+                    "slot": slot, "job_id": job_id, "session_id": session["session_id"],
+                    "error": {"code": "internal_error", "message": type(error).__name__, "details": {}}})
+
+    def _resume_project(self, project, end, outcome, judge_lost=False):
         if project.provider != SUPPORTED_PROVIDER:
             outcome.update(self._skipped(project))
             return
         seconds = max(1.0, end - time.monotonic())
         records = SuspendStore(project, seconds).read()
+        if judge_lost:
+            self._judge_lost(project, end, records, outcome)
         slots = sorted(records, key=lambda slot: (slot != "leader", int(slot[5:]) if slot != "leader" else 0))
         resumed, failed = [], []
         for slot in slots:
             record = records[slot]
             row = {"slot": slot, "job_id": record["job_id"], "session_id": record["session_id"],
                    "forced": record["forced"]}
+            if "lost" in record:
+                row["lost"] = record["lost"]
             try:
                 manager = self._manager(project, max(1.0, end - time.monotonic()))
                 manager.end = end
@@ -495,7 +633,7 @@ class Fleet:
         worker_names = [f"{slot}({row['job_id']})" for slot, _, row in resumed if slot != "leader"]
         lost = [f"{row['slot']}({row['job_id']}): {row['error']['code']}" for row in failed if row["slot"] != "leader"]
         for slot, manager, row in sorted(resumed, key=lambda item: item[0] == "leader"):
-            text = resume_text(slot, row["forced"], worker_names, lost)
+            text = resume_text(slot, row["forced"], worker_names, lost, "lost" in row)
             try:
                 manager.notify_resumed(slot, text)
                 row["message"] = "sent"
@@ -503,7 +641,7 @@ class Fleet:
                 row["message"] = error.as_dict()
             outcome.setdefault("rows", []).append(row)
 
-    def resume(self, project=None, everything=False):
+    def resume(self, project=None, everything=False, lost=False):
         registry, selected = self._select(project, everything)
         self._authorize(registry, selected, "resume")
         end = time.monotonic() + self.timeout
@@ -511,7 +649,7 @@ class Fleet:
 
         def run(item, outcome):
             try:
-                self._resume_project(item, end, outcome)
+                self._resume_project(item, end, outcome, lost)
             except SessionError as error:
                 outcome["error"] = error.as_dict()
             except Exception as error:
@@ -529,6 +667,9 @@ class Fleet:
                    "resumed": [r for r in rows if r["status"] == "resumed"],
                    "failed": [r for r in rows if r["status"] == "failed"],
                    "skipped": outcome.get("skipped", [])}
+            if lost:
+                row["rejected"] = outcome.get("rejected", [])
+                problems += len(row["rejected"])
             if "error" in outcome:
                 row["error"] = outcome["error"]
                 problems += 1
@@ -537,5 +678,5 @@ class Fleet:
         result = {"projects": projects}
         if problems:
             raise SessionError("resume_incomplete", f"{problems} target(s) were not resumed; their records "
-                               "remain.", 4, result)
+                               "and assignments remain.", 4, result)
         return result

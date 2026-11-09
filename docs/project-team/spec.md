@@ -296,7 +296,8 @@ Tmux 근거가 사라지면 state를 자동 삭제하거나 실행을 자동 채
 Tmux server를 다시 시작하면 예약 seat의 현재 실행 포인터와 실행 근거가 함께 사라집니다.
 그 seat의 start·stop·restart는 execution_unknown입니다. 운영자가 7절의 수동 복구를 수행합니다.
 예외는 shutdown이 남긴 종료 기록이 있는 slot입니다. 서버를 내리기 전에 `agent-session shutdown`을 실행했으면 이 근거가 사라져도 resume이나 start가 이어 갑니다(7절 shutdown·resume).
-`agent/suspend.json`은 shutdown이 종료를 확인한 slot의 기록입니다. slot(`leader` 또는 `seat-N`)마다 job_id·종료한 run_id·session_id·종료 시각(UTC)·forced를 담습니다.
+shutdown 없이 서버가 내려갔어도 운영자가 `resume --lost`로 재부팅을 확인한 slot은 같은 기록을 만들어 이어 갑니다(7절 resume --lost).
+`agent/suspend.json`은 shutdown이 종료를 확인한 slot의 기록입니다. slot(`leader` 또는 `seat-N`)마다 job_id·종료한 run_id·session_id·종료 시각(UTC)·forced를 담습니다. `resume --lost`가 만든 기록은 판정 근거인 `lost`를 더 담습니다.
 이 파일은 배정과 연결의 원본이 아닙니다. resume과 start가 state와 대조하는 데만 사용합니다.
 저장은 `agent/suspend.lock` 아래 원자적 교체로 합니다. 손상한 파일은 `suspend_invalid`이며 덮어쓰지 않습니다.
 `agent/runs/<run_id>/`에는 prompt·settings·launch·hook 진단·제어 결과를 둡니다.
@@ -412,7 +413,7 @@ Tmux server를 다시 띄운 뒤의 resume·start는 이전 window가 없으므�
 Claude 2.1.319는 `/background`(`/bg`)나 빈 입력란의 `←`로 대화를 background session으로 옮깁니다. CLI가 background 작업이나 session cron을 가진 채 끝날 때도 대화를 넘깁니다(exit handoff). 옮긴 대화는 새 session ID로 이어지고 `claude daemon`의 process가 맡으며, 관리 pane의 CLI는 그 대화를 보여 주는 화면으로 남습니다. 이 run은 옛 ID로 등록돼 있으므로 hook의 새 ID는 거절되고 ListAgents에도 pane이 없습니다.
 
 - **감지**: 옛 transcript가 `{"type":"continued-in","continuedInSessionId":<새 ID>}`로 끝나면 옮겨진 것입니다. 마지막 record만 봅니다. 옮긴 뒤 같은 대화를 다시 열면 record가 이어 붙으므로 옮겨진 것이 아닙니다.
-  - transcript는 `<config>/projects/*/<옛 ID>.jsonl`입니다. `<config>`는 호출한 process의 `CLAUDE_CONFIG_DIR`, 없으면 `~/.claude`입니다. CLI에만 다른 config 디렉토리를 줬다면 찾지 못하고, 그때는 감지하지 못한 채 이전 오류가 그대로 나옵니다.
+  - transcript 위치의 원본은 `providers/claude.py`의 `transcript_files`입니다(`resume --lost`의 대화 기록 확인과 같은 규칙: `<Claude 설정 dir>/projects/<경로 slug>/<session_id>.jsonl`). 여기서는 cwd를 쓰지 않고 `projects/*/<옛 ID>.jsonl`을 찾습니다. 설정 dir은 호출한 process의 `CLAUDE_CONFIG_DIR`, 없으면 `~/.claude`입니다. CLI에만 다른 config 디렉토리를 줬다면 찾지 못하고, 그때는 감지하지 못한 채 이전 오류가 그대로 나옵니다.
   - hook 경로: 다른 session ID의 hook이 오면, 그 ID가 옛 transcript의 `continued-in`이 가리키는 ID일 때 window option `moved_to_background`(`old_session_id`·`new_session_id`·`host_pid`·`host_birth`·`detected_at`)를 기록하고 `conversation_backgrounded`로 실패합니다. 아니면 `owner_mismatch`입니다.
   - 명령 경로: 기록이 없어도 transcript가 `continued-in`으로 끝나고 provider 조회(ListAgents)가 관리 pane을 보여 주지 않으면 같은 판정을 하고 기록합니다. pane이 조회되면 옮겨진 것이 아닙니다.
 - **host**: background 대화를 맡은 process입니다. `claude agents --json --cwd <run의 cwd>`에서 새 ID의 행 `pid`를 찾아 PID와 생성 시각을 기록합니다. 조회가 실패하거나 행이 없으면 PID는 unknown(null)입니다.
@@ -1009,6 +1010,7 @@ Provider가 Claude인 project만 처리합니다. Codex project는 건드리지 
 | --all | --project와 택일 | 등록 파일의 모든 project |
 | --timeout SECONDS | 선택. 600초 | shutdown은 모든 대상이 함께 쓰는 마감까지의 대기, resume은 전체 대기 제한 |
 | --force | shutdown만. 선택 | 마감까지 쉬지 않는 대상을 강제 종료 |
+| --lost | resume만. 선택 | shutdown 없이 서버가 내려간 뒤 기록이 없는 slot도 대상으로 삼음(아래 resume --lost) |
 
 #### shutdown
 
@@ -1060,10 +1062,31 @@ Provider가 Claude인 project만 처리합니다. Codex project는 건드리지 
    - 복원된 session을 채택하는 코드는 없습니다.
 9. 모두 재개했으면 exit 0입니다. 하나라도 실패하면 `resume_incomplete`이고 exit 4이며 같은 결과를 details에 담습니다.
 
+#### resume --lost
+
+정전·crash·강제 재부팅으로 shutdown 없이 서버가 내려가면 종료 기록과 tmux의 실행 근거가 모두 없습니다. `resume --lost`는 이 slot을 재부팅이 끝냈다고 확인할 수 있을 때만 shutdown의 `forced: true` 기록과 같게 취급합니다. 재부팅을 종료 근거로 쓰는 경우만 다룹니다. 재부팅 없이 tmux만 죽은 경우는 아래 수동 복구입니다.
+
+1. 대상은 `--lost`가 없을 때와 같은 호출자·project 선택 규칙을 따릅니다(관리 session이 호출하면 role_denied). 그 위에 state에 session이 있고 종료 기록이 없는 Leader·Worker slot을 판정합니다. 종료 기록이 있는 slot은 판정 없이 위 1~9항을 따릅니다. 대화가 등록되지 않은 seat는 `skipped`(`no_conversation`)로 보고합니다.
+2. slot마다 다음을 모두 확인합니다. 확인하지 못한 항목은 충족하지 못한 것으로 봅니다. 한 항목이 실패해도 나머지 근거를 모아 보고합니다.
+
+   | 확인 | 충족 조건 | 거절 사유(`reasons[].code`) |
+   | --- | --- | --- |
+   | 실행 포인터 | 그 slot의 현재 실행 포인터가 없습니다. 포인터가 있으면 창이 없어도 충족하지 않습니다 | `execution_present` |
+   | 부팅 시각 | 시스템 부팅 시각을 얻었습니다 | `process_unknown` |
+   | 대화 기록 | `<Claude 설정 dir>/projects/<경로 slug>/<session_id>.jsonl`이 있습니다. 경로는 Leader는 base, Worker는 seat와 CR의 Cwd입니다. SSH seat는 판정하지 않습니다 | `transcript_missing`, `remote_seat`, `target_changed`(Worker의 CR이 in-progress가 아님) |
+   | 갱신 시각 | 대화 기록의 마지막 갱신이 부팅 시각보다 앞섭니다 | `updated_after_boot` |
+   | process | 그 session_id가 명령행에 있는 process가 없습니다. 목록을 완전히 읽지 못하면 충족하지 않습니다 | `cli_alive`, `process_unknown` |
+   | 마지막 run | 그 session_id를 쓴 run(`agent/runs/<run_id>/launch.sh`)이 있습니다 | `run_unknown` |
+
+3. 모두 충족한 slot은 `forced: true` 기록에 판정 근거 `lost`(`checked_at`·`boot_time`·`transcript`·`transcript_updated`·`processes`·`execution_pointer`)를 더해 `agent/suspend.json`에 씁니다. 그 slot은 위 1~9항의 resume 경로로 같은 대화 ID로 재개합니다. 같은 근거가 결과의 `resumed[].lost`에 남습니다. 재개 메시지는 shutdown이 아니라 서버가 shutdown 없이 내려갔고 실행 중이던 명령이 끊겼다고 알립니다.
+4. 하나라도 충족하지 못한 slot은 기록을 쓰지 않고 배정을 바꾸지 않습니다. 결과의 `rejected`에 slot·job_id·session_id와 `error`(`lost_not_confirmed`, `details.reasons`·`details.evidence`)를 보고하며, 다른 slot의 판정과 재개는 계속합니다. 거절한 slot이 있으면 `resume_incomplete`·exit 4입니다. 정상 실행 중인 slot도 포인터가 있으므로 이때 거절됩니다.
+5. 재개하지 못한 slot의 기록은 남으므로 Worker는 `start --job <CR>`로 같은 seat에서 새 대화를 시작할 수 있습니다(아래).
+6. 부팅 시각은 Linux에서 `/proc/stat`의 `btime`, macOS에서 `sysctl kern.boottime`입니다. 둘 다 부팅 때의 벽시계 시각이라 부팅 뒤 시계를 조정하면 같은 양만큼 어긋납니다. 다른 platform은 얻지 못한 것으로 봅니다. 대화 기록 경로는 영숫자가 아닌 문자를 `-`로 바꾼 이름이며 200자 이상의 경로는 찾지 못합니다. process는 Linux의 `/proc/*/cmdline`, macOS의 `ps`로 찾으므로 `hidepid` 같은 설정으로 일부가 보이지 않으면 놓칠 수 있습니다.
+
 #### 새 대화로 시작
 
 - 종료 기록이 있고 state의 job_id·session_id가 그 기록과 같은 Worker seat는 현재 실행 포인터가 없어도 `start --job <CR>`로 시작할 수 있습니다. 같은 seat에서 새 대화로 시작하며 Git 준비를 다시 하지 않습니다. 시작하면 그 기록을 지웁니다.
-- 기록이 없거나 state와 다르면 지금처럼 execution_unknown입니다.
+- 기록이 없거나 state와 다르면 지금처럼 execution_unknown입니다. 재부팅으로 내려간 slot은 `resume --lost`가 먼저 기록을 만듭니다.
 - `start --job leader`는 실행 포인터가 없으면 새 Leader로 시작합니다. 시작하면 Leader의 기록을 지웁니다.
 - 시작하지 못한 resume의 run이 CLI 종료로 등록 전에 끝났으면 그 포인터를 지워 위 경로가 열리게 합니다.
 
@@ -1074,7 +1097,7 @@ Stop은 session_unbound를 반환하고 배정·Git 기준·기존 runtime 근�
 단 그 CLI의 종료(pane dead, 기록한 `cli_pid`·`cli_birth`의 process 없음)가 확인되면 start가 같은 slot에서 새 대화로 진행합니다(3절). 이 수동 복구는 그 근거를 확인하지 못한 경우에 적용합니다.
 등록한 CLI도 직접 /exit·crash·외부 종료 뒤 unload되면 마지막 background 근거가 없을 수 있습니다.
 이 경우의 종료 판정도 unknown이며 같은 수동 확인 절차를 적용합니다.
-이 경우 v1은 자동 복구를 지원하지 않습니다.
+이 경우 v1은 자동 복구를 지원하지 않습니다. 재부팅으로 서버가 내려간 경우는 `resume --lost`(7절)가 처리합니다.
 종료한 window 정리(3절)는 control_pending이 남았거나 종료를 확인하지 못한 window를 닫지 않습니다. 이 절의 수동 확인 근거는 보존됩니다.
 담당 Agent는 오류와 run 경로를 보고합니다. 운영자가 다음 절차를 수행합니다.
 
@@ -1292,7 +1315,7 @@ Details의 `diagnostic`에 `agent/diagnostics/`의 traceback 파일 경로를 �
 | V3 실행 | 두 provider의 시작·전송·종료·재시작 확인. 내부 등록 실패와 연결 소실을 성공으로 처리하지 않음 |
 | V4 Git | Seat 생성, 최초 준비·재시도·restart·보류 뒤 재배정의 기준 유지, read-only 규약 |
 | V5 통합 | CR todo→배정(in-progress)→작업→제출→review 반복→merge→done→반납 |
-| V6 중단·재개 | shutdown의 기록·마감·`--force`·알람, resume의 같은 대화 재개·재개 메시지, 기록이 있는 slot의 새 대화 시작 |
+| V6 중단·재개 | shutdown의 기록·마감·`--force`·알람, resume의 같은 대화 재개·재개 메시지, `resume --lost`의 판정·거절·근거 기록, 기록이 있는 slot의 새 대화 시작 |
 
 Review 뒤 제출 hash가 바뀌면 새 hash를 다시 검토합니다.
 V3의 restart는 새 UUID와 이전 실행 종료를 모두 확인합니다.

@@ -93,30 +93,40 @@ TRANSCRIPT_TAIL = 65536                    # bytes read from the end of a transc
 HOST_QUERY_SECONDS = 8                      # `claude agents` wait inside a hook's 30 seconds
 
 
-def _config_directory():
-    root = os.environ.get("CLAUDE_CONFIG_DIR")
-    return (Path(root).expanduser() if root else Path.home() / ".claude")
+def transcript_files(cwds, conversation_id):
+    """The existing conversation records of one conversation: the one owner of where Claude keeps them.
+
+    Claude keeps `<config dir>/projects/<cwd with every non-alphanumeric character as "-">/<id>.jsonl`.
+    `<config dir>` is the calling process's CLAUDE_CONFIG_DIR, else ~/.claude.
+    A path of 200 characters or more is stored under a shortened name, which a search by `cwds` does
+    not find. With `cwds` None every project directory is searched instead, for a conversation whose
+    directory is not known."""
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser() / "projects"
+    if cwds is None:
+        if not isinstance(conversation_id, str) or not conversation_id or "/" in conversation_id:
+            return []
+        try:
+            return sorted(path for path in root.glob("*/" + conversation_id + ".jsonl") if path.is_file())
+        except OSError:
+            return []
+    names = {re.sub(r"[^A-Za-z0-9]", "-", str(path)) for cwd in cwds for path in (Path(cwd), Path(cwd).resolve())}
+    return sorted(path for path in (root / name / f"{conversation_id}.jsonl" for name in names) if path.is_file())
 
 
 def continued_into(session_id):
     """The session ID that a conversation moved to, or None.
 
-    Claude ends the old transcript `<config>/projects/<project>/<session_id>.jsonl` with a
-    `{"type":"continued-in","continuedInSessionId":...}` record when it hands the conversation to a
-    background session. Only that last record counts: a conversation resumed after the handoff
-    appends more records. The calling process's CLAUDE_CONFIG_DIR (else ~/.claude) is searched, so a
-    config directory that only the CLI was given leaves the move undetected."""
-    if not isinstance(session_id, str) or not session_id or "/" in session_id:
-        return None
+    Claude ends the old transcript with a `{"type":"continued-in","continuedInSessionId":...}` record
+    when it hands the conversation to a background session. Only that last record counts: a
+    conversation resumed after the handoff appends more records. The transcript is searched in every
+    project directory of the calling process's config directory (`transcript_files`), so a config
+    directory that only the CLI was given leaves the move undetected."""
     try:
-        files = sorted((_config_directory() / "projects").glob("*/" + session_id + ".jsonl"),
-                       key=lambda path: path.stat().st_mtime)
-    except OSError:
-        return None
-    if not files:
-        return None
-    try:
-        with files[-1].open("rb") as stream:
+        files = transcript_files(None, session_id)
+        if not files:
+            return None
+        newest = max(files, key=lambda path: path.stat().st_mtime)
+        with newest.open("rb") as stream:
             stream.seek(0, os.SEEK_END)
             stream.seek(max(0, stream.tell() - TRANSCRIPT_TAIL))
             lines = [line for line in stream.read().splitlines() if line.strip()]

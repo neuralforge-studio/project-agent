@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -533,3 +534,19 @@ def test_the_background_host_comes_from_the_agents_listing(claude, monkeypatch):
     monkeypatch.setattr(module, "run", lambda argv, timeout, **keywords: "not json")
     with pytest.raises(SessionError):
         provider.background_host("absent", "/project")
+
+
+def test_transcript_files_follow_claudes_directory_naming(tmp_path, monkeypatch):
+    from agent_session.providers.claude import transcript_files
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    seat = tmp_path / "agent.seat2"
+    seat.mkdir()
+    folder = tmp_path / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(seat.resolve()))
+    folder.mkdir(parents=True)
+    (folder / f"{IDENTITY}.jsonl").write_text("{}\n")
+    assert transcript_files([seat], IDENTITY) == [folder / f"{IDENTITY}.jsonl"]
+    assert transcript_files([seat], "other") == [] and transcript_files([tmp_path / "elsewhere"], IDENTITY) == []
+    # Without a directory every project directory is searched, in the same config directory.
+    assert transcript_files(None, IDENTITY) == [folder / f"{IDENTITY}.jsonl"]
+    assert transcript_files(None, "other") == [] and transcript_files(None, "../" + IDENTITY) == []
