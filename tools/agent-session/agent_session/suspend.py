@@ -225,6 +225,7 @@ class SuspendMixin:
 
     def relaunch(self, slot, record):
         """Start the recorded conversation again, in a new run and window, with `claude --resume`."""
+        self.tmux.require_version()
         state = self.store.read()
         session, job_id = self._slot_entry(slot, state)
         if not session or session["session_id"] != record["session_id"] or job_id != record["job_id"]:

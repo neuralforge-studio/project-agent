@@ -9,7 +9,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import api, background, git_ops, handoff, jobs, launch_artifacts, process, windows, workspace
+from . import api, background, ended, git_ops, handoff, jobs, launch_artifacts, process, windows, workspace
 from .config import RemoteSeat, current_project, load_registry, require_base
 from .errors import SessionError
 from .providers import get_provider
@@ -22,6 +22,8 @@ from .util import write_json
 HOST_SECONDS = 8                                   # wait for the provider's background listing
 DIALOG_SCREEN_SECONDS = 1                          # how often an unregistered start reads its pane for a dialog
 REGAIN_SECONDS = 5                                 # wait to take the control lock again after waiting for a registration
+FINISH_LOCK_SECONDS = 5                            # a run that ended itself waits this long for a busy control lock
+FINISH_END_SECONDS = 15                            # and this long for its process group to drain before it is not confirmed
 PARKED_ALIVE = "The parked JOB still has a run; stop it before starting the JOB again."
 
 
@@ -287,6 +289,11 @@ class Manager(SuspendMixin, WatchMixin):
                         "idle": True, "cli_alive": False, "group_alive": False, "tracked_alive": False,
                         "stopped": True, "pane": pane}
             return process.unlaunched_observation(meta, pane)
+        if pane["pane_dead"] and ended.confirms(self.project, meta):
+            # The end was confirmed when the run ended itself (`finish_ended`); a dead pane and the same CLI.
+            return {"known": True, "terminal": True, "active_turn": False, "pending": [], "background": [],
+                    "idle": True, "cli_alive": False, "group_alive": False, "tracked_alive": False,
+                    "stopped": True, "pane": pane}
         context = self._provider_context(meta, pane)
         session = self._session(meta)
         moved = meta.get("moved_to_background")
@@ -360,6 +367,9 @@ class Manager(SuspendMixin, WatchMixin):
             "stopping": False,
         })
         script = launch_artifacts.write_launch_script(self.project, context, launch)
+        # Before the CLI exists, so that even an immediate exit is seen. A path the hook command cannot carry
+        # leaves the hook out (the dead pane then stays until `stop`); a tmux that refuses it is an error.
+        self.tmux.install_exit_hook(context["python"], context["library_path"])
         context = self.tmux.launch(context["window_id"], context["cwd"], script)
         result = self._wait_ready(context)
         return {**result, "cleanup": self._sweep_regained(context["target"])}
@@ -516,6 +526,7 @@ class Manager(SuspendMixin, WatchMixin):
     def start(self, job, prompt_file=None, seat=None):
         leader = job == "leader"
         check_start_arguments(job, prompt_file, seat)
+        self.tmux.require_version()
         if seat is not None and (isinstance(seat, bool) or not isinstance(seat, int)
                                  or not 0 <= seat < len(self.project.seats)):
             raise SessionError("seat_invalid", "The seat number is outside the registry.", 2)
@@ -811,6 +822,8 @@ class Manager(SuspendMixin, WatchMixin):
         """Stop or restart one run. A self-controller defers window cleanup until it saved its result."""
         if operation not in ("stop", "restart"):
             raise SessionError("invalid_input", "Use stop or restart.", 2)
+        if operation == "restart":
+            self.tmux.require_version()            # a stop needs no hook, so it still works on an older tmux
         selected = self._target(job, seat, recovery=True)
         actor, _ = self._authorize(operation, selected["target"])
         if expected_run and selected["run_id"] != expected_run:
@@ -870,16 +883,77 @@ class Manager(SuspendMixin, WatchMixin):
                 # _launch already swept once the new run became current; a self-controller sweeps again
                 # after it saved its result, when its own pending window may close.
                 return {**result, "deferred_cleanup": meta["target"]} if defer_cleanup else result
-            cr_state = jobs.state_of(self.project, meta["job_id"]) if meta.get("job_id") else (None, None)
-            check, pointer_kept = self._release(meta, cr_state)
-            if not check.get("allowed") and meta.get("job_id"):
-                self._clear_review(meta["job_id"])
-                if cr_state[0] == "in-progress":
-                    # The CR's move out of in-progress finishes this release (finish_release).
-                    self._hold_release(meta, check["reasons"])
-            result = self._result(meta, stopped=True, released=bool(check.get("allowed")),
-                                  reasons=check.get("reasons", []))
-            return self._finish_control(result, meta, defer_cleanup, pointer_kept)
+            return self._settle(meta, defer_cleanup)
+
+    def _settle(self, meta, defer_cleanup=False):
+        """What follows the confirmed end of a run, under its control lock: release or hold the slot, then clean up.
+
+        `stop` and the wrap-up of a run that ended itself (`finish_ended`) both end here."""
+        cr_state = jobs.state_of(self.project, meta["job_id"]) if meta.get("job_id") else (None, None)
+        check, pointer_kept = self._release(meta, cr_state)
+        if not check.get("allowed") and meta.get("job_id"):
+            self._clear_review(meta["job_id"])
+            if cr_state[0] == "in-progress":
+                # The CR's move out of in-progress finishes this release (finish_release).
+                self._hold_release(meta, check["reasons"])
+        result = self._result(meta, stopped=True, released=bool(check.get("allowed")),
+                              reasons=check.get("reasons", []))
+        return self._finish_control(result, meta, defer_cleanup, pointer_kept)
+
+    def finish_ended(self, run_id, target, pane_id):
+        """Wrap up a run whose CLI ended by itself (`/exit`, a crash, a signal), with no command from anyone.
+
+        The tmux server starts this when the managed pane dies. It does what `stop` does after it confirmed the
+        end: record the end (`ended`), then release the slot or hold the release for a CR still in progress, and
+        clean up the window. Only a published, local run that is still the slot's current one is wrapped up;
+        anything else is `{"finished": False, "reason": ...}` and nothing changes. Such a run is left to
+        `stop`/`start`: one a command is controlling (stopping, a pending or running controller, a held control
+        lock), one that a shutdown ended (it is resumed), and one whose end cannot be confirmed."""
+        try:
+            with control_lock(self.project, target, min(FINISH_LOCK_SECONDS, self.remaining())):
+                meta = self.tmux.get_current(self.project.project_id, target)
+                if not meta or meta.get("run_id") != run_id or meta.get("pane_id") != pane_id:
+                    return {"finished": False, "reason": "not_current"}
+                if meta.get("remote_seat") or not (meta.get("registered") and meta.get("ready")):
+                    return {"finished": False, "reason": "not_published"}
+                controller = meta.get("controller_pid")
+                if (meta.get("stopping") or meta.get("control_pending")
+                        or (controller and process.alive(int(controller), meta.get("controller_birth")))):
+                    return {"finished": False, "reason": "control_active"}
+                state = self.store.read()
+                if target != "leader" and state[target[5:]]["job_id"] != meta.get("job_id"):
+                    return {"finished": False, "reason": "target_changed"}
+                self._owned(meta, target, state)
+                basis = self._ended_basis(meta)
+                if basis is None:
+                    return {"finished": False, "reason": "termination_unconfirmed"}
+                ended.write(self.project, meta, basis)
+                self.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "stopping": True})
+                self._retire_name(meta)
+                return {"finished": True, "basis": basis, **self._settle(meta)}
+        except SessionError as error:
+            return {"finished": False, "reason": error.code}
+
+    def _ended_basis(self, meta):
+        """How the end of a run whose pane died is confirmed, or None: `provider` as `stop` confirms it, or `process`.
+
+        `process`: Claude reports the end of a conversation only through its SessionEnd hook, which a killed
+        CLI never runs. When the pane is dead and neither the CLI, its process group, nor its tracked PIDs
+        live, nothing is left that could work (the same ground that confirms a forced shutdown). A moved
+        conversation is never confirmed this way. A process group that is still draining is waited for."""
+        limit = time.monotonic() + min(FINISH_END_SECONDS, self.remaining())
+        while True:
+            pane = self.tmux.pane_info(meta["pane_id"])
+            if not pane["pane_dead"]:
+                return None
+            if self._observe(meta)["stopped"]:
+                return "provider"
+            if (self.project.provider == "claude" and not meta.get("moved_to_background")
+                    and not any(self._process_facts(meta, pane))):
+                return "process"
+            if time.monotonic() >= limit:
+                return None
+            time.sleep(0.2)
 
     def _release(self, meta, cr_state):
         """Release the stopped run's slot when the release check allows it: (check, kept pointers)."""

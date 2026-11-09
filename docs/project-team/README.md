@@ -108,7 +108,7 @@ CR ARCH-001이 합의한 목표는 모두 위 현행에 옮겼습니다(2026-11-
 
 1. 세 `bin/` 경로(`tools/<도구>/bin/<도구>`)와 `tools/agent-session/agent_session.py`.
 2. 도구 디렉터리 이름(`agent-session`, `project-item`, `project-board`).
-3. `agent_session.internal`의 `register_from_hook`, `register_current`, `mark_process`, `run_controller`. Hook command, Codex 등록 command, `launch.sh`, `controller.sh`가 `tools/agent-session`의 절대 경로로 호출합니다.
+3. `agent_session.internal`의 `register_from_hook`, `register_current`, `mark_process`, `run_controller`, `finish_ended`(`python -m agent_session.internal finish-ended`). Hook command, Codex 등록 command, `launch.sh`, `controller.sh`와 tmux server의 `pane-died[agent-session]` hook이 `tools/agent-session`의 절대 경로로 호출합니다. 떠 있는 server의 hook은 갱신 전 경로를 가리키므로 이름과 인자 순서(socket, window, pane)가 그대로여야 합니다.
 4. `python -m agent_session.remote_runtime`과 `python -m agent_session.remote_bridge`.
 5. 원격 zip의 배치. `agent-session/`, `project-item/`, `guidance/<저장소 상대 경로>`입니다. 어떤 guidance 문서를 싣는지는 `remote.py`의 `GUIDANCE_FILES`가 정하고, test가 skill 문서의 link와 맞는지 확인합니다.
 6. tmux 연결은 자기 디렉터리 기준의 상대 경로로 도구를 부릅니다(`tmux_project_board.sh`는 `../../tools/project-board/bin/project-board`, `tmux_decide_status.py`는 `tools/project-item`). 결정 표시는 `project-agent-main.conf`의 option이 `tmux_decide_status.sh`를 부르고, 이 wrapper가 launcher로 고른 interpreter로 `.py`를 실행합니다. `project-agent-main.conf`는 읽힌 디렉터리를 `@project_agent_tmux_dir`에 두고 binding·hook이 그 디렉터리의 `tmux_project_board.sh`와 `project_agent_bind.sh`를 부릅니다. 파일 이름 `integrations/tmux/project-agent.conf`는 설치 계약(2절)이 읽습니다. 이 파일은 tmux 2.x도 parse하는 판정만 하고, tmux가 최소 버전 이상일 때만 `project-agent-main.conf`를 읽습니다(설치 계약 3.2절).

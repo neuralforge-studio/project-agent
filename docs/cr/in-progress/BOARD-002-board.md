@@ -128,3 +128,58 @@ README 검증 표의 `tools/project-board/**`, `integrations/tmux/**`, `tools/pr
 | `python -m pytest -q -n 8 install/tests` | 253 passed, 2 skipped |
 
 근거 재사용·재실행 판정: 결과를 바꾸는 `api.py`·`model.py`·`tmux_control.py`·`conf` 변경 뒤에 각 명령을 실행했습니다. 그 뒤 바꾼 것은 테스트 파일과 CHANGELOG뿐입니다. 새 테스트: `test_model.py`(변경분만 읽음, 이동한 파일, registry 1회 읽기, popup 단일 project), `test_internal.py`(`project_state`·`project_liveness`), `test_tmux_control.py`(떠난 window의 pane 유지), `test_project_agent_conf.py`(hook 조건 4가지 상태). 다른 `tools/test_*.py`와 `install/tests`는 마지막 코드 변경 뒤 재실행하지 않았습니다. CHANGELOG와 테스트 파일만 바뀌었기 때문입니다.
+
+### 수정 제출 (Leader 검토 반영)
+
+- 제출 commit: b9294bd56143bda3bda7d2061ed52575626f729b
+
+Leader 요청 4개를 반영했습니다. 수정 전 값은 base `7e35d24`, 수정 후 값은 이 commit입니다(같은 격리 tmux server·같은 registry, load average 60~350).
+
+#### 요청 3: `origin/main` merge
+
+- 충돌 4개(`CHANGELOG.md`, `spec.md`, `agent_session/api.py`, `test_model.py`)를 해결했습니다. `CHANGELOG.md`는 origin/main과 같게 두었습니다(`git diff origin/main -- CHANGELOG.md` 비어 있음, BOARD-002 항목 제거).
+- **merge가 만든 새 회귀**: SESSION-004·005의 `model.project_view`가 project마다 `api.pending_releases(...)`를 불러(`Manager`가 등록 파일을 다시 읽고 `tmux get_current`가 seat마다 tmux process 8개) snapshot 한 번이 0.3초에서 4.2초(load 242)로 돌아갔습니다. cProfile: ipweaver 하나가 tmux 호출 32번, 1.5초. 고침: `api.project_pending_releases(project)`(등록 파일을 다시 읽지 않음)를 추가하고, 이 읽기를 2초 파일 갱신에서 10초 실행 상태 갱신(`model.liveness`)으로 옮겼습니다. `snapshot`은 그 결과를 씁니다. 반납 대기가 끝난 것은 다음 10초 갱신까지 최대 10초 늦게 사라집니다. 고친 뒤 snapshot 중앙값 0.26초(최대 0.44초). 명세 5절 표, TUI 계획 2절, README에 적었습니다.
+
+#### 요청 1: 보이지 않는 pane은 갱신하지 않음
+
+- 방식: tmux hook(6개)이 Board가 켜져 있으면 `integrations/tmux/project_board_visibility.sh`(plain sh, Python 없음)를 실행합니다. 이 스크립트가 `list-clients`로 보이는 window를 구하고, Board pane(`@project_board_managed`)마다 `@project_board_visible`을 기록해 상태가 바뀐 pane에만 SIGUSR1을 보냅니다. TUI는 신호를 받으면 tmux에 한 번 물어(`tmux_control.board_visible`) 2초·10초 읽기를 멈추거나, 보이게 되면 각각 곧바로 한 번 읽습니다. 2초마다 tmux client를 띄우지 않습니다.
+- 안전장치: SIGUSR1의 기본 동작은 종료이므로 TUI가 handler를 설치한 뒤에만 `@project_board_ready=1`을 쓰고(`mark_ready`), 스크립트는 ready인 pane에만 신호를 보냅니다. ready를 쓴 직후 보임 상태를 한 번 읽어 그 사이의 변화를 놓치지 않습니다. 시작 때 handler를 달기 전 신호로 pane이 죽는 경로는 없습니다.
+- 실측(격리 server, window 2개, 같은 부하): 보이는 Board pane은 30초 동안 CPU 5초, 보이지 않는 pane은 **0초**. 창을 되돌리면 옵션이 `visible=1`로 돌아옵니다. 스크립트 한 번 0.059초(중앙값, 15회, window 7개), 같은 부하의 `sync` 1.6초(최대 4.3초).
+- SIGSTOP으로 멈추는 안은 쓰지 않았습니다. `control.lock`을 잡은 채 멈추면 `sync`·`toggle`이 그 window가 다시 보일 때까지 막힐 수 있기 때문입니다.
+
+#### 요청 2: 유지하는 pane 상한 8개
+
+- 실측(격리 server, 실제 sidebar): Board process 하나의 RSS **49.8 MB**, thread 6개. 보일 때 CPU는 40초에 6초(load 약 250에서 15%), 보이지 않을 때는 0입니다.
+- 근거: 보이지 않는 pane은 읽지 않으므로 비용은 메모리입니다. **N=8이면 약 400 MB 이하**입니다. 이 server에 window가 33개 있어도 Board process는 8개를 넘지 않습니다. 한 작업에서 오가는 window(project의 Leader와 Worker, 몇 개의 shell)가 8개 안에 들어옵니다. 값은 `tmux_control.MAX_KEPT`, 근거는 TUI 계획 5절과 설치 계약 5.3절에 적었습니다.
+- 동작: 새 pane을 만들 때 유지 pane이 8개를 넘으면, 어느 client도 보지 않는 window 중 `@project_board_seen`(보인 시각, 위 스크립트가 기록, 새 pane은 만든 시각)이 가장 오래된 window의 pane을 제거하고 layout을 복원합니다. 지금 보이는 window의 pane은 제거하지 않습니다.
+
+#### 요청 4: BOARD-003·004 판정 근거
+
+격리 server, window 4개, 이미 모두 한 번씩 본 상태에서 0.3초 간격으로 24번 전환(`m_rapid.py`: 전환 때마다 sidebar를 20ms 간격으로 sampling, `list-panes`로 pane 생성·제거 집계, hook 래퍼로 process 시작 집계).
+
+| 항목 | 수정 전 | 수정 후 |
+| --- | --- | --- |
+| 시작된 hook process | `sync`(bash+launcher+Python) **24개**(전환 1회당 1개, 서로 `control.lock`을 기다림) | `sync` **0개**, visibility sh 24개(0.06초) |
+| Board pane 생성 / 제거 | **11 / 11** | **0 / 0** |
+| sidebar sample(보이는 window) | 137개 중 133개(**97%**)가 project 행 없음(그 window에 Board pane이 없음 131, 있어도 행 없음 2) | 130개와 71개(2회) 중 **0개** |
+| 전환 뒤 0.3초 안에 행이 이미 보인 전환 | 1/24 | **24/24** |
+
+판정 근거:
+- **BOARD-004(깜빡임)**: 원인은 pane 재생성입니다. 수정 전에는 창을 옮길 때마다 Board pane이 지워지고 새로 만들어져(11번) 보이는 window의 97%가 빈 화면이었습니다. 수정 후에는 pane이 그대로 있어 생성·제거 0, 빈 화면 0입니다. 같은 원인으로 해소됩니다.
+- **BOARD-003(빠른 창 이동 때 지연·loading 중복)**: 수정 전 24번 전환이 Python `sync` 24개를 만들었고(각 0.7초~4.6초, 서로 기다림) 그 사이 pane이 반복해서 만들어지고 지워졌습니다(loading 화면이 반복된 원인). 수정 후에는 Python process가 0개이고, 전환 24번 모두 0.3초 안에 행이 보입니다. 수정 전 단독 `sync`가 1.6초(load 337)였던 것과 달리 스크립트는 0.06초입니다. 같은 원인으로 해소됩니다. 남는 것은 **처음 보는 window**의 첫 표시(새 TUI process 기동)뿐이며, 이는 위 6절의 RUST-001 근거와 같은 비용입니다.
+
+#### 검증 (제출 commit `b9294bd`)
+
+README 검증 표의 `tools/project-board/**`, `integrations/tmux/**`, `tools/agent-session/**`(`api.py`·`lifecycle.py`), `tools/project-item/**` 행. merge로 입력이 바뀐 test와 `api.py` 변경이 요구하는 `install/tests`를 실행했습니다.
+
+| 명령 | 결과 |
+| --- | --- |
+| `python -m pytest -q tools/project-board/tests` | 130 passed(처음에 `test_cli` 1건 실패: 새 인자 `mark_ready`, `visibility_reader`를 test의 가짜 `sidebar()`가 받지 못함. test를 고쳐 `test_cli` 3 passed. 나머지 129건은 그 실행에서 통과) |
+| `python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py tools/test_release_files.py tools/test_tmux_test_server.py` | 93 passed |
+| `python -m pytest -q tools/project-item/tests` | 125 passed |
+| `python -m pytest -q -n 8 tools/agent-session/tests` | 753 passed(`[sigint]` test도 통과, TEST-005 merge 뒤 재발 없음) |
+| `python -m pytest -q -n 8 install/tests` | 260 passed, 2 skipped |
+
+새 test: `test_tui.py`(보이지 않는 sidebar는 읽지 않고 보이면 곧바로 한 번 읽음, SIGUSR1 경로와 handler 정리), `test_tmux_control.py`(pane 상한과 가장 오래 안 본 window 제거, `mark_ready`·`board_visible`), `test_project_agent_conf.py`(visibility 스크립트가 바뀐 ready pane에만 신호를 보내는지, hook이 스크립트를 실행하는지), `test_model.py`(반납 대기는 10초 갱신에서만 읽음). `test_cli.py`는 고친 호출 인자를 확인합니다.
+
+근거 재사용·재실행 판정: 마지막 코드 변경(`test_cli.py` 수정) 전에 전체 명령을 한 번 실행했고, 그 뒤 바뀐 것은 `test_cli.py`뿐이라 그 파일만 다시 실행했습니다. CHANGELOG는 Leader 통합에서 씁니다.
