@@ -1,5 +1,7 @@
 """The one existing file the installer edits: the managed block in the user's tmux settings (contract section 3)."""
 
+import os
+
 BEGIN = "# >>> project-agent (managed block, do not edit) >>>"
 SOURCE = "source-file -q ~/.local/lib/project-agent/tmux.conf"
 END = "# <<< project-agent <<<"
@@ -17,8 +19,27 @@ def has_block(data):
 
 def target(env):
     """The settings file tmux reads first: `~/.tmux.conf`, else `~/.config/tmux/tmux.conf`, else None."""
-    import os
     for path in env.tmux_candidates:
         if os.path.lexists(path):
             return path
+    return None
+
+
+def rewrite_problem(path, info):
+    """Why the installer will not rewrite this file (it prints the line to add instead), or None. A rename makes a
+    new file, so it must not break a second name, change the owner, ignore a read-only mark, or lose what the
+    file system keeps besides the bytes and the permission bits (ACLs and extended attributes)."""
+    if info.st_nlink != 1:
+        return "linked under more than one name"
+    if info.st_uid != os.getuid():
+        return "owned by another user"
+    if not os.access(path, os.W_OK):
+        return "read-only"
+    try:
+        if os.listxattr(path, follow_symlinks=False):
+            return "carrying extended attributes or ACLs"
+    except (OSError, AttributeError):
+        pass
+    if info.st_size > LIMIT:
+        return "larger than 1 MiB"
     return None

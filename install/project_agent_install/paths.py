@@ -12,6 +12,7 @@ Identifiers:
     tree     release:<name>  backup
 """
 
+import base64
 import re
 
 from .layout import PROVIDERS, SKILLS, TOOLS, InstallerError
@@ -190,6 +191,8 @@ def validate_record(env, record):
                     require(entry.get("provider") == ident.split(":")[1], "A skill link provider", entry.get("provider"))
         elif ident.startswith("release:"):
             require(ident[len("release:"):] in releases, "A release directory", ident)
+            require(isinstance(entry.get("digest"), str) and HEX.fullmatch(entry["digest"]), "A release digest",
+                    entry.get("digest"))
         elif kind == "file" and entry.get("sha256") is not None:
             require(HEX.fullmatch(str(entry["sha256"])), "A file hash", entry["sha256"])
     for text in record["created_dirs"]:
@@ -204,6 +207,8 @@ def validate_record(env, record):
     if tmux.get("backup") is not None:
         backup = parse(env, tmux["backup"])
         require(backup.parent == env.backup and BACKUP_NAME.fullmatch(backup.name), "The tmux backup", tmux["backup"])
+        require(isinstance(tmux.get("backup_sha256"), str) and HEX.fullmatch(tmux["backup_sha256"]),
+                "The tmux backup hash", tmux.get("backup_sha256"))
     return places
 
 
@@ -212,7 +217,7 @@ SPEC_KEYS = {
     "dir": {"id"}, "file": {"id", "sha"}, "link": {"id", "target"}, "swap": {"id", "previous", "new"},
     "record": {"previous", "before_sha", "after_sha", "mtime_ns"}, "release": {"id", "digest"},
     "tmux": {"id", "before_bytes", "before_sha", "after_sha", "mtime_ns"},
-    "rm_link": {"id", "target"}, "rm_file": {"id", "sha"}, "rm_tree": {"id"}, "rm_dir": {"id"},
+    "rm_link": {"id", "target"}, "rm_file": {"id", "sha"}, "rm_tree": {"id", "digest"}, "rm_dir": {"id"},
     "cut": {"id", "before_sha", "after_sha", "delete"}, "drop_journal": set(),
 }
 OPTIONAL_HEX = {("rm_file", "sha"), ("record", "before_sha")}      # these two may be null
@@ -231,9 +236,12 @@ def validate_spec(places, spec):
     for key in ("mtime_ns",):
         if key in spec and not (spec[key] is None or isinstance(spec[key], int)):
             places.bad("A time", spec[key])
-    for key in ("previous", "before_bytes"):
-        if key in spec and not (spec[key] is None or (isinstance(spec[key], str) and "\0" not in spec[key])):
-            places.bad("A stored value", key)
+    stored = {"record": "previous", "tmux": "before_bytes"}.get(op)         # these two are base64 bytes
+    if stored and spec[stored] is not None:
+        try:
+            base64.b64decode(spec[stored], validate=True)
+        except (TypeError, ValueError):
+            places.bad("A stored value", stored)
     ident = spec.get("id")
     if "id" in SPEC_KEYS[op] and not isinstance(ident, str):
         places.bad("An identifier", ident)
@@ -255,7 +263,7 @@ def validate_spec(places, spec):
         elif spec["new"] != places.link_target(ident) or not isinstance(spec["previous"], str):
             places.bad("A link target", spec["new"])
     elif op in ("release", "rm_tree"):
-        places.tree(ident)
+        places.release_name(ident)
     elif op in ("tmux", "cut"):
         if not ident.startswith("tmux:"):
             places.bad("A tmux file", ident)

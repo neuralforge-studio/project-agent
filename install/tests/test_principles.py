@@ -18,6 +18,7 @@ import pytest
 from harness import BLOCK, LIB, REGISTRY_DRAFT, commit_change, plant_at, release_name, stop_at
 
 DRAFT = {".config", ".config/project-agent", REGISTRY_DRAFT}
+ROOT_CANNOT = pytest.mark.skipif(os.getuid() == 0, reason="permissions do not stop root")
 JOURNAL = ".project-agent-install-journal.json"
 SKILL_TARGET = "/.local/lib/project-agent/current/skills/project-team"
 
@@ -234,3 +235,84 @@ def test_a_user_edit_after_a_kill_during_uninstall_is_kept_and_the_uninstall_goe
     assert "Traceback" not in result.stderr and ".tmux.conf" in result.stdout
     assert home.read(".tmux.conf") == edited                               # the user's file was not touched
     assert not home.path(LIB).exists()
+
+
+# ---------------------------------------------------------------- follow-up of the third review
+
+@pytest.mark.parametrize("where", ["release-root", "bytecode-directory", "backup-directory"])
+def test_uninstall_leaves_a_release_or_backup_directory_that_holds_the_users_files(home, source, name, where):
+    """B for removal: a release goes only if it is exactly what was built; `backup/` loses only the recorded backup."""
+    home.write(".tmux.conf", b"set -g mouse on\n")
+    installed(home, source)
+    release = home.path(LIB + "/releases/" + name)
+    if where == "release-root":
+        mine = release / "mine.txt"
+    elif where == "bytecode-directory":
+        mine = release / "tools/agent-session/agent_session/__pycache__/mine.txt"
+    else:
+        mine = home.path(LIB + "/backup/mine.txt")
+    os.chmod(mine.parent, 0o755)                          # a release is read-only; the user makes it writable
+    mine.write_text("mine")
+    result = home.run("uninstall")
+    assert result.returncode == 0, result.stderr
+    assert mine.read_text() == "mine", "the user's file was deleted"
+    assert "left as it is" in result.stdout
+    assert not home.path(LIB + "/install.json").exists() and not home.path(".local/bin/agent-session").exists()
+    if where == "backup-directory":
+        assert sorted(os.listdir(home.path(LIB + "/backup"))) == ["mine.txt"]       # the recorded backup is gone
+        assert home.path(LIB + "/releases/" + name).exists() is False
+    else:
+        assert home.path(LIB + "/releases/" + name).is_dir()
+        assert not home.path(LIB + "/backup").exists()
+
+
+@ROOT_CANNOT
+def test_a_read_only_tmux_file_is_not_rewritten(home, source):
+    home.write(".tmux.conf", b"set -g mouse on\n", mode=0o444)
+    before = home.snapshot()
+    result = installed(home, source)
+    assert home.read(".tmux.conf") == b"set -g mouse on\n"
+    assert os.stat(home.path(".tmux.conf")).st_mode & 0o777 == 0o444
+    assert not home.path(LIB + "/backup").exists()
+    assert "read-only" in result.stdout and "source-file -q ~/.local/lib/project-agent/tmux.conf" in result.stdout
+    assert home.snapshot()[".tmux.conf"] == before[".tmux.conf"]
+    checked = home.run("check")
+    assert checked.returncode == 0 and "수동 연결 필요" in checked.stdout
+
+
+def test_a_tmux_file_with_extended_attributes_is_not_rewritten(home, source):
+    path = home.write(".tmux.conf", b"set -g mouse on\n")
+    try:
+        os.setxattr(path, "user.note", b"mine")
+    except OSError:
+        pytest.skip("this file system has no user extended attributes")
+    result = installed(home, source)
+    assert home.read(".tmux.conf") == b"set -g mouse on\n" and os.getxattr(path, "user.note") == b"mine"
+    assert "extended attributes" in result.stdout
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o640, 0o644])
+def test_the_backup_has_the_mode_of_the_original(home, source, mode):
+    home.write(".tmux.conf", b"set -g mouse on\n", mode=mode)
+    installed(home, source)
+    backups = [name for name in os.listdir(home.path(LIB + "/backup"))]
+    assert len(backups) == 1
+    assert os.stat(home.path(LIB + "/backup/" + backups[0])).st_mode & 0o777 == mode
+
+
+def test_a_corrupt_base64_value_in_a_journal_is_refused_without_a_traceback(home, source):
+    installed(home, source)
+    bad = {"format": 2, "command": "install", "mode": "undo", "homes": {}, "specs": [
+        {"op": "record", "previous": "!!not base64!!", "before_sha": None, "after_sha": "0" * 64, "mtime_ns": None}]}
+    worse = {"format": 2, "command": "install", "mode": "undo", "homes": {}, "specs": [
+        {"op": "tmux", "id": "tmux:0", "before_bytes": "@@@", "before_sha": "0" * 64, "after_sha": "1" * 64,
+         "mtime_ns": None}]}
+    for document in (bad, worse):
+        forged(home, document)
+        before = home.snapshot()
+        for command in ("uninstall", "install", "rollback"):
+            result = home.run(command, source=source)
+            assert result.returncode == 3 and "journal_invalid" in result.stderr, (command, result.stderr)
+            assert "Traceback" not in result.stderr
+            assert home.snapshot() == before
+        home.path(LIB + "/" + JOURNAL).unlink()

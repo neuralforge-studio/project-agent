@@ -428,3 +428,27 @@ def test_the_installer_and_the_product_it_imports_write_no_bytecode_into_the_che
     result = home.run("uninstall", "--dry-run", installer=installer)
     assert result.returncode == 0, result.stderr
     assert not list(source.rglob("__pycache__"))
+
+
+# ---------------------------------------------------------------- the third review
+
+def test_a_removal_that_raises_while_finishing_an_uninstall_ends_as_an_error_and_keeps_the_journal(home, source, monkeypatch):
+    installed(home, source)
+    killed = home.run("uninstall", env=stop_at(home, "after", 0))
+    assert killed.returncode == -signal.SIGKILL
+    monkeypatch.setenv("HOME", str(home.home))
+    env = Env()
+    pending = journal.read(env, journal.find(env))
+    monkeypatch.setattr(actions, "apply_spec", lambda ctx, spec: (_ for _ in ()).throw(IsADirectoryError(21, "x")))
+    with pytest.raises(InstallerError) as error:
+        journal.resume(env, pending)
+    assert error.value.code == "command_failed" and error.value.exit_code == 4
+    assert journal.find(env) is not None
+
+
+def test_the_ownership_check_of_a_tmux_file_names_the_owner(home, monkeypatch):
+    from project_agent_install import tmuxconf
+    path = home.write(".tmux.conf", b"set -g mouse on\n")
+    assert tmuxconf.rewrite_problem(path, os.lstat(path)) is None
+    monkeypatch.setattr(os, "getuid", lambda: os.lstat(path).st_uid + 1)
+    assert tmuxconf.rewrite_problem(path, os.lstat(path)) == "owned by another user"

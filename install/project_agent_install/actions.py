@@ -137,15 +137,37 @@ def inspect(path):
     return "other", None
 
 
+def digest_of(names):
+    return sha256("\n".join(sorted(names)).encode())
+
+
+def release_digest(files, extra):
+    """The listing of a release as the plan knows it: every file, and every directory above one (`name/`).
+    The bytecode directories the build adds are not in it."""
+    names = set(files) | set(extra)
+    for relative in list(names):
+        parts = relative.split("/")
+        names.update("/".join(parts[:count]) + "/" for count in range(1, len(parts)))
+    return digest_of(names)
+
+
 def tree_digest(root):
-    """The listing of a release: its sorted relative file names, without bytecode caches."""
+    """The same listing read from disk. Of the bytecode directories only `__pycache__` itself and the `.pyc` files
+    directly in it are left out: anything else in them (a user's file) changes the digest."""
     names = []
     for directory, dirs, files in os.walk(root):
-        for name in files + [entry for entry in dirs if os.path.islink(os.path.join(directory, entry))]:
-            relative = os.path.relpath(os.path.join(directory, name), root)
-            if "__pycache__" not in relative.split(os.sep):
-                names.append(relative.replace(os.sep, "/"))
-    return sha256("\n".join(sorted(names)).encode())
+        base = os.path.relpath(directory, root)
+        prefix = "" if base == "." else base.replace(os.sep, "/") + "/"
+        in_cache = os.path.basename(directory) == "__pycache__"
+        for name in files:
+            if not (in_cache and name.endswith(".pyc")):
+                names.append(prefix + name)
+        for name in dirs:
+            if os.path.islink(os.path.join(directory, name)):
+                names.append(prefix + name)
+            elif name != "__pycache__":
+                names.append(prefix + name + "/")
+    return digest_of(names)
 
 
 def force_rmtree(path):
@@ -178,7 +200,7 @@ def swap_path(path, target):
         raise
 
 
-def create_new(path, data, guard=None):
+def create_new(path, data, guard=None, mode=None):
     """Make a file that does not exist yet, complete: write a temporary file, then `link` it to the name (which
     fails if the name exists, so nothing is overwritten) and remove the temporary file."""
     temporary = temp_of(path)
@@ -187,6 +209,8 @@ def create_new(path, data, guard=None):
         guard()
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666)
     try:
+        if mode is not None:
+            os.fchmod(fd, mode)                     # not the umask's guess: the mode the caller asked for
         write_all(fd, data)
         os.fsync(fd)
     except BaseException:
@@ -202,6 +226,8 @@ def create_new(path, data, guard=None):
             raise
         out = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)        # a file system without hard links
         try:
+            if mode is not None:
+                os.fchmod(out, mode)
             write_all(out, data)
         finally:
             os.close(out)
@@ -344,7 +370,7 @@ def _tmux_state(path):
     if state != "file":
         return state, None, None
     data, info = read_user_file(path)
-    if info.st_nlink != 1:
+    if tmuxconf.rewrite_problem(path, info):
         return "other", None, info
     return "file", sha256(data), info
 
@@ -371,10 +397,14 @@ def _op_rm_file(ctx, spec):
 
 
 def _op_rm_tree(ctx, spec):
+    """Remove a release: only if it is still exactly what the installer built (its listing digest)."""
     path = ctx.places.tree(spec["id"])
     state, _ = inspect(path)
     if state == "dir":
-        force_rmtree(path)
+        if tree_digest(path) == spec["digest"]:
+            force_rmtree(path)
+        else:
+            ctx.notes.append("%s holds files that are not the installer's; the release is left as it is." % path)
     elif state != "absent":
         _leave(ctx, path)
 
@@ -387,6 +417,7 @@ def _op_rm_dir(ctx, spec):
         except OSError as error:
             if error.errno not in (errno.ENOTEMPTY, errno.EEXIST):
                 raise
+            ctx.notes.append("%s is not empty; it is left as it is." % path)
 
 
 def _op_cut(ctx, spec):
@@ -433,10 +464,10 @@ def mkdir(places, ident):
     return Step("create", path, "dir", "", lambda ctx: os.mkdir(path), undo={"op": "dir", "id": ident})
 
 
-def new_file(places, ident, data, detail="", guard=None):
+def new_file(places, ident, data, detail="", guard=None, mode=None):
     """Create a file that does not exist; an existing name is an error and is left alone."""
     path = places.file(ident)
-    return Step("create", path, "file", detail, lambda ctx: create_new(path, data, guard),
+    return Step("create", path, "file", detail, lambda ctx: create_new(path, data, guard, mode),
                 undo={"op": "file", "id": ident, "sha": sha256(data)})
 
 
@@ -470,7 +501,7 @@ def build_release(places, name, files, source_root, extra):
     when complete. `extra` maps a release-relative path to the bytes written after the copy."""
     ident = "release:" + name
     destination, temporary = places.tree(ident), places.release_temp(name)
-    names = sorted(list(files) + list(extra))
+    count = len(files) + len(extra)
 
     def run(ctx):
         if os.path.lexists(temporary):
@@ -498,17 +529,18 @@ def build_release(places, name, files, source_root, extra):
             force_rmtree(temporary)
             raise
         fsync_dir(destination.parent)
-    return Step("create", destination, "tree", "%d files" % len(names), run,
-                undo={"op": "release", "id": ident, "digest": sha256("\n".join(names).encode())})
+    return Step("create", destination, "tree", "%d files" % count, run,
+                undo={"op": "release", "id": ident, "digest": release_digest(files, extra)})
 
 
-def backup_file(places, name, source, original):
-    """Copy the user's file into backup/. The bytes read now must be the ones the plan read."""
+def backup_file(places, name, source, original, mode):
+    """Copy the user's file into backup/ with the same permissions. The bytes read now must be the ones the plan
+    read."""
     def guard():
         data, _ = read_user_file(source)
         if sha256(data) != sha256(original):
             raise Changed(errno.EBUSY, "%s changed after the plan; nothing was changed" % source)
-    return new_file(places, "backup:" + name, original, "backup of %s" % source, guard)
+    return new_file(places, "backup:" + name, original, "backup of %s" % source, guard, mode)
 
 
 def append_block(places, ident, original, block, info):
@@ -518,7 +550,7 @@ def append_block(places, ident, original, block, info):
 
     def run(ctx):
         data, current = read_user_file(path)
-        if current.st_nlink != 1 or sha256(data) != sha256(original):
+        if tmuxconf.rewrite_problem(path, current) or sha256(data) != sha256(original):
             raise Changed(errno.EBUSY, "%s changed after the plan; nothing was changed" % path)
         replace_atomic(path, data + block, stat.S_IMODE(current.st_mode),
                        expect=(current.st_ino, current.st_size, current.st_mtime_ns))
@@ -541,8 +573,8 @@ def remove_file(places, ident, expected_sha=None):
     return _removal("remove", places.file(ident), "file", "", {"op": "rm_file", "id": ident, "sha": expected_sha})
 
 
-def remove_tree(places, ident):
-    return _removal("remove", places.tree(ident), "tree", "", {"op": "rm_tree", "id": ident})
+def remove_tree(places, ident, digest):
+    return _removal("remove", places.tree(ident), "tree", "", {"op": "rm_tree", "id": ident, "digest": digest})
 
 
 def remove_dir(places, ident):

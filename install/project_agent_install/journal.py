@@ -145,7 +145,7 @@ def recover(env, journal):
         for spec in reversed(journal.specs):
             try:
                 actions.apply_spec(ctx, spec)
-            except OSError as error:
+            except (OSError, ValueError, KeyError) as error:
                 failures.append("%s: %s" % (spec.get("id", spec["op"]), error))
         if not failures:
             actions.unlink(journal.path)
@@ -158,7 +158,12 @@ def resume(env, journal):
     ctx = actions.Context(places_of(env, journal.homes), journal.path, strict=False)
     with uninterruptible():
         for spec in journal.specs:
-            actions.apply_spec(ctx, spec)
+            try:
+                actions.apply_spec(ctx, spec)
+            except (OSError, ValueError, KeyError) as error:
+                raise InstallerError("command_failed", "Finishing the interrupted uninstall failed at %s: %s. The "
+                                     "journal is kept; run `uninstall` again." % (spec.get("id", spec["op"]), error),
+                                     {}, exit_code=4) from error
         actions.unlink(journal.path)
     return ctx.notes
 

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import datetime as dt
 import json
 import os
+import stat
 import subprocess
 
 from . import actions, journal, paths, record as records, release as releases, runs, tmuxconf
@@ -90,9 +91,9 @@ def plan_install(env, source, python):
             b.conflict(env.lib, "is not empty and has no install record")
     b.ensure_dir(env.lib)
     b.ensure_dir(env.releases)
-    b.add(actions.build_release(places, source.name, source.files, source.root,
-                                {releases.PYTHON_ENV: releases.python_env(python)}))
-    owned.append(records.owned(env.display(release_dir), "dir"))
+    extra = {releases.PYTHON_ENV: releases.python_env(python)}
+    b.add(actions.build_release(places, source.name, source.files, source.root, extra))
+    owned.append(records.owned(env.display(release_dir), "dir", digest=actions.release_digest(source.files, extra)))
     b.add(actions.new_link(places, "current", "releases/" + source.name))
     owned.append(records.owned(env.display(env.current), "symlink", target="releases/" + source.name))
     tmux_conf = tmuxconf.INTEGRATION.encode()
@@ -186,8 +187,7 @@ def _plan_tmux_block(env, b, new):
     display = env.display(target)
     info = os.lstat(target)
     reason = ("a symlink" if target.is_symlink() else "not a regular file" if not target.is_file() else
-              "linked under more than one name" if info.st_nlink != 1 else "larger than 1 MiB"
-              if info.st_size > tmuxconf.LIMIT else None)
+              tmuxconf.rewrite_problem(target, info))
     if reason:
         tmux.update(state="manual", file=display)
         b.note("%s is %s, so it was not changed. Add this line to the file it points to (or to your tmux "
@@ -204,9 +204,10 @@ def _plan_tmux_block(env, b, new):
     if not os.path.lexists(env.backup):
         b.add(actions.mkdir(places, "backup"))
         new["owned"].append(records.owned(env.display(env.backup), "dir"))
-    b.add(actions.backup_file(places, name, target, data))
+    b.add(actions.backup_file(places, name, target, data, stat.S_IMODE(info.st_mode)))
     b.add(actions.append_block(places, places.tmux_id(target), data, tmuxconf.BLOCK, info))
-    tmux.update(state="inserted", file=display, created=False, backup=env.display(backup))
+    tmux.update(state="inserted", file=display, created=False, backup=env.display(backup),
+                backup_sha256=actions.sha256(data))
     b.note(reload)
 
 
@@ -264,9 +265,10 @@ def plan_upgrade(env, source, python):
                                  "installer with the interpreter it was made with, or bump VERSION." % source.name)
         plan.notes.append("Release %s already exists; `current` is pointed at it." % source.name)
     else:
-        plan.steps.append(actions.build_release(places, source.name, source.files, source.root,
-                                                {releases.PYTHON_ENV: python_env}))
-        new["owned"].append(records.owned(env.display(release_dir), "dir"))
+        extra = {releases.PYTHON_ENV: python_env}
+        plan.steps.append(actions.build_release(places, source.name, source.files, source.root, extra))
+        new["owned"].append(records.owned(env.display(release_dir), "dir",
+                                          digest=actions.release_digest(source.files, extra)))
     plan.steps.append(actions.swap_link(places, "current", "releases/" + source.name))
     plan.steps.append(actions.replace_record(places, records.encode(new)))
     _changed_notes(env, installed, plan)
@@ -317,13 +319,24 @@ def plan_uninstall(env, source_root, socket=None):
                 plan.notes.append("%s was changed by you; it is left as it is." % entry["path"])
             continue
         kind, ident = places.identify(path)
+        if ident == "backup":
+            continue                                    # only the recorded backup file goes, then the directory
         if kind == "tree":
-            plan.steps.append(actions.remove_tree(places, ident))
+            plan.steps.append(actions.remove_tree(places, ident, entry["digest"]))
         elif kind == "link":
             plan.steps.append(actions.remove_link(places, ident, entry["target"]))
         else:
             plan.steps.append(actions.remove_file(places, ident, entry.get("sha256")))
         removed.add(path)
+    tmux = installed["tmux"]
+    if any(entry["path"] == env.display(env.backup) for entry in installed["owned"]) and path_exists(env.backup):
+        if tmux.get("backup") and path_exists(env.expand(tmux["backup"])):
+            name = env.expand(tmux["backup"]).name
+            plan.steps.append(actions.remove_file(places, "backup:" + name, tmux.get("backup_sha256")))
+            removed.add(env.expand(tmux["backup"]))
+        plan.steps.append(actions.remove_dir(places, "backup"))
+        if all(env.backup / child in removed for child in os.listdir(env.backup)):
+            removed.add(env.backup)
     removed.add(env.record)
     removed.add(plan.journal_path)
     # A directory that holds the journal can only go after it; every other created directory goes before the
@@ -342,6 +355,10 @@ def plan_uninstall(env, source_root, socket=None):
     plan.steps += [actions.remove_dir(places, places.dir_id(directory)) for directory in late]
     _kept_notes(env, plan)
     return plan
+
+
+def path_exists(path):
+    return os.path.lexists(path)
 
 
 def _plan_tmux_removal(env, installed, plan):
