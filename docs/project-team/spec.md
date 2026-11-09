@@ -437,7 +437,7 @@ Tmux server를 다시 띄운 뒤의 resume·start는 이전 window가 없으므�
 
 ### Background로 옮겨진 대화와 등록되지 않은 run의 종료 판정
 
-Claude 2.1.319는 `/background`(`/bg`)나 빈 입력란의 `←`로 대화를 background session으로 옮깁니다. CLI가 background 작업이나 session cron을 가진 채 끝날 때도 대화를 넘깁니다(exit handoff). 옮긴 대화는 새 session ID로 이어지고 `claude daemon`의 process가 맡으며, 관리 pane의 CLI는 그 대화를 보여 주는 화면으로 남습니다. 이 run은 옛 ID로 등록돼 있으므로 hook의 새 ID는 거절되고 ListAgents에도 pane이 없습니다.
+Claude 2.1.319는 `/background`(`/bg`)나 빈 입력란의 `←`로 대화를 background session으로 옮깁니다. CLI가 background 작업이나 session cron을 가진 채 끝날 때도 대화를 넘깁니다(exit handoff). 관리 Claude CLI는 아래 방지로 이 이전을 끄므로 session cron은 CLI와 함께 사라집니다. 옮긴 대화는 새 session ID로 이어지고 `claude daemon`의 process가 맡으며, 관리 pane의 CLI는 그 대화를 보여 주는 화면으로 남습니다. 이 run은 옛 ID로 등록돼 있으므로 hook의 새 ID는 거절되고 ListAgents에도 pane이 없습니다.
 
 - **감지**: 옛 transcript가 `{"type":"continued-in","continuedInSessionId":<새 ID>}`로 끝나면 옮겨진 것입니다. 마지막 record만 봅니다. 옮긴 뒤 같은 대화를 다시 열면 record가 이어 붙으므로 옮겨진 것이 아닙니다.
   - transcript 위치의 원본은 `providers/claude.py`의 `transcript_files`입니다(`resume --lost`의 대화 기록 확인과 같은 규칙: `<Claude 설정 dir>/projects/<경로 slug>/<session_id>.jsonl`). 여기서는 cwd를 쓰지 않고 `projects/*/<옛 ID>.jsonl`을 찾습니다. 설정 dir은 호출한 process의 `CLAUDE_CONFIG_DIR`, 없으면 `~/.claude`입니다. CLI에만 다른 config 디렉토리를 줬다면 찾지 못하고, 그때는 감지하지 못한 채 이전 오류가 그대로 나옵니다.
@@ -984,10 +984,16 @@ Stop·restart가 실제 종료를 확인하기 전에 실패할 수 있습니다
 | `provider_status` | provider가 보고한 상태. Claude는 background shell이 도는 동안 `idle`이 아니라 `shell`로 보고합니다. |
 | `idle` | provider 기준 idle 여부 |
 | `background` | provider가 보고한 남은 background 목록. 항목은 `id`·`type`과 120자로 줄인 `command`입니다. 보고가 없으면 null입니다. |
+| `session_crons` | 마지막 Stop 보고에 있던 session cron 목록(진단용). 종료 판정은 아래 규칙을 따릅니다. 보고가 없으면 null입니다. |
 | `cli_alive`·`pane_dead`·`group_alive`·`tracked_alive` | CLI, pane, process group, 추적한 background PID의 생존 |
 
 Claude Worker에 background 작업이 남으면 idle이 되지 않아 종료 요청을 보내지 않고 시간 초과가 납니다. 이때 `exit_requested`가 false이고 `background`가 그 작업을 보여 줍니다.
 이 상태에서 Worker가 그 작업을 멈추면 같은 stop이 끝납니다. stop은 background 작업에 신호를 보내지 않습니다.
+
+session cron은 run이 exit handoff를 껐는지에 따라 셉니다. 근거는 그 run의 `launch.sh`(window option `launch_file`)에 `export CLAUDE_DISABLE_ADOPT=1`이 있는지입니다(3절 방지).
+- 껐으면 session cron은 CLI와 함께 사라지므로 background로 세지 않습니다. 자기 점검 cron(7절)만 남은 run도 idle이면 종료 요청을 보내고, CLI가 끝나면(pane dead, `cli_pid`·`cli_birth` 일치 process 없음, process group 없음) 마지막 Stop 보고에 cron이 남아 있어도 종료로 판정해 반납합니다. 이미 `stopping`이 남은 run을 다시 stop해도 같습니다. stop·restart·shutdown·`finish_ended`가 같은 판정(`providers/claude.py`의 `report_background`)을 씁니다.
+- 근거가 없으면(옛 run, 읽을 수 없는 `launch.sh`) 지금처럼 session cron을 background로 셉니다.
+- background shell·task(`background_tasks`)는 어느 경우에나 종료를 막는 background로 셉니다.
 
 Worker는 아래 반납 검사를 추가로 확인합니다.
 
@@ -1296,7 +1302,7 @@ agent-session watch --project NAME --minutes 30
 | --minutes N | 선택. 30 | 가장 새 대화 기록이 오래돼도 되는 시간. 이 시간이 지나야 움직입니다 |
 | --timeout SECONDS | 선택. 120 | 한 project의 전체 대기 제한 |
 
-**자기 점검(실행 방식)**: 반복 실행은 각 Claude instance가 자기 TUI의 session cron(`CronCreate`)으로 합니다. 중앙 감시 process와 system crontab은 두지 않습니다. session cron은 그 instance가 쉬고 있을 때만 실행되고 instance가 끝나면 사라지므로, 점검은 "turn이 끝난 채 멈춘" 상태에만 깨어나고 수명이 instance와 같습니다.
+**자기 점검(실행 방식)**: 반복 실행은 각 Claude instance가 자기 TUI의 session cron(`CronCreate`)으로 합니다. 중앙 감시 process와 system crontab은 두지 않습니다. session cron은 그 instance가 쉬고 있을 때만 실행되고 instance가 끝나면 사라지므로, 점검은 "turn이 끝난 채 멈춘" 상태에만 깨어나고 수명이 instance와 같습니다. 그래서 stop·restart·shutdown은 이 cron을 종료를 막는 background로 세지 않습니다(7절 stop의 `exit_wait` 표의 `session_crons`와 그 아래 session cron 규칙). 종료 전에 `CronDelete`할 필요가 없습니다.
 
 - 원본은 [self-check.md](../../skills/project-team/references/self-check.md)입니다. Worker용·Leader용 cron 식(30분 주기, `:00`·`:30`을 피한 분, `recurring: true`)과 점검 prompt가 그 문서에만 있습니다. 첫 prompt와 resume 메시지는 `launch_artifacts.self_check_text` 한 곳이 만든 지시로 그 문서의 자기 역할 절을 읽고 등록하라고 합니다.
 - 등록 시점: Claude Leader·Worker의 최초 prompt(등록 뒤 첫 행동), resume 메시지(재개한 대화는 session cron을 잃습니다). restart는 새 대화이므로 최초 prompt로 다시 등록합니다. Codex에는 session cron이 없어 Codex의 prompt에는 넣지 않습니다. Codex Worker의 멈춤은 운영자의 수동 `watch`로만 점검합니다(지금 등록된 project는 모두 Claude).

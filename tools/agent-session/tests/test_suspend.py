@@ -224,6 +224,20 @@ def test_an_idle_cli_with_a_background_task_has_not_rested_until_it_is_forced(se
     marker.unlink()
 
 
+def test_an_idle_cli_with_only_a_session_cron_rests_and_ends_without_force(session_env, monkeypatch):
+    env = session_env
+    cli = claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    marker = env.base / "agent" / "fixture-cron-seat-0"
+    marker.write_text("")
+    result = fleet(env, timeout=5).shutdown(project="fixture")
+    saved = records(env)
+    assert saved["seat-0"]["forced"] is False and not result["projects"][0]["busy"]
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is True
+    assert signals(cli) == [{"signal": "SIGTERM"}] * 2
+    marker.unlink()
+
+
 def test_force_does_not_signal_a_process_with_a_different_birth(session_env, monkeypatch):
     env = session_env
     cli = claude_project(env, monkeypatch)

@@ -229,6 +229,59 @@ def test_claude_observation_preserves_missing_background(claude):
     assert result["terminal"] is False
 
 
+CRON = {"id": "585de34f", "cron": "13,43 * * * *", "recurring": True}
+
+
+def with_launch_script(meta, tmp_path, *lines):
+    script = tmp_path / "launch.sh"
+    script.write_text("\n".join(["#!/bin/bash", "set -e", *lines, "exec claude"]) + "\n", encoding="utf-8")
+    meta["launch_file"] = str(script)
+
+
+def test_claude_session_cron_does_not_keep_a_run_without_the_exit_handoff_from_resting(claude, tmp_path):
+    provider, _, context, meta, _ = claude
+    with_launch_script(meta, tmp_path, "export CLAUDE_DISABLE_ADOPT=1")
+    meta["hook_observations"]["Stop"]["session_crons"] = [CRON]
+    result = provider.observe({"session_id": IDENTITY}, context, meta)
+    assert (result["known"], result["terminal"], result["background"]) == (True, True, [])
+    assert result["session_crons"] == [CRON]                    # kept for diagnosis
+
+
+def test_claude_session_cron_still_keeps_a_run_that_has_no_record_of_the_launch_from_resting(claude, tmp_path):
+    provider, _, context, meta, _ = claude
+    meta["hook_observations"]["Stop"]["session_crons"] = [CRON]
+    for launch_file in (None, str(tmp_path / "missing.sh")):
+        meta["launch_file"] = launch_file
+        result = provider.observe({"session_id": IDENTITY}, context, meta)
+        assert (result["terminal"], result["background"], result["session_crons"]) == (False, [CRON], [CRON])
+    with_launch_script(meta, tmp_path, "export CLAUDE_DISABLE_ADOPT=0", "# export CLAUDE_DISABLE_ADOPT=1")
+    assert provider.observe({"session_id": IDENTITY}, context, meta)["terminal"] is False
+
+
+def test_claude_background_task_keeps_a_run_from_resting_with_or_without_the_exit_handoff(claude, tmp_path):
+    provider, _, context, meta, _ = claude
+    with_launch_script(meta, tmp_path, "export CLAUDE_DISABLE_ADOPT=1")
+    task = {"id": "bz1mzn8iq", "type": "shell"}
+    meta["hook_observations"]["Stop"].update(background_tasks=[task], session_crons=[CRON])
+    result = provider.observe({"session_id": IDENTITY}, context, meta)
+    assert (result["terminal"], result["background"], result["session_crons"]) == (False, [task], [CRON])
+
+
+def test_claude_cli_that_ended_with_only_a_session_cron_in_its_last_report_is_terminal(claude, tmp_path):
+    # The stuck stop: SIGTERM ended the CLI after an idle Stop report that listed the self-check cron.
+    import subprocess
+
+    provider, fake, context, meta, _ = claude
+    ended = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+    fake.listing = listing(pane="%99")
+    with_launch_script(meta, tmp_path, "export CLAUDE_DISABLE_ADOPT=1")
+    meta.update(cli_pid=int(ended.stdout), cli_birth="ended", pane_dead=True)
+    meta["hook_observations"]["Stop"]["session_crons"] = [CRON]
+    meta["hook_observations"]["SessionEnd"] = {"session_id": IDENTITY, "reason": "other"}
+    result = provider.observe({"session_id": IDENTITY}, context, meta)
+    assert (result["known"], result["terminal"], result["background"], result["session_crons"]) == (True, True, [], [CRON])
+
+
 def test_claude_cli_that_ended_during_the_listing_is_observed_from_its_hooks(claude):
     # The stop loop read a live pane, then /exit ended the CLI before ListAgents ran.
     import subprocess

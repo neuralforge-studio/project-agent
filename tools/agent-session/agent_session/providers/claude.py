@@ -90,6 +90,37 @@ def startup_dialog(screen):
     return next((kind for kind, pattern in STARTUP_DIALOGS if pattern.search(screen)), None)
 
 
+# A CLI that ends with background work hands its conversation to a background session under a new ID; the
+# managed run would then lose its binding. The managed launch turns that off for runs started from here on.
+ADOPT_ENV = ("CLAUDE_DISABLE_ADOPT", "1")
+
+
+def adopt_disabled(meta):
+    """Whether this run's own launch script (`launch.sh`, named by the window's `launch_file`) turned the exit
+    handoff off. A run without that record, or whose script cannot be read, is judged as before."""
+    try:
+        lines = Path(meta["launch_file"]).read_text(encoding="utf-8").splitlines()
+    except (KeyError, TypeError, OSError, ValueError):
+        return False
+    return "export " + ADOPT_ENV[0] + "=" + shlex.quote(ADOPT_ENV[1]) in lines
+
+
+def report_background(stopped, meta):
+    """The background work in a Stop/StopFailure hook report: `(background, session_crons)`, or `(None, None)`
+    when the report lacks either list.
+
+    Background shells and tasks always keep the run from resting. Session crons do only while the CLI could
+    hand its conversation to a background session when it ends. Without that handoff they end with the
+    instance (spec 7절 watch), so a CLI that ended leaves no work behind in them. The report of the crons
+    stays in `session_crons` for diagnosis."""
+    if not (isinstance(stopped, dict) and isinstance(stopped.get("background_tasks"), list)
+            and isinstance(stopped.get("session_crons"), list)):
+        return None, None
+    crons = list(stopped["session_crons"])
+    tasks = list(stopped["background_tasks"])
+    return (tasks if adopt_disabled(meta) else tasks + crons), crons
+
+
 HOST_QUERY_SECONDS = 8                      # `claude agents` wait inside a hook's 30 seconds
 
 
@@ -333,9 +364,7 @@ class ClaudeProvider:
     def launch_spec(self, context, prepared):
         args = prepared.get("provider_args", [])
         sources = _validate_args(args)
-        # A CLI that ends with background work hands its conversation to a background session under a new ID;
-        # the managed run would then lose its binding. This applies to runs started from here on.
-        prepared = {**prepared, "env": {**prepared.get("env", {}), "CLAUDE_DISABLE_ADOPT": "1"}}
+        prepared = {**prepared, "env": {**prepared.get("env", {}), ADOPT_ENV[0]: ADOPT_ENV[1]}}
         self._configuration(context, prepared, sources)
         identity = context.get("expected_session_id") or context.get("session_id")
         try:
@@ -463,18 +492,18 @@ class ClaudeProvider:
         stopped = valid.get("Stop")
         if not isinstance(stopped, dict):
             stopped = valid.get("StopFailure")
-        observed = isinstance(stopped, dict) and isinstance(stopped.get("background_tasks"), list) and isinstance(stopped.get("session_crons"), list)
-        background = stopped["background_tasks"] + stopped["session_crons"] if observed else None
+        background, crons = report_background(stopped, current)
+        observed = background is not None
         if peer is None:
             ended = "SessionEnd" in valid
             return {"listed": False, "known": bool(ended and observed), "active_turn": False if ended else None,
                     "active_turn_ids": [], "pending": None, "background": background,
-                    "idle": bool(ended), "terminal": bool(ended and observed and not background),
+                    "session_crons": crons, "idle": bool(ended), "terminal": bool(ended and observed and not background),
                     "pending_disposition": "unknown"}
         status = peer["status"].casefold()
         idle = status == "idle"
         return {"listed": True, "known": bool(observed), "active_turn": not idle, "active_turn_ids": [],
-                "pending": None, "background": background, "idle": idle,
+                "pending": None, "background": background, "session_crons": crons, "idle": idle,
                 "terminal": bool(idle and observed and not background),
                 "pending_disposition": "unknown", "runtime_status": status}
 
