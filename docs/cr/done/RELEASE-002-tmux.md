@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Base: 77a9bb8fcd6a0728227fe63ea7beb4eb6a6cd0b2 2026-11-09T18:55:26+09:00
+- Outcome: fixed
 
 ## Symptom
 다른 직원이 읽고 따라 할 설치 안내문이 없습니다.
@@ -21,6 +22,7 @@
 - 2026-11-09 Leader: 고친다(Leader 판정). RELEASE-001에서 떼어 낸 직원용 안내문입니다(사용자 지시 2026-11-09 "남은 CR은 전부 등록해서 얼마나 남았는지 알 수 있게 해줘"). 승인한 계획 agent DIST-001 7단계의 하위 작업이므로 위임 범위입니다. 설치기 명령이 확정되는 INSTALL-001·002·004·005와 RELEASE-001이 통합된 뒤 시작합니다.
 - 2026-11-09 Leader: 선행이 모두 통합되었습니다(INSTALL-001 ecc5bce, INSTALL-002 298ea6e, INSTALL-005 e49f466, INSTALL-004 0d6e99b, RELEASE-001 0cbacc6). 안내문이 다룰 명령은 설치기 `--help`와 계약 7절이 원본입니다(`install`·`upgrade`·`rollback`·`prune`·`uninstall`·`check`, `--dry-run`). `--adopt-dev-links`는 이 workstation 전환용이므로 직원 안내에 넣지 않습니다. Board 전제(설치 interpreter의 textual, D-20261109-01 waive)와 tmux 파일을 고치지 않는 경우(계약 3절: symlink·hard link·다른 소유자·읽기 전용·ACL/xattr·1 MiB 초과)의 안내를 포함합니다. 검증 1의 명령 실행은 격리 HOME(`HOME=<빈 디렉터리>`, 별도 tmux socket)에서만 합니다.
 - 2026-11-09 Leader: 제출 aae91a2c05a6f884f66150f8915a0856fd28fd91를 인수합니다. Leader review: docs/install.md와 README link를 확인했습니다. 전제·설치·check·경로·tmux 연결(고치지 않는 경우와 직접 넣을 줄)·PATH·Board 키·결정 표시·등록을 계약 link로 안내하고 내용을 다시 쓰지 않습니다. 격리 HOME 실행 기록·link 검사·test_distribution_boundary 9 passed를 확인했습니다. Worker 질문(tmux 최소 버전)은 결정 사항이 아니라 호환성 결함이므로 TMUX-002로 열어 Leader 판정으로 고칩니다. 안내문의 tmux 전제 줄은 TMUX-002가 확정 값으로 고칩니다.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 fd23779(Merge cr/RELEASE-002, 제출 aae91a2). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 전체, RELEASE-001의 버전 규칙 문서, INSTALL-001·002·004·005의 Result.
