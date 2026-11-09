@@ -2054,7 +2054,7 @@ def window_names(env):
 # What two runs of one slot may legitimately share; every other value must be the new run's own.
 SHARED = {"base", "project_id", "provider", "config_path", "target", "seat", "seat_root", "cwd", "job_id", "role",
           "python", "library_path", "allow_daemon_start", "window_id", "pane_id", "window_name", "endpoint",
-          "server_pid", "server_started", "server_birth", "socket_path", "registered", "ready", "stopping",
+          "server_pid", "server_started", "server_birth", "socket_path", "registered", "ready", "publishing", "stopping",
           "provider_launch_attempted", "job", "provider_name", "leader_request", "start_error"}
 
 
