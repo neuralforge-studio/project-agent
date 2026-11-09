@@ -3,6 +3,7 @@
 - Opened: 2026-11-10
 - Scope: project-agent
 - Severity: S2
+- Base: ce7050f5545f939fb068232a86b389a5840b3180 2026-11-10T00:03:28+09:00
 
 ## Symptom
 `tools/agent-session/tests/test_lifecycle.py`의 `test_the_seats_next_cr_opens_a_new_window…`(seat=1)가 origin/main에서 load 320 아래 6번 중 0번 통과했습니다. BOARD-002 branch에서는 6번 중 1번 통과했습니다. 간헐이 아니라 그 조건에서 계속 실패합니다.
