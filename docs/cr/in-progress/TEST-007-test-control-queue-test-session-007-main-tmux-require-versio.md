@@ -3,6 +3,7 @@
 - Opened: 2026-11-10
 - Scope: project-agent
 - Severity: S2
+- Base: fec73916af748c9bca5b69ff956d0141076e6d33 2026-11-10T00:42:14+09:00
 
 ## Symptom
 `tools/agent-session/tests/test_control_queue.py::test_external_control_cannot_overtake_a_pending_self_request`가 main에서 `AttributeError: 'Tmux' object has no attribute 'require_version'`로 실패합니다.
