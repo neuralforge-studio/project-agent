@@ -6,7 +6,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import uuid
 
 import pytest
 
@@ -20,6 +19,7 @@ from agent_session_fake_provider import FakeProvider
 
 PROJECT_ITEM = TOOL.parent / "project-item"
 sys.path.insert(0, str(PROJECT_ITEM))
+import tmux_test_server  # noqa: E402
 from project_item import store as item_store  # noqa: E402
 from project_item.kinds import CR  # noqa: E402
 
@@ -44,13 +44,6 @@ def git(root, *args):
     if result.returncode:
         raise AssertionError(result.stderr or result.stdout)
     return result.stdout.strip()
-
-
-def stop_test_server(socket_name):
-    """Kill a test tmux server and remove its socket file, which kill-server leaves behind."""
-    path = Tmux(socket_name=socket_name).effective_socket()
-    subprocess.run(["tmux", "-L", socket_name, "kill-server"], capture_output=True, timeout=10)
-    Path(path).unlink(missing_ok=True)
 
 
 def build_repositories(layout):
@@ -109,7 +102,7 @@ class Environment:
         self.base = directory / "project.main"
         self.seats = [directory / f"project.seat{n}" for n in range(2)]
         self.config = directory / "project.json"
-        self.socket_name = "agent-lifecycle-test-" + uuid.uuid4().hex[:10]
+        self.socket_name = tmux_test_server.new_name("agent-lifecycle-test")
 
     def setup(self, template=None):
         """Lay out the Git repositories and the tmux harness.
@@ -125,6 +118,7 @@ class Environment:
                                                           "path_cr": "agent/cr", "path_decide": "agent/decide"}}))
         (self.base / "agent").mkdir()
         self.cr_root = self.base / "agent" / "cr"
+        tmux_test_server.watch(self.socket_name)
         subprocess.run(["tmux", "-L", self.socket_name, "-f", os.devnull,
                         "new-session", "-d", "-s", "harness", "sleep", "86400"], check=True, capture_output=True)
         self.project = resolve_project(self.base, self.config)
@@ -236,4 +230,4 @@ def session_env(tmp_path, tmp_path_factory, monkeypatch):
     monkeypatch.setattr(providers, "get_provider", lambda name: FakeProvider())
     fixture = Environment(tmp_path).setup(shared_template(tmp_path_factory))
     yield fixture
-    stop_test_server(fixture.socket_name)
+    tmux_test_server.release(fixture.socket_name)

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from harness import LIB
+import tmux_test_server  # noqa: E402  (harness puts tools/tests on sys.path)
 
 pytestmark = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 MOUSE_DEFAULT = r"select-pane -t = \; send-keys -M"
@@ -22,6 +23,7 @@ class Server:
         self.home = home
         self.directory = Path(tempfile.mkdtemp(prefix="pi-t"))
         self.socket = self.directory / "s"
+        tmux_test_server.watch_path(self.socket)
         self.run("new-session", "-d", "-s", "home", "sleep", "300")
 
     def run(self, *args, check=True):
@@ -37,7 +39,7 @@ class Server:
         self.run("source-file", str(self.home.path(LIB + "/tmux.conf")))
 
     def close(self):
-        self.run("kill-server", check=False)
+        tmux_test_server.release_path(self.socket)
         shutil.rmtree(self.directory, ignore_errors=True)
 
 

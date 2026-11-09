@@ -13,7 +13,8 @@ import uuid
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
-from agent_session_fixture import command_timeout, git, session_env, stop_test_server
+from agent_session_fixture import command_timeout, git, session_env
+import tmux_test_server  # noqa: E402
 from agent_session import launch_artifacts, windows as windows_module
 from agent_session.errors import SessionError
 from agent_session.state import locked
@@ -1399,7 +1400,7 @@ def test_a_run_of_another_base_gets_no_input_through_its_socket(session_env, tmp
             assert env.tmux.pane_info(run["pane_id"])["pane_dead"] is False
         assert env.project.state_path.read_bytes() == snapshots[0]
     finally:
-        stop_test_server(other.socket_name)
+        tmux_test_server.release(other.socket_name)
 
 
 @pytest.mark.parametrize("scenario", ["stopped-worker", "waiting-worker", "waiting-leader", "live-leader", "unassigned-seat"])
@@ -1462,7 +1463,7 @@ def test_start_does_not_handle_the_run_of_another_base(session_env, tmp_path, mo
         assert after == before
         assert env.tmux.get_current("fixture", slot)["run_id"] == foreign["run_id"]
     finally:
-        stop_test_server(other.socket_name)
+        tmux_test_server.release(other.socket_name)
 
 
 def test_a_run_that_the_state_does_not_name_gets_no_input(session_env, monkeypatch):
