@@ -14,6 +14,7 @@ project-agent는 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로
 | `integrations/tmux/` | Board binding, status 표시, 결정 대기 알림. 설치본은 `project-agent.conf`를 읽습니다 | 각 script의 머리말, [project-board README](tools/project-board/README.md) |
 | `docs/project-team/` | 제품 지도, 동작 명세, 설치 계약, 예제 JSON | [제품 지도](docs/project-team/README.md) |
 | `docs/project-board-*` | Project Board 계획과 화면 시안 | [TUI 계획](docs/project-board-tui-plan.md) |
+| `VERSION`, `CHANGELOG.md`, `tools/formats.json` | 버전 값, 변경 기록, 형식 버전 선언 | [버전 규칙](docs/project-team/release.md) |
 | `docs/cr/` | 이 저장소의 CR | [CR 계약](skills/project-item/references/cr.md) |
 
 ## 검증
@@ -24,7 +25,7 @@ project-agent는 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로
 python -m pytest -q -n 8 tools/agent-session/tests
 python -m pytest -q tools/project-item/tests
 python -m pytest -q tools/project-board/tests
-python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py
+python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py tools/test_release_files.py
 ```
 
 - 네 명령은 서로 독립이며 pytest 설정 파일 없이 각 디렉터리의 `conftest.py`로 동작합니다.
@@ -36,4 +37,6 @@ python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_d
 - [제품 지도](docs/project-team/README.md): 구성 요소, 공개 진입점, 의존 관계, 실행 경로 계약
 - [동작 명세](docs/project-team/spec.md): 등록, state, start·stop·restart·shutdown·resume
 - [설치 계약](docs/project-team/install-contract.md): 설치·갱신·되돌리기·제거의 경계
+- [버전 규칙](docs/project-team/release.md): 버전 값, 형식 버전과 호환 범위, git tag 이름, 변경 기록 작성
+- [변경 기록](CHANGELOG.md): 버전별 CR ID 목록과 형식 변경 여부
 - [AGENTS.md](AGENTS.md): 이 저장소에서 작업하는 agent의 규칙
