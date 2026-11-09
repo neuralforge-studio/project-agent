@@ -12,7 +12,7 @@ from pathlib import Path
 from . import registry, store
 from .cr import accepted, section_text, submitted_hash
 from .kinds import CR, Kind
-from .registry import ItemError
+from .errors import ItemError
 
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 

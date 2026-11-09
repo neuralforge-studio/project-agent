@@ -20,10 +20,8 @@ for _name in ("agent-session", "project-item"):
 from agent_session import api  # noqa: E402
 from agent_session.config import RemoteSeat, load_registry  # noqa: E402
 from agent_session.errors import SessionError  # noqa: E402
-from project_item.cr import submitted_hash  # noqa: E402  (the CR format owns the submission row)
-from project_item.kinds import CR, DECIDE  # noqa: E402
-from project_item.render import cr_states, decision_stage, sections  # noqa: E402
-from project_item.store import file_id, item_files  # noqa: E402
+from project_item.api import (CR, DECIDE, cr_states, decision_stage, file_id,  # noqa: E402
+                              item_files, sections, submitted_hash)
 
 CR_STATES = ("open", "todo", "in-progress")           # done and deferred are not shown
 HASH_TOKEN = re.compile(r"\b[0-9a-f]{7,40}\b")
@@ -203,7 +201,10 @@ def snapshot(config=None, now: dt.datetime | None = None) -> dict:
 
 
 def liveness(config=None) -> dict:
-    """Plan 7.2: per project, `alive`, `stopped` or `unknown` for each bound slot."""
+    """Per project, `alive`, `stopped` or `unknown` for each bound slot.
+
+    The rule is owned by docs/project-team/spec.md section 5 (`agent_session.api.liveness`).
+    """
     out = {}
     for project in load_registry(config):
         try:

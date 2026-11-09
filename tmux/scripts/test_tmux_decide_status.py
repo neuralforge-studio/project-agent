@@ -159,15 +159,15 @@ def test_an_unreadable_project_keeps_its_last_decisions(status, tmp_path, capsys
     alpha = register(status, tmp_path, "alpha", "D-20261106-01")
     register(status, tmp_path, "beta", "D-20261106-02")
     assert display(status, capsys).strip() == "결정 2"
-    _, _, store, _ = status.load_project_item()
-    item_files = store.item_files
+    item_api = status.load_project_item()
+    item_files = item_api.item_files
 
     def unreadable_alpha(kind, root, state):
         if root == alpha.resolve():
             raise OSError("stale file handle")
         return item_files(kind, root, state)
 
-    monkeypatch.setattr(store, "item_files", unreadable_alpha)
+    monkeypatch.setattr(item_api, "item_files", unreadable_alpha)
     close_decision(alpha, "D-20261106-01")
     expire(status)
     assert display(status, capsys).strip() == "결정 2"

@@ -10,8 +10,11 @@ import re
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Mapping
 
-from .cr import HEADER_RE, SECTION_RE, STATUS_LINE_RE, files, outside_fence
+from .cr import (HEADER_RE, ID_RE as CR_ID_RE, SECTION_RE, STATUS_LINE_RE, files, outcome_kind,
+                 outside_fence, set_header)
+from .errors import ItemError
 
 STATES = ("open", "answered", "done")
 URGENCIES = ("high", "normal", "low")
@@ -21,12 +24,16 @@ TITLE_RE = re.compile(rf"^#\s+({ID_RE}):\s+(\S.*?)\s*$")
 OPENED_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
 OUTCOME_RE = re.compile(r"^(decided\s+\S.*|withdrawn|merged\s+\S+)$")
 
+RELATED_CR_RE = re.compile(rf"(?<![\w-])({CR_ID_RE})(?![\w-])")
+MAX_ANSWER_BYTES = 16384
+
 REQUIRED_HEADERS = ("Opened", "Urgency")
 BODY_SECTIONS = ("Background", "Options", "Recommendation", "Evidence")
 SECTION_ORDER = ("Background", "Options", "Recommendation", "Evidence", "Disposition", "Result")
 
 __all__ = ["STATES", "URGENCIES", "ID_RE", "TITLE_RE", "SECTION_ORDER", "Decision",
-           "answer_text",
+           "answer_text", "answer_json", "check_answer", "decision_stage", "prepare_move",
+           "check_outcome", "MAX_ANSWER_BYTES",
            "parse", "parse_text", "check", "files", "TEMPLATE", "EMPTY_BODY"]
 
 
@@ -86,6 +93,62 @@ def answer_text(item: Decision) -> str | None:
     except (TypeError, ValueError):
         return None
     return answer if isinstance(answer, str) else None
+
+
+def answer_json(answer: str) -> str:
+    """Keep the JSON string on one Markdown line without escaping ordinary Unicode text."""
+    encoded = json.dumps(answer, ensure_ascii=False)
+    for separator in ("\x85", "\u2028", "\u2029"):
+        encoded = encoded.replace(separator, f"\\u{ord(separator):04x}")
+    return encoded
+
+
+def check_answer(answer: object) -> None:
+    """Refuse an answer that cannot be recorded."""
+    if not isinstance(answer, str):
+        raise ItemError("answer_invalid", "The decision answer must be text.")
+    if not answer.strip():
+        raise ItemError("answer_empty", "The decision answer is empty.")
+    if "\x00" in answer:
+        raise ItemError("answer_invalid", "The decision answer contains a NUL byte.")
+    if len(answer.encode("utf-8")) > MAX_ANSWER_BYTES:
+        raise ItemError("answer_too_large", f"Keep the answer within {MAX_ANSWER_BYTES} bytes.")
+
+
+def decision_stage(item: dict, states: Mapping[str, str]) -> str:
+    """Display stage from the decision directory and related CR/JOB directories.
+    `item` has the keys state and headers; `states` maps CR/JOB IDs to their directory."""
+    if item["state"] == "open":
+        return "결정 대기"
+    if item["state"] == "answered":
+        return "답변 접수"
+    if item["headers"].get("Outcome", "").split()[:1] == ["withdrawn"]:
+        return "완료"
+    related = RELATED_CR_RE.findall(item["headers"].get("Related", ""))
+    return ("반영 중" if any(states.get(item_id) not in ("done", "deferred") for item_id in related)
+            else "완료")
+
+
+def prepare_move(item_id: str, text: str, path: Path, source_state: str, state: str,
+                 outcome: str | None, note: str | None) -> tuple[str, str | None]:
+    """The decision rules of a move that read or change the Answer. Return the text and note to
+    use. `outcome` is the one the caller gave."""
+    if state == "done" and source_state == "open" and outcome_kind(outcome) == "decided":
+        raise ItemError("invalid_transition", "Record the answer before confirming a decided decision.")
+    if source_state == "answered" and state in ("done", "open"):
+        answer = answer_text(parse_text(text, path, source_state))
+        if answer is None:
+            raise ItemError("format_invalid", f"{item_id} has no recorded answer.")
+        label = "사용자 답변 원문" if state == "done" else "이전 답변 원문"
+        original = f"{label}: {answer_json(answer)}"
+        note = f"{note} {original}" if note else original    # a move to open always has a note
+    if state == "open":
+        text = set_header(text, "Answer", None)
+    return text, note
+
+
+def check_outcome(source_state: str, new_outcome: str | None) -> None:
+    """The decision rule on the Outcome that a move gives: none."""
 
 
 def check(item: Decision) -> list[str]:

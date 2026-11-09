@@ -7,11 +7,11 @@ import tempfile
 from pathlib import Path
 
 from . import model
-from project_item import render, store
-from project_item.registry import ItemError
+from project_item import api as item_api
+from project_item.api import ItemError
 
 AGENT_SESSION = model.TOOLS / "agent-session" / "bin" / "agent-session"
-MAX_ANSWER = store.MAX_DECISION_ANSWER_BYTES
+MAX_ANSWER = item_api.MAX_ANSWER_BYTES
 SEND_TIMEOUT = 30                        # agent-session send --timeout
 
 
@@ -105,7 +105,7 @@ def submit_answer(config, project_id: str, decide_id: str, answer: str) -> dict:
         issue = model._error(error)
         return _fail(issue["code"], issue["message"])
     try:
-        store.answer_decide(project.path_decide, decide_id, answer)
+        item_api.answer_decide(project.path_decide, decide_id, answer)
     except ItemError as error:
         return _fail(error.code, error.message)
     except Exception as error:
@@ -113,7 +113,7 @@ def submit_answer(config, project_id: str, decide_id: str, answer: str) -> dict:
         return _fail(issue["code"], issue["message"])
     page_error = None
     try:
-        render.render(project.project_id, project.path_decide, cr_root=project.path_cr)
+        item_api.render_decision_page(project.project_id, project.path_decide, cr_root=project.path_cr)
     except Exception as error:
         page_error = model._error(error)
     delivery = _notification(project, answer_message(project.project_id, decide_id, decision["title"], answer))

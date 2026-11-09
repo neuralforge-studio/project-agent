@@ -170,7 +170,7 @@ def test_page_write_failure_does_not_lose_an_accepted_answer(board, monkeypatch)
     def fail_page(*_args, **_kwargs):
         raise OSError("page is read-only")
 
-    monkeypatch.setattr(answer.render, "render", fail_page)
+    monkeypatch.setattr(answer.item_api, "render_decision_page", fail_page)
     monkeypatch.setattr(answer, "send_answer", lambda *_: {"ok": True, "data": {}, "error": None})
     result = answer.submit_answer(data.config, "alpha", DECIDE, "A")
     assert result["ok"] is True and result["data"]["page_error"]["code"] == "OSError"

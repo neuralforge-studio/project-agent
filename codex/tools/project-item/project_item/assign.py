@@ -6,17 +6,19 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import store
+from .cr import set_header
+from .errors import ItemError
 from .kinds import CR
-from .registry import ItemError
 
 
 def lookup(root: Path, cr_id: str) -> dict:
     """The CR as a JOB: id, state, path, title, mode, cwd, base and text."""
     with store.root_lock(root):
-        return _lookup(root, cr_id)
+        return lookup_locked(root, cr_id)
 
 
-def _lookup(root: Path, cr_id: str) -> dict:
+def lookup_locked(root: Path, cr_id: str) -> dict:
+    """`lookup` for a caller that already holds store.root_lock(root)."""
     state, path = store.find(CR, root, cr_id)
     text = path.read_text(encoding="utf-8")
     item = CR.fmt.parse_text(text, path, state)
@@ -35,11 +37,11 @@ def _lookup(root: Path, cr_id: str) -> dict:
 def claim(root: Path, cr_id: str) -> dict:
     """Move a todo CR to in-progress (an in-progress CR stays). Return the JOB after the move."""
     with store.root_lock(root):
-        job = _lookup(root, cr_id)
+        job = lookup_locked(root, cr_id)
         if job["state"] == "todo":
             path = Path(job["path"])
             store._relocate(CR, root, cr_id, "todo", path, "in-progress", path.read_text(encoding="utf-8"))
-            job = _lookup(root, cr_id)
+            job = lookup_locked(root, cr_id)
         elif job["state"] != "in-progress":
             raise ItemError("cr_not_assignable", f"{cr_id} is in {job['state']}/; assign a CR in todo/.")
         return job
@@ -58,7 +60,7 @@ def set_base(root: Path, cr_id: str, base: dict | None) -> None:
     with store.root_lock(root):
         state, path = store.find(CR, root, cr_id)
         value = None if base is None else f"{base['base_hash']} {base['base_commit_time']}"
-        text = store.set_header(path.read_text(encoding="utf-8"), "Base", value)
+        text = set_header(path.read_text(encoding="utf-8"), "Base", value)
         bad = CR.fmt.check(CR.fmt.parse_text(text, path, state))
         if bad:
             raise ItemError("format_invalid", f"{cr_id}: " + "; ".join(bad))

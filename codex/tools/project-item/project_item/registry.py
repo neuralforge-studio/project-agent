@@ -20,14 +20,9 @@ from agent_session import api  # noqa: E402
 from agent_session.config import load_registry, resolve_project  # noqa: E402
 from agent_session.errors import SessionError  # noqa: E402
 
+from .errors import ItemError  # noqa: E402,F401  (project_item.registry.ItemError stays importable)
+
 KEYS = {"cr": "path_cr", "decide": "path_decide"}
-
-
-class ItemError(Exception):
-    def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
-        self.message = message
 
 
 def _registry_error(error: SessionError) -> ItemError:
