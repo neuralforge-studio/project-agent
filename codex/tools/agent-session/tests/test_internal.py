@@ -336,3 +336,54 @@ def test_registration_gives_up_when_the_listing_never_shows_the_pane(native_slot
     assert failed.get("registered") is not True
     assert failed["start_error"]["code"] == "session_not_bound"
     assert "ListAgents" in failed["start_error"]["message"]
+
+
+def _hook_with(fixture, monkeypatch, session_id, moved, host):
+    """Run a Stop hook that carries `session_id` for a run that expects another conversation."""
+    old = fixture["previous"]
+
+    class Provider:
+        def moved_to(self, expected):
+            assert expected == old["session_id"]
+            return moved
+
+        def background_host(self, session_id, cwd, timeout=8):
+            if host is None:
+                raise SessionError("provider_command_failed", "The listing failed.", 5)
+            return host
+
+    monkeypatch.setattr(providers, "get_provider", lambda name: Provider())
+    payload = {"session_id": session_id, "hook_event_name": "Stop", "cwd": str(fixture["seat"]),
+               "background_tasks": [], "session_crons": []}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    internal.register_from_hook(old["run_id"], str(fixture["config"]), old["socket_path"],
+                                expected_session_id=old["session_id"])
+
+
+def test_a_hook_from_the_background_session_records_the_move(native_slot, monkeypatch):
+    fixture = native_slot
+    new = str(uuid.uuid4())
+    with pytest.raises(SessionError) as error:
+        _hook_with(fixture, monkeypatch, new, new, {"listed": True, "pid": os.getpid()})
+    assert error.value.code == "conversation_backgrounded"
+    recorded = fixture["tmux"].get_current("fixture", "seat-0")["moved_to_background"]
+    assert (recorded["old_session_id"], recorded["new_session_id"]) == (fixture["previous"]["session_id"], new)
+    assert recorded["host_pid"] == os.getpid() and recorded["host_birth"]
+    assert (error.value.details["old_session_id"], error.value.details["new_session_id"],
+            error.value.details["host_pid"]) == (recorded["old_session_id"], new, os.getpid())
+
+
+def test_an_unknown_host_is_recorded_as_unknown(native_slot, monkeypatch):
+    new = str(uuid.uuid4())
+    with pytest.raises(SessionError) as error:
+        _hook_with(native_slot, monkeypatch, new, new, None)
+    assert error.value.code == "conversation_backgrounded" and error.value.details["host_pid"] is None
+    assert native_slot["tmux"].get_current("fixture", "seat-0")["moved_to_background"]["host_pid"] is None
+
+
+@pytest.mark.parametrize("moved", [None, "another-session"])
+def test_a_hook_with_another_id_stays_an_owner_mismatch_without_a_move_record(native_slot, monkeypatch, moved):
+    with pytest.raises(SessionError) as error:
+        _hook_with(native_slot, monkeypatch, str(uuid.uuid4()), moved, {"listed": True, "pid": 1})
+    assert error.value.code == "owner_mismatch"
+    assert not native_slot["tmux"].get_current("fixture", "seat-0").get("moved_to_background")

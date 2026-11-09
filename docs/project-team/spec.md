@@ -264,7 +264,7 @@ State는 배정과 연결의 원본이며 실행 process 정보의 원본은 아
 | Tmux 실행 | 실제 socket 경로, server PID·시작 시각, session/window/pane ID |
 | Process 실행 | CLI PID·생성 시각·process group, 추적한 background PID·생성 시각 |
 | Provider 연결 | 실제 session_id, Claude message_to 또는 Codex endpoint |
-| 제어와 관찰 | stopping 여부, provider 실행 시도 여부, 등록 완료 여부, hook 관찰값, controller PID·생성 시각 |
+| 제어와 관찰 | stopping 여부, provider 실행 시도 여부, 등록 완료 여부, hook 관찰값, controller PID·생성 시각, background로 옮겨짐(`moved_to_background`) |
 
 JOB 값은 CR을 가리키는 값(8절)만 둡니다. CR 본문은 option에 복제하지 않고 CR 파일에서 읽습니다.
 
@@ -407,6 +407,26 @@ Hook은 canonical state를 쓰지 않고 자기 window의 binding·관찰값만 
 반납(stop) 뒤 사용자 pane이 있는 window는 정리가 닫지 않으므로 다음 start까지 `-exited-` 이름으로 남습니다. 다음 start가 그 window를 이어받고 이름을 되돌립니다. 사용자 pane이 없는 window는 지금처럼 정리가 닫습니다.
 Tmux server를 다시 띄운 뒤의 resume·start는 이전 window가 없으므로 새 window를 만듭니다.
 
+### Background로 옮겨진 대화와 등록되지 않은 run의 종료 판정
+
+Claude 2.1.319는 `/background`(`/bg`)나 빈 입력란의 `←`로 대화를 background session으로 옮깁니다. CLI가 background 작업이나 session cron을 가진 채 끝날 때도 대화를 넘깁니다(exit handoff). 옮긴 대화는 새 session ID로 이어지고 `claude daemon`의 process가 맡으며, 관리 pane의 CLI는 그 대화를 보여 주는 화면으로 남습니다. 이 run은 옛 ID로 등록돼 있으므로 hook의 새 ID는 거절되고 ListAgents에도 pane이 없습니다.
+
+- **감지**: 옛 transcript가 `{"type":"continued-in","continuedInSessionId":<새 ID>}`로 끝나면 옮겨진 것입니다. 마지막 record만 봅니다. 옮긴 뒤 같은 대화를 다시 열면 record가 이어 붙으므로 옮겨진 것이 아닙니다.
+  - transcript는 `<config>/projects/*/<옛 ID>.jsonl`입니다. `<config>`는 호출한 process의 `CLAUDE_CONFIG_DIR`, 없으면 `~/.claude`입니다. CLI에만 다른 config 디렉토리를 줬다면 찾지 못하고, 그때는 감지하지 못한 채 이전 오류가 그대로 나옵니다.
+  - hook 경로: 다른 session ID의 hook이 오면, 그 ID가 옛 transcript의 `continued-in`이 가리키는 ID일 때 window option `moved_to_background`(`old_session_id`·`new_session_id`·`host_pid`·`host_birth`·`detected_at`)를 기록하고 `conversation_backgrounded`로 실패합니다. 아니면 `owner_mismatch`입니다.
+  - 명령 경로: 기록이 없어도 transcript가 `continued-in`으로 끝나고 provider 조회(ListAgents)가 관리 pane을 보여 주지 않으면 같은 판정을 하고 기록합니다. pane이 조회되면 옮겨진 것이 아닙니다.
+- **host**: background 대화를 맡은 process입니다. `claude agents --json --cwd <run의 cwd>`에서 새 ID의 행 `pid`를 찾아 PID와 생성 시각을 기록합니다. 조회가 실패하거나 행이 없으면 PID는 unknown(null)입니다.
+- **종료 판정**: 옮겨진 run은 다음 둘이 모두 확인될 때만 종료입니다.
+  - 대화 종료: provider 조회에 새 ID가 없고, 기록한 host PID(생성 시각 포함)의 process가 없습니다. 조회가 실패했거나 host PID가 unknown이면 확인하지 못한 것입니다.
+  - CLI 종료: pane이 dead이고 `cli_pid`·`cli_birth`가 일치하는 process가 없습니다. 이 판정은 process group을 보지 않습니다. CLI가 띄운 `claude daemon`이 같은 group에 남을 수 있기 때문입니다. host는 위 대화 종료가 따로 봅니다.
+  - 하나라도 살아 있으면 `running`, 살아 있는 것은 없지만 확인하지 못한 것이 있으면 `unknown`입니다.
+- **명령의 처리**:
+  - 종료로 판정한 run은 일반 종료 run과 같습니다. `start`·`restart`가 새 대화로 진행하고, `stop`이 반납합니다. Leader는 state의 leader를 새 대화로 바꾸고 Worker는 같은 seat·CR·branch를 유지합니다.
+  - 종료가 아니면 `send`·`review`는 `conversation_backgrounded`(exit 4)로 거절하고 아무것도 바꾸지 않습니다. `start`·`restart`·`stop`도 `running`이면 같은 오류이고 `unknown`이면 `execution_unknown`(exit 4)입니다. 둘 다 details에 `run_id`·`window_id`·`pane_id`·`old_session_id`·`new_session_id`·`host_pid`(unknown이면 null)와 `conversation`·`cli`·`state`의 판정을 담습니다.
+  - 옮겨진 대화를 멈추는 일은 운영자가 합니다(7절 수동 복구). 도구는 확인만 하고 host에 신호를 보내지 않습니다.
+- **방지**: 관리 Claude CLI의 실행 환경에 `CLAUDE_DISABLE_ADOPT=1`을 넣어 exit handoff를 끕니다. 새로 시작하는 run에만 적용됩니다. 이미 떠 있는 run은 환경을 바꿀 수 없으므로 이 변경 뒤에도 옮겨질 수 있습니다. `/background`와 `←`는 이 환경 변수로 막지 못합니다. Claude의 `env` 설정이 이 값을 다르게 정하면 `env_policy_conflict`입니다.
+- **등록되지 않은 run**: 실행을 시도했으나(`provider_launch_attempted`가 false가 아님) 등록하지 못한 run도 같은 CLI 종료 근거(pane dead, `cli_pid`·`cli_birth` 일치 process 없음)가 확인되면 종료로 판정합니다. 같은 slot의 `start`가 새 대화로 진행합니다. `cli_pid`·`cli_birth` 기록이 없으면 확인하지 못한 것이므로 지금처럼 보존합니다. CLI가 살아 있으면 `registration_failed`를 그대로 보고합니다. 이 판정은 start와 window 정리·재사용에 쓰이며, stop은 등록되지 않은 run에 대해 지금처럼 `session_unbound`입니다.
+
 ## 4. start
 
 | 옵션 | 필수·기본값 | 처리 |
@@ -428,7 +448,8 @@ Prompt 파일은 선택입니다.
 생략하면 프로젝트 지침과 Leader 역할로 시작합니다. Leader는 `project-item ls`로 결정 대기와 CR을 확인하고 사용자 지시를 기다립니다.
 현재 Leader가 실행 중이거나 종료를 확인할 수 없으면 새로 시작하지 않습니다.
 등록 전 시작 dialog에서 기다리는 Leader(5절 Provider 내부 등록)는 예외입니다. 다시 실행한 start는 새로 시작하지 않고 그 실행의 등록을 기다립니다.
-등록 전 hook이 실패해 `registration_failed`로 끝난 Leader도 같은 경로입니다. CLI가 살아 있으면 다시 실행한 start는 같은 오류를 바로 반환합니다. 새로 시작하지 않습니다. CLI가 끝난 실행의 복구 경로는 이 절이 정하지 않았습니다.
+등록 전 hook이 실패해 `registration_failed`로 끝난 Leader도 같은 경로입니다. CLI가 살아 있으면 다시 실행한 start는 같은 오류를 바로 반환합니다. 새로 시작하지 않습니다. CLI가 끝난 것이 확인되면 새 대화로 시작합니다(3절 "Background로 옮겨진 대화와 등록되지 않은 run의 종료 판정").
+Background로 옮겨진 대화의 Leader는 그 대화와 CLI가 모두 끝난 것이 확인될 때만 새로 시작합니다. 아니면 start는 `conversation_backgrounded` 또는 `execution_unknown`입니다.
 정상 종료가 확인된 이전 Leader는 명시적인 새 시작을 막지 않습니다.
 새 Leader는 이전 Leader의 종료한 window를 이어받을 수 있습니다. 사용자가 그 window에 붙인 pane은 새 Leader 옆에 그대로 남습니다(3절 종료한 window 재사용).
 Leader 시작은 base의 Git 상태를 바꾸지 않습니다.
@@ -613,6 +634,8 @@ Hook은 SessionStart마다 한 번 실행하므로 실패한 run이 스스로 �
 예외는 resume의 run입니다. 이 run은 `claude --resume <기록한 session_id> --settings <최종 파일>`로 같은 대화를 엽니다(7절 shutdown·resume).
 resume의 run은 `--fork-session`과 위치 인자 prompt를 쓰지 않습니다. 재개 메시지는 등록이 끝난 뒤 send로 보냅니다.
 프로젝트의 provider_name이 있으면 현재 CLI의 이름 옵션 `-n`에 전달합니다.
+CLI의 환경에 `CLAUDE_DISABLE_ADOPT=1`을 넣어 CLI가 끝날 때 대화가 background session으로 넘어가지 않게 합니다(3절 "Background로 옮겨진 대화와 등록되지 않은 run의 종료 판정").
+SessionStart·Stop·StopFailure·SessionEnd hook의 session_id가 기대값과 다르면 `owner_mismatch`이지만, 옛 transcript가 그 ID로의 이동을 보여 주면 이동을 기록하고 `conversation_backgrounded`입니다.
 최종 --settings에는 프로젝트 guard와 공통 SessionStart·Stop·StopFailure·SessionEnd hook을 합칩니다.
 이 파일의 writer는 prepare-session 하나입니다.
 공통 코드는 hook 조각을 제공하며 같은 파일을 다시 쓰지 않습니다.
@@ -1046,6 +1069,7 @@ Provider가 Claude인 project만 처리합니다. Codex project는 건드리지 
 
 실행을 시도한 미등록 CLI는 자동으로 빈 자리로 바꾸지 않습니다.
 Stop은 session_unbound를 반환하고 배정·Git 기준·기존 runtime 근거를 보존합니다.
+단 그 CLI의 종료(pane dead, 기록한 `cli_pid`·`cli_birth`의 process 없음)가 확인되면 start가 같은 slot에서 새 대화로 진행합니다(3절). 이 수동 복구는 그 근거를 확인하지 못한 경우에 적용합니다.
 등록한 CLI도 직접 /exit·crash·외부 종료 뒤 unload되면 마지막 background 근거가 없을 수 있습니다.
 이 경우의 종료 판정도 unknown이며 같은 수동 확인 절차를 적용합니다.
 이 경우 v1은 자동 복구를 지원하지 않습니다.
@@ -1089,6 +1113,17 @@ Codex의 종료 확인 오류 뒤 입력란에 원래 /exit가 남으면 전체 
 운영자가 확인한 모드를 닫은 뒤 `pane_in_mode=0`과 실제 입력을 다시 대조합니다.
 부분 전송이 없고 입력이 비었을 때만 정식 stop을 새로 요청합니다.
 부분 전송이나 수신 여부가 unknown이면 위의 원래 /exit 확인 절차를 적용합니다.
+
+### Background로 옮겨진 대화의 복구
+
+`conversation_backgrounded`는 관리 대화가 background session으로 옮겨져 새 session ID로 이어지고 있다는 뜻입니다(3절). 같은 slot에서 새 대화로 시작하는 지원 경로는 다음 순서입니다.
+
+1. 고유 오류를 확인하십시오. details의 `old_session_id`·`new_session_id`·`host_pid`와 판정(`conversation`·`cli`·`state`)을 봅니다. 같은 오류가 hook에서 나면 그 pane에 Stop hook 오류로 보입니다.
+2. 인계 파일을 확인하십시오. restart는 `agent/handoff/<slot>.md`가 필요합니다. 옮겨진 대화에서 작업 중이면 그 대화에 인계 내용을 쓰게 하거나, 직접 작성하십시오. Worker의 미commit·미push 작업은 seat에 그대로 있습니다.
+3. 옮겨진 대화와 CLI를 끝내십시오. 새 ID의 대화를 `claude agents`로 찾아 멈춥니다(예: `claude agents --json --cwd <작업 경로>`의 `pid`를 확인한 뒤 그 대화를 종료). 그 다음 관리 pane의 CLI를 끝냅니다. 도구는 이 일을 하지 않습니다.
+4. `agent-session start --job <leader 또는 CR>`을 다시 실행하십시오(restart도 같습니다). 종료가 확인되면 새 대화로 진행합니다. 여전히 `conversation_backgrounded`이면 어느 쪽이 살아 있는지 details의 판정으로 확인하십시오. `execution_unknown`이면 host PID나 CLI 기록을 확인하지 못한 것입니다. 그 경우 배정을 바꾸지 않고 위 "종료 근거가 부족한 실행의 수동 복구"의 확인을 먼저 마치십시오.
+
+옮겨진 대화가 이미 끝났어도 host PID를 기록하지 못했다면 종료를 확인하지 못해 `execution_unknown`입니다. 이때 운영자가 대화와 process의 종료를 실제로 확인한 뒤 7절의 수동 복구 절차를 따르십시오.
 
 ### 중단된 Git 단계의 정리
 

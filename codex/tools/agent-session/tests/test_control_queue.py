@@ -67,7 +67,7 @@ def test_same_pending_request_returns_one_result_location(tmp_path):
 def test_external_control_cannot_overtake_a_pending_self_request(tmp_path):
     subject, meta = manager(tmp_path)
     subject._self_control("stop", meta, meta["job_id"], None)
-    subject._target = lambda *args: dict(meta)
+    subject._target = lambda *args, **keywords: dict(meta)
     subject._authorize = lambda *args: ("operator", None)
     with pytest.raises(SessionError) as error:
         subject.control("restart", job=meta["job_id"])

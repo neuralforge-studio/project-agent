@@ -40,7 +40,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | Hook·controller | `agent_session.internal`의 `register_from_hook`(Claude SessionStart hook), `register_current`(Codex 초기 도구), `mark_process`, `run_controller`([명세 5절](spec.md#provider-내부-등록)) |
 | 원격 seat | `python -m agent_session.remote_runtime`, `python -m agent_session.remote_bridge` |
 | tmux option | 관리 window의 `@agent_session_*`([명세 3절](spec.md#실행-근거와-잠금)), Board의 `@project_board_*`(`@project_board_enabled`, `_managed`, `_pane`, `_width`, `_restore`, `_expanded`, `_config`, `_click_socket`) |
-| 환경 변수 | 관리 대화에 `AGENT_SESSION_BASE`, `AGENT_SESSION_CONFIG`, `AGENT_SESSION_SOCKET`, `AGENT_SESSION_UPLINK`을 줍니다. |
+| 환경 변수 | 관리 대화에 `AGENT_SESSION_BASE`, `AGENT_SESSION_CONFIG`, `AGENT_SESSION_SOCKET`, `AGENT_SESSION_UPLINK`을 줍니다. 관리 Claude CLI에는 `CLAUDE_DISABLE_ADOPT=1`도 줍니다. CLI가 끝날 때 대화가 background session으로 넘어가는 것을 막습니다([명세 3절](spec.md#background로-옮겨진-대화와-등록되지-않은-run의-종료-판정)). |
 | 등록·state | 등록 파일 `project.json`과 `<base>/agent/state.json`([명세 2절](spec.md#2-등록과-프로젝트-선택), [3절](spec.md#3-statejson)) |
 
 ## 의존 관계

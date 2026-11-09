@@ -301,6 +301,10 @@ class CodexProvider:
     def trust_base(self, root):
         return trust_workspace(root)
 
+    def moved_to(self, session_id):
+        """Codex has no background-session handoff."""
+        return None
+
     def startup_dialog(self, screen):
         if re.search(r"\bFolder access\b", screen) and re.search(r"\bTrust this folder\?", screen):
             return "workspace_trust"
