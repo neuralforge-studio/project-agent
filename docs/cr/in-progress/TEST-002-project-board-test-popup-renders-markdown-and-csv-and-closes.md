@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S3
+- Base: 9458aba01535c1a12ee034ce725048aca5448c10 2026-11-09T14:40:54+09:00
 
 ## Symptom
 이 test가 Base와 수정본 모두에서 실행마다 통과와 실패가 번갈아 나옵니다. 실패는 textual `NoMatches '#answer'`입니다. 매 검증에서 알려진 실패로 따로 확인해야 해서 회귀 판정을 흐립니다.

@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
+- Base: 9458aba01535c1a12ee034ce725048aca5448c10 2026-11-09T14:40:54+09:00
 
 ## Symptom
 설치본에서 tmux가 부르는 helper는 `~/.local/bin`의 shim을 거치지 않습니다. `integrations/tmux/tmux_project_board.sh`는 release 안의 `tools/project-board/bin/project-board`를 직접 실행하고, `@project_agent_decide_status`는 `tmux_decide_status.py`(`#!/usr/bin/env python3`)를 직접 실행합니다. shim이 정하는 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`가 없으므로 개발 checkout 규칙(`python3` 등)으로 interpreter를 고릅니다. 새 직원 환경에서는 그 interpreter가 Python 3.10 미만이거나 `textual`이 없을 수 있어 Board와 결정 표시가 동작하지 않습니다.
