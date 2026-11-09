@@ -42,6 +42,21 @@ def test_a_worker_prompt_names_the_cr_and_the_registration_for_codex_only(tmp_pa
     assert "SessionStart 내부 등록이 실패하면" in claude and "SessionStart" not in codex
 
 
+def test_a_claude_prompt_tells_each_role_to_register_its_own_session_cron_and_a_codex_prompt_does_not(tmp_path):
+    marker = "references/self-check.md"
+    worker = launch_artifacts.prompt_text(project(tmp_path, "claude"), context())
+    leader = launch_artifacts.prompt_text(project(tmp_path, "claude"), context(seat=None, target="leader", job=None))
+    codex = [launch_artifacts.prompt_text(project(tmp_path), context()),
+             launch_artifacts.prompt_text(project(tmp_path), context(seat=None, target="leader", job=None))]
+    assert marker in worker and "Worker 절" in worker and "CronCreate" in worker and "Leader 절" not in worker
+    assert marker in leader and "Leader 절" in leader and "Worker 절" not in leader
+    # The prompt points to the document; the cron expression and the check prompt are written there only.
+    assert "13,43" not in worker and "8,38" not in leader and "CronList" in worker
+    # Registration comes before the work instructions.
+    assert worker.index(marker) < worker.index("배정 CR:")
+    assert all("CronCreate" not in text and marker not in text for text in codex)
+
+
 def test_a_resumed_conversation_gets_only_the_request_and_a_leader_gets_no_job_lines(tmp_path):
     assert launch_artifacts.prompt_text(project(tmp_path), context(resume=True), "RESUME") == "RESUME"
     leader = launch_artifacts.prompt_text(project(tmp_path, "claude"), context(seat=None, target="leader", job=None))

@@ -39,6 +39,7 @@ respond(r,d)
 GUIDANCE_FILES = (
     "skills/project-team/SKILL.md",
     "skills/project-team/assets/commit-message.txt",
+    "skills/project-team/references/self-check.md",
     "skills/project-item/SKILL.md",
     "skills/project-item/references/cr.md",
     "skills/project-item/references/decide.md",

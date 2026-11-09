@@ -1075,6 +1075,7 @@ Provider가 Claude인 project만 처리합니다. Codex project는 건드리지 
    - 서버를 내려 CLI가 끊겼고 background 작업과 monitor는 끝났으니 상태를 확인하고 이어 가라고 알립니다.
    - forced였으면 실행 중이던 명령이 강제 종료되어 결과가 없다는 사실을 넣습니다.
    - Leader의 메시지에는 재개한 Worker와 재개하지 못한 대상을 적습니다.
+   - 재개한 대화는 session cron을 잃었으므로 모든 메시지가 자기 점검을 다시 등록하라는 지시를 담습니다(7절 watch의 자기 점검).
    - 메시지 전달 실패는 해당 대상의 `message`에 보고하며 재전송하지 않습니다.
 8. tmux server가 다시 뜬 경우와 종료한 window가 남은 경우 결과가 같습니다. tmux-resurrect가 복원한 window의 option은 채택하지 않습니다(3절).
    - 서버가 뜬 뒤에는 tmux-resurrect 복원보다 resume을 먼저 실행합니다.
@@ -1256,7 +1257,7 @@ agent-session watch --all
 agent-session watch --project NAME --minutes 30
 ```
 
-CR이 in-progress인데 쉬고 있는 Worker를 깨우고 Leader에게 알립니다. 운영자가 주기적으로 실행하는 명령입니다. 관리 session(Leader·Worker)이 호출하면 role_denied이고 등록 밖의 agent가 호출하면 caller_unbound입니다(shutdown·resume과 같은 판정, 아무것도 바꾸기 전에 합니다). 한 번 실행하면 각 project의 Worker seat를 한 번씩 보고 끝납니다. 반복은 명령이 하지 않습니다.
+CR이 in-progress인데 쉬고 있는 Worker를 깨우고 Leader에게 알립니다. 운영자가 수동으로 점검할 때와 Claude Leader가 자기 점검(아래)에서 실행하는 명령입니다. 호출자 판정은 아무것도 바꾸기 전에 합니다. 운영자는 어느 project든 점검할 수 있습니다(shutdown·resume과 같은 판정). 그 project의 현재 Leader는 자기 project 하나만 점검할 수 있고(`--project`로 자기 project를 지정, 또는 등록이 그 하나뿐일 때의 `--all`), Worker는 role_denied, 다른 project의 Leader·등록 밖의 agent는 caller_unbound이며 여럿을 고르는 `--all`은 Leader에게 열려 있지 않습니다. 한 번 실행하면 각 project의 Worker seat를 한 번씩 보고 끝납니다. 반복은 명령이 하지 않습니다.
 
 | 옵션 | 필수·기본값 | 처리 |
 | --- | --- | --- |
@@ -1265,13 +1266,13 @@ CR이 in-progress인데 쉬고 있는 Worker를 깨우고 Leader에게 알립니
 | --minutes N | 선택. 30 | Worker가 쉬어도 되는 시간. 이 시간이 지나야 움직입니다 |
 | --timeout SECONDS | 선택. 120 | 한 project의 전체 대기 제한 |
 
-**실행 방식: cron을 고릅니다.** 운영자의 crontab에 한 줄을 둡니다(tmux socket이 기본 위치가 아니면 `--socket-name`·`--socket-path`를 앞에 붙입니다).
+**자기 점검(실행 방식)**: 반복 실행은 각 Claude instance가 자기 TUI의 session cron(`CronCreate`)으로 합니다. 중앙 감시 process와 system crontab은 두지 않습니다. session cron은 그 instance가 쉬고 있을 때만 실행되고 instance가 끝나면 사라지므로, 점검은 "turn이 끝난 채 멈춘" 상태에만 깨어나고 수명이 instance와 같습니다.
 
-```
-*/10 * * * * $HOME/.local/bin/agent-session watch --all
-```
-
-Board의 갱신 loop는 고르지 않습니다. Board는 사람이 열어 보는 화면이라 닫히면 감지가 멈추고, 여러 곳에서 열리면 같은 판정이 겹칩니다. 또 화면 도구가 Worker에게 메시지를 보내는 부수효과를 갖게 됩니다. cron은 Board와 무관하게 돌고 한 줄이면 설치됩니다. 실행 간격(10분)은 `--minutes`보다 짧아야 합니다. 쉬기 시작한 뒤 `--minutes`에 최대 간격만큼을 더한 때 움직입니다.
+- 원본은 [self-check.md](../../skills/project-team/references/self-check.md)입니다. Worker용·Leader용 cron 식(30분 주기, `:00`·`:30`을 피한 분, `recurring: true`)과 점검 prompt가 그 문서에만 있습니다. 첫 prompt와 resume 메시지는 `launch_artifacts.self_check_text` 한 곳이 만든 지시로 그 문서의 자기 역할 절을 읽고 등록하라고 합니다.
+- 등록 시점: Claude Leader·Worker의 최초 prompt(등록 뒤 첫 행동), resume 메시지(재개한 대화는 session cron을 잃습니다). restart는 새 대화이므로 최초 prompt로 다시 등록합니다. Codex에는 session cron이 없어 Codex의 prompt에는 넣지 않습니다. Codex Worker의 멈춤은 운영자의 수동 `watch`로만 점검합니다(지금 등록된 project는 모두 Claude).
+- Worker 점검은 자기 CR·자식 process를 스스로 보고 풀며, Leader 회신을 기다리는 중이면 아무것도 하지 않습니다. Leader 점검은 자기 project에 `watch`를 실행하고 반납 대기·빈 seat·사라진 Worker를 `project-item ls`·state로 봅니다.
+- 한계: session cron은 instance가 turn 중이면 실행되지 않고 주기의 최대 절반(최대 30분)까지 늦으며 7일 뒤 만료합니다. 점검이 만료 전에 자기 등록을 갱신합니다. instance 자체가 쉬지 못하게 막힌 경우(긴 turn)는 이 점검이 보지 못합니다.
+- Leader가 호출한 `watch`는 쉬는 Worker를 깨우는 판정은 같지만 Leader에게 메시지를 보내지 않습니다(자기에게 보내는 것이 됩니다). 대신 `resting` target 결과에 `evidence`(운영자 호출이면 Leader 메시지에 담기는 근거)를 담고, Leader 알림 기록(`notified_at`)은 남기지 않습니다.
 
 **쉬고 있음**: 다음이 모두 맞는 Worker입니다.
 
@@ -1291,7 +1292,7 @@ turn이 진행 중이면 아무것도 하지 않습니다(`busy`). foreground �
 
 **반복 방지**: window option `watch`(`first_seen_at`·`busy_seen_at`·`children`·`children_at`·`resting.nudged_at`·`resting.notified_at`)에 보낸 기록을 둡니다. 같은 쉬는 상태가 이어지면 Worker에게는 다시 보내지 않습니다. Leader에게는 마지막 알림 뒤 `--minutes`가 지날 때마다 다시 알립니다. Worker가 점검 뒤 Leader에게 보고하거나 Leader에게서 메시지를 받으면 다음 쉼은 새 상태이므로 Worker에게 다시 보냅니다. 전달이 accepted가 아니면 기록하지 않아 다음 점검이 다시 시도합니다(Leader가 없거나 Worker가 준비 중인 경우 등). 기록은 run의 window에 있으므로 새 run은 처음부터 봅니다. 같은 project의 watch는 `agent/watch.lock`으로 동시에 하나만 돕니다(둘째는 `control_busy`를 그 project의 `error`로 보고하고 아무것도 보내지 않습니다).
 
-결과는 `{threshold_minutes, projects: [{project, targets: [{slot, job_id, status, reason, actions}], error?}]}`입니다. status는 `skipped`·`busy`·`idle`·`awaiting_leader`·`observing`·`working`·`resting`·`error`입니다. 한 seat의 오류는 다른 seat를 막지 않고 그 target의 `error`로 보고합니다. 점검 대상이 없어도 exit 0입니다. 자식 process의 CPU 시간은 Linux에서만 읽습니다. 다른 OS에서는 자식 process를 읽지 못한 것으로 보고 메시지에 그렇게 적으며 CPU 조건은 자식이 없는 것으로 취급합니다.
+결과는 `{threshold_minutes, projects: [{project, targets: [{slot, job_id, status, reason, actions}], error?}]}`입니다. status는 `skipped`·`busy`·`idle`·`awaiting_leader`·`observing`·`working`·`resting`·`error`입니다. Leader가 호출한 결과의 `resting` target은 `evidence`를 더합니다. 한 seat의 오류는 다른 seat를 막지 않고 그 target의 `error`로 보고합니다. 점검 대상이 없어도 exit 0입니다. 자식 process의 CPU 시간은 Linux에서만 읽습니다. 다른 OS에서는 자식 process를 읽지 못한 것으로 보고 메시지에 그렇게 적으며 CPU 조건은 자식이 없는 것으로 취급합니다.
 
 ## 8. CR과 실행 입력
 
