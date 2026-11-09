@@ -146,6 +146,9 @@ def main(argv=None, manager_factory=None, fleet_factory=None):
             from .remote_bridge import forward
             _emit(True, data=forward(arguments))
             return 0
+        if operation == "start":
+            from .lifecycle import check_start_arguments
+            check_start_arguments(arguments.job, arguments.prompt_file, arguments.seat)
         with redirect_stdout(sys.stderr):
             effects_possible = True
             if operation in ("shutdown", "resume"):

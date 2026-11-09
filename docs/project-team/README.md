@@ -67,8 +67,8 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 
 | 모듈 | 책임 | 의존 방향 |
 | --- | --- | --- |
-| `cli` | 입력 해석, 결과 JSON 표현, 조립. `Manager`와 `Fleet`을 만들고 `Fleet`에 `Manager` class를 `manager_factory`로 넘깁니다(`_default_fleet`). | `lifecycle`, `suspend`를 지연 import합니다. |
-| `lifecycle` | `Manager`: start·send·stop·restart·review. start 인자 규칙(`--prompt-file`은 Leader, `--seat`는 Worker JOB)을 소유합니다. | `suspend`를 import합니다(`Manager`가 `SuspendMixin`을 상속). |
+| `cli` | 입력 해석, 결과 JSON 표현, 조립. `Manager`와 `Fleet`을 만들고 `Fleet`에 `Manager` class를 `manager_factory`로 넘깁니다(`_default_fleet`). start는 `Manager`를 만들기 전에 `lifecycle.check_start_arguments`를 부릅니다. | `lifecycle`, `suspend`를 지연 import합니다. |
+| `lifecycle` | `Manager`: start·send·stop·restart·review. start 인자 규칙(`--prompt-file`은 Leader, `--seat`는 Worker JOB)의 원본인 모듈 함수 `check_start_arguments`를 소유하고 `Manager.start`가 부릅니다. | `suspend`를 import합니다(`Manager`가 `SuspendMixin`을 상속). |
 | `suspend` | `SuspendStore`(shutdown 기록), `SuspendMixin`(한 대상의 shutdown·resume 단계), `Fleet`(운영자 명령). | `lifecycle`을 import하지 않습니다. `SuspendMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
 
 ### `sys.path` 조작 위치

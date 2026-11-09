@@ -139,3 +139,17 @@ def test_cli_start_reports_the_manager_rule(session_env, monkeypatch, capsys, ar
     assert code == 2 and not output.err
     assert json.loads(output.out) == {"ok": False, "data": None, "error": {
         "code": "invalid_arguments", "message": message, "details": {}}}
+
+
+@pytest.mark.parametrize("argv, message", START_RULES)
+def test_cli_start_rule_error_does_not_depend_on_the_project(tmp_path, monkeypatch, capsys, argv, message):
+    """Outside every registered base the same bad request still gets the rule's error, not project_not_found."""
+    from agent_session import cli
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("AGENT_SESSION_UPLINK", raising=False)
+    monkeypatch.delenv("AGENT_SESSION_CONFIG", raising=False)
+    code = cli.main(["--config", str(tmp_path / "none.json"), "start", *argv])
+    output = capsys.readouterr()
+    assert code == 2 and not output.err
+    assert json.loads(output.out) == {"ok": False, "data": None, "error": {
+        "code": "invalid_arguments", "message": message, "details": {}}}
