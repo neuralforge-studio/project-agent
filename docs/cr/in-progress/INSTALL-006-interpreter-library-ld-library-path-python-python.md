@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
+- Base: a50c23a3e251def5c0aeca54f641f0ed69f5eeb6 2026-11-09T19:57:07+09:00
 
 ## Symptom
 설치본은 `tools/python.env`에 설치 interpreter의 경로만 기록합니다. 사내 Python(`/primehome/tools/Inhouse/Python3/latest/bin/python3`)은 자기 `lib`이 `LD_LIBRARY_PATH`에 없으면 시스템 libpython으로 떠서 `sys.prefix=/usr`가 되고, 사내 site-packages(`textual` 등)가 보이지 않습니다. 사내 환경 설정이 없는 계정, cron, 그런 환경에서 시작한 tmux server에서는 Board가 시작하지 않습니다. 안내문 1절의 "사내 Python에는 있습니다"도 이 조건에서는 사실이 아닙니다.
