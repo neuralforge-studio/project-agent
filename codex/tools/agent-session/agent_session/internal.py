@@ -14,6 +14,7 @@ from .tmux import control as tmux_control
 
 _BINDING_TIMEOUT = 20      # seconds; inside the 30 second SessionStart hook limit
 _BINDING_INTERVAL = 1.0
+_HOST_TIMEOUT = 8          # seconds for the provider's background listing inside the hook
 _HOOK_FIELDS = ("session_id", "hook_event_name", "cwd", "source", "reason", "background_tasks", "session_crons")
 
 
@@ -169,6 +170,30 @@ def _wait_ready(control, context, session, output=False):
     raise SessionError("registration_timeout", "The controller did not finish startup.", 4)
 
 
+def _foreign_session(run_id, config_path, socket_path, payload, expected_session_id):
+    """Reject a hook that carries another conversation's ID.
+
+    When the run's own transcript says the conversation moved to this ID's background session, the run's
+    window records the move and the error says so; otherwise it is an `owner_mismatch`."""
+    from . import background
+    from .providers import get_provider
+
+    session_id = payload.get("session_id")
+    if session_id and expected_session_id:
+        try:
+            project, control, context = _run(run_id, config_path, socket_path, payload.get("cwd"))
+            record = background.record_of(get_provider(project.provider), expected_session_id, session_id,
+                                          context["cwd"], _HOST_TIMEOUT)
+            if record:
+                control.write_meta(context["window_id"], {"run_id": run_id, "moved_to_background": record})
+                raise SessionError("conversation_backgrounded", "The conversation moved to a background session.",
+                                   4, background.details(context, record))
+        except SessionError as error:
+            if error.code == "conversation_backgrounded":
+                raise
+    raise SessionError("owner_mismatch", "The hook has an unexpected native session ID.")
+
+
 def register_from_hook(run_id, config_path, socket_path, expected_session_id=None, endpoint=None):
     """Read one native Claude event and reject a stale execution callback."""
     import sys
@@ -176,7 +201,7 @@ def register_from_hook(run_id, config_path, socket_path, expected_session_id=Non
     payload = json.load(sys.stdin)
     session_id = payload.get("session_id")
     if not session_id or session_id != expected_session_id:
-        raise SessionError("owner_mismatch", "The hook has an unexpected native session ID.")
+        _foreign_session(run_id, config_path, socket_path, payload, expected_session_id)
     cwd = payload.get("cwd")
     project, control, context = _run(run_id, config_path, socket_path, cwd)
     event = payload.get("hook_event_name")

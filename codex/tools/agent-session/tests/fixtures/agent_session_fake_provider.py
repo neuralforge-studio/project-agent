@@ -33,6 +33,13 @@ class FakeProvider:
     def trust_new_seat(self, root):
         return False
 
+    def moved_to(self, session_id):
+        return None
+
+    def background_host(self, session_id, cwd, timeout=8):
+        from agent_session.errors import SessionError
+        raise SessionError("provider_command_failed", "The fixture has no background listing.", 5)
+
     def trust_base(self, root):
         return False
 

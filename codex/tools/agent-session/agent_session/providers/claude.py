@@ -89,14 +89,54 @@ def startup_dialog(screen):
     return next((kind for kind, pattern in STARTUP_DIALOGS if pattern.search(screen)), None)
 
 
+TRANSCRIPT_TAIL = 65536                    # bytes read from the end of a transcript to find its last record
+HOST_QUERY_SECONDS = 8                      # `claude agents` wait inside a hook's 30 seconds
+
+
 def transcript_files(cwds, conversation_id):
-    """The existing conversation records of one conversation, for the directories it may have run in.
+    """The existing conversation records of one conversation: the one owner of where Claude keeps them.
 
     Claude keeps `<config dir>/projects/<cwd with every non-alphanumeric character as "-">/<id>.jsonl`.
-    A path of 200 characters or more is stored under a shortened name, which this does not find."""
+    `<config dir>` is the calling process's CLAUDE_CONFIG_DIR, else ~/.claude.
+    A path of 200 characters or more is stored under a shortened name, which a search by `cwds` does
+    not find. With `cwds` None every project directory is searched instead, for a conversation whose
+    directory is not known."""
     root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser() / "projects"
+    if cwds is None:
+        if not isinstance(conversation_id, str) or not conversation_id or "/" in conversation_id:
+            return []
+        try:
+            return sorted(path for path in root.glob("*/" + conversation_id + ".jsonl") if path.is_file())
+        except OSError:
+            return []
     names = {re.sub(r"[^A-Za-z0-9]", "-", str(path)) for cwd in cwds for path in (Path(cwd), Path(cwd).resolve())}
     return sorted(path for path in (root / name / f"{conversation_id}.jsonl" for name in names) if path.is_file())
+
+
+def continued_into(session_id):
+    """The session ID that a conversation moved to, or None.
+
+    Claude ends the old transcript with a `{"type":"continued-in","continuedInSessionId":...}` record
+    when it hands the conversation to a background session. Only that last record counts: a
+    conversation resumed after the handoff appends more records. The transcript is searched in every
+    project directory of the calling process's config directory (`transcript_files`), so a config
+    directory that only the CLI was given leaves the move undetected."""
+    try:
+        files = transcript_files(None, session_id)
+        if not files:
+            return None
+        newest = max(files, key=lambda path: path.stat().st_mtime)
+        with newest.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - TRANSCRIPT_TAIL))
+            lines = [line for line in stream.read().splitlines() if line.strip()]
+        record = json.loads(lines[-1])
+    except (OSError, ValueError, IndexError):
+        return None
+    if not isinstance(record, dict) or record.get("type") != "continued-in":
+        return None
+    target = record.get("continuedInSessionId")
+    return target if isinstance(target, str) and target else None
 
 
 def _config_file():
@@ -282,6 +322,9 @@ class ClaudeProvider:
     def launch_spec(self, context, prepared):
         args = prepared.get("provider_args", [])
         sources = _validate_args(args)
+        # A CLI that ends with background work hands its conversation to a background session under a new ID;
+        # the managed run would then lose its binding. This applies to runs started from here on.
+        prepared = {**prepared, "env": {**prepared.get("env", {}), "CLAUDE_DISABLE_ADOPT": "1"}}
         self._configuration(context, prepared, sources)
         identity = context.get("expected_session_id") or context.get("session_id")
         try:
@@ -360,6 +403,26 @@ class ClaudeProvider:
         return {"disposition": disposition, "accepted": disposition == "accepted", "read": False,
                 "session": {"session_id": session_id(session), "message_to": peer["message_to"]}}
 
+    def moved_to(self, session_id):
+        """The background session that this conversation moved to, or None (transcript record)."""
+        return continued_into(session_id)
+
+    def background_host(self, session_id, cwd, timeout=HOST_QUERY_SECONDS):
+        """Whether `claude agents` lists the background session, and the PID of its host process.
+
+        A listing that cannot be read raises; it is not an absent session."""
+        cli = executable("claude")
+        output = run([cli, "agents", "--json", "--cwd", str(cwd)], min(timeout, HOST_QUERY_SECONDS))
+        try:
+            rows = json.loads(output)
+        except ValueError as error:
+            raise SessionError("provider_protocol_error", "Claude returned invalid JSON from agents.", 4) from error
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise SessionError("provider_protocol_error", "Claude returned an invalid agents listing.", 4)
+        found = [row for row in rows if row.get("sessionId") == session_id]
+        pid = found[0].get("pid") if found else None
+        return {"listed": bool(found), "pid": pid if isinstance(pid, int) and not isinstance(pid, bool) else None}
+
     def _latest_meta(self, context, meta):
         if context.get("socket_path") and context.get("window_id"):
             from ..tmux import Tmux
@@ -393,13 +456,13 @@ class ClaudeProvider:
         background = stopped["background_tasks"] + stopped["session_crons"] if observed else None
         if peer is None:
             ended = "SessionEnd" in valid
-            return {"known": bool(ended and observed), "active_turn": False if ended else None,
+            return {"listed": False, "known": bool(ended and observed), "active_turn": False if ended else None,
                     "active_turn_ids": [], "pending": None, "background": background,
                     "idle": bool(ended), "terminal": bool(ended and observed and not background),
                     "pending_disposition": "unknown"}
         status = peer["status"].casefold()
         idle = status == "idle"
-        return {"known": bool(observed), "active_turn": not idle, "active_turn_ids": [],
+        return {"listed": True, "known": bool(observed), "active_turn": not idle, "active_turn_ids": [],
                 "pending": None, "background": background, "idle": idle,
                 "terminal": bool(idle and observed and not background),
                 "pending_disposition": "unknown", "runtime_status": status}

@@ -216,7 +216,7 @@ def test_claude_requires_tmpdir_in_final_settings(claude):
     data = json.loads(path.read_text())
     data["env"] = dict(prepared["env"])
     path.write_text(json.dumps(data))
-    assert provider.launch_spec(context, prepared)["env"] == prepared["env"]
+    assert provider.launch_spec(context, prepared)["env"] == {**prepared["env"], "CLAUDE_DISABLE_ADOPT": "1"}
 
 
 def test_claude_observation_preserves_missing_background(claude):
@@ -479,6 +479,63 @@ def test_claude_marks_only_an_unlisted_pane_as_retryable(claude):
     assert caught.value.code == "session_not_bound" and not caught.value.details
 
 
+def test_claude_launch_disables_the_exit_handoff_to_a_background_session(claude):
+    provider, _, context, _, prepared = claude
+    assert provider.launch_spec(context, prepared)["env"]["CLAUDE_DISABLE_ADOPT"] == "1"
+
+
+def transcript(tmp_path, session_id, *records):
+    path = tmp_path / "home" / "projects" / "-some-project" / (session_id + ".jsonl")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    return path
+
+
+MOVED = {"type": "continued-in", "continuedInSessionId": "ddfda1ec-803a-420d-897c-bd8444c16abd"}
+
+
+def test_a_transcript_that_ends_with_continued_in_names_the_background_session(claude, tmp_path):
+    provider = claude[0]
+    transcript(tmp_path, IDENTITY, {"type": "user"}, {"type": "attachment", "attachment": {"type": "session_cron_carry"}}, MOVED)
+    assert provider.moved_to(IDENTITY) == MOVED["continuedInSessionId"]
+
+
+@pytest.mark.parametrize("records", [
+    [{"type": "user"}, {"type": "assistant"}],
+    [MOVED, {"type": "user"}],                      # a conversation resumed after the handoff goes on
+    [{"type": "continued-in"}],
+])
+def test_a_transcript_without_a_final_move_record_is_not_a_move(claude, tmp_path, records):
+    transcript(tmp_path, IDENTITY, *records)
+    assert claude[0].moved_to(IDENTITY) is None
+
+
+def test_a_missing_or_unreadable_transcript_is_not_a_move(claude, tmp_path):
+    provider = claude[0]
+    assert provider.moved_to(IDENTITY) is None
+    path = transcript(tmp_path, IDENTITY, {"type": "user"})
+    path.write_text("{not json\n", encoding="utf-8")
+    assert provider.moved_to(IDENTITY) is None
+    assert provider.moved_to("../" + IDENTITY) is None
+
+
+def test_the_background_host_comes_from_the_agents_listing(claude, monkeypatch):
+    import agent_session.providers.claude as module
+
+    provider = claude[0]
+    rows = [{"pid": 3568208, "sessionId": MOVED["continuedInSessionId"], "kind": "background", "status": "idle"},
+            {"pid": 1, "sessionId": "other", "kind": "interactive"}]
+    seen = []
+    monkeypatch.setattr(module, "run", lambda argv, timeout, **keywords: seen.append(argv) or json.dumps(rows))
+    monkeypatch.setattr(module, "executable", lambda name, context=None: "/bin/claude")
+    assert provider.background_host(MOVED["continuedInSessionId"], "/project") == {"listed": True, "pid": 3568208}
+    assert seen[0][1:] == ["agents", "--json", "--cwd", "/project"]
+    assert provider.background_host("absent", "/project") == {"listed": False, "pid": None}
+    monkeypatch.setattr(module, "run", lambda argv, timeout, **keywords: "not json")
+    with pytest.raises(SessionError):
+        provider.background_host("absent", "/project")
+
+
 def test_transcript_files_follow_claudes_directory_naming(tmp_path, monkeypatch):
     from agent_session.providers.claude import transcript_files
 
@@ -490,3 +547,6 @@ def test_transcript_files_follow_claudes_directory_naming(tmp_path, monkeypatch)
     (folder / f"{IDENTITY}.jsonl").write_text("{}\n")
     assert transcript_files([seat], IDENTITY) == [folder / f"{IDENTITY}.jsonl"]
     assert transcript_files([seat], "other") == [] and transcript_files([tmp_path / "elsewhere"], IDENTITY) == []
+    # Without a directory every project directory is searched, in the same config directory.
+    assert transcript_files(None, IDENTITY) == [folder / f"{IDENTITY}.jsonl"]
+    assert transcript_files(None, "other") == [] and transcript_files(None, "../" + IDENTITY) == []

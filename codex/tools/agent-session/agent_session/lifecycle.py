@@ -8,7 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import api, git_ops, jobs, process, workspace
+from . import api, background, git_ops, jobs, process, workspace
 from .config import RemoteSeat, current_project, load_registry
 from .errors import SessionError
 from .providers import get_provider
@@ -17,6 +17,7 @@ from .suspend import SuspendMixin, SuspendStore
 from .tmux import Tmux, check_owner
 from .util import write_json
 
+HOST_SECONDS = 8                                   # wait for the provider's background listing
 SWEEP_SECONDS = 30                                 # after this, a cleanup leaves later windows to the next sweep
 DIALOG_SCREEN_SECONDS = 1                          # how often an unregistered start reads its pane for a dialog
 REUSE_REFUSED = ("target_changed", "tmux_owner_mismatch", "target_running", "window_unreusable")
@@ -38,6 +39,15 @@ def _completed(result_file):
         return json.loads(Path(result_file).read_text(encoding="utf-8"))["data"]["completed"] is True
     except (OSError, ValueError, KeyError, TypeError):
         return False
+
+
+def _unregistered_ended(meta, pane):
+    """A run that tried to launch its CLI but never registered, whose CLI is confirmed gone.
+
+    The pane is dead and the recorded CLI process (PID and birth) no longer runs. A run without those
+    records, or one that never attempted a launch, is not confirmed."""
+    return (not meta.get("registered") and meta.get("provider_launch_attempted") is not False
+            and not meta.get("remote_seat") and background.cli_state(meta, pane) == "ended")
 
 
 def check_start_arguments(job, prompt_file=None, seat=None):
@@ -171,7 +181,9 @@ class Manager(SuspendMixin):
         except SessionError:
             return None
 
-    def _target(self, job=None, seat=None):
+    def _target(self, job=None, seat=None, recovery=False):
+        """The slot's current run. A run whose conversation moved to the background is refused unless it ended;
+        with `recovery`, stop and restart may then replace it, and an unknown end is `execution_unknown`."""
         if (job is None) == (seat is None):
             raise SessionError("target_required", "Specify exactly one of --job and --seat.", 2)
         state = self.store.read()
@@ -195,7 +207,72 @@ class Manager(SuspendMixin):
             number = slot[5:]
             if state[number]["job_id"] != meta.get("job_id"):
                 raise SessionError("target_changed", "The JOB differs from the managed execution.")
-        return self._owned(meta, slot, state)
+        owned = self._owned(meta, slot, state)
+        self._refuse_moved(owned, recovery)
+        return owned
+
+    def _refuse_moved(self, meta, recovery):
+        """Raise for a run whose conversation moved to the background, unless that run is confirmed ended."""
+        record = self._moved_record(meta)
+        if record:
+            observed = self._moved_observation(meta, record, self.tmux.pane_info(meta["pane_id"]))
+            if not observed["stopped"]:
+                raise self._moved_error(observed["moved"], recovery)
+
+    def _moved_record(self, meta, listed=None):
+        """The record of a move to a background session, or None. A new one is recorded on the run's window.
+
+        Without a record, the run's transcript must end with the move and the provider's listing must no
+        longer show the managed pane (`listed` False, else looked up here)."""
+        record = meta.get("moved_to_background")
+        if record or meta.get("remote_seat") or not meta.get("registered") or not meta.get("session_id"):
+            return record or None
+        if not self.provider.moved_to(meta["session_id"]):
+            return None
+        if listed is None:
+            context = self._provider_context(meta, self.tmux.pane_info(meta["pane_id"]))
+            try:
+                observed = self.provider.observe(self._session(meta), context, context["meta"],
+                                                 timeout=self.remaining())
+                listed = observed.get("listed") is not False
+            except SessionError as error:
+                if error.code != "session_not_bound":
+                    raise
+                listed = False
+        if listed:
+            return None
+        record = background.record_of(self.provider, meta["session_id"], None, meta["cwd"],
+                                      min(self.remaining(), HOST_SECONDS))
+        if record:
+            meta["moved_to_background"] = record
+            self.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "moved_to_background": record})
+        return record
+
+    def _moved_observation(self, meta, record, pane):
+        """The observation of a moved run: stopped only when its conversation and its CLI both ended."""
+        judged = background.judge(self.provider, meta, record, pane, min(self.remaining(), HOST_SECONDS))
+        if judged["record"] != record:
+            meta["moved_to_background"] = judged["record"]
+            self.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "moved_to_background": judged["record"]})
+        ended = judged["state"] == "ended"
+        return {"known": True, "terminal": ended, "active_turn": False if ended else None, "pending": [],
+                "background": [], "idle": ended, "stopped": ended, "pane": pane,
+                "cli_alive": judged["cli"] == "alive", "group_alive": False, "tracked_alive": False,
+                "moved": background.details(meta, judged["record"], judged)}
+
+    @staticmethod
+    def _moved_error(moved, recovery):
+        """`conversation_backgrounded`; with `recovery`, an end that cannot be confirmed is `execution_unknown`."""
+        if recovery and moved["state"] == "unknown":
+            return SessionError("execution_unknown", "The conversation moved to a background session and its end "
+                                "cannot be confirmed.", 4, moved)
+        return SessionError("conversation_backgrounded", "The managed conversation moved to a background session "
+                            "with a new session ID. Stop that conversation and the CLI, then run start or restart "
+                            "again.", 4, moved)
+
+    @staticmethod
+    def _provider_context(meta, pane):
+        return {**meta, "pane_dead": pane["pane_dead"], "meta": {**meta, "pane_dead": pane["pane_dead"]}}
 
     def _same(self, selected, published=True):
         """Re-read the selected run under its control lock. Before publication, compare only its base and slot."""
@@ -236,10 +313,28 @@ class Manager(SuspendMixin):
             return observe(meta, timeout=self.remaining())
         pane = self.tmux.pane_info(meta["pane_id"])
         if not meta.get("registered"):
+            if _unregistered_ended(meta, pane):
+                return {"known": True, "terminal": True, "active_turn": False, "pending": [], "background": [],
+                        "idle": True, "cli_alive": False, "group_alive": False, "tracked_alive": False,
+                        "stopped": True, "pane": pane}
             return process.unlaunched_observation(meta, pane)
-        context = {**meta, "pane_dead": pane["pane_dead"], "meta": {**meta, "pane_dead": pane["pane_dead"]}}
+        context = self._provider_context(meta, pane)
         session = self._session(meta)
-        observed = self.provider.observe(session, context, context["meta"], timeout=self.remaining())
+        moved = meta.get("moved_to_background")
+        if not moved:
+            failure = None
+            try:
+                observed = self.provider.observe(session, context, context["meta"], timeout=self.remaining())
+            except SessionError as error:
+                if error.code != "session_not_bound":
+                    raise
+                observed, failure = None, error
+            if observed is None or observed.get("listed") is False:
+                moved = self._moved_record(meta, listed=False)
+            if not moved and failure:
+                raise failure
+        if moved:
+            return self._moved_observation(meta, moved, pane)
         self._record_background_clear(meta, observed)
         live, group_live, extra_live = self._process_facts(meta, pane)
         stopped = bool(pane["pane_dead"] and not live and not group_live and not extra_live
@@ -559,6 +654,8 @@ class Manager(SuspendMixin):
         if meta.get("registered"):
             observed = self._observe(meta)
             if not observed["stopped"]:
+                if observed.get("moved"):
+                    raise self._moved_error(observed["moved"], True)
                 if meta.get("stopping"):
                     raise SessionError("target_stopping", "This execution is stopping.")
                 if parked:
@@ -567,13 +664,9 @@ class Manager(SuspendMixin):
                     from .remote_lifecycle import attach
                     meta = attach(self, meta)
                 return self._wait_ready(meta)
-            job = jobs.claim(self.project, meta["job_id"]) if meta.get("job_id") else None
-            handoff = self._fresh_handoff(meta)
-            self._retire_name(meta)
-            context = self._context(meta["target"], job)
-            context["handoff_file"] = _handoff(handoff)
-            context = self._new_window(context)
-            return self._launch(context)
+            return self._replace_ended(meta)
+        if not meta.get("remote_seat") and _unregistered_ended(meta, self.tmux.pane_info(meta["pane_id"])):
+            return self._replace_ended(meta)       # its CLI ended before registering
         if meta.get("provider_launch_attempted") is not False:
             if parked:
                 raise SessionError("assignment_mismatch", PARKED_ALIVE, 3)
@@ -592,6 +685,16 @@ class Manager(SuspendMixin):
             self._prepare_launch(meta, request)
         return self._launch(meta, request)
 
+    def _replace_ended(self, meta):
+        """A new conversation in the slot of a run whose end is confirmed; the CR, seat, and branch stay."""
+        job = jobs.claim(self.project, meta["job_id"]) if meta.get("job_id") else None
+        handoff = self._fresh_handoff(meta)
+        self._retire_name(meta)
+        context = self._context(meta["target"], job)
+        context["handoff_file"] = _handoff(handoff)
+        context = self._new_window(context)
+        return self._launch(context)
+
     def start(self, job, prompt_file=None, seat=None):
         leader = job == "leader"
         check_start_arguments(job, prompt_file, seat)
@@ -605,15 +708,20 @@ class Manager(SuspendMixin):
                 current = self.tmux.get_current(self.project.project_id, "leader")
                 if current:
                     self._adopted(current, "leader")
-                    if current.get("registered") and self._observe(current)["stopped"]:
+                    observed = self._observe(current) if current.get("registered") else None
+                    if observed and observed["stopped"]:
                         self._retire_name(current)
                     elif current.get("registered") and not current.get("ready") and not current.get("stopping"):
                         return self._wait_ready(current)
                     elif current.get("provider_launch_attempted") is False:
                         return self._start_existing(current, request)
+                    elif _unregistered_ended(current, self.tmux.pane_info(current["pane_id"])):
+                        self._retire_name(current)         # its CLI ended before registering; a new run replaces it
                     elif (not current.get("registered") and not current.get("stopping")
                           and not self.tmux.pane_info(current["pane_id"])["pane_dead"]):
                         return self._wait_ready(current)   # e.g. a start that waited at a startup dialog
+                    elif observed and observed.get("moved"):
+                        raise self._moved_error(observed["moved"], True)
                     else:
                         raise SessionError("leader_exists", "The current Leader is alive or its exit is unconfirmed.")
                 context = self._context("leader")
@@ -833,6 +941,8 @@ class Manager(SuspendMixin):
         expected = leader["session_id"]
         if actor == "leader" and identity != expected:
             raise SessionError("caller_changed", "The calling Leader was replaced.")
+        if not clear:
+            self._refuse_moved_review(job)
 
         def mark(value):
             current = value["leader"]
@@ -850,11 +960,25 @@ class Manager(SuspendMixin):
         state = self.store.update(mark)
         return {"project": self.project.project_id, "reviewing": state["leader"]["reviewing"]}
 
+    def _refuse_moved_review(self, job):
+        """A review needs the Leader and the JOB's Worker to be reachable, not moved to a background session."""
+        state = self.store.read(missing_ok=True)
+        slots = ["leader"] + [f"seat-{key}" for key, entry in state.items() if key != "leader" and entry["job_id"] == job]
+        for slot in slots:
+            try:
+                meta = self.tmux.get_current(self.project.project_id, slot)
+            except SessionError as error:
+                if error.code != "execution_evidence_missing":
+                    raise
+                continue
+            if meta:
+                self._refuse_moved(meta, False)
+
     def control(self, operation, job=None, seat=None, expected_run=None, allow_self=True, defer_cleanup=False):
         """Stop or restart one run. A self-controller defers window cleanup until it saved its result."""
         if operation not in ("stop", "restart"):
             raise SessionError("invalid_input", "Use stop or restart.", 2)
-        selected = self._target(job, seat)
+        selected = self._target(job, seat, recovery=True)
         actor, _ = self._authorize(operation, selected["target"])
         if expected_run and selected["run_id"] != expected_run:
             raise SessionError("target_changed", "This controller belongs to an old run.")
