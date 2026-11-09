@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: d4911beec6060bc2f46a88a17e979b1e9a675319 2026-11-09T21:55:14+09:00
+- Outcome: fixed
 
 ## Symptom
 관리 대화(Leader·Worker) 안에서 `/exit`하거나 CLI가 비정상 종료하면 pane이 dead로 바뀌고 window가 그대로 남습니다. 정리는 누군가 `agent-session stop`을 실행하거나 다음 start의 sweep이 돌 때만 일어납니다. 사용자 보고(2026-11-09, 11개 요청의 9번): "exit을 해도 pane, window가 최종 destory까지 안됨."
@@ -20,6 +21,7 @@
 - 2026-11-09 Leader: 고친다(Leader 판정). 사용자가 보고한 동작 결함이고 위임 범위입니다. 근본 원인은 run의 마무리가 `stop`이라는 별도 명령에만 묶여 있어, CLI가 스스로 끝난 경우에는 마무리할 주체가 없다는 점입니다(SESSION-001의 게시, SESSION-004의 반납과 같은 모양의 결함).
 - 2026-11-09 Leader: 제출 31af38e 검토. pane-died에서 stop과 같은 마무리(`_settle`), 종료 근거 `ended.json`, 경합 규칙, Leader `/exit`·Worker SIGKILL·사용자 pane 경우의 실제 tmux test, 760 passed를 확인했습니다. Worker 판단 1(CR in-progress면 window를 반납 대기 근거로 유지, CR 이동 때 정리)은 받아들입니다: Leader의 자기 점검(SESSION-006)이 반납 대기를 보고 CR을 옮기므로 무기한 남지 않고, 근거를 window 밖으로 옮기는 비용(약 30곳)에 비해 이득이 작습니다. 수정 요청: (1) 새 server 전체 hook `pane-died[agent-session]`을 설치 계약 5.3절 표와 `uninstall`의 되돌림 명령에 넣을 것, (2) 이름 붙은 hook index는 tmux 3.8부터이므로(TMUX-002) 더 낮은 tmux에서의 start 동작을 정할 것.
 - 2026-11-09 Leader: 제출 cf0295a6d01972d367539a84b4516e7a7f8b3812를 인수합니다. Leader review: 수정 delta(설치 계약 5.3·3.1·3.2에 pane-died[agent-session]와 되돌림, uninstall 출력과 이름 대조 test, start·restart·resume의 시작 전 tmux 버전 확인과 tmux_too_old 거절, 최소 버전 원본은 project-agent.conf 한 줄)를 확인했습니다. install/tests 261 passed, 바꾼 모듈 test 통과, 경계 9. 이전 검토(31af38e의 마무리 구조·ended.json·경합 규칙)와 판단 1 수용을 재사용합니다.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 0ab12a1(Merge cr/SESSION-007, 제출 cf0295a). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [동작 명세](../../project-team/spec.md) 3절(종료한 window 정리, 실행 근거)·5절(hook)·7절(stop), SESSION-003·SESSION-004 Result, [README 검증 표](../../../README.md#검증).
