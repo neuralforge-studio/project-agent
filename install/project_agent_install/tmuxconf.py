@@ -26,6 +26,15 @@ def has_block(data):
     return BEGIN.encode() in data.split(b"\n")
 
 
+def has_source(path):
+    """True when the file (a symlink is followed) has the `SOURCE` line as a line of its own that is not a comment."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return False
+    return SOURCE.encode() in (line.strip() for line in data.splitlines())
+
+
 def target(env):
     """The settings file tmux reads first: `~/.tmux.conf`, else `~/.config/tmux/tmux.conf`, else None."""
     for path in env.tmux_candidates:

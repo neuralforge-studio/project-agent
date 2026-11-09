@@ -113,6 +113,36 @@ def test_t4_a_symlinked_tmux_file_is_never_changed(home, source, name, link):
     assert checked.returncode == 0 and "수동 연결 필요" in checked.stdout
 
 
+@pytest.mark.parametrize("content, announced", [
+    (b"set -g mouse on\n", True),
+    (b"set -g mouse on\nsource-file -q ~/.local/lib/project-agent/tmux.conf\n", False),
+    (b"  source-file -q ~/.local/lib/project-agent/tmux.conf  \n", False),
+    (b"# source-file -q ~/.local/lib/project-agent/tmux.conf\n", True),
+    (b"source-file -q ~/.local/lib/project-agent/tmux.conf.old\n", True),
+])
+def test_t4_check_announces_the_manual_connection_only_while_the_line_is_missing(home, source, content, announced):
+    registry(home)
+    home.write("dotfiles/tmux.conf", b"set -g mouse on\n")
+    home.path(".tmux.conf").symlink_to(home.path("dotfiles/tmux.conf"))
+    installed(home, source)
+    home.write("dotfiles/tmux.conf", content)
+    before = home.snapshot()
+    checked = home.run("check")
+    assert checked.returncode == 0, checked.stderr
+    assert ("수동 연결 필요" in checked.stdout) == announced
+    assert home.snapshot() == before
+
+
+def test_t4_check_announces_the_manual_connection_when_the_link_target_cannot_be_read(home, source):
+    registry(home)
+    home.write("dotfiles/tmux.conf", b"set -g mouse on\n")
+    home.path(".tmux.conf").symlink_to(home.path("dotfiles/tmux.conf"))
+    installed(home, source)
+    home.path("dotfiles/tmux.conf").unlink()
+    checked = home.run("check")
+    assert checked.returncode == 0 and "수동 연결 필요" in checked.stdout
+
+
 def test_t5_a_block_that_the_user_made_is_neither_changed_nor_removed(home, source, name):
     registry(home)
     mine = b"set -g mouse on\n" + BLOCK
