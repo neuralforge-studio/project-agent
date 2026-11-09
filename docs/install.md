@@ -12,11 +12,13 @@
 | tmux | `tmux -V`가 [계약 3.2절](project-team/install-contract.md#32-tmux-최소-버전)의 최소 버전 이상이어야 합니다. 낮으면 `check`가 실패로 알리고, 그 tmux는 설정을 읽을 때 오류 한 줄만 보이며 Board binding·hook을 넣지 않습니다. 사내 tmux는 `/primehome/tools/Inhouse/tmux/latest/bin/tmux`입니다. PATH에서 새 tmux가 앞에 오는지 확인합니다. |
 | git | `git --version` |
 | Claude Code 또는 Codex CLI | 쓰려는 provider의 CLI가 실행됩니다. |
-| Board용 `textual` | 설치에 쓰는 Python에 있어야 합니다. 버전은 [requirements.txt](../tools/project-board/requirements.txt)입니다. 사내 Python에는 있습니다. |
+| Board용 `textual` | 설치에 쓰는 Python에 있어야 합니다. 버전은 [requirements.txt](../tools/project-board/requirements.txt)입니다. 사내 workstation의 Python(아래)에는 있습니다. |
 
 - 설치기를 실행한 Python이 설치본의 Python이 됩니다. 설치 뒤에 바꾸려면 다시 설치합니다.
+- 설치기는 그 Python이 사내 환경 설정(`LD_LIBRARY_PATH`) 없이도 같은 Python(같은 `sys.prefix`)으로 뜨는지 시험하고, 필요한 library 경로를 설치본에 기록합니다([계약 6.1절](project-team/install-contract.md#61-python-선택)). 그래서 사내 환경 설정이 없는 계정이나 cron, 그런 환경에서 시작한 tmux server에서도 설치본은 같은 Python과 그 package(`textual`)를 씁니다. 그 경로로도 같아지지 않는 Python은 설치를 거절합니다(`python_environment`).
 - 사내 workstation의 Python은 `/primehome/tools/Inhouse/Python3/latest/bin/python3`입니다.
 - `textual`이 없어도 설치는 됩니다. Board만 시작하지 않으며 `check`가 알려 줍니다(5절).
+- 사내 tmux(`/primehome/tools/Inhouse/tmux/latest/bin/tmux`)도 library(libevent 등)가 필요하고, 설치기는 tmux의 경로를 기록하지 않습니다. 사내 환경 설정이 없는 계정에서는 `LD_LIBRARY_PATH`에 사내 library 경로(`/primehome/tools/Inhouse/libs/libevent/lib`, `/primehome/tools/Inhouse/libs/ncurses/lib`)가 있어야 tmux가 뜹니다. 사내 환경 설정이 있는 계정에서는 이미 맞습니다.
 - Claude Code와 Codex의 skill link는 그 provider의 홈(`~/.claude`, `~/.codex`)이 이미 있을 때만 만듭니다. 쓰려는 CLI를 한 번 실행해 홈을 만든 뒤에 설치합니다.
 - 홈이 생기기 전에 설치했다면 `install`을 다시 실행해도 link를 더하지 않습니다("No change"). 홈을 만든 뒤 `uninstall`과 `install`을 차례로 실행합니다(7절).
 
@@ -206,6 +208,8 @@ $PY ~/.local/lib/project-agent/current/install/project-agent-install uninstall
 | `check`가 실패(종료 코드 1) | 출력이 어긋난 경로를 알립니다. 사용자가 바꾼 경로는 설치기가 고치지 않습니다. |
 | `check`가 "A run was interrupted"로 실패 | 설치기가 중단된 흔적입니다. `check` 외의 명령(예: `install`)을 다시 실행하면 먼저 되돌립니다. `uninstall`과 `prune`은 같은 명령만 마무리합니다([계약 2절 규칙 5](project-team/install-contract.md#2-설치가-만드는-것)). |
 | `python_unavailable`, `python_version` | 설치에 쓴 Python이 없어졌거나 3.10 미만입니다. 올바른 Python으로 다시 설치합니다. |
+| `check`가 "empty environment"의 `sys.prefix` 불일치로 실패 | 설치 때와 다른 Python으로 뜹니다. 설치 때 쓴 Python이 옮겨지거나 바뀌었는지 확인하고, 그 Python으로 다시 설치합니다. |
+| `python_environment`로 설치가 거절됨 | 설치기를 실행한 Python이 빈 환경에서 자기 `sys.prefix`로 뜨지 않고 `<prefix>/lib`도 도움이 되지 않습니다. 다른 Python으로 설치합니다. |
 | Board가 시작하지 않음 | 설치 Python에 `textual`이 있는지 `check`의 안내를 봅니다. |
 
 ## 관련 문서
