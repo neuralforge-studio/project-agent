@@ -30,6 +30,9 @@ def test_explicit_remote_seat_is_chosen_while_an_earlier_local_seat_is_free(sess
             return False
         if operation == "is_git":
             return git_ops.is_git(root)
+        if operation == "index_lock":
+            lock = git_ops.index_lock(root)
+            return str(lock) if lock else None
         assert operation == "git"
         return git_ops.git(root, *payload["args"], timeout=timeout)
 
