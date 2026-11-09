@@ -101,8 +101,8 @@ def test_uninstall_goes_through_when_every_run_is_stopped(home, source, runs, na
 def test_t7_upgrade_keeps_the_release_of_a_live_run_and_new_runs_use_the_new_one(home, source, runs, monkeypatch):
     install(home, source)
     first = release_name(source)
-    runs.start_leader()
-    launch = runs.run_directories()[0] / "launch.sh"
+    started = runs.start_leader()
+    launch = runs.base / "agent/runs" / started["run_id"] / "launch.sh"
     old_text = launch.read_text()
     assert release_in(old_text) == {first}
     commit_change(source, "1.1.0")
@@ -130,9 +130,10 @@ def test_t7_upgrade_keeps_the_release_of_a_live_run_and_new_runs_use_the_new_one
     assert installer_runs.releases_in_use(Env(), slots) == {first: ["%s/leader" % runs.PROJECT]}
     # A run that starts after the upgrade uses the new release.
     runs.stop_leader()
-    runs.start_leader()
-    newest = runs.run_directories()[-1] / "launch.sh"
+    restarted = runs.start_leader()
+    newest = runs.base / "agent/runs" / restarted["run_id"] / "launch.sh"
     assert newest != launch and release_in(newest.read_text()) == {second}
+    assert release_in(launch.read_text()) == {first}
 
 
 # ---------------------------------------------------------------- T19: what the product writes while it runs
