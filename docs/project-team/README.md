@@ -96,9 +96,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 
 ### 목표
 
-CR ARCH-001이 합의한 목표입니다. `project_item.api`(ARCH-003), `agent_session.api`(ARCH-004), `sys.path` 조작 위치와 양방향 의존의 예외 기록(ARCH-005)은 위에 옮겼습니다. 나머지는 아직 적용하지 않았으며, 단계마다 이 절을 현행으로 옮깁니다.
-
-- 각 도구는 공개 인터페이스를 선언합니다(`project_item.api`·`agent_session.api` 적용함). 다른 도구와 tmux script는 그 인터페이스만 씁니다.
+CR ARCH-001이 합의한 목표는 모두 위 현행에 옮겼습니다(2026-11-09). 내용은 공개 인터페이스(ARCH-003 `project_item.api`, ARCH-004 `agent_session.api`), `sys.path` 조작 위치와 양방향 의존의 예외 기록(ARCH-005), agent-session 내부 구성(ARCH-006·ARCH-007)입니다. `project-board`는 다른 도구가 import하지 않으므로 CLI(`project-board`)와 tmux 연결이 공개 진입점입니다. 새 목표가 생기면 이 절에 적고, 적용한 뒤 현행으로 옮깁니다.
 
 ## 실행 경로 계약
 
