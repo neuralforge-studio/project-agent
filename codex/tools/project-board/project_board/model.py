@@ -49,7 +49,8 @@ def cited(disposition: str, commit: str) -> bool:
 
 
 def review_wait(state: str, headers: dict, parts: dict) -> bool:
-    """Plan 7.1: a submission the Leader has not answered yet."""
+    """A submission the Leader has not answered yet. The rule is owned by
+    codex/tools/project-board/README.md ("Review wait")."""
     if state != "in-progress":
         return False
     result = parts.get("Result", "")

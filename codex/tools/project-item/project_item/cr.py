@@ -2,7 +2,8 @@
 (codex/skills/project-item/references/cr.md).
 
 The format (references/cr.md "파일 형식") is the single source. This module is its
-only executable copy; keep the two in step.
+only executable copy; tests/test_doc_contract.py::test_code_matches_format_documents
+fails when the two differ.
 """
 from __future__ import annotations
 

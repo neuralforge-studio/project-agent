@@ -17,7 +17,7 @@ def board(tmp_path):
     return Board(tmp_path)
 
 
-# ------------------------------------------------------------ plan 7.1 review wait
+# ------------------------------------------------------------ review wait (project-board README)
 @pytest.mark.parametrize("result, expected", [
     ("", None),
     (f"- 제출 commit: `{SUBMIT}` (`cr/TOOL-001`).", SUBMIT),

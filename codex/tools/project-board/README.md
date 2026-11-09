@@ -86,6 +86,30 @@ tmux keeps an open popup running if an external command changes the client's win
 If a managed pane is respawned while its client stays on the same window, run
 `project-board sync` to restore that window's Board pane immediately.
 
+## Review wait
+
+A seat shows `review_wait` when its Worker submitted and the Leader has not answered that
+submission. The owner of this rule is this section; `review_wait` and `cited` in
+`project_board/model.py` implement it, and `tests/test_model.py` covers it.
+
+- Only a CR in `in-progress/` can wait. A CR in any other state does not.
+- A write CR waits when the last submission line of its `## Result` has a hash that its
+  `## Disposition` does not cite. The syntax of the submission line
+  (`- 제출 commit: <40-hex>`) is owned by `codex/skills/project-item/references/cr.md`;
+  `project_item.cr.submitted_hash` reads it. A CR without a submission line does not wait.
+- A Disposition cites a hash when it contains a word of 7 to 40 hex characters that starts
+  the submitted hash. Any Disposition text that names the hash answers the submission:
+  an acceptance or a request for changes. A new submission hash makes the seat wait again.
+- A read-only CR (`- Mode: read-only`) has no commit. It waits when its `## Result` has
+  text. Known limit: after the Leader asks for changes, it still waits until the Leader
+  moves the CR.
+- This rule answers "has the Leader responded to the submission". It is not the acceptance
+  check of `project-item move` (`project_item.cr.accepted`), which needs the exact 40-hex
+  acceptance entry that `project-item accept` writes.
+- The seat status is chosen in this order: no job (`empty`), no session (`pending`), the
+  Leader's `reviewing` job (`reviewing`), `review_wait`, else `working`. The `R` mark and the
+  colors are owned by `docs/project-board-tui-plan.md`.
+
 ## Check
 
 ```sh

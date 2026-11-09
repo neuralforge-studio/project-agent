@@ -1,7 +1,8 @@
 """Decision item format: parse a decision file and check it.
 
 The format is owned by codex/skills/project-item/references/decide.md. This module is its
-only executable copy; keep the two in step.
+only executable copy; tests/test_doc_contract.py::test_code_matches_format_documents
+fails when the two differ.
 """
 from __future__ import annotations
 

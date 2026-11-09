@@ -1,7 +1,8 @@
 """Item kinds: states, transitions and the format module of each kind.
 
-The rules are owned by codex/skills/project-item/SKILL.md ("상태와 전이"). Keep the tables
-below in step with it.
+The rules are owned by codex/skills/project-item/SKILL.md ("상태와 전이") and, for the Outcome
+values, by references/cr.md and references/decide.md. The tables below are their executable
+copy; tests/test_doc_contract.py::test_code_matches_format_documents fails when they differ.
 """
 from __future__ import annotations
 
