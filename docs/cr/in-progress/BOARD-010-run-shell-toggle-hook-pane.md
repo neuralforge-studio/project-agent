@@ -3,6 +3,7 @@
 - Opened: 2026-11-10
 - Scope: project-agent
 - Severity: S2
+- Base: 3581f1fc9fad89cb02768dfab072e6de4597d52a 2026-11-10T00:34:22+09:00
 
 ## Symptom
 tmux `run-shell`은 실행한 명령의 출력과 0이 아닌 종료 상태를 그때의 활성 pane에 view-mode로 보입니다. BOARD-006은 Board click 경로만 고쳤습니다. 통합 파일의 다른 `run-shell`(prefix Board 키 toggle, status line toggle, 창 이동·client 이벤트 hook의 `sync`·visibility script)도 실패하면 사용자의 작업 pane에 오류가 덮입니다. hook은 창을 옮길 때마다 돌기 때문에 실패가 반복되면 작업 pane을 계속 가립니다.

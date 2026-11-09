@@ -11,7 +11,8 @@ import uuid
 
 from .. import process
 from ..errors import SessionError
-from .common import context_timeout, deadline, executable, json_result, run, session_id, text_file
+from .common import (TRANSCRIPT_TAIL, context_timeout, deadline, executable, json_result, last_record_time, run,
+                     session_id, text_file)
 from .mcp import MCPClient
 
 
@@ -89,7 +90,6 @@ def startup_dialog(screen):
     return next((kind for kind, pattern in STARTUP_DIALOGS if pattern.search(screen)), None)
 
 
-TRANSCRIPT_TAIL = 65536                    # bytes read from the end of a transcript to find its last record
 HOST_QUERY_SECONDS = 8                      # `claude agents` wait inside a hook's 30 seconds
 
 
@@ -247,6 +247,17 @@ class ClaudeProvider:
 
     def startup_dialog(self, screen):
         return startup_dialog(screen)
+
+    def last_record(self, session_id):
+        """When this conversation's transcript last got a record: `{"at": epoch seconds or None, "reason": ...}`."""
+        try:
+            files = transcript_files(None, session_id)
+            if not files:
+                return {"at": None, "reason": "transcript_not_found"}
+            at = last_record_time(max(files, key=lambda path: path.stat().st_mtime))
+        except OSError:
+            return {"at": None, "reason": "transcript_unreadable"}
+        return {"at": at, "reason": None if at is not None else "no_record_with_time"}
 
     def registration_hooks(self, context):
         required = ("python", "library_path", "run_id", "config_path", "socket_path")

@@ -1,19 +1,20 @@
-"""Wake a Worker that rests with its CR in progress, and tell the Leader.
+"""Wake an instance whose conversation has not moved, and tell the Leader.
 
 `WatchMixin` is the one-target judgement of a project's `Manager`. `Watch` is the command: it selects
-projects from the registry and runs the judgement for every Worker seat once. The operator runs it by
-hand; the Leader runs it for its own project from its own session cron (spec 7, watch).
+projects from the registry and runs the judgement for every Worker seat and the Leader once. The operator
+runs it by hand; the Leader runs it for its own project from its own session cron (spec 7, watch).
 
-A Worker rests when its turn has ended (or only a background shell runs), no input arrived since, and
-it is not waiting for the Leader. Watch then sends the Worker one message with the evidence (CR, last
-turn end, last report, background tasks, child processes with their commands, age and CPU) so the
-Worker checks and decides for itself, and sends the Leader the same evidence. It never signals a
-process or changes the state, the CR or the Git work. A Worker whose child processes use CPU is working
-and is left alone.
+A stall is judged by the conversation record alone, whatever the cause: the newest record of the
+provider's conversation file (`provider.last_record`) is older than `--minutes`. A turn that runs keeps
+appending records; an instance that waits for a child process, for the Leader, or for nothing does not.
+Nothing from an earlier look is compared. Watch then sends the Worker one message with the evidence (CR,
+last turn end, last report, background tasks, child processes with their commands and age) so the Worker
+checks and decides for itself, and tells the Leader. A stalled Leader gets one message that names the CRs
+in progress. It never signals a process or changes the state, the CR or the Git work.
 
-The judgement reads only facts the tools already keep: the CR state, the provider's turn status, the
-last Stop hook, the send records on the windows (`last_sent`, `last_received`) and the CLI's child
-processes. What watch sent is recorded in the window option `watch`.
+The judgement reads that record time and, for the evidence only, facts the tools already keep: the CR
+state, the provider's turn status, the last Stop hook, the send records on the windows and the CLI's child
+processes. What watch sent is recorded in the window option `watch` so that one stall wakes an instance once.
 
 Dependency direction as in `suspend`: `lifecycle` imports this module and `Manager` inherits
 `WatchMixin`; this module never imports `lifecycle`. `Watch` gets the `Manager` class from the code that
@@ -28,23 +29,26 @@ from .errors import SessionError
 from .state import locked
 from .suspend import Fleet
 
-DEFAULT_MINUTES = 30      # how long a Worker may rest before watch acts
-IDLE_CPU_RATE = 0.02      # child processes that used less than this share of one core between two looks are not working.
-                          # A `pgrep -f` loop that sleeps 1 s measured 5.6 % on a loaded workstation, one that sleeps 5 s about 1 %;
-                          # a wrongly woken Worker only reads a message, a missed one stays stuck, so the bar is low.
+DEFAULT_MINUTES = 30      # how old the newest conversation record may be before watch acts
 RESIDENT_GRACE = 120      # seconds after the CLI starts in which its helper processes (MCP servers) start
 COMMAND_CHARS = 160       # command line length in a message
-LISTED = 8                # most background tasks or child processes named in a message
+LISTED = 8                # most background tasks, child processes or CRs named in a message
+LEADER = "leader"
 
 WORKER_NOTICE = (
-    "[agent-session watch] 자동 점검 메시지입니다. {job} CR이 in-progress인데 이 세션은 {minutes}분 넘게 "
-    "turn이 끝난 채 새 입력과 보고가 없습니다. 아래 근거를 보고 작업이 실제로 진행 중인지 확인하십시오. "
-    "멈춘 대기(예: 자기 shell과도 맞아 끝나지 않는 `pgrep -f` loop)이면 원인을 풀고 이어서 진행하십시오. "
-    "제출했다면 `agent-session send --job leader`로 보고하고, 막혔다면 이유를 Leader에게 보고하십시오. "
-    "같은 상태에서는 이 메시지를 다시 보내지 않습니다.\n{evidence}")
+    "[agent-session watch] 자동 점검 메시지입니다. {job} CR이 in-progress인데 이 세션의 대화 기록이 {minutes}분 넘게 "
+    "갱신되지 않았습니다. 아래 근거를 보고 작업이 실제로 진행 중인지 확인하십시오. "
+    "제출해서 Leader 회신을 기다리는 중이면 `agent-session send --job leader`로 Leader에게 CR ID와 제출 commit을 "
+    "짧게 다시 알리십시오. 멈춘 대기(예: 자기 shell과도 맞아 끝나지 않는 `pgrep -f` loop)이면 원인을 풀고 이어서 "
+    "진행하고, 막혔다면 이유를 Leader에게 보고하십시오. 같은 정체 상태에서는 이 메시지를 다시 보내지 않습니다.\n{evidence}")
+WORKER_LEADER_NOTICE = (
+    "[agent-session watch] seat {seat}의 {job} Worker의 대화 기록이 {minutes}분째 갱신되지 않았습니다(CR in-progress). "
+    "{delivery} 강제로 끊지 않았습니다. 제출 뒤 review를 기다리는 중일 수 있으니 `## Result`의 제출 hash가 "
+    "Disposition에 없는 CR이면 review하고, 아니면 Worker 상태를 확인해 주십시오.\n{evidence}")
 LEADER_NOTICE = (
-    "[agent-session watch] seat {seat}의 {job} Worker가 {minutes}분째 쉬고 있습니다(CR in-progress, turn 종료, "
-    "새 입력·보고 없음). {delivery} 강제로 끊지 않았습니다. 계속되면 Worker 상태를 확인해 주십시오.\n{evidence}")
+    "[agent-session watch] 자동 점검 메시지입니다. Leader의 대화 기록이 {minutes}분 넘게 갱신되지 않았는데 in-progress CR이 "
+    "있습니다. `project-item ls`로 review 대기 CR(`## Result`의 제출 hash가 Disposition에 없는 것)을 먼저 처리하고, "
+    "그 밖에 Worker 보고·결정 항목·빈 seat를 확인하십시오. 같은 정체 상태에서는 이 메시지를 다시 보내지 않습니다.\n{evidence}")
 
 
 def _parse(value):
@@ -71,16 +75,25 @@ class WatchMixin:
     """
 
     def watch_target(self, slot, threshold, now=None, tell_leader=True):
-        """Judge one Worker seat and act once. Return what was seen and done.
+        """Judge one seat (a Worker's, or the Leader's with `slot` "leader") and act once. Return what was seen
+        and done.
 
         With `tell_leader` False the caller is the Leader, who gets the evidence in the result instead of
         a message to itself."""
         now = time.time() if now is None else now
         state = self.store.read()
-        job_id = state[slot[len("seat-"):]]["job_id"]
-        outcome = {"slot": slot, "job_id": job_id, "status": "skipped", "reason": None, "actions": []}
-        if jobs.state_of(self.project, job_id)[0] != "in-progress":
-            return {**outcome, "reason": "cr_not_in_progress"}
+        leader = slot == LEADER
+        working = self._in_progress(state)
+        if leader:
+            job_id = None
+            outcome = {"slot": slot, "job_id": None, "status": "skipped", "reason": None, "actions": []}
+            if not working:
+                return {**outcome, "reason": "no_cr_in_progress"}        # nothing for a Leader to have forgotten
+        else:
+            job_id = state[slot[len("seat-"):]]["job_id"]
+            outcome = {"slot": slot, "job_id": job_id, "status": "skipped", "reason": None, "actions": []}
+            if jobs.state_of(self.project, job_id)[0] != "in-progress":
+                return {**outcome, "reason": "cr_not_in_progress"}
         meta = self.tmux.get_current(self.project.project_id, slot)
         if not meta or not meta.get("ready") or meta.get("stopping") or meta.get("control_pending"):
             return {**outcome, "reason": "not_ready"}
@@ -92,23 +105,32 @@ class WatchMixin:
         pane = self.tmux.pane_info(meta["pane_id"])
         if pane["pane_dead"] or not process.cli_alive(meta, pane):
             return {**outcome, "reason": "not_running"}
-        context = self._provider_context(meta, pane)
-        observed = self.provider.observe(self._session(meta), context, context["meta"], timeout=self.remaining())
-        record = dict(meta.get("watch") or {})
-        record.setdefault("first_seen_at", now)
-        # Claude reports "shell" while only a background shell runs: its turn has ended.
-        if observed.get("idle") or observed.get("runtime_status") == "shell":
-            outcome.update(self._judge_rest(state, meta, observed, record, threshold, now, job_id, slot,
-                                                tell_leader))
+        last = self.provider.last_record(meta.get("session_id"))
+        at = last["at"]
+        if at is None:
+            return {**outcome, "reason": last["reason"]}                 # no record to judge by: not a stall
+        record = {"resting": (meta.get("watch") or {}).get("resting") or {}}
+        nudged = _parse(record["resting"].get("nudged_at"))
+        if nudged is not None and at > nudged:
+            record["resting"] = {}                                      # the conversation moved since: a new state
+        if now - at < threshold:
+            outcome.update(status="active")
+        elif leader:
+            outcome.update(self._judge_leader_stall(working, record, at, now, threshold))
         else:
-            record["busy_seen_at"] = now
-            outcome.update(status="busy")
+            outcome.update(self._judge_stall(meta, pane, record, at, now, threshold, job_id, slot, tell_leader))
         if record != (meta.get("watch") or {}):
             try:
                 self.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "watch": record})
             except SessionError as error:
                 outcome["actions"].append({"record": "failed", "error": error.as_dict()})
         return outcome
+
+    def _in_progress(self, state):
+        """The (seat number, CR) pairs whose Worker has a session and whose CR is in progress."""
+        return [(key, row["job_id"]) for key, row in state.items()
+                if key != LEADER and row["job_id"] and row["session"]
+                and jobs.state_of(self.project, row["job_id"])[0] == "in-progress"]
 
     @staticmethod
     def _hook_time(meta):
@@ -118,41 +140,22 @@ class WatchMixin:
                 and item.get("session_id") == meta.get("session_id")]
         return max((value for value in seen if value is not None), default=None)
 
-    def _judge_rest(self, state, meta, observed, record, threshold, now, job_id, slot, tell_leader=True):
+    def _judge_stall(self, meta, pane, record, at, now, threshold, job_id, slot, tell_leader=True):
+        try:
+            context = self._provider_context(meta, pane)
+            observed = self.provider.observe(self._session(meta), context, context["meta"], timeout=self.remaining())
+        except SessionError:
+            observed = {}                  # the evidence lacks the turn status; the stall stands
         children = self._children(meta)
-        before = (record.get("children"), record.get("children_at"))     # the last look, before this one replaces it
-        working = self._working(children, before, now)
-        record["children"] = {f"{item['pid']}:{item['birth']}": item["cpu"] for item in children or ()}
-        record["children_at"] = now
         sent, received = meta.get("last_sent") or {}, meta.get("last_received") or {}
         sent_at, received_at = _parse(sent.get("at")), _parse(received.get("at"))
-        reviewing = (state["leader"] or {}).get("reviewing") == job_id
-        # A Worker that reported or asked the Leader and has no answer yet is waiting for the Leader, not resting.
-        answered = received_at is not None and (sent_at is None or received_at > sent_at)
-        if reviewing or (sent.get("to") == "leader" and not answered):
-            return {"status": "awaiting_leader", "reason": "reviewing" if reviewing else "reported"}
-        # The turn's end, the last input, and the last time watch saw it busy bound the rest from below.
-        # Without any of them (Codex has no Stop hook) the first look at this run starts the clock.
-        ended = self._hook_time(meta)
-        marks = [value for value in (ended, received_at, record.get("busy_seen_at")) if value]
-        resting_since = max(marks) if marks else record["first_seen_at"]
-        if now - resting_since < threshold:
-            return {"status": "idle", "reason": None}
-        if working is None:
-            return {"status": "observing", "reason": "children_not_measured"}
-        if working:
-            return {"status": "working", "reason": "children_use_cpu"}
         resting = record.get("resting") or {}
-        nudged = _parse(resting.get("nudged_at"))
-        if nudged is not None and ((sent_at or 0) > nudged or (received.get("from") == "leader"
-                                                              and (received_at or 0) > nudged)):
-            resting = {}                   # the Worker reported or the Leader answered since: a new episode
-        minutes = _minutes(now - resting_since)
-        evidence = self._evidence(job_id, ended, received_at, sent_at, observed, children, before, now)
+        minutes = _minutes(now - at)
+        evidence = self._evidence(job_id, self._hook_time(meta), received_at, sent_at, at, observed, children, now)
         actions = []
         told = False
         if not resting.get("nudged_at"):
-            # The first look at an episode wakes the Worker once; later looks only remind the Leader.
+            # The first look at a stall wakes the Worker once; later looks only remind the Leader.
             told = self._deliver(actions, job_id, WORKER_NOTICE.format(job=job_id, minutes=minutes, evidence=evidence))
             if told:
                 resting["nudged_at"] = _iso(now)
@@ -162,8 +165,19 @@ class WatchMixin:
         if not tell_leader:
             record["resting"] = resting
             return {"status": "resting", "reason": None, "actions": actions, "evidence": evidence}
-        record["resting"] = self._notify_leader(actions, resting, now, threshold, LEADER_NOTICE.format(
+        record["resting"] = self._notify_leader(actions, resting, now, threshold, WORKER_LEADER_NOTICE.format(
             seat=slot[len("seat-"):], job=job_id, minutes=minutes, delivery=delivery, evidence=evidence))
+        return {"status": "resting", "reason": None, "actions": actions}
+
+    def _judge_leader_stall(self, working, record, at, now, threshold):
+        """Wake a stalled Leader once per stall with the CRs in progress."""
+        resting = record.get("resting") or {}
+        actions = []
+        if not resting.get("nudged_at"):
+            evidence = "근거: in-progress CR " + ", ".join(f"{job}(seat {key})" for key, job in working[:LISTED])
+            if self._deliver(actions, LEADER, LEADER_NOTICE.format(minutes=_minutes(now - at), evidence=evidence)):
+                resting["nudged_at"] = _iso(now)
+        record["resting"] = resting
         return {"status": "resting", "reason": None, "actions": actions}
 
     # Child processes
@@ -179,23 +193,11 @@ class WatchMixin:
         return [item for item in tree if began is None or item["started"] > began + RESIDENT_GRACE]
 
     @staticmethod
-    def _working(children, before, now):
-        """Whether the children used CPU since the last look: True or False, or None before there is a look
-        to compare with. Without children nothing works. The CPU of a child includes the children it
-        reaped, so a build's `make` shows its compilers and a shell loop shows only its own small cost."""
-        if not children:
-            return False
-        cpu, at = before
-        if cpu is None or at is None:
-            return None
-        used = sum(item["cpu"] - cpu.get(f"{item['pid']}:{item['birth']}", 0.0) for item in children)
-        return used >= IDLE_CPU_RATE * max(now - at, 1)
-
-    def _evidence(self, job_id, ended, received_at, sent_at, observed, children, before, now):
+    def _evidence(job_id, ended, received_at, sent_at, at, observed, children, now):
         def when(value):
             return _iso(value) if value else "기록 없음"
         lines = [f"근거: CR {job_id} in-progress / 마지막 turn 종료 {when(ended)} / 마지막 입력 {when(received_at)} / "
-                 f"마지막 보고(Leader에게 send) {when(sent_at)}"]
+                 f"마지막 보고(Leader에게 send) {when(sent_at)} / 대화 기록 마지막 {when(at)}"]
         background = observed.get("background") or []
         for item in background[:LISTED]:
             item = item if isinstance(item, dict) else {"command": str(item)}
@@ -204,11 +206,8 @@ class WatchMixin:
         if children is None:
             lines.append("- 자식 process: 읽지 못했습니다.")
         for item in (children or [])[:LISTED]:
-            earlier = (before[0] or {}).get(f"{item['pid']}:{item['birth']}")
-            recent = (f", 직전 점검 뒤 CPU {item['cpu'] - earlier:.1f}초/{_minutes(now - before[1])}분"
-                      if earlier is not None and before[1] else "")
             lines.append(f"- 자식 process pid {item['pid']}, 실행 {_minutes(now - item['started'])}분, "
-                         f"CPU 누적 {item['cpu']:.1f}초{recent}: {item['args'][:COMMAND_CHARS]}")
+                         f"CPU 누적 {item['cpu']:.1f}초: {item['args'][:COMMAND_CHARS]}")
         if not background and not children:
             lines.append("- background 작업과 자식 process가 없습니다.")
         return "\n".join(lines)
@@ -265,8 +264,11 @@ class Watch(Fleet):
             try:
                 with locked(item.runtime_path / "watch.lock", self.timeout, blocking=False):
                     state = manager.store.read(missing_ok=True)
+                    if tell_leader and state.get(LEADER):
+                        # A Leader that runs this command is not stalled, so only the operator judges the Leader.
+                        outcome["targets"].append(self._target(manager, LEADER, None, threshold, tell_leader))
                     for key, row in state.items():
-                        if key == "leader" or row["job_id"] is None or row["session"] is None:
+                        if key == LEADER or row["job_id"] is None or row["session"] is None:
                             continue
                         outcome["targets"].append(self._target(manager, f"seat-{key}", row["job_id"], threshold,
                                                                   tell_leader))
