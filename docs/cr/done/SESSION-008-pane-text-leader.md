@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: 2a2406201f0cd4a66f7b49ffcdb16888e8374792 2026-11-10T00:02:14+09:00
+- Outcome: fixed
 
 ## Symptom
 Worker가 제출하고 Leader의 review를 기다리는데 Leader가 잊으면, 지금 설계에서는 양쪽 모두 멈춥니다. Worker 자기 점검(`skills/project-team/references/self-check.md` Worker 2번)은 "회신을 기다리는 중이면 아무것도 하지 않고 메시지도 보내지 않는다"이고, `agent-session watch`(SESSION-005)도 Leader 회신 대기를 `awaiting_leader`로 제외합니다. 또 `watch`는 자식 process의 CPU 사용으로 '일하는 중'을 판정하므로, 자식 process가 없는 대화의 정체는 그 신호로 보지 못합니다.
@@ -22,6 +23,8 @@ Worker가 제출하고 Leader의 review를 기다리는데 Leader가 잊으면, 
 ## Disposition
 - 2026-11-10 Leader: 고친다(Leader 판정). 사용자가 지적한 시나리오(자식 process 없음, review 요청 뒤 Leader가 잊음)는 지금 설계가 명시적으로 깨우지 않는 경우라 함께 멈춥니다. 사용자 방식(pane text 비교)은 원인과 무관하게 '아무 일도 일어나지 않음'을 보므로 이 경우와 자식 process가 없는 정체를 모두 잡습니다. 앞서 걱정한 '화면이 계속 바뀜'은 turn이 진행 중일 때(실제로 일하는 중)뿐이고, turn과 무관하게 바뀌는 status 줄만 비교에서 빼면 됩니다.
 - 2026-11-10 Leader: 사용자 결정 D-20261110-01 A(대화 transcript 기록으로 판정). 사용자 원문: "A가 좋은데 전체를 평가할 필요는 없을 것 같네. 1번 평가 마지막 한줄, 2번 평가 20줄 이렇게 하면 대부분 아닐거라 생각하고, 평가 시간자체도 많이 줄일 수 있을거라 생각해." 평가 방법: transcript는 끝에 덧붙이기만 하므로 마지막 줄이 같으면 그 앞 줄도 같습니다. 그래서 마지막 완전한 기록 한 줄만 읽고(파일 끝 최대 64KB, `providers/claude.py`의 기존 tail 읽기), 그 기록의 시각이 `--minutes`(30분)보다 오래됐으면 정체입니다. 이전 결과를 저장해 비교하지 않습니다. transcript를 찾을 수 없거나(대화 ID가 바뀜 등) 마지막 줄이 쓰는 중이면 그 앞 완전한 줄을 쓰고, 그래도 없으면 정체로 보지 않고 결과에 이유를 남깁니다. Codex는 자기 session 기록 파일의 마지막 기록으로 같은 판정을 합니다. Implementation 1의 pane text hash와 빼는 줄 규칙은 쓰지 않습니다.
+- 2026-11-10 Leader: 제출 57e2f91c8bb3c9c492948bd15fb64dc8692ea645를 인수합니다. Leader review: D-20261110-01 A대로 시각이 있는 마지막 완전한 transcript 기록(파일 끝 64KB)으로 정체를 판정하고 CPU 판정·awaiting_leader 제외를 없앰, 깨우는 메시지의 '회신 대기면 Leader에게 다시 알림', Leader 정체(진행 중 CR이 있을 때만), self-check.md Worker 2번·Leader 2번을 확인했습니다. 가정 2건(Leader 자기 호출은 자신을 판정하지 않음, 시각 없는 bookkeeping 줄 건너뜀)은 받아들입니다. Codex 경로는 실제 파일 미확인(명세에 한계 기록). agent-session 781 passed·1 failed(같은 기존 실패, TEST-007).
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 81b3aef. origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [동작 명세](../../project-team/spec.md) 7절 watch, `skills/project-team/references/self-check.md`, `tools/agent-session/agent_session/watch.py`, [README 검증 표](../../../README.md#검증).
