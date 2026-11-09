@@ -36,3 +36,94 @@
 1. 수정 전 측정 표(1단계)와 원인 근거.
 2. 수정 뒤 같은 조건의 측정 표. 사용자가 느끼는 동작(sidebar 첫 표시, 창 이동 뒤 갱신, popup 열기)의 중앙값과 최대값이 얼마나 줄었는지 적습니다.
 3. README 검증 표의 `tools/project-board/**` 행, 바꾼 경로에 `integrations/tmux/**`가 있으면 그 행.
+
+## Result
+
+- 제출 commit: dcca9e930ff37c1d4718730a80115bf92eef49dd
+
+### 1. 측정 조건
+
+- 격리 tmux server(`tmux -S <새 socket>`, 사용자 server 미사용)에 `integrations/tmux/project-agent.conf`를 읽고 pty client 1개(100x30)를 붙여 쟀습니다. 등록 파일은 이 계정의 실제 등록(10개 project, 결정 190여 개, CR 130여 개)입니다. 읽기만 했습니다.
+- 수정 전은 base `7e35d24`의 `git archive`본, 수정 후는 `dcca9e9`입니다. 둘을 같은 시간대에 번갈아 3라운드 돌렸습니다. 이 host의 load average는 측정 중 120~280이었습니다(수정 전 기준값을 처음 잰 때 120~180, 번갈아 잰 최종 측정은 245~280). 절대값이 크고 라운드마다 흔들리므로 **같은 라운드 안의 수정 전·후 비교**가 근거입니다.
+- 횟수: 라운드당 8회씩 3라운드(창 첫 방문은 라운드당 2회라 6회, 재방문은 18회). popup은 6회씩 2번 번갈아(12회). 단계별 표(2절)는 각 항목 10회 중앙값이며, Textual import 시간만 `python -X importtime` 1회 값을 함께 적었습니다. click 처리(`click` 명령→popup 시작 사이)는 직접 재지 않았습니다. 아래 단계 표의 launcher·import 값에서 추정하며, 실측은 못 했습니다.
+
+### 2. 수정 전 단계별 측정 (load 120~210, 중앙값/최대)
+
+| 단계 | 중앙값 | 최대 | 비고 |
+| --- | --- | --- | --- |
+| bash: launcher 선택 | 0.05초 | 0.07초 | |
+| Python 기동(import 없음) | 0.13~0.22초 | | |
+| `project-board --help` 전체(bash→launcher→Python→cli import) | 0.62초 | 0.79초 | |
+| `import project_board.model`(agent_session, project_item) | 0.28~0.32초 | 0.83초 | 첫 실행이 느림 |
+| `import project_board.tui`(Textual) | 3.1초 | | load 210에서는 8.1초(최대 10.7초) |
+| registry 읽기(`load_registry`) | 0.024초 | 0.032초 | **snapshot 한 번에 11번 호출**(아래) |
+| `model.snapshot`(10개 project 전체) | 2.16초 | 3.71초 | load 210에서는 4.4~8.1초 |
+| `model.liveness`(전체) | 0.39초 | 0.49초 | project마다 registry 재로드 |
+| 그 중 결정 읽기가 큰 project 하나(결정 48개) | 0.99초 | | |
+| 화면 그리기(`_render_projects`, 10 project) | 0.36초 | 0.38초 | 내용이 바뀐 때만 |
+| `sync`(바뀐 것 없음, 프로세스 전체) | 0.73초 | 0.88초 | |
+| toggle OFF / ON 명령 | 0.71 / 0.82초 | 1.31 / 1.00초 | |
+| 창 이동 → Board pane 생김 / 첫 project 행 | 0.98 / 4.87초 | 1.24 / 5.64초 | n=10 |
+| 창 이동 한 번에 시작되는 hook process | 1개(1.9~3.3초) | | `session-window-changed` |
+| popup 첫 항목: CR popup / 결정 popup | 8.7 / 25.5초 | 16.2 / 32.4초 | n=10, 전체 project snapshot 때문 |
+
+### 3. 원인 (확정)
+
+1. **project마다 등록 파일을 다시 읽음**(`tools/agent-session/agent_session/api.py:68` `read_state`, `liveness`→`config.py:237 current_project`→`:207 resolve_project`→`:150 load_registry`): snapshot과 liveness가 project마다 `api.read_state(project.base, …)`를 불러 등록 파일 전체를 다시 파싱하고 `Path.resolve()`·`_overlap`(O(n²))을 돕니다. 한 번의 snapshot에 `load_registry` 11번. cProfile에서 snapshot 시간의 약 72%(2.88초/4.02초, 3회 합).
+2. **바뀌지 않은 파일도 매번 두 번 읽음**(`model.py` 수정 전 `decide_items`·`cr_items`): `parse(path)`와 `sections(path)`가 각각 `read_text`. NFS에서 파일 open·close가 파일당 약 1ms+(load 시 수 ms~수십 ms). 2초마다 모든 pane이 이를 반복했고 snapshot이 갱신 주기(2초)보다 길었습니다(수정 전 중앙값 4.4~8.1초).
+3. **창 이동마다 Board pane을 지우고 새 TUI process를 만듦**(`tmux_control.py` `_reconcile`의 `show = enabled and window in visible`): 이동 한 번이 Python+Textual import(3~8초)+첫 snapshot을 다시 치릅니다. 4.9초(load 낮을 때)~28초(load 250).
+4. **hook마다 bash→launcher→Python process**(`project-agent-main.conf` 6개 hook): 바뀐 것이 없어도 0.7초(load 낮을 때)~4.6초 동안 CPU를 씁니다. 같은 이벤트에 여러 hook이 겹치면 `control.lock` 때문에 줄을 섭니다.
+5. popup이 자기 project 하나만 보면서 모든 project를 읽음(`tui.py` 수정 전 `model.snapshot` 호출).
+
+기각한 가설: 화면 그리기(0.36초, 내용이 바뀐 때만)는 병목이 아닙니다. hook 중복 실행은 창 이동당 1개로 확인(`session-window-changed`만)해서 "겹친 sync" 가설은 기각합니다.
+
+### 4. 고친 것 (`dcca9e9`)
+
+- `project_board/model.py`: CR·결정 파일을 크기·수정 시각·inode가 바뀐 것만 다시 파싱(`_cached`), 한 번에 한 번만 읽음(`project_item.api.text_sections` 추가). `snapshot(project_id=…)`로 popup은 자기 project만 읽음. 읽기 오류는 캐시하지 않음.
+- `agent_session/api.py`: `project_state(project)`·`project_liveness(project, socket)` 추가(기존 `read_state`·`liveness`는 이를 부름, 동작 불변). Board는 등록 파일을 한 번만 읽음. `config.require_base`로 `base_unavailable` 판정을 한 곳에 둠. 명세 5절 표에 두 이름 추가.
+- `tmux_control.py`: 마지막 client가 떠나도 Board pane 유지. 끌 때·관리 pane 종료·pane 종료 때만 제거.
+- `project-agent-main.conf`: 6개 hook이 `@project_agent_sync_needed`(Board on이고 그 window의 Board pane이 없거나 저장한 폭이 아님)일 때만 `sync` 실행. 조건은 tmux format 하나.
+- 문서: `docs/project-board-tui-plan.md`(2절 갱신·실행 단위, 5절), `install-contract.md` 5.3절(Board pane·hook·option), `tools/project-board/README.md`, `docs/project-team/spec.md` 5절. CHANGELOG에 BOARD-002.
+- 숫자 한도·sleep으로 가린 것은 없습니다.
+
+### 5. 수정 후 측정 (같은 조건, 같은 라운드의 수정 전과 비교)
+
+| 사용자가 느끼는 동작 | 수정 전 (라운드1/2/3 중앙값) | 수정 후 (라운드1/2/3 중앙값) | 최대(수정 전→후) |
+| --- | --- | --- | --- |
+| 창 **재방문** 뒤 sidebar 보임 | 27.8 / 22.5 / 20.4초 | 0.19 / 0.06 / 0.10초 | 31.6→0.33초 |
+| 창 **첫 방문** 뒤 sidebar 보임 | 29.8 / 27.8 / 17.5초 (n=2씩) | 25.1 / 13.0 / 7.8초 (n=2씩) | 30.9→26.9초 |
+| sidebar 켠 뒤 첫 project 행 | 24.5 / 22.8 / 17.5초 | 17.6 / 14.7 / 8.5초 | 33.2→27.7초 |
+| toggle ON 명령(pane 생성까지) | 3.7 / 3.5 / 2.5초 | 3.1 / 2.8 / 1.5초 | |
+| CR popup 첫 항목(6회씩 2번) | 8.95 / 9.70초 | 3.31 / 2.53초 | 20.99→4.08초 |
+| 결정 popup 첫 항목(6회씩 2번) | 6.55 / 4.18초 | 5.85 / 3.34초 | 7.11→6.60초 |
+| 전체 snapshot 한 번(load 210) | 4.4~7.1초 | 0.31~0.35초 | 13.0→0.46초 |
+| 창 이동 한 번의 hook process | 1개 | 재방문은 **0개**(6회 중 4회, 첫 방문 2회만 1개) | |
+
+읽는 법: 사용자가 가장 자주 하는 동작(이미 본 창으로 돌아가기)은 수 초~수십 초에서 0.1~0.2초가 됐습니다. snapshot은 매 2초 반복 비용이라 약 15~20배 줄었습니다. CR popup 첫 항목도 3~4배 빨라졌습니다. 반면 **처음 보는 창의 첫 표시, sidebar 켜기, 결정 popup**은 10~55% 줄어드는 데 그쳤습니다(라운드마다 편차가 큽니다). 이 구간은 새 Python+Textual process의 기동과 첫 읽기가 대부분입니다.
+
+### 6. RUST-001 근거 (언어를 바꾸지 않고는 못 줄이는 비용)
+
+- 새 process마다 Python 기동 0.13~0.22초 + `project_board.tui`(Textual) import **약 3.1초(load 210에서 8.1초, 최대 10.7초)**. 같은 코드를 `-X importtime`으로 보면 `textual.app` 누적 2.4초, `textual` 패키지 0.88초입니다. 이 비용은 (a) 처음 보는 window마다 Board pane 하나, (b) popup을 열 때마다 한 번씩 반드시 치릅니다. CR popup은 이 값 때문에 수정 후에도 `first byte`가 2.3~3.1초입니다.
+- 첫 snapshot(cache가 비어 있을 때)은 파일 수에 비례합니다. 수정 후에도 새 process는 한 번 전체를 읽습니다. load 210에서 전체 project 6~8초(수정 후 번갈아 측정에서 첫 호출 3.1~7.4초). 파일당 1회 읽기로 줄였지만 NFS 지연은 남습니다.
+- `sync`·`toggle`·`click` 명령은 매번 bash→launcher→Python 기동(0.62초, load 높으면 2~4초)+agent_session import. 재방문 hook은 process를 시작하지 않지만 첫 방문 hook과 toggle, click은 이 비용을 냅니다.
+
+### 7. 가정과 Leader 확인 사항
+
+- **계약 변경**: "마지막 client가 떠나면 Board pane을 정리한다"를 "Board를 끄거나 그 window의 관리 pane이 끝날 때까지 유지한다"로 바꿨습니다(plan 5절, 설치 계약 5.3절). 보지 않은 window에는 만들지 않습니다. 되돌리려면 `_reconcile`의 `usable`/`show` 분리만 되돌리면 됩니다. 사용자 결정이 필요한 정책 변경이면 알려 주십시오.
+- 유지된 pane도 2초마다 snapshot을 읽습니다(바뀐 것만 파싱하므로 비용은 stat+목록 읽기 수준). 안 보이는 window의 polling을 멈추는 것은 하지 않았습니다.
+- 캐시는 process 안에서만 삼니다. popup이나 새 pane의 첫 읽기는 여전히 전체를 읽습니다. process 간 공유는 만들지 않았습니다(범위 밖, 위 RUST-001 근거 참고).
+- BOARD-003·004(같은 원인일 수 있는 항목)는 이 CR의 원인과 수정 후 값을 보고 판정하십시오. 제 판단으로는 창 이동 뒤 갱신 지연은 이 CR로 해소됐고, 첫 방문과 popup 기동의 남은 비용만 별개입니다.
+
+### 8. 검증 (제출 commit `dcca9e9`)
+
+README 검증 표의 `tools/project-board/**`, `integrations/tmux/**`, `tools/project-item/api.py`·`read.py`, `tools/agent-session/api.py`, `docs/**` 행.
+
+| 명령 | 결과 |
+| --- | --- |
+| `python -m pytest -q tools/project-board/tests` | 123 passed |
+| `python -m pytest -q tools/project-item/tests` | 120 passed(`api.py`·`read.py`를 고친 뒤 실행) |
+| `python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py tools/test_release_files.py tools/test_tmux_test_server.py` | 마지막 실행에서 `integrations/tmux` 36 passed. 처음에는 hook 조건 변경으로 `test_installed_link_is_kept…` 1건 실패했고 테스트가 Board를 켜도록 고쳐 통과. 나머지 파일(`tools/test_*.py`)은 첫 실행에서 83건 중 위 1건 외 통과. |
+| `python -m pytest -q -n 8 tools/agent-session/tests` | 729 passed, 1 failed(`test_lifecycle.py::test_registration_publishes_when_the_controller_ends_before_it[sigint]`, load 230에서 60초 한도 초과). 같은 테스트를 단독 재실행해 4 passed. load에 의한 시간 초과로 판단하며 이 변경과 무관한 경로입니다. |
+| `python -m pytest -q -n 8 install/tests` | 253 passed, 2 skipped |
+
+근거 재사용·재실행 판정: 결과를 바꾸는 `api.py`·`model.py`·`tmux_control.py`·`conf` 변경 뒤에 각 명령을 실행했습니다. 그 뒤 바꾼 것은 테스트 파일과 CHANGELOG뿐입니다. 새 테스트: `test_model.py`(변경분만 읽음, 이동한 파일, registry 1회 읽기, popup 단일 project), `test_internal.py`(`project_state`·`project_liveness`), `test_tmux_control.py`(떠난 window의 pane 유지), `test_project_agent_conf.py`(hook 조건 4가지 상태). 다른 `tools/test_*.py`와 `install/tests`는 마지막 코드 변경 뒤 재실행하지 않았습니다. CHANGELOG와 테스트 파일만 바뀌었기 때문입니다.
