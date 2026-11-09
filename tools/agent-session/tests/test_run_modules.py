@@ -13,6 +13,7 @@ import pytest
 
 from agent_session import handoff, launch_artifacts, windows
 from agent_session.errors import SessionError
+from fake_tmux import FakeTmux
 
 JOB = {"job_id": "TOOL-001", "title": "Example", "path": "/cr/TOOL-001.md", "mode": "write",
        "branch": "cr/TOOL-001", "base": {"base_hash": "a" * 40}}
@@ -171,14 +172,14 @@ def test_a_handoff_is_fresh_only_when_written_after_the_run_launched(tmp_path):
 
 # windows
 
-class Tmux:
+class Tmux(FakeTmux):
     """Records the commands and answers the metadata queries that the window functions use."""
 
     def __init__(self, current=None, windows_=()):
         self.current, self.windows, self.commands, self.closed = current, {w["window_id"]: w for w in windows_}, [], []
 
-    def command(self, *args):
-        self.commands.append(args)
+    def command(self, *arguments):
+        self.commands.append(arguments)
 
     def get_current(self, project_id, target):
         return self.current
@@ -189,9 +190,9 @@ class Tmux:
     def read_meta(self, window_id):
         return self.windows[window_id]
 
-    def close_window(self, window_id, meta):
+    def close_window(self, window_id, expected):
         self.closed.append(window_id)
-        return "pane" if meta.get("person") else "window"
+        return "pane" if expected.get("person") else "window"
 
 
 def test_window_names_follow_the_project_slot_and_job_and_a_retired_name_adds_the_run():

@@ -9,6 +9,7 @@ import pytest
 
 from agent_session.errors import SessionError
 from agent_session.lifecycle import Manager
+from fake_tmux import FakeTmux, fake_tmux
 
 
 def manager(tmp_path):
@@ -18,22 +19,25 @@ def manager(tmp_path):
             "socket_path": str(tmp_path / "tmux.sock")}
     state = {"leader": None, "0": {"job_id": meta["job_id"], "git_hash": None,
                                    "session": {"session_id": meta["session_id"]}}}
-    class Tmux:
+    class Tmux(FakeTmux):
         def __init__(self):
             self.submitted = []
 
-        def get_current(self, project, target):
+        def require_version(self):
+            pass
+
+        def get_current(self, project_id, target):
             return dict(meta)
 
-        def read_meta(self, window):
+        def read_meta(self, window_id):
             return dict(meta)
 
-        def write_meta(self, window, values):
-            meta.update(values)
+        def write_meta(self, window_id, updates):
+            meta.update(updates)
             return dict(meta)
 
-        def run_controller(self, script, cwd):
-            self.submitted.append(str(script))
+        def run_controller(self, script_path, cwd):
+            self.submitted.append(str(script_path))
     value = Manager.__new__(Manager)
     value.project = SimpleNamespace(base=base, runtime_path=tmp_path / "agent",
                                     project_id="fixture", config_path=tmp_path / "projects.json", seats=(tmp_path / "seat",))
@@ -92,3 +96,35 @@ def test_self_restart_needs_a_handoff_written_during_the_run(tmp_path):
     os.utime(handoff, (later, later))
     assert subject._self_control("restart", meta, meta["job_id"], None)["accepted"] is True
     assert len(subject.tmux.submitted) == 1
+
+
+def test_a_fake_tmux_follows_the_product_interface():
+    from agent_session.tmux import Tmux
+
+    class Faked(FakeTmux):
+        def read_meta(self, window_id):
+            return {}
+
+    assert Faked().read_meta("@1") == {}
+    with pytest.raises(AssertionError, match="does not fake the tmux call"):
+        Faked().require_version()                        # an unwritten product method reaches no real tmux
+    assert Tmux.read_meta.__name__ == "read_meta"
+    with pytest.raises(AssertionError, match="not a method"):
+        class Removed(FakeTmux):
+            def no_such_method(self):
+                pass
+    with pytest.raises(AssertionError, match="differs from"):
+        class Renamed(FakeTmux):
+            def read_meta(self, window):
+                pass
+
+
+def test_a_fake_tmux_built_from_callables_follows_the_product_interface():
+    fake = fake_tmux(get_current=lambda *args: {"run_id": "r"}, pane_info=lambda pane_id: {"pane_dead": True})
+    assert fake.get_current("p", "seat-0") == {"run_id": "r"} and fake.pane_info("%1") == {"pane_dead": True}
+    with pytest.raises(AssertionError, match="not a method"):
+        fake_tmux(no_such_method=lambda: None)
+    with pytest.raises(AssertionError, match="differs from"):
+        fake_tmux(pane_info=lambda pane: None)
+    with pytest.raises(AssertionError, match="differs from"):
+        fake_tmux(pane_info=lambda pane_id, extra: None)

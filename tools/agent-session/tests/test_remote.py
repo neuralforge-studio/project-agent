@@ -17,6 +17,7 @@ import pytest
 from agent_session import remote, remote_bridge, remote_runtime
 from agent_session.config import Project, RemoteSeat
 from agent_session.errors import SessionError
+from fake_tmux import fake_tmux
 
 
 def test_remote_seat_before_any_ssh_launch_uses_only_its_local_waiting_process(monkeypatch):
@@ -24,7 +25,7 @@ def test_remote_seat_before_any_ssh_launch_uses_only_its_local_waiting_process(m
     from agent_session.lifecycle import Manager
     manager = object.__new__(Manager)
     manager.remaining = lambda: 5
-    manager.tmux = SimpleNamespace(pane_info=lambda pane: {"pane_dead": True})
+    manager.tmux = fake_tmux(pane_info=lambda pane_id: {"pane_dead": True})
     monkeypatch.setattr(remote, "observe", lambda *args, **kwargs: pytest.fail("No remote launch was attempted"))
     monkeypatch.setattr(process, "alive", lambda *args: False)
     monkeypatch.setattr(process, "group_alive", lambda *args: False)
@@ -42,7 +43,7 @@ def test_native_stop_can_finish_after_the_ssh_display_already_left(monkeypatch):
         assert args == ("list-clients", "-F", "#{session_name}")
         return ""
 
-    manager = SimpleNamespace(project=SimpleNamespace(project_id="remote-test"), tmux=SimpleNamespace(command=command))
+    manager = SimpleNamespace(project=SimpleNamespace(project_id="remote-test"), tmux=fake_tmux(command=command))
     monkeypatch.setattr(remote_runtime, "_current", lambda *args: (manager, {}))
     assert remote_runtime.dispatch("/remote/seat", "detach", {"run_id": "a" * 32}, None) == {}
     assert len(calls) == 1
@@ -209,7 +210,7 @@ def test_native_observation_rejects_replaced_execution_before_provider_call(monk
               "session_id": "thread-1", "endpoint": "unix:///tmp/daemon-1.sock"}
     actual = {**native, changed: "replaced"}
     manager = SimpleNamespace(project=SimpleNamespace(project_id="remote-example"),
-                              tmux=SimpleNamespace(get_current=lambda *args: actual),
+                              tmux=fake_tmux(get_current=lambda *args: actual),
                               _observe=lambda *args: pytest.fail("A replaced native run must not be observed"))
     monkeypatch.setattr(remote_runtime, "_manager", lambda directory: (manager, {"seat": "/remote/seat", "job_id": "TOOL-001"}))
     with pytest.raises(SessionError) as error:
@@ -230,8 +231,8 @@ def test_launch_response_loss_retries_the_same_run_without_git_preparation(tmp_p
                 "remote_seat": {"host": "macbook-worker", "path": "/remote/seat"}}
     launches = []
 
-    def write_meta(window, update):
-        metadata.update(update)
+    def write_meta(window_id, updates):
+        metadata.update(updates)
         return dict(metadata)
 
     native = {"run_id": metadata["run_id"], "session_id": "thread-1", "endpoint": "unix:///tmp/native.sock"}
@@ -247,7 +248,7 @@ def test_launch_response_loss_retries_the_same_run_without_git_preparation(tmp_p
         return {"ready": True, "native": native}
 
     manager = SimpleNamespace(project=SimpleNamespace(args_for=lambda role: (), base=tmp_path),
-                              tmux=SimpleNamespace(write_meta=write_meta), remaining=lambda: 30,
+                              tmux=fake_tmux(write_meta=write_meta), remaining=lambda: 30,
                               _authorize=lambda *args: None,
                               _wait_ready=lambda meta: {"run_id": meta["run_id"], "ready": True},
                               _sweep=lambda target: {})
@@ -327,7 +328,7 @@ def test_late_remote_binding_is_reported_once_the_capsule_registration_published
     directory = tmp_path / "run"
     directory.mkdir()
     manager = SimpleNamespace(project=SimpleNamespace(project_id="remote-example"),
-                              tmux=SimpleNamespace(get_current=lambda *args: dict(native), capture_pane=lambda pane: ""),
+                              tmux=fake_tmux(get_current=lambda *args: dict(native), capture_pane=lambda pane_id: ""),
                               provider=SimpleNamespace(startup_dialog=lambda screen: None))
     monkeypatch.setattr(remote_runtime, "_directory", lambda identity: directory)
     monkeypatch.setattr(remote_runtime, "_manager", lambda path: (manager, {"seat": "/remote/seat", "job_id": "TOOL-001"}))
@@ -361,7 +362,7 @@ def test_report_rechecks_the_run_under_control_lock_before_changing_result(tmp_p
         return {**first, "run_id": "new-run"} if locked else first
 
     manager = SimpleNamespace(project=SimpleNamespace(project_id="example"),
-                              tmux=SimpleNamespace(get_current=current), _lock=control_lock)
+                              tmux=fake_tmux(get_current=current), _lock=control_lock)
     recheck = lifecycle.Manager._same
     manager._same = lambda selected: recheck(manager, selected)
     monkeypatch.setattr(lifecycle, "Manager", lambda *args, **kwargs: manager)
@@ -580,10 +581,10 @@ def failed_remote_controller(remote_launch_files, monkeypatch):
                               _new_window=window, _launch=launch, _handoff_path=lambda context: directory / "handoff.md",
                               _lock=lambda slot: nullcontext(), _adopted=lambda native, slot: native,
                               provider=SimpleNamespace(prepare_context=lambda context: context),
-                              tmux=SimpleNamespace(get_current=current, has_session=lambda name: observed["native"] is not None,
+                              tmux=fake_tmux(get_current=current, has_session=lambda project_id: observed["native"] is not None,
                                   managed_windows=lambda *args: ["@1"] if observed["native"] else [],
-                                  pane_info=lambda pane: {"pane_pid": 700, "pane_dead": False}))
-    manager.tmux.write_meta = lambda window, update: observed["native"].update(update) or observed["native"]
+                                  pane_info=lambda pane_id: {"pane_pid": 700, "pane_dead": False}))
+    manager.tmux.replace(write_meta=lambda window_id, updates: observed["native"].update(updates) or observed["native"])
     monkeypatch.setattr(remote_runtime, "_manager", lambda path: (manager, json.loads((directory / "execution.json").read_text())))
     return SimpleNamespace(env=env, source=source, payload=payload, saved=saved, directory=directory,
                            state=state, observed=observed, manager=manager)
@@ -641,7 +642,7 @@ def test_retry_preserves_uncertain_or_already_started_native_execution(failed_re
     elif uncertain == "placeholder_dead":
         monkeypatch.setattr(process, "alive", lambda *args: False)
     else:
-        case.manager.tmux.pane_info = lambda pane: {"pane_pid": 701, "pane_dead": False}
+        case.manager.tmux.replace(pane_info=lambda pane_id: {"pane_pid": 701, "pane_dead": False})
     try:
         remote_runtime.dispatch("/remote/seat", "launch", case.payload, case.source)
     except SessionError as error:
@@ -710,7 +711,7 @@ def test_unbound_endpoint_change_requires_a_proven_safe_prelaunch_retry(monkeypa
                 "session_id": None, "endpoint": "unix:///tmp/original-provider.sock"}
     changed = {**original, "provider_launch_attempted": True, "endpoint": "unix:///tmp/unexplained-provider.sock"}
     manager = SimpleNamespace(project=SimpleNamespace(project_id="remote-example"),
-                              tmux=SimpleNamespace(get_current=lambda *args: changed),
+                              tmux=fake_tmux(get_current=lambda *args: changed),
                               _observe=lambda *args: pytest.fail("An unproven endpoint must not be used"))
     monkeypatch.setattr(remote_runtime, "_manager", lambda directory: (manager, {"seat": "/remote/seat", "job_id": "TOOL-001"}))
     with pytest.raises(SessionError) as caught:
