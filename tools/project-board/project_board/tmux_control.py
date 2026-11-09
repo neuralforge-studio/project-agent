@@ -547,9 +547,10 @@ def toggle_sidebar(config=None, client=None, socket=None) -> dict:
 def _popup(control: Tmux, client: str, args: list[str], title: str, size: str) -> dict:
     # display-popup -E waits until the popup closes. Run it as a tmux background
     # job so the click socket and the sidebar remain responsive while it is open.
+    # A person opened it: a failure is recorded and shown on that client, never in a work pane (BOARD-011).
     command = ["tmux", "-S", control.effective_socket(), "display-popup", "-E", "-c", client,
                "-w", size, "-h", size, "-T", title, "-e", f"PROJECT_BOARD_CLIENT={client}", *args]
-    control.command("run-shell", "-b", shlex.join(command))
+    control.run_quiet(shlex.join(command), "board-popup", client)
     return _ok({"client": client})
 
 
