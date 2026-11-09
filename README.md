@@ -39,6 +39,7 @@ python -m pytest -q -n 8 install/tests
 
 - [제품 지도](docs/project-team/README.md): 구성 요소, 공개 진입점, 의존 관계, 실행 경로 계약
 - [동작 명세](docs/project-team/spec.md): 등록, state, start·stop·restart·shutdown·resume
+- [설치 안내](docs/install.md): 직원용. 전제, 한 줄 설치, 설치가 만드는 경로, 갱신·제거, tmux 연결
 - [설치 계약](docs/project-team/install-contract.md): 설치·갱신·되돌리기·제거의 경계
 - [버전 규칙](docs/project-team/release.md): 버전 값, 형식 버전과 호환 범위, git tag 이름, 변경 기록 작성
 - [변경 기록](CHANGELOG.md): 버전별 CR ID 목록과 형식 변경 여부
