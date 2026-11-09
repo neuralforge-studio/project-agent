@@ -52,13 +52,18 @@ project-board popup --project PROJECT_ID      # show that project's unfinished d
 project-board cr --project PROJECT_ID --state open  # show a CR list
 ```
 
-The sidebar refreshes source files every 2 seconds and run liveness every 10 seconds.
+The sidebar refreshes source files every 2 seconds and run liveness every 10 seconds. A refresh
+parses again only the CR and decision files whose size or modification time changed; a popup
+reads only its own project.
 The TUI keeps clicks and scrolling responsive during reads and answer delivery. Decision
 answers require the `operator` caller classification from `agent-session`; a managed or
 unmanaged agent session cannot submit an approval.
 
 In tmux, prefix `B` or click `Board` in the status line to toggle the sidebar for every
-attached client. The same window shares one Board pane. Each visible window gives the Board
+attached client. The same window shares one Board pane. A window keeps its Board pane after
+the last client leaves it, so returning to a window shows the Board at once instead of starting
+it again; turning the Board off removes every Board pane. A window that no client has watched
+has none. Each visible window gives the Board
 25 columns by default and shows existing panes in the remaining space. A width adjusted in
 tmux is used when the Board pane moves to another window or is created again. Turning the
 Board off restores the previous pane layout and focus. A window with too little space for

@@ -1,7 +1,8 @@
 """tmux placement and client-directed actions for the Project Board TUI.
 
-The server owns one global toggle. A Board pane exists only in a window watched by
-an attached client. Multiple clients watching the same window share that pane; a
+The server owns one global toggle. A Board pane is created in a window when an attached
+client first watches it, and stays until the toggle is turned off, the window's managed pane
+dies, or the window closes. Multiple clients watching the same window share that pane; a
 mouse binding sends each click's client and pane-relative coordinates over a local
 socket so actions still target the client that clicked.
 """
@@ -387,10 +388,13 @@ def _reconcile(control: Tmux) -> dict:
         try:
             panes = _panes(control, window)
             board = _board_pane(control, window, panes)
-            show = enabled and window in visible and not _managed_pane_dead(control, window, panes)
-            if board and (not show or panes[board]):
+            usable = enabled and not _managed_pane_dead(control, window, panes)
+            # A Board pane stays in a window nobody watches: it is the process that costs seconds
+            # to start, and the next client to arrive finds it already showing.
+            if board and (not usable or panes[board]):
                 to_remove.append((window, board))
                 board = None
+            show = usable and window in visible
             if show and board is None and panes:
                 to_create.append(window)
             elif show and board:
@@ -552,7 +556,7 @@ def switch_seat(config, project_id: str, seat_index: int, client: str | None = N
             return _fail("project_not_found", "The project is not registered.")
         if not isinstance(seat_index, int) or isinstance(seat_index, bool) or not 0 <= seat_index < len(project.seats):
             return _fail("seat_invalid", "The seat does not exist in this project.")
-        state = api.read_state(project.base, config_path=project.config_path)
+        state = api.project_state(project)
         session = state[str(seat_index)]["session"]
         if session is None:
             return _fail("seat_not_running", "The seat has no Worker session.")

@@ -554,7 +554,7 @@ class CRPopupApp(App):
 
     async def refresh_items(self) -> None:
         try:
-            data = await asyncio.to_thread(model.snapshot, self.config)
+            data = await asyncio.to_thread(model.snapshot, self.config, project_id=self.project_id)
             if not self._closing:
                 await self.apply_snapshot(data)
         except Exception as error:
@@ -671,7 +671,7 @@ class PopupApp(App):
         self.config = config
         self.project_id = project_id
         self.decide_id = decide_id
-        self.snapshot_reader = snapshot_reader or model.snapshot
+        self.snapshot_reader = snapshot_reader or self._read_project
         self.answer_sender = answer_sender or answer.submit_answer
         self.load = load
         self.project: dict | None = None
@@ -681,6 +681,9 @@ class PopupApp(App):
         self._evidence_open = False
         self._drafts: dict[str, str] = {}
         self._tasks: set[asyncio.Task] = set()
+
+    def _read_project(self, config: str | None) -> dict:
+        return model.snapshot(config, project_id=self.project_id)
 
     def compose(self) -> ComposeResult:
         yield Static("결정 항목을 읽는 중…", id="popup-heading")

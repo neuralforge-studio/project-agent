@@ -412,6 +412,10 @@ def test_liveness_reads_tmux_and_process_facts_without_a_provider(native_slot, m
     monkeypatch.setattr(providers, "get_provider", no_provider)
     call = lambda: api.liveness(fixture["seat"], config_path=fixture["config"], socket=previous["socket_path"])
     assert call() == {"0": {"session_id": previous["session_id"], "state": "alive"}}
+    # A caller that already holds the project (BOARD-002) gets the same answers without selecting it again.
+    project = api.resolve_project(fixture["seat"], config_path=fixture["config"])
+    assert api.project_liveness(project, socket=previous["socket_path"]) == call()
+    assert api.project_state(project) == api.read_state(fixture["seat"], config_path=fixture["config"])
     other = str(uuid.uuid4())
     fixture["store"].update(lambda state: state["0"]["session"].update(session_id=other))
     assert call() == {"0": {"session_id": other, "state": "unknown"}}

@@ -16,7 +16,7 @@ DECIDE = "D-20261105-01"
 @pytest.fixture(autouse=True)
 def operator(monkeypatch):
     monkeypatch.setattr(answer.model.api, "caller", lambda project: ("operator", None))
-    monkeypatch.setattr(answer.model.api, "liveness", lambda cwd, config_path=None:
+    monkeypatch.setattr(answer.model.api, "project_liveness", lambda project, socket=None:
                         {"leader": {"session_id": LEADER_ID, "state": "alive"}})
 
 
@@ -78,7 +78,7 @@ def test_only_the_operator_can_approve(board, monkeypatch, actor, code):
 
 def test_stopped_current_leader_is_recorded_without_sending(board, monkeypatch):
     data, base = board
-    monkeypatch.setattr(answer.model.api, "liveness", lambda cwd, config_path=None:
+    monkeypatch.setattr(answer.model.api, "project_liveness", lambda project, socket=None:
                         {"leader": {"session_id": LEADER_ID, "state": "stopped"}})
     monkeypatch.setattr(answer, "send_answer", lambda *_: pytest.fail("must not send"))
     result = answer.submit_answer(data.config, "alpha", DECIDE, "A")
@@ -89,7 +89,7 @@ def test_stopped_current_leader_is_recorded_without_sending(board, monkeypatch):
 
 def test_old_stopped_verdict_cannot_block_a_new_leader(board, monkeypatch):
     data, _ = board
-    monkeypatch.setattr(answer.model.api, "liveness", lambda cwd, config_path=None:
+    monkeypatch.setattr(answer.model.api, "project_liveness", lambda project, socket=None:
                         {"leader": {"session_id": "old-session", "state": "stopped"}})
     monkeypatch.setattr(answer, "send_answer", lambda *_: {"ok": True, "data": {}, "error": None})
     assert answer.submit_answer(data.config, "alpha", DECIDE, "A")["ok"] is True

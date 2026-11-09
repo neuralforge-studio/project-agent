@@ -227,7 +227,11 @@ def resolve_project(cwd=None, config_path=None):
     deepest = {item[1] for item in matches if item[0] == depth}
     if len(deepest) != 1:
         raise SessionError("project_ambiguous", "The working directory matches more than one project.", 2)
-    project = deepest.pop()
+    return require_base(deepest.pop())
+
+
+def require_base(project):
+    """Return `project` when its registered base directory exists."""
     if not project.base.is_dir():
         raise SessionError("base_unavailable", "The registered project base is unavailable.", 3,
                            {"base": str(project.base)})

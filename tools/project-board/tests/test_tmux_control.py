@@ -319,19 +319,21 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
                              "@project_board_pane")
         assert _pane_geometry(name, second_window)[second_board][0] == 33
 
+        # BOARD-002: a window the last client left keeps its Board pane, so returning to it starts nothing.
         _tmux(name, "switch-client", "-c", clients[0][2], "-t", "two")
         result = tmux_control.reconcile(socket=socket_path)
         assert result["ok"] is True
-        assert result["data"]["removed"] == [first_window]
+        assert result["data"]["removed"] == [] and result["data"]["created"] == []
         assert _tmux(name, "show-options", "-wqv", "-t", first_window,
-                     "@project_board_pane") == ""
-        assert _tmux(name, "show-options", "-wqv", "-t", first_window,
-                     "@project_board_restore") == ""
-        assert _pane_geometry(name, first_window) == first_geometry
+                     "@project_board_pane") == first_board
+        assert first_board in _pane_geometry(name, first_window)
         assert tmux_control.expanded_projects(socket_path) == {"one"}
 
         _tmux(name, "switch-client", "-c", clients[0][2], "-t", "one")
-        assert tmux_control.reconcile(socket=socket_path)["ok"] is True
+        result = tmux_control.reconcile(socket=socket_path)
+        assert result["ok"] is True and result["data"]["created"] == []
+        assert _tmux(name, "show-options", "-wqv", "-t", first_window,
+                     "@project_board_pane") == first_board
         assert tmux_control.expanded_projects(socket_path) == {"one"}
 
         result = tmux_control.toggle_sidebar(socket=socket_path)
@@ -342,6 +344,7 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
         assert tmux_control.expanded_projects(socket_path) == {"one"}
         assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
         assert set(_tmux(name, "list-panes", "-a", "-F", "#{pane_id}").splitlines()) == original
+        assert _pane_geometry(name, first_window) == first_geometry
         assert _pane_geometry(name, second_window) == second_geometry
         assert _tmux(name, "show-options", "-wqv", "-t", second_window,
                      "@project_board_restore") == ""
@@ -417,21 +420,28 @@ def test_sidebar_keeps_resized_width_across_window_changes(monkeypatch):
         assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
         board = _tmux(name, "show-options", "-wqv", "-t", second, "@project_board_pane")
         _tmux(name, "resize-pane", "-t", board, "-x", "33")
+        # The after-resize-pane hook of project-agent-main.conf records this (test_resize_hook_...).
+        _tmux(name, "set-option", "-g", "@project_board_width", "33")
         assert _pane_geometry(name, second)[board][0] == 33
+        second_board = board
 
         _tmux(name, "switch-client", "-c", clients[0][2], "-t", "one")
         assert tmux_control.reconcile(socket=socket_path)["ok"] is True
         board = _tmux(name, "show-options", "-wqv", "-t", first, "@project_board_pane")
         assert _pane_geometry(name, first)[board][0] == 33
-        assert set(_pane_geometry(name, second)) == original[second]
+        # The window the client left keeps its Board pane (BOARD-002).
+        assert set(_pane_geometry(name, second)) == original[second] | {second_board}
 
         _tmux(name, "switch-client", "-c", clients[0][2], "-t", "two")
         assert tmux_control.reconcile(socket=socket_path)["ok"] is True
         board = _tmux(name, "show-options", "-wqv", "-t", second, "@project_board_pane")
+        assert board == second_board
         assert _pane_geometry(name, second)[board][0] == 33
-        assert set(_pane_geometry(name, first)) == original[first]
+        assert set(_pane_geometry(name, first)) == original[first] | {_tmux(
+            name, "show-options", "-wqv", "-t", first, "@project_board_pane")}
 
         assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+        assert set(_pane_geometry(name, first)) == original[first]
         assert set(_pane_geometry(name, second)) == original[second]
     finally:
         for process, master, _client in clients:
@@ -466,6 +476,7 @@ def test_sidebar_keeps_requested_width_after_a_narrow_window(monkeypatch):
         assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
         board = _tmux(name, "show-options", "-wqv", "-t", wide, "@project_board_pane")
         _tmux(name, "resize-pane", "-t", board, "-x", "33")
+        _tmux(name, "set-option", "-g", "@project_board_width", "33")   # what the resize hook records
         assert _pane_geometry(name, wide)[board][0] == 33
 
         _tmux(name, "switch-client", "-c", clients[0][2], "-t", "narrow")

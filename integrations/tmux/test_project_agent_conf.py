@@ -200,6 +200,41 @@ def test_user_hooks_stay_and_no_generic_board_hook_is_left(server, conf):
     assert all(any(line.startswith("%s[project-agent] " % event) for line in hooks) for event in events)
 
 
+def test_a_window_change_starts_sync_only_when_the_window_lacks_its_board_pane(server, tmp_path):
+    """BOARD-002: sync costs a process start, so an event that has nothing to do must not start it."""
+    log = tmp_path / "log"
+    release = make_release(tmp_path / "releases" / "r1", "r1", log)
+    tmux = server()
+    tmux.read(release / "integrations" / "tmux" / "project-agent.conf")
+    tmux.run("new-window", "-d")
+    with_board, without_board = tmux.run("list-windows", "-F", "#{window_id}").split()
+    pane = tmux.run("split-window", "-d", "-h", "-t", with_board, "-P", "-F", "#{pane_id}", "sleep", "300")
+    tmux.run("set-option", "-w", "-t", with_board, "@project_board_pane", pane)
+    tmux.run("set-option", "-g", "@project_board_width", tmux.run("display-message", "-p", "-t", pane, "#{pane_width}"))
+
+    def syncs():
+        return log.read_text().count("board sync") if log.exists() else 0
+
+    def move(window):
+        tmux.run("select-window", "-t", window)
+        time.sleep(1.0)                      # a hook runs as a background job: give it the time it would need
+
+    move(without_board)
+    assert syncs() == 0                      # the Board is off: nothing to reconcile
+    tmux.run("set-option", "-g", "@project_board_enabled", "1")
+    move(with_board)
+    assert syncs() == 0                      # the window shows its Board pane at the saved width
+    move(without_board)
+    wait_for(log, "board sync")              # no Board pane here yet
+    assert syncs() == 1
+    tmux.run("set-option", "-g", "@project_board_width", "99")
+    move(with_board)
+    wait_for_count = time.time() + 10
+    while syncs() < 2 and time.time() < wait_for_count:
+        time.sleep(0.1)
+    assert syncs() == 2                      # a width other than the saved one is reconciled
+
+
 def test_installed_link_is_kept_and_the_next_call_follows_an_upgrade(server, tmp_path):
     log = tmp_path / "log"
     first = make_release(tmp_path / "releases" / "r1", "r1", log)
@@ -211,6 +246,8 @@ def test_installed_link_is_kept_and_the_next_call_follows_an_upgrade(server, tmp
     assert tmux.option("@project_agent_tmux_dir") == str(current / "integrations" / "tmux")
 
     # The hook and the key binding run the helper that sits next to the conf that was read.
+    # A hook runs sync only while the Board is on and the window has no Board pane yet.
+    tmux.run("set-option", "-g", "@project_board_enabled", "1")
     tmux.run("new-window", "-d")
     wait_for(log, "r1 board sync --socket")
     command = tmux.key("prefix", "B").split(None, 4)[4]

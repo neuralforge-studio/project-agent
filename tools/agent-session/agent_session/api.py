@@ -12,8 +12,8 @@ from .tmux import PANE_ID_OPTION, Tmux
 # The public names. spec 5 (docs/project-team/spec.md) records each one's input and result.
 __all__ = (
     "PANE_ID_OPTION", "RemoteSeat", "SessionError", "Tmux",
-    "caller", "check_binding", "liveness", "load_registry", "read_state", "require_live",
-    "resolve_project",
+    "caller", "check_binding", "liveness", "load_registry", "project_liveness", "project_state",
+    "read_state", "require_live", "resolve_project",
 )
 
 
@@ -67,7 +67,13 @@ def require_live(project, slot, identity, tmux=None):
 
 def read_state(cwd=None, config_path=None):
     """Read an existing atomic snapshot without acquiring a control lock."""
-    return StateStore(config.current_project(cwd, config_path)).read()
+    return project_state(config.current_project(cwd, config_path))
+
+
+def project_state(project):
+    """`read_state` of a project the caller already holds (from `load_registry`). A consumer that
+    visits every project reads the registry once instead of once per project."""
+    return StateStore(config.require_base(project)).read()
 
 
 def liveness(cwd=None, config_path=None, socket=None):
@@ -78,8 +84,12 @@ def liveness(cwd=None, config_path=None, socket=None):
     "stopped": that run's pane or CLI ended. "unknown": no current run, a run of another
     session, or a failed lookup. A caller drops a verdict whose session is no longer current.
     """
-    project = config.current_project(cwd, config_path)
-    state = StateStore(project).read()
+    return project_liveness(config.current_project(cwd, config_path), socket)
+
+
+def project_liveness(project, socket=None):
+    """`liveness` of a project the caller already holds (from `load_registry`)."""
+    state = StateStore(config.require_base(project)).read()
     control = tmux_module.control(socket)
     result = {}
     for key, entry in state.items():
