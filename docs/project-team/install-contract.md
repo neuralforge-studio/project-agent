@@ -87,12 +87,12 @@ source-file -q ~/.local/lib/project-agent/tmux.conf
 
 ### 3.1 통합 파일이 server에 넣는 binding
 
-tmux 통합 파일은 읽힐 때 tmux server에 binding과 hook을 넣습니다([5.3](#53-tmux-server)). 사용자가 정한 binding은 덮어쓰지 않습니다. 구현은 DIST-001 5단계가 합니다.
+tmux 통합 파일은 읽힐 때 tmux server에 binding과 hook을 넣습니다([5.3](#53-tmux-server)). 사용자가 정한 binding은 덮어쓰지 않습니다. 구현은 [project_agent_bind.sh](../../integrations/tmux/project_agent_bind.sh)입니다(tmux 설정 문법은 `list-keys`로 판정할 수 없어 통합 파일이 이 helper를 부릅니다).
 
-1. `prefix B`와 root table의 `MouseDown1Pane`은 비어 있거나 tmux 기본값일 때만 binding합니다. 그 밖의 binding이 있으면 건너뜁니다. tmux 3.8 기준으로 `prefix B`는 기본 binding이 없고, `MouseDown1Pane`의 기본값은 `select-pane -t = \; send-keys -M`입니다.
+1. `prefix B`와 root table의 `MouseDown1Pane`은 비어 있거나 tmux 기본값일 때만 binding합니다. 그 밖의 binding이 있으면 건너뜁니다. 제품이 이미 넣은 binding(명령이 `tmux_project_board.sh`를 부름)은 사용자 binding이 아니므로 다시 읽으면 같은 결과로 바뀝니다. tmux 3.8 기준으로 `prefix B`는 기본 binding이 없고, `MouseDown1Pane`의 기본값은 `select-pane -t = \; send-keys -M`입니다.
 2. Board 키는 사용자가 바꿀 수 있습니다. 통합 파일을 읽기 전에 tmux option `@project_agent_board_key`를 설정하면 그 키를 씁니다. 없으면 `B`입니다.
-3. 건너뛴 binding은 `check`가 "binding 건너뜀"으로 알립니다. 어느 키를 건너뛰었는지 함께 알립니다. 실패가 아닙니다.
-4. 통합 파일이 넣은 binding과 hook은 `uninstall` 뒤에도 server가 끝날 때까지 남습니다. `uninstall`은 이를 되돌리는 명령을 출력합니다. 출력하는 명령은 `unbind-key`, 기본값이 있는 `MouseDown1Pane`의 기본값 복원, `set-hook -gu`입니다. 사용자의 binding은 되돌림 대상이 아닙니다.
+3. 건너뛴 binding은 `check`가 "binding 건너뜀"으로 알립니다. 어느 키를 건너뛰었는지 함께 알립니다. 실패가 아닙니다. 건너뛴 키는 server option `@project_agent_board_skipped`가 `<table>:<key>` 단어를 공백으로 이어 담습니다(예: `prefix:B root:MouseDown1Pane`). 건너뛴 키가 없으면 빈 값입니다. 통합 파일을 읽을 때마다 다시 정해집니다.
+4. 통합 파일이 넣은 binding과 hook은 `uninstall` 뒤에도 server가 끝날 때까지 남습니다. `uninstall`은 이를 되돌리는 명령을 출력합니다. 출력하는 명령은 `unbind-key`, 기본값이 있는 `MouseDown1Pane`의 기본값 복원, `set-hook -gu`·`set-hook -gwu`입니다. 대상은 5.3절 표의 목록이며, 건너뛴 키(`@project_agent_board_skipped`)는 되돌리지 않습니다. 사용자의 binding은 되돌림 대상이 아닙니다.
 5. 설치기는 이 명령을 실행하지 않습니다. 실행 중인 server를 바꾸지 않는 원칙은 3절의 "실행 중인 tmux server" 행과 같습니다.
 
 ## 4. 설치가 절대 건드리지 않는 것
@@ -163,9 +163,17 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 | `run-shell -b` | stop·restart 예약, Board popup | controller script 실행, `display-popup` | [tmux.py:619](../../tools/agent-session/agent_session/tmux.py), [tmux_control.py:366](../../tools/project-board/project_board/tmux_control.py) |
 | Board option | Board를 켜고 끌 때, 크기를 바꿀 때 | server option `@project_board_enabled`, `@project_board_config`, `@project_board_width`, `@project_board_expanded`, window option `@project_board_pane`, `@project_board_restore`, pane option `@project_board_managed`, `@project_board_click_socket` | [tmux_control.py:146, 182-208, 233-237, 289-352](../../tools/project-board/project_board/tmux_control.py) |
 | Board pane | Board가 켜져 있을 때, client가 보는 window마다 | `split-window`로 사이드바 pane을 추가합니다. | [tmux_control.py:218-250](../../tools/project-board/project_board/tmux_control.py) |
-| 통합 파일이 넣는 binding·hook (`source-file`로 읽힐 때. 규칙은 3.1절) | tmux 설정을 읽을 때 | `bind-key B`, root table의 `MouseDown1Pane`, `[board]` 이름의 hook 9개(`client-attached`, `client-detached`, `client-session-changed`, `session-window-changed`, `window-created`, `window-closed`, `after-resize-pane`, `pane-died`) | [project_board.conf:3-32](../../integrations/tmux/project_board.conf) |
+| 통합 파일의 binding (`source-file`로 읽힐 때. 규칙은 3.1절) | tmux 설정을 읽을 때 | prefix table의 Board 키(`@project_agent_board_key`, 없으면 `B`)와 root table의 `MouseDown1Pane`. 제품 binding은 명령에 `tmux_project_board.sh`가 들어 있습니다. `MouseDown1Pane`을 되돌리는 기본값은 `select-pane -t = \; send-keys -M`입니다. | [project_agent_bind.sh](../../integrations/tmux/project_agent_bind.sh) |
+| 통합 파일의 hook | tmux 설정을 읽을 때 | 이름이 `[project-agent]`인 hook 8개. session scope(`set-hook -g`로 넣고 `set-hook -gu '<event>[project-agent]'`로 지움) 5개: `client-attached`, `client-detached`, `client-session-changed`, `session-window-changed`, `after-resize-pane`. window scope(`set-hook -gw`로 보이고 `set-hook -gwu`로 지움) 3개: `window-created`, `window-closed`, `pane-died`. 같은 이름의 항목만 바뀌고 사용자 hook은 그대로입니다. | [project-agent.conf](../../integrations/tmux/project-agent.conf) |
+| 통합 파일의 server option | tmux 설정을 읽을 때 | `@project_agent_tmux_dir`: 통합 파일을 읽은 디렉터리입니다. 설치본은 `current` link를 풀지 않은 경로입니다. binding·hook·`@project_agent_decide_status`가 이 경로의 helper를 부릅니다. `@project_agent_board_skipped`: 3.1절의 건너뛴 키입니다. `@project_agent_decide_status`: 결정 대기 표시 조각입니다(아래). | [project-agent.conf](../../integrations/tmux/project-agent.conf), [project_agent_bind.sh](../../integrations/tmux/project_agent_bind.sh) |
 
-사용자 status 배치(`status-left`, `status-format[0]`, `MouseDown1Status`)는 통합 파일에 넣지 않습니다. 각자의 tmux 설정이 소유합니다(DIST-001 5단계). 그 내용은 `project_board_home_status.conf`(agent 저장소의 파일이며 이 저장소에는 아직 없습니다. TMUX-001이 정합니다)에 있고 `tmux/tmux.conf`가 같은 줄을 씁니다.
+사용자 status 배치(`status-left`, `status-format[0]`, `MouseDown1Status`)는 통합 파일에 넣지 않습니다. 각자의 tmux 설정이 소유합니다(DIST-001 5단계). `project_board_home_status.conf`는 각 사용자의 tmux 설정 파일이며 제품에 넣지 않습니다.
+
+결정 대기 표시는 server option `@project_agent_decide_status`가 `tmux_decide_status.py`를 부르는 `#()` 조각으로 제공합니다. 사용자가 자기 status 설정에 한 줄을 넣어 씁니다. 경로를 알 필요가 없습니다.
+
+```tmux
+set-option -ag status-right '#{E:@project_agent_decide_status}'
+```
 
 ### 5.4 HOME 밖
 
@@ -306,7 +314,7 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 | T22 | `~/.codex/skills/project-team`이 runtime이 만든 link(`skills.json`에 대상이 일치하게 기록됨). 같은 이름이지만 `skills.json`에 없는 link도 따로 준비 | `install` | 앞의 경우: 2절의 경로, 그 link의 대상 교체, 설치 기록. 뒤의 경우: 없음(거절) | `skills.json`의 내용과 `mtime_ns`가 같음. 설치 기록에 넘겨받음이 적힘 |
 | T23 | `CLAUDE_CONFIG_DIR`·`CODEX_HOME`을 격리 HOME 안의 다른 디렉터리로 설정 | `install`, 그 뒤 두 변수를 지우고 `uninstall` | skill link는 변수가 가리키는 디렉터리의 `skills/`에만 생김. 기본 경로(`~/.claude`, `~/.codex`)에는 아무것도 없음 | 설치 기록에 실제 경로가 있음. `uninstall`이 기록한 경로의 link를 지움 |
 
-기대 변경 목록의 "정확히"는 T1~T18과 T20~T23에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding 구현은 DIST-001 5단계에서 갖춥니다.
+기대 변경 목록의 "정확히"는 T1~T18과 T20~T23에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding은 TMUX-001이 구현했습니다([test](../../integrations/tmux/test_project_agent_conf.py)).
 
 ## 9. 이 계약과 어긋나는 현재 동작
 
@@ -317,9 +325,9 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 | 등록 파일 위치 | 해결됨(DIST-003): 6절의 세 후보를 찾음 | 6절의 세 후보 | 2단계 |
 | CLI python 선택 | 해결됨(DIST-003): 6.1절의 공용 launcher가 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`를 받음 | 설치 때 고른 interpreter. `project-board`는 `PYTHONNOUSERSITE=1`이므로 release 안의 package를 `PYTHONPATH`로 넣어야 함 | 2단계 |
 | 원격 runtime의 skill link | runtime의 건너뛰기는 해결됨(DIST-003): `install.json`이 있으면 `_install_skills`가 link를 만들지 않고 고치지 않음. 설치의 넘겨받기는 남음 | 설치본이 있으면 만들지 않고 고치지 않음(2절 규칙 6) | 4단계(설치의 넘겨받기) |
-| tmux 통합 파일의 경로 | `~/.tmux/scripts/tmux_project_board.sh`를 고정 경로로 부름([project_board.conf:3-32](../../integrations/tmux/project_board.conf)) | `current` 아래 경로 | 5단계 |
-| tmux 통합 파일의 binding | `prefix B`와 root `MouseDown1Pane`을 무조건 binding함 | 3.1절 | 5단계 |
-| `tmux_decide_status.py`의 project-item 찾기 | 저장소 상대 경로([README의 실행 경로 계약 6항](README.md)) | 설치본에서도 찾음 | 5단계 |
+| tmux 통합 파일의 경로 | 해결됨(TMUX-001): 통합 파일이 읽힌 디렉터리(`@project_agent_tmux_dir`)의 helper를 부름 | `current` 아래 경로 | 5단계 |
+| tmux 통합 파일의 binding | 해결됨(TMUX-001): 3.1절대로 binding하고 건너뜀 | 3.1절 | 5단계 |
+| `tmux_decide_status.py`의 project-item 찾기 | 해결됨(TMUX-001): 스크립트가 있는 release 안의 `tools/project-item`을 찾음([README의 실행 경로 계약 6항](README.md)). `current` link 경로로 불러도 같은 release를 찾음 | 설치본에서도 찾음 | 5단계 |
 
 ### 9.1 7단계 안내문이 다룰 항목
 
