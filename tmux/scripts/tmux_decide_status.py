@@ -75,12 +75,11 @@ def write_cache(path, known):
 
 
 def load_project_item():
-    """Import the project-item modules that own the registry and the decision format."""
+    """Import the public interface of project-item (project_item.api)."""
     if str(PROJECT_ITEM) not in sys.path:
         sys.path.insert(0, str(PROJECT_ITEM))
-    from project_item import decide, registry, store
-    from project_item.kinds import DECIDE
-    return decide, registry, store, DECIDE
+    from project_item import api
+    return api
 
 
 def read_open_decisions(previous):
@@ -89,19 +88,19 @@ def read_open_decisions(previous):
     A project whose directory cannot be read keeps its entry of `previous`; without one it is left out.
     """
     try:
-        decide, registry, store, kind = load_project_item()
-        projects = registry.projects()
+        item_api = load_project_item()
+        projects = item_api.projects()
     except Exception:
         return None
     current = {}
     for project in projects:
         try:
-            root = registry.item_root(project, "decide")
+            root = item_api.item_root(project, "decide")
             ids = {}
-            for path in store.item_files(kind, root, "open"):
-                item_id = store.file_id(kind, path) or path.stem
+            for path in item_api.item_files(item_api.DECIDE, root, "open"):
+                item_id = item_api.file_id(item_api.DECIDE, path) or path.stem
                 try:
-                    title = decide.parse(path, "open").title or ""
+                    title = item_api.DECIDE.fmt.parse(path, "open").title or ""
                 except (OSError, ValueError):
                     title = ""
                 ids[item_id] = title

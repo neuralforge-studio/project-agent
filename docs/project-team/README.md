@@ -36,7 +36,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | 종류 | 진입점 |
 | --- | --- |
 | CLI | `agent-session`, `project-item`, `project-board`. 각 `bin/` 파일을 `~/.local/bin`에 link합니다. |
-| Python API | `agent_session.api`의 `read_state`, `check_binding`, `liveness`([명세 5절](spec.md#5-내부-세션-등록과-실행-확인)). `project-item`은 선언한 공개 API가 아직 없습니다(목표 관계 참조). |
+| Python API | `agent_session.api`의 `read_state`, `check_binding`, `liveness`([명세 5절](spec.md#5-내부-세션-등록과-실행-확인)). `project_item.api`: 목록의 원본은 [api.py](../../codex/tools/project-item/project_item/api.py)의 `__all__`이고 계층은 [project-item README](../../codex/tools/project-item/README.md#layers-and-public-api)가 설명합니다. |
 | Hook·controller | `agent_session.internal`의 `register_from_hook`(Claude SessionStart hook), `register_current`(Codex 초기 도구), `mark_process`, `run_controller`([명세 5절](spec.md#provider-내부-등록)) |
 | 원격 seat | `python -m agent_session.remote_runtime`, `python -m agent_session.remote_bridge` |
 | tmux option | 관리 window의 `@agent_session_*`([명세 3절](spec.md#실행-근거와-잠금)), Board의 `@project_board_*`(`@project_board_enabled`, `_managed`, `_pane`, `_width`, `_restore`, `_expanded`, `_config`, `_click_socket`) |
@@ -52,20 +52,20 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | 사용하는 쪽 | 쓰는 대상 | 위치 |
 | --- | --- | --- |
 | `project_item.registry` | `agent_session.api`, `.config`, `.errors` | `registry.py`가 `sys.path`에 `agent-session`을 넣습니다. |
-| `agent_session.jobs` | `project_item.assign`, `.registry` | `jobs.py`가 `sys.path`에 `project-item`을 넣습니다. |
-| `agent_session.remote_bridge` | `project_item.assign`, `.store` | 함수 안에서 import합니다. |
-| `project_board.model` | `agent_session.api`, `.config`, `.errors`와 `project_item.cr`, `.kinds`, `.render`, `.store` | `model.py`가 두 도구를 `sys.path`에 넣습니다. |
-| `project_board.answer` | `project_item.render`, `.store`, `.registry` | |
+| `agent_session.jobs` | `project_item.api` | `jobs.py`의 `item_api()`가 `sys.path`에 `project-item`을 넣습니다. |
+| `agent_session.remote_bridge` | `project_item.api` | `jobs.item_api()`로 가져와 함수 안에서 씁니다. |
+| `project_board.model` | `agent_session.api`, `.config`, `.errors`와 `project_item.api` | `model.py`가 두 도구를 `sys.path`에 넣습니다. |
+| `project_board.answer` | `project_item.api` | |
 | `project_board.tmux_control` | `agent_session.api`, `.errors`, `.tmux` | |
-| `tmux/scripts/tmux_decide_status.py` | `project_item.decide`, `.registry`, `.store`, `.kinds` | 저장소 상대 경로로 `project-item`을 찾습니다. |
+| `tmux/scripts/tmux_decide_status.py` | `project_item.api` | 저장소 상대 경로로 `project-item`을 찾습니다. |
 
-`agent-session`과 `project-item`은 서로를 씁니다(양방향). 비공개 모듈과 함수를 쓰는 관계도 있습니다.
+`agent-session`과 `project-item`은 서로를 씁니다(양방향). project-item을 쓰는 쪽은 `project_item.api`만 씁니다([경계 test](../../codex/tools/project-item/tests/test_api_boundary.py)가 확인합니다). 이 표의 project-item 소비자 목록은 그 test의 `CONSUMERS`와 맞춥니다. `agent_session`의 비공개 모듈(`config`·`errors`·`tmux`)을 쓰는 관계는 남아 있습니다.
 
 ### 목표
 
-CR ARCH-001이 합의한 목표입니다. 아직 적용하지 않았으며, 단계마다 이 절을 현행으로 옮깁니다.
+CR ARCH-001이 합의한 목표입니다. `project_item.api`는 적용해 위 현행에 옮겼습니다(ARCH-003). 나머지는 아직 적용하지 않았으며, 단계마다 이 절을 현행으로 옮깁니다.
 
-- 각 도구는 공개 인터페이스를 선언합니다(`project_item.api`, 정리한 `agent_session.api`). 다른 도구와 tmux script는 그 인터페이스만 씁니다.
+- 각 도구는 공개 인터페이스를 선언합니다(`project_item.api`는 적용함, 정리한 `agent_session.api`는 남음). 다른 도구와 tmux script는 그 인터페이스만 씁니다.
 - 도구 사이의 `sys.path` 조작은 도구마다 한 곳에 모읍니다.
 - `agent-session`과 `project-item`의 양방향 의존은 해소하거나, 남기면 이유를 이 문서에 기록합니다.
 

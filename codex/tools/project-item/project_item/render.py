@@ -1,6 +1,7 @@
 """Render the decision items of one project as one self-contained HTML page.
 
 The page is derived output. The item files stay the source; the page never takes input.
+The reads and the decision stage come from read.py and decide.py.
 """
 from __future__ import annotations
 
@@ -12,10 +13,9 @@ import re
 from pathlib import Path
 from typing import Mapping
 
-from .cr import section_heads
-from .kinds import CR, DECIDE
 from . import store
-from .store import item_files
+from .decide import decision_stage
+from .read import cr_states, load
 
 PAGE_NAME = "decide.html"
 LABELS = {"Background": "배경", "Options": "선택지", "Recommendation": "추천", "Evidence": "근거",
@@ -110,50 +110,6 @@ def markdown(text: str) -> str:
 
 
 # ---------------------------------------------------------------- items
-def sections(path: Path) -> list[tuple[str, str]]:
-    lines = path.read_text(encoding="utf-8").splitlines()
-    heads = section_heads(lines)
-    out = []
-    for index, (start, name) in enumerate(heads):
-        end = heads[index + 1][0] if index + 1 < len(heads) else len(lines)
-        out.append((name, "\n".join(lines[start + 1:end]).strip()))
-    return out
-
-
-def load(root: Path) -> list[dict]:
-    items = []
-    for state in DECIDE.states:
-        for path in item_files(DECIDE, root, state):
-            parsed = DECIDE.fmt.parse(path, state)
-            items.append({"id": parsed.item_id or path.stem, "title": parsed.title or path.stem,
-                          "state": state, "headers": parsed.headers, "sections": sections(path)})
-    return items
-
-
-RELATED_CR_RE = re.compile(r"(?<![\w-])([A-Z][A-Z0-9]*-\d{2,})(?![\w-])")
-
-
-def cr_states(root: Path | None) -> dict[str, str]:
-    """Map CR/JOB IDs to their source directory states for derived decision progress."""
-    if root is None:
-        return {}
-    return {store.file_id(CR, path): state for state, path in store.all_files(CR, root)
-            if store.file_id(CR, path)}
-
-
-def decision_stage(item: dict, states: Mapping[str, str]) -> str:
-    """Display stage from the decision directory and related CR/JOB directories."""
-    if item["state"] == "open":
-        return "결정 대기"
-    if item["state"] == "answered":
-        return "답변 접수"
-    if item["headers"].get("Outcome", "").split()[:1] == ["withdrawn"]:
-        return "완료"
-    related = RELATED_CR_RE.findall(item["headers"].get("Related", ""))
-    return ("반영 중" if any(states.get(item_id) not in ("done", "deferred") for item_id in related)
-            else "완료")
-
-
 def _first_line(body: str) -> str:
     for line in body.splitlines():
         if line.strip() and not line.lstrip().startswith("|"):

@@ -5,25 +5,14 @@ import contextlib
 import datetime as dt
 import fcntl
 import hashlib
-import json
 import os
 import re
 import subprocess
 from pathlib import Path
 
-from .cr import section_heads
+from .cr import add_disposition, outcome_kind, set_header
+from .errors import ItemError
 from .kinds import CR, DECIDE, Kind
-from .registry import ItemError
-
-MAX_DECISION_ANSWER_BYTES = 16384
-
-
-def _answer_json(answer: str) -> str:
-    """Keep the JSON string on one Markdown line without escaping ordinary Unicode text."""
-    encoded = json.dumps(answer, ensure_ascii=False)
-    for separator in ("\x85", "\u2028", "\u2029"):
-        encoded = encoded.replace(separator, f"\\u{ord(separator):04x}")
-    return encoded
 
 
 # ---------------------------------------------------------------- lock
@@ -179,72 +168,21 @@ def answer_decide(root: Path, item_id: str, answer: str, *, by: str = "user") ->
     The answer is a JSON string in the file header, so newlines and Markdown headings survive
     without creating a second item store. Notification is the caller's next step.
     """
-    if not isinstance(answer, str):
-        raise ItemError("answer_invalid", "The decision answer must be text.")
-    if not answer.strip():
-        raise ItemError("answer_empty", "The decision answer is empty.")
-    if "\x00" in answer:
-        raise ItemError("answer_invalid", "The decision answer contains a NUL byte.")
-    if len(answer.encode("utf-8")) > MAX_DECISION_ANSWER_BYTES:
-        raise ItemError("answer_too_large", f"Keep the answer within {MAX_DECISION_ANSWER_BYTES} bytes.")
+    DECIDE.fmt.check_answer(answer)
     with root_lock(root):
         state, source = find(DECIDE, root, item_id)
         if state != "open":
             raise ItemError("decide_not_open", f"{item_id} is {state}; only open decisions accept answers.")
-        text = set_header(source.read_text(encoding="utf-8"), "Answer", _answer_json(answer))
+        text = set_header(source.read_text(encoding="utf-8"), "Answer", DECIDE.fmt.answer_json(answer))
         day = dt.date.today().isoformat()
         text = add_disposition(text, f"{day} {by}: open -> answered. 답변을 접수했습니다.", DECIDE.sections)
         return _relocate(DECIDE, root, item_id, state, source, "answered", text)
 
 
 # ---------------------------------------------------------------- move
-_HEADER_LINE = re.compile(r"^-\s+([A-Z][A-Za-z ]*?):")
-
-
-def _header_end(lines: list[str]) -> int:
-    """Index after the header block (title, then '- Key: value' lines and blank lines)."""
-    i = 1
-    while i < len(lines) and (lines[i].strip() == "" or _HEADER_LINE.match(lines[i])):
-        i += 1
-    while i > 1 and lines[i - 1].strip() == "":
-        i -= 1
-    return i
-
-
-def set_header(text: str, key: str, value: str | None) -> str:
-    """Write the '- <key>: <value>' header at the end of the header block (None removes it)."""
-    lines = text.splitlines()
-    end = _header_end(lines)
-    kept = [n for n in range(1, end) if not re.match(rf"^-\s+{re.escape(key)}:", lines[n])]
-    head = [lines[0]] + [lines[n] for n in kept]
-    if value is not None:
-        head.append(f"- {key}: {value}")
-    return "\n".join(head + lines[end:]) + "\n"
-
-
 def set_outcome(text: str, outcome: str | None) -> str:
     """Write the Outcome header (None removes it)."""
     return set_header(text, "Outcome", outcome)
-
-
-def add_disposition(text: str, entry: str, order: tuple[str, ...]) -> str:
-    """Append one entry to '## Disposition', creating the section at its place in the order."""
-    lines = text.rstrip("\n").splitlines()
-    heads = section_heads(lines)
-    for n, name in heads:
-        if name == "Disposition":
-            end = next((m for m, _ in heads if m > n), len(lines))
-            while end > n + 1 and lines[end - 1].strip() == "":
-                end -= 1
-            lines[end:end] = [f"- {entry}"]
-            return "\n".join(lines) + "\n"
-    later = set(order[order.index("Disposition") + 1:])
-    at = next((n for n, name in heads if name in later), len(lines))
-    block = ["## Disposition", "", f"- {entry}", ""]
-    if at == len(lines):
-        block = [""] + block[:-1]
-    lines[at:at] = block
-    return "\n".join(lines) + "\n"
 
 
 def record(kind: Kind, root: Path, item_id: str, entry: str) -> Path:
@@ -257,10 +195,6 @@ def record(kind: Kind, root: Path, item_id: str, entry: str) -> Path:
             raise ItemError("format_invalid", f"{item_id} does not meet {state}/: " + "; ".join(bad))
         path.write_text(text, encoding="utf-8")
     return path
-
-
-def _outcome_kind(outcome: str | None) -> str:
-    return outcome.split()[0] if outcome else ""
 
 
 def _in_index(root: Path, path: Path) -> bool:
@@ -319,32 +253,17 @@ def move_locked(kind: Kind, root: Path, item_id: str, state: str, outcome: str |
     if state == source_state or state not in kind.transitions[source_state]:
         raise ItemError("invalid_transition",
                         f"{kind.name} {item_id}: {source_state} -> {state} is not allowed.")
-    text = source.read_text(encoding="utf-8")
-    if kind is DECIDE and state == "done" and source_state == "open" and _outcome_kind(outcome) == "decided":
-        raise ItemError("invalid_transition", "Record the answer before confirming a decided decision.")
-    if kind is DECIDE and state == "done" and source_state == "answered":
-        answer = kind.fmt.answer_text(kind.fmt.parse_text(text, source, source_state))
-        if answer is None:
-            raise ItemError("format_invalid", f"{item_id} has no recorded answer.")
-        original = f"사용자 답변 원문: {_answer_json(answer)}"
-        note = f"{note} {original}" if note else original
-    if kind is DECIDE and state == "open" and source_state == "answered":
-        answer = kind.fmt.answer_text(kind.fmt.parse_text(text, source, source_state))
-        if answer is None:
-            raise ItemError("format_invalid", f"{item_id} has no recorded answer.")
-        note = f"{note} 이전 답변 원문: {_answer_json(answer)}"
-    if kind is DECIDE and state == "open":
-        text = set_header(text, "Answer", None)
+    text, note = kind.fmt.prepare_move(item_id, source.read_text(encoding="utf-8"), source, source_state,
+                                       state, outcome, note)
     current = kind.fmt.parse_text(text, source, source_state).headers.get("Outcome")
     new_outcome = None if state in ("open", "todo", "in-progress") else (outcome or current)
     if outcome and new_outcome is None:
         raise ItemError("invalid_outcome", f"{state}/ has no Outcome.")
     allowed = kind.outcomes.get(state)
-    if allowed is not None and _outcome_kind(new_outcome) not in allowed:
+    if allowed is not None and outcome_kind(new_outcome) not in allowed:
         raise ItemError("invalid_outcome", f"{kind.name} {state}/ takes Outcome "
                         + " | ".join(allowed) + f", not '{new_outcome}'.")
-    if kind is CR and _outcome_kind(new_outcome) == "fixed" and source_state not in ("todo", "in-progress"):
-        raise ItemError("invalid_transition", "A fixed CR reaches done only from todo or in-progress.")
+    kind.fmt.check_outcome(source_state, new_outcome)
     if new_outcome != current:
         text = set_header(text, "Outcome", new_outcome)
     if by:

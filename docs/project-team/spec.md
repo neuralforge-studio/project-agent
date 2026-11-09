@@ -1162,11 +1162,8 @@ CR 형식·상태·전이는 project-item skill과 `codex/skills/project-item/re
 | branch | Write이면 `cr/<ID>`. Read-only이면 없음 |
 | 시작 기준 | `- Base: <commit> <ISO 시각>`과 state의 git_hash |
 
-| 작성 주체 | 하는 일 |
-| --- | --- |
-| Leader | CR 생성, 판정(Disposition), todo 이동, 검토 결과·수정 요청 기록, in-progress 밖으로 이동 |
-| Worker | 자기 CR이 in-progress인 동안 `## Result`에 제출 commit과 검증 결과만 추가 |
-| agent-session | todo→in-progress 이동, Base 기록 |
+CR을 고치는 주체(Leader·Worker)와 하는 일은 [cr.md의 JOB으로 쓸 때](../../codex/skills/project-item/references/cr.md#job으로-쓸-때)가 소유합니다.
+agent-session은 start에서 todo→in-progress 이동과 `- Base:` 기록을 합니다.
 
 역할 지침·읽을 문서는 CR 본문에 link와 문장으로 적습니다. Submodule 초기화는 start의 Git 준비가 합니다. 공통 형식은 이를 해석하지 않습니다.
 `project-item move`의 허용 전이와 호출자 권한(`agent_session_only`·`role_denied`·`review_missing`)은 [project-item skill의 상태와 전이](../../codex/skills/project-item/SKILL.md#상태와-전이)가 소유합니다.

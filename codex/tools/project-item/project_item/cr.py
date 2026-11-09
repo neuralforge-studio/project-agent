@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .errors import ItemError
+
 STATES = ("open", "todo", "in-progress", "done", "deferred")
 MODES = ("write", "read-only")
 SEVERITIES = ("S1", "S2", "S3")
@@ -97,6 +99,65 @@ def submitted_hash(result: str) -> str | None:
         if match:
             found = match.group(1)
     return found
+
+
+def _header_end(lines: list[str]) -> int:
+    """Index after the header block (title, then '- Key: value' lines and blank lines)."""
+    i = 1
+    while i < len(lines) and (lines[i].strip() == "" or HEADER_RE.match(lines[i])):
+        i += 1
+    while i > 1 and lines[i - 1].strip() == "":
+        i -= 1
+    return i
+
+
+def set_header(text: str, key: str, value: str | None) -> str:
+    """Write the '- <key>: <value>' header at the end of the header block (None removes it).
+    The header block is the same in a CR and a decision file."""
+    lines = text.splitlines()
+    end = _header_end(lines)
+    kept = [n for n in range(1, end) if not re.match(rf"^-\s+{re.escape(key)}:", lines[n])]
+    head = [lines[0]] + [lines[n] for n in kept]
+    if value is not None:
+        head.append(f"- {key}: {value}")
+    return "\n".join(head + lines[end:]) + "\n"
+
+
+def add_disposition(text: str, entry: str, order: tuple[str, ...]) -> str:
+    """Append one entry to '## Disposition', creating the section at its place in `order`."""
+    lines = text.rstrip("\n").splitlines()
+    heads = section_heads(lines)
+    for n, name in heads:
+        if name == "Disposition":
+            end = next((m for m, _ in heads if m > n), len(lines))
+            while end > n + 1 and lines[end - 1].strip() == "":
+                end -= 1
+            lines[end:end] = [f"- {entry}"]
+            return "\n".join(lines) + "\n"
+    later = set(order[order.index("Disposition") + 1:])
+    at = next((n for n, name in heads if name in later), len(lines))
+    block = ["## Disposition", "", f"- {entry}", ""]
+    if at == len(lines):
+        block = [""] + block[:-1]
+    lines[at:at] = block
+    return "\n".join(lines) + "\n"
+
+
+def outcome_kind(outcome: str | None) -> str:
+    """The first word of an Outcome value (fixed, waived, merged, moved, decided, withdrawn)."""
+    return outcome.split()[0] if outcome else ""
+
+
+def prepare_move(item_id: str, text: str, path: Path, source_state: str, state: str,
+                 outcome: str | None, note: str | None) -> tuple[str, str | None]:
+    """The CR rules that change the text or note of a move: none (a decision has some)."""
+    return text, note
+
+
+def check_outcome(source_state: str, new_outcome: str | None) -> None:
+    """The CR rule on the Outcome that a move gives."""
+    if outcome_kind(new_outcome) == "fixed" and source_state not in ("todo", "in-progress"):
+        raise ItemError("invalid_transition", "A fixed CR reaches done only from todo or in-progress.")
 
 
 def acceptance(day: str, commit: str, note: str | None = None) -> str:

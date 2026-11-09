@@ -27,6 +27,22 @@ ln -s <agent repo>/codex/tools/project-item/bin/project-item ~/.local/bin/projec
 `~/.local/bin` must be in `PATH`. The entry resolves its own link, so the source tree is
 the only copy.
 
+## Layers and public API
+
+Other tools and tmux scripts import `project_item.api` and nothing else of this package.
+The names in `api.__all__` are the public interface (`project_item/api.py`);
+`tests/test_api_boundary.py` checks the consumers. A consumer that needs another name asks for
+it in `api.py`.
+
+| Layer | Modules | Rule |
+| --- | --- | --- |
+| Public API | `api.py` | lists what a consumer may use; owns no logic |
+| Domain core | `errors.py`, `cr.py`, `decide.py`, `kinds.py`, `read.py` | formats, transitions, the rules a move applies (`prepare_move`, `check_outcome` of each format module), reads (sections, CR states, decision stage). Imports neither `render` nor `cli` (tested) |
+| Files and project | `store.py`, `assign.py`, `guard.py`, `registry.py` | files, the root lock, git, project selection and caller checks; `store.move_locked` applies the core rules and moves the file |
+| Output | `render.py`, `cli.py` | the decision page and the command line |
+
+`project_item.registry.ItemError` remains importable; `errors.ItemError` is the definition.
+
 ## Commands
 
 `project-item --help` and `project-item <command> --help` own the options and inputs. This

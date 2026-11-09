@@ -29,14 +29,13 @@ def _parts(text):
 def sync_result(project, settings, original, updated):
     """Copy only Result into the authoritative CR under its existing item-root lock."""
     from . import jobs
-    jobs._modules()
-    from project_item import assign, store
+    api = jobs.item_api()
     before, result, after = _parts(updated)
     old_before, old_result, old_after = _parts(original)
     if (before, after) != (old_before, old_after):
         raise SessionError("remote_result_invalid", "A Worker may return only the CR Result section.", 2)
-    with store.root_lock(jobs.cr_root(project)):
-        item = assign._lookup(jobs.cr_root(project), settings["job_id"])
+    with api.root_lock(jobs.cr_root(project)):
+        item = api.lookup_locked(jobs.cr_root(project), settings["job_id"])
         if item["state"] != "in-progress":
             raise SessionError("target_changed", "The CR left in-progress before the remote report.")
         path = Path(item["path"])

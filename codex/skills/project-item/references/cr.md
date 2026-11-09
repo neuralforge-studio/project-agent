@@ -16,13 +16,7 @@ CR 항목은 각 저장소의 git CR 디렉토리(`open/`, `todo/`, `done/`, `de
 
 ## 도구
 
-`project-item`을 사용합니다. Codex와 Claude Code가 같은 도구를 씁니다. 허용 전이는 [project-item skill](../SKILL.md)이 소유합니다. 명령의 옵션은 `--help`, `move`의 동작 단계는 [project-item README](../../../tools/project-item/README.md)를 봅니다.
-
-- `project-item new cr --project <project> --area <AREA> --title ...`: 다음 번호로 `open/`에 파일을 만듭니다.
-- `project-item ls [--project <project>]`: `open/`, `todo/`, `deferred/`의 항목과 상태별 개수를 보여 줍니다.
-- `project-item check cr`: 이 문서의 파일 형식을 검사합니다.
-- `project-item owner <project>`: 담당 session 이름을 보여 줍니다. 관리 Leader가 없는 project에 `SendMessage`로 알릴 때만 씁니다("다른 project에 요청할 때").
-- `project-item move <ID> <STATE>`: 허용 전이에 따라 상태를 옮깁니다.
+`project-item`을 사용합니다. Codex와 Claude Code가 같은 도구를 씁니다. 어떤 상황에 어떤 명령을 쓰는지는 [project-item skill의 "언제 무엇을 쓰는가"](../SKILL.md#언제-무엇을-쓰는가)가, 허용 전이는 같은 skill의 "상태와 전이"가 소유합니다. 명령의 옵션은 `project-item <명령> --help`, `move`의 동작 단계는 [project-item README](../../../tools/project-item/README.md)를 봅니다.
 
 ## 상태와 소유권
 

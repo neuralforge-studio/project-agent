@@ -1,7 +1,7 @@
-"""The decision page: escaping, order and the markdown subset."""
+"""The decision page (escaping, order, the markdown subset) and the decision reads it shows."""
 import datetime as dt
 
-from project_item import render
+from project_item import decide, read, render
 
 
 def item(item_id, urgency, state="open", title="질문", sections=None, **headers):
@@ -36,14 +36,14 @@ def test_decision_stages_follow_related_cr_without_copying_its_state():
     waiting = item("D-20261107-01", "high", Related="SESSION-020")
     received = item("D-20261107-02", "normal", state="answered", Related="SESSION-020")
     confirmed = item("D-20261107-03", "normal", state="done", Related="SESSION-020")
-    assert render.decision_stage(waiting, {"SESSION-020": "open"}) == "결정 대기"
-    assert render.decision_stage(received, {"SESSION-020": "todo"}) == "답변 접수"
+    assert decide.decision_stage(waiting, {"SESSION-020": "open"}) == "결정 대기"
+    assert decide.decision_stage(received, {"SESSION-020": "todo"}) == "답변 접수"
     for cr_state in ("open", "todo", "in-progress"):
-        assert render.decision_stage(confirmed, {"SESSION-020": cr_state}) == "반영 중"
-    assert render.decision_stage(confirmed, {"SESSION-020": "done"}) == "완료"
-    assert render.decision_stage(confirmed, {}) == "반영 중"
-    assert render.decision_stage(item("D-20261107-04", "low", state="done"), {}) == "완료"
-    assert render.decision_stage(item("D-20261107-05", "low", state="done",
+        assert decide.decision_stage(confirmed, {"SESSION-020": cr_state}) == "반영 중"
+    assert decide.decision_stage(confirmed, {"SESSION-020": "done"}) == "완료"
+    assert decide.decision_stage(confirmed, {}) == "반영 중"
+    assert decide.decision_stage(item("D-20261107-04", "low", state="done"), {}) == "완료"
+    assert decide.decision_stage(item("D-20261107-05", "low", state="done",
                                       Related="D-20261107-01"), {}) == "완료"
 
 
@@ -52,8 +52,8 @@ def test_withdrawn_decision_is_complete_while_related_cr_waits():
     merged = item("D-20261107-07", "normal", state="done", Outcome="merged D-20261107-08",
                   Related="TOOL-001")
     states = {"TOOL-001": "todo"}
-    assert render.decision_stage(withdrawn, states) == "완료"
-    assert render.decision_stage(merged, states) == "반영 중"
+    assert decide.decision_stage(withdrawn, states) == "완료"
+    assert decide.decision_stage(merged, states) == "반영 중"
     html = render.page("demo", [withdrawn], states=states)
     assert "반영 중 0건 · 완료 1건" in html
     assert "<dt>결론</dt><dd>withdrawn</dd>" in html
@@ -85,7 +85,7 @@ def test_sections_keep_fenced_markdown_headings_in_their_body(tmp_path):
                     "~~~md\n## Disposition\n예시입니다.\n~~~\n\n"
                     "````md\n## Recommendation\n```\n## Result\n````\n\n"
                     "## Options\n실제 선택지.\n", encoding="utf-8")
-    parts = render.sections(path)
+    parts = read.sections(path)
     assert [name for name, _ in parts] == ["Background", "Options"]
     assert "## Disposition" in parts[0][1] and "## Result" in parts[0][1]
     assert parts[1][1] == "실제 선택지."

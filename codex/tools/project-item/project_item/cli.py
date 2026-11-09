@@ -11,7 +11,7 @@ from pathlib import Path
 from . import guard, registry, render, store
 from .cr import acceptance
 from .kinds import CR, DECIDE, KINDS, kind_of_id
-from .registry import ItemError
+from .errors import ItemError
 
 
 def _common() -> argparse.ArgumentParser:
@@ -260,7 +260,7 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("projects", parents=[common], help="projects, item roots and counts")
     p.set_defaults(run=cmd_projects)
 
-    p = sub.add_parser("ls", parents=[common], help="items (default: cr open/todo/deferred, decide open/answered)")
+    p = sub.add_parser("ls", parents=[common], help="items (default: cr open/todo/in-progress/deferred, decide open/answered)")
     p.add_argument("kind", nargs="?", choices=KINDS)
     p.add_argument("--state", action="append", help="repeatable")
     p.add_argument("--all", action="store_true", help="every state")
