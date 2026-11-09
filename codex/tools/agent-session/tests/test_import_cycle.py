@@ -7,6 +7,7 @@ the real entry points do, and checks that the first import succeeds.
 Limit: this checks the four import orders below. It does not see a cycle that only a different
 `sys.path` or a dynamic import (`importlib`) would create.
 """
+import ast
 import subprocess
 import sys
 from pathlib import Path
@@ -39,3 +40,28 @@ def test_first_import_succeeds_in_a_new_interpreter(tool, module):
     program = _PROGRAM.format(path=str(TOOLS / tool), module=module, lazy=tool == "agent-session")
     result = subprocess.run([sys.executable, "-I", "-c", program], capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, f"import {module} failed:\n{result.stderr}"
+
+
+PACKAGE = TOOLS / "agent-session" / "agent_session"
+
+
+def _imports(module):
+    """Names of the agent_session modules that `module` imports anywhere, including inside functions."""
+    found = set()
+    for node in ast.walk(ast.parse((PACKAGE / f"{module}.py").read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.level == 1:
+            if node.module:
+                found.add(node.module.split(".")[0])
+            else:
+                found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            found.update(alias.name.split(".")[1] for alias in node.names
+                         if alias.name.startswith("agent_session."))
+    return found
+
+
+def test_lifecycle_and_suspend_do_not_import_each_other():
+    # Manager inherits SuspendMixin, so lifecycle -> suspend is the one allowed direction.
+    # Fleet gets the Manager from the assembling code (cli) instead of importing it.
+    assert "suspend" in _imports("lifecycle")
+    assert "lifecycle" not in _imports("suspend")

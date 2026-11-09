@@ -97,8 +97,9 @@ def build_parser():
 
 
 def _default_fleet(**kwargs):
+    from .lifecycle import Manager
     from .suspend import Fleet
-    return Fleet(**kwargs)
+    return Fleet(Manager, **kwargs)
 
 
 def _default_manager(**kwargs):
@@ -145,10 +146,6 @@ def main(argv=None, manager_factory=None, fleet_factory=None):
             from .remote_bridge import forward
             _emit(True, data=forward(arguments))
             return 0
-        if operation == "start" and arguments.prompt_file is not None and arguments.job != "leader":
-            raise SessionError("invalid_arguments", "--prompt-file is only valid for --job leader.", 2)
-        if operation == "start" and arguments.job == "leader" and arguments.seat is not None:
-            raise SessionError("invalid_arguments", "--seat is only valid for a Worker JOB.", 2)
         with redirect_stdout(sys.stderr):
             effects_possible = True
             if operation in ("shutdown", "resume"):

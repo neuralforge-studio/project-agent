@@ -61,6 +61,16 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 
 `agent-session`과 `project-item`은 서로를 씁니다(양방향). project-item을 쓰는 쪽은 `project_item.api`만 씁니다([경계 test](../../codex/tools/project-item/tests/test_api_boundary.py)가 확인합니다). 이 표의 project-item 소비자 목록은 그 test의 `CONSUMERS`와 맞춥니다. agent-session을 쓰는 쪽은 `agent_session.api`만 씁니다([경계 test](../../codex/tools/agent-session/tests/test_api_boundary.py)가 `codex/tools`·`codex/scripts`·`tmux/scripts`의 다른 도구 파일을 모두 검사하고, agent-session 안에서 다른 모듈의 밑줄 이름을 import하는 것도 막습니다).
 
+### agent-session 내부 구성
+
+관계를 사용하는 쪽의 코드가 원본입니다(2026-11-09 확인). `lifecycle`과 `suspend`는 서로를 import하지 않으며, [test](../../codex/tools/agent-session/tests/test_import_cycle.py)가 두 모듈의 import 문(함수 안 포함)으로 확인합니다.
+
+| 모듈 | 책임 | 의존 방향 |
+| --- | --- | --- |
+| `cli` | 입력 해석, 결과 JSON 표현, 조립. `Manager`와 `Fleet`을 만들고 `Fleet`에 `Manager` class를 `manager_factory`로 넘깁니다(`_default_fleet`). | `lifecycle`, `suspend`를 지연 import합니다. |
+| `lifecycle` | `Manager`: start·send·stop·restart·review. start 인자 규칙(`--prompt-file`은 Leader, `--seat`는 Worker JOB)을 소유합니다. | `suspend`를 import합니다(`Manager`가 `SuspendMixin`을 상속). |
+| `suspend` | `SuspendStore`(shutdown 기록), `SuspendMixin`(한 대상의 shutdown·resume 단계), `Fleet`(운영자 명령). | `lifecycle`을 import하지 않습니다. `SuspendMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
+
 ### `sys.path` 조작 위치
 
 도구 사이를 잇는 `sys.path` 조작은 도구마다 한 곳입니다. 실행 진입점(`agent_session.py`, hook·controller command, `remote.py` bootstrap)은 자기 도구만 넣습니다.

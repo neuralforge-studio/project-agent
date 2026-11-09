@@ -106,7 +106,36 @@ def test_invalid_explicit_seat_changes_no_assignment(session_env, seat):
     assert env.store.read(missing_ok=True)["0"] == EMPTY
 
 
-def test_leader_cannot_select_a_worker_seat(session_env):
+START_RULES = [
+    (["--job", "leader", "--seat", "0"], "--seat is only valid for a Worker JOB."),
+    (["--job", "TOOL-001", "--prompt-file", "REQUEST.md"], "--prompt-file is only valid for --job leader."),
+    (["--job", "TOOL-001", "--prompt-file", "REQUEST.md", "--seat", "9"], "--prompt-file is only valid for --job leader."),
+]
+
+
+@pytest.mark.parametrize("argv, message", START_RULES)
+def test_start_argument_rules_belong_to_the_manager(session_env, argv, message):
+    """The Manager enforces them, so the CLI and any other caller get the same error before an effect."""
+    env = session_env
+    job, prompt, seat = argv[1], None, None
+    if "--prompt-file" in argv:
+        prompt = argv[argv.index("--prompt-file") + 1]
+    if "--seat" in argv:
+        seat = int(argv[argv.index("--seat") + 1])
     with pytest.raises(SessionError) as error:
-        session_env.manager().start("leader", seat=0)
-    assert error.value.code == "invalid_input"
+        env.manager().start(job, prompt_file=prompt, seat=seat)
+    assert (error.value.code, error.value.exit_code, str(error.value)) == ("invalid_arguments", 2, message)
+    assert not (env.base / "agent" / "state.json").exists() or env.store.read(missing_ok=True)["0"] == EMPTY
+
+
+@pytest.mark.parametrize("argv, message", START_RULES)
+def test_cli_start_reports_the_manager_rule(session_env, monkeypatch, capsys, argv, message):
+    from agent_session import cli
+    env = session_env
+    monkeypatch.chdir(env.base)
+    monkeypatch.delenv("AGENT_SESSION_UPLINK", raising=False)
+    code = cli.main(["--config", str(env.config), "--socket-name", env.socket_name, "start", *argv])
+    output = capsys.readouterr()
+    assert code == 2 and not output.err
+    assert json.loads(output.out) == {"ok": False, "data": None, "error": {
+        "code": "invalid_arguments", "message": message, "details": {}}}

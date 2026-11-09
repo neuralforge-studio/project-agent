@@ -582,13 +582,13 @@ class Manager(SuspendMixin):
 
     def start(self, job, prompt_file=None, seat=None):
         leader = job == "leader"
+        if prompt_file is not None and not leader:
+            raise SessionError("invalid_arguments", "--prompt-file is only valid for --job leader.", 2)
         if leader and seat is not None:
-            raise SessionError("invalid_input", "--seat is only valid for a Worker JOB.", 2)
+            raise SessionError("invalid_arguments", "--seat is only valid for a Worker JOB.", 2)
         if seat is not None and (isinstance(seat, bool) or not isinstance(seat, int)
                                  or not 0 <= seat < len(self.project.seats)):
             raise SessionError("seat_invalid", "The seat number is outside the registry.", 2)
-        if prompt_file is not None and not leader:
-            raise SessionError("invalid_input", "--prompt-file is only valid for the Leader.", 2)
         request = Path(prompt_file).read_text(encoding="utf-8") if prompt_file else None
         if leader:
             self._authorize("start", "leader")

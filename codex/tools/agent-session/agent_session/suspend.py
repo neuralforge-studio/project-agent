@@ -3,6 +3,10 @@
 `SuspendStore` is the per-project record of what a shutdown ended. `SuspendMixin` holds the
 one-target steps that need a project's `Manager`. `Fleet` is the operator command: it selects
 projects from the registry, runs all targets under one deadline, and sounds the alarms.
+
+Dependency direction: `lifecycle` imports this module (`Manager` inherits `SuspendMixin`); this
+module never imports `lifecycle`. `Fleet` gets the `Manager` class from the code that assembles
+it (`cli._default_fleet`) as `manager_factory`.
 """
 
 import json
@@ -100,7 +104,17 @@ class SuspendStore:
 
 
 class SuspendMixin:
-    """One-target shutdown and resume steps of a project's Manager."""
+    """One-target shutdown and resume steps of a project's Manager.
+
+    The mixin relies on these members of the `lifecycle.Manager` it is mixed into; changing one of
+    them there changes this contract:
+    - attributes: `project`, `store`, `tmux`, `provider`
+    - lock and deadline: `_lock(slot)`, `remaining()`
+    - run evidence: `_owned`, `_observe`, `_session`, `_process_facts`, `_retire_name`,
+      `_restore_stopping`
+    - starting a conversation: `_context`, `_new_window`, `_launch`
+    - messaging: `send`
+    """
 
     def _slot_entry(self, slot, state):
         """The state's conversation and JOB of a slot."""
@@ -304,7 +318,8 @@ class Alarm:
 class Fleet:
     """The operator's shutdown and resume over registered projects."""
 
-    def __init__(self, config_path=None, socket_name=None, socket_path=None, timeout=600):
+    def __init__(self, manager_factory, config_path=None, socket_name=None, socket_path=None, timeout=600):
+        self.manager_factory = manager_factory      # called as (base, config_path, timeout=, socket_name=, socket_path=)
         self.config_path = config_path
         self.socket = {"socket_name": socket_name, "socket_path": socket_path}
         self.timeout = timeout
@@ -320,8 +335,7 @@ class Fleet:
         return registry, chosen
 
     def _manager(self, project, seconds):
-        from .lifecycle import Manager
-        return Manager(project.base, project.config_path, timeout=seconds, **self.socket)
+        return self.manager_factory(project.base, project.config_path, timeout=seconds, **self.socket)
 
     def _authorize(self, registry, selected, operation):
         """Only an operator may run these. A managed or agent caller of any registered project is refused
