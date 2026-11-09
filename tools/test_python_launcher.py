@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
@@ -79,3 +80,103 @@ def test_development_checkout_runs_without_installer_values(name):
     result = run(ENTRIES[name], "--help")
     assert result.returncode == 0, result.stderr
     assert "usage" in result.stdout.lower()
+
+
+# python.env: the installer's values, read by the launcher where the environment has none.
+ROOT = TOOLS.parent
+RELEASE_ENTRIES = (*sorted(ENTRIES), "tmux_project_board.sh", "tmux_decide_status.sh")
+
+
+def release_entry(release, name):
+    if name in ENTRIES:
+        return release / "tools" / name / "bin" / name
+    return release / "integrations" / "tmux" / name
+
+
+@pytest.fixture
+def release(tmp_path):
+    """A release layout (launcher, the three entry points, the tmux helpers) with no python.env."""
+    root = tmp_path / "release"
+    (root / "tools").mkdir(parents=True)
+    shutil.copy2(TOOLS / "python-launcher.sh", root / "tools")
+    for name in ENTRIES:
+        shutil.copytree(TOOLS / name / "bin", root / "tools" / name / "bin")
+    shutil.copytree(ROOT / "integrations" / "tmux", root / "integrations" / "tmux",
+                    ignore=shutil.ignore_patterns("*.py", "__pycache__"))
+    return root
+
+
+def write_env(release, *lines):
+    (release / "tools" / "python.env").write_text("".join(line + "\n" for line in lines))
+
+
+@pytest.mark.parametrize("name", RELEASE_ENTRIES)
+def test_python_env_alone_selects_the_interpreter_and_packages(name, release, fake_python, tmp_path):
+    packages = f"{tmp_path}/lib/a:{tmp_path}/lib/b"
+    write_env(release, f"PROJECT_AGENT_PYTHON={fake_python}", f"PROJECT_AGENT_PYTHONPATH={packages}")
+    result = run(release_entry(release, name), "--help")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("ARGV1=")
+    if name in ("project-board", "tmux_project_board.sh"):
+        root = release / "tools" / "project-board"
+        assert f"PYTHONPATH={root}:{packages} " in result.stdout
+    if name != "agent-session":
+        assert "NOUSERSITE=1" in result.stdout
+
+
+def test_interpreter_path_may_contain_spaces(release, tmp_path):
+    spaced = tmp_path / "my python dir" / "python"
+    spaced.parent.mkdir()
+    spaced.write_text('#!/bin/sh\necho SPACED\n')
+    spaced.chmod(0o755)
+    write_env(release, f"PROJECT_AGENT_PYTHON={spaced}")
+    assert run(release_entry(release, "project-item")).stdout == "SPACED\n"
+
+
+@pytest.mark.parametrize("name", RELEASE_ENTRIES)
+def test_environment_variables_win_over_python_env(name, release, fake_python, tmp_path):
+    other = tmp_path / "other-python"
+    other.write_text('#!/bin/sh\necho FROM-FILE\n')
+    other.chmod(0o755)
+    write_env(release, f"PROJECT_AGENT_PYTHON={other}", f"PROJECT_AGENT_PYTHONPATH={tmp_path}/from-file")
+    result = run(release_entry(release, name), env={"PROJECT_AGENT_PYTHON": str(fake_python),
+                                                    "PROJECT_AGENT_PYTHONPATH": f"{tmp_path}/from-env"})
+    assert result.stdout.startswith("ARGV1=")
+    assert "from-file" not in result.stdout
+    if name in ("project-board", "tmux_project_board.sh"):
+        assert f"{tmp_path}/from-env " in result.stdout
+
+
+def test_missing_interpreter_in_python_env_is_the_unavailable_error(release, tmp_path):
+    write_env(release, f"PROJECT_AGENT_PYTHON={tmp_path / 'absent'}")
+    result = run(release_entry(release, "agent-session"), "--help")
+    assert result.returncode == 5
+    assert json.loads(result.stdout)["error"]["code"] == "python_unavailable"
+    for name in ("project-item", "project-board", "tmux_project_board.sh", "tmux_decide_status.sh"):
+        result = run(release_entry(release, name), "--help")
+        assert result.returncode == 5
+        assert result.stdout == ""
+        assert "unavailable" in result.stderr
+
+
+def test_python_env_is_parsed_not_executed(release, fake_python, tmp_path):
+    marks = [tmp_path / f"mark{number}" for number in range(4)]
+    write_env(release, f"$(touch {marks[0]})", f"touch {marks[1]}", f"OTHER=$(touch {marks[2]})",
+              f"PROJECT_AGENT_PYTHON={fake_python}", f"`touch {marks[3]}`")
+    result = run(release_entry(release, "project-item"))
+    assert result.stdout.startswith("ARGV1=-m")
+    assert not any(mark.exists() for mark in marks)
+
+
+def test_python_env_value_is_literal(release, tmp_path):
+    mark = tmp_path / "mark"
+    write_env(release, f"PROJECT_AGENT_PYTHON=$(touch {mark})")
+    assert run(release_entry(release, "project-item")).returncode == 5
+    assert not mark.exists()
+
+
+def test_python_env_other_names_do_not_select_an_interpreter(release, fake_python):
+    # Without PROJECT_AGENT_PYTHON in the file the development checkout rule applies.
+    write_env(release, f"PYTHON={fake_python}", f"PROJECT_AGENT_PYTHONX={fake_python}")
+    assert not run(release_entry(release, "project-item"), "--help").stdout.startswith("ARGV1=")
+

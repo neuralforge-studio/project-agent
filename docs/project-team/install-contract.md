@@ -127,7 +127,7 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 | `~/.claude.json` (`CLAUDE_CONFIG_DIR`가 있으면 그 디렉터리의 `.claude.json`) | Claude project에서 `start`가 새 seat를 clone했을 때만 | `projects.<seat 절대 경로>.hasTrustDialogAccepted = true` 한 항목. 파일이 없으면 쓰지 않습니다. 이미 true면 쓰지 않습니다. 잠금 디렉터리 `.claude.json.lock`과 임시 파일 `.claude.json.agent-session-<pid>`를 만들고 끝나면 지웁니다. 파일이 symlink면 가리키는 파일을 고칩니다(`resolve()`). | 등록(seat 경로). 새로 clone한 로컬 seat만. Claude Leader의 base에는 쓰지 않습니다. | [claude.py:143-190](../../tools/agent-session/agent_session/providers/claude.py), 호출 [lifecycle.py:535-536](../../tools/agent-session/agent_session/lifecycle.py) → [claude.py:244-246](../../tools/agent-session/agent_session/providers/claude.py) |
 | `~/.codex/config.toml` (`CODEX_HOME`가 있으면 그 디렉터리) | Codex project에서 (a) Leader를 시작할 때마다, (b) `start`가 새 로컬 seat를 clone했을 때, (c) 원격 host에서 seat를 clone했을 때 | `[projects."<절대 경로>"]`에 `trust_level = "trusted"`. 이미 trusted면 쓰지 않습니다. **디렉터리 `~/.codex/`와 `config.toml`이 없으면 만듭니다.** 잠금 디렉터리 `config.toml.agent-session.lock`과 임시 파일을 만들고 끝나면 지웁니다. symlink면 가리키는 파일을 고칩니다. | 등록(base 또는 seat 경로) | [codex.py:35-113](../../tools/agent-session/agent_session/providers/codex.py), 호출 [launch_artifacts.py:101-102](../../tools/agent-session/agent_session/launch_artifacts.py), [lifecycle.py:535-536](../../tools/agent-session/agent_session/lifecycle.py), [remote_runtime.py:299-300](../../tools/agent-session/agent_session/remote_runtime.py) |
 | `~/.cache/project-item/locks/<hash>.lock` | `project-item`의 `new`·`move`·`record`·`render` 등 item root를 쓰는 모든 명령 | 잠금 파일(내용 없음). 만든 뒤에 지우지 않습니다. `<hash>`는 item root 경로의 해시입니다. | 등록(`path_cr`, `path_decide`)에서 계산한 이름 | [store.py:19-31](../../tools/project-item/project_item/store.py) |
-| `~/.cache/tmux-decide-status.json`, `.lock`, `.<pid>.tmp` (`XDG_CACHE_HOME`가 있으면 그 아래) | tmux status가 `tmux_decide_status.py`를 부를 때. 사용자가 status 설정에 이 script를 넣은 경우만 | 열린 결정 ID 목록과 잠금. 새 결정이 생기면 모든 tmux client에 `display-message`와, Leader window의 pane tty에 BEL(0x07)을 씁니다. | 등록(project마다 `path_decide`를 읽음) | [tmux_decide_status.py:49-51, 69-74, 168-170](../../integrations/tmux/tmux_decide_status.py), 알림 [같은 파일 136-146](../../integrations/tmux/tmux_decide_status.py) |
+| `~/.cache/tmux-decide-status.json`, `.lock`, `.<pid>.tmp` (`XDG_CACHE_HOME`가 있으면 그 아래) | tmux status가 `tmux_decide_status.sh`(`tmux_decide_status.py`)를 부를 때. 사용자가 status 설정에 이 script를 넣은 경우만 | 열린 결정 ID 목록과 잠금. 새 결정이 생기면 모든 tmux client에 `display-message`와, Leader window의 pane tty에 BEL(0x07)을 씁니다. | 등록(project마다 `path_decide`를 읽음) | [tmux_decide_status.py:49-51, 69-74, 168-170](../../integrations/tmux/tmux_decide_status.py), 알림 [같은 파일 136-146](../../integrations/tmux/tmux_decide_status.py) |
 | (원격 host의 HOME) `~/.cache/agent-session/runs/<run>/`, `~/.cache/agent-session/runtime/<hash>/`와 `.lock`, `~/.cache/agent-session/skills.json`·`skills.lock` | Codex SSH Worker seat를 쓰는 원격 host에서만 | run 기록, 받은 실행본 압축 해제, skill 소유 기록. 이 host에서는 일어나지 않습니다. | 원격 host의 HOME | [remote_runtime.py:17-20, 46-94, 171-214](../../tools/agent-session/agent_session/remote_runtime.py), [remote.py:15-29](../../tools/agent-session/agent_session/remote.py) |
 | (원격 host의 HOME) `~/.codex/skills/project-team`, `~/.codex/skills/project-item` | 같은 원격 host에서 run을 시작할 때. 그 host에 `~/.local/lib/project-agent/install.json`이 있으면 쓰지 않습니다(DIST-003). | 위 실행본의 `guidance/skills/<이름>`을 가리키는 symlink. 이름이 이미 있고 이 runtime이 만든 것이 아니면 건드리지 않습니다. `~/.codex/skills/`가 없으면 만듭니다. | 원격 host의 HOME. **2절의 설치 대상과 같은 이름입니다(2절 규칙 6).** | [remote_runtime.py:46-94](../../tools/agent-session/agent_session/remote_runtime.py) |
 
@@ -169,7 +169,7 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 
 사용자 status 배치(`status-left`, `status-format[0]`, `MouseDown1Status`)는 통합 파일에 넣지 않습니다. 각자의 tmux 설정이 소유합니다(DIST-001 5단계). `project_board_home_status.conf`는 각 사용자의 tmux 설정 파일이며 제품에 넣지 않습니다.
 
-결정 대기 표시는 server option `@project_agent_decide_status`가 `tmux_decide_status.py`를 부르는 `#()` 조각으로 제공합니다. 사용자가 자기 status 설정에 한 줄을 넣어 씁니다. 경로를 알 필요가 없습니다.
+결정 대기 표시는 server option `@project_agent_decide_status`가 `tmux_decide_status.sh`를 부르는 `#()` 조각으로 제공합니다. 이 wrapper가 6.1절의 launcher로 interpreter를 골라 `tmux_decide_status.py`를 실행하므로, 설치본에서는 `python.env`의 interpreter가 쓰입니다. 표시 형식은 바뀌지 않습니다. 사용자가 자기 status 설정에 한 줄을 넣어 씁니다. 경로를 알 필요가 없습니다.
 
 ```tmux
 set-option -ag status-right '#{E:@project_agent_decide_status}'
@@ -217,18 +217,25 @@ set-option -ag status-right '#{E:@project_agent_decide_status}'
 
 ### 6.1 Python 선택
 
-세 CLI(`agent-session`, `project-item`, `project-board`)의 `bin/` 진입점은 같은 규칙을 씁니다. 규칙의 원본은 공용 launcher [`tools/python-launcher.sh`](../../tools/python-launcher.sh) 하나입니다. 진입점은 이 파일을 `source`하며, 도구 디렉터리(`tools/<도구>/`)의 부모에 있어야 합니다. release는 이 상대 배치를 유지합니다.
+세 CLI(`agent-session`, `project-item`, `project-board`)의 `bin/` 진입점과 tmux helper `integrations/tmux/tmux_decide_status.sh`는 같은 규칙을 씁니다. 규칙의 원본은 공용 launcher [`tools/python-launcher.sh`](../../tools/python-launcher.sh) 하나입니다. 진입점은 이 파일을 `source`하며, 도구 디렉터리(`tools/<도구>/`)의 부모에 있어야 합니다. release는 이 상대 배치를 유지합니다.
 
-설치기의 shim은 아래 환경 변수를 정하고 진입점을 실행합니다.
+설치본은 아래 두 값을 환경 변수나 `python.env`로 정합니다. 설치기의 shim은 환경 변수로 넘겨도 되고, 설치기가 release에 `python.env`를 써도 됩니다. tmux가 shim 없이 부르는 helper(`tmux_project_board.sh`, `tmux_decide_status.sh`)는 `python.env`로 같은 값을 얻습니다.
 
 | 변수 | 뜻 | 없을 때 |
 | --- | --- | --- |
 | `PROJECT_AGENT_PYTHON` | 설치 때 고른 interpreter의 절대 경로. 값이 있으면 후보는 이것 하나입니다. 다른 interpreter로 되돌아가지 않습니다. | 개발 checkout 규칙: macOS는 `python3`, WSL은 `~/python/.venv/bin/python`만, 그 밖에는 `/primehome/tools/Inhouse/Python3/latest/bin/python3`, `~/python/.venv/bin/python`, `python3` 순서 |
 | `PROJECT_AGENT_PYTHONPATH` | release 안 외부 package 디렉터리(`textual` 등). `:`로 여럿을 이을 수 있습니다. `project-board`만 `PYTHONPATH`에 더합니다. | 더하지 않음 |
 
+`python.env`: 위치는 launcher와 같은 디렉터리, 곧 release의 `tools/python.env`입니다. 설치기가 release를 만들 때 씁니다. 개발 checkout에는 없고 root `.gitignore`가 commit을 막습니다.
+
+- 형식: 한 줄에 `NAME=값` 하나. 이름은 `PROJECT_AGENT_PYTHON`과 `PROJECT_AGENT_PYTHONPATH` 둘뿐이며, 값은 따옴표 없이 줄 끝까지입니다(공백을 포함할 수 있습니다). 같은 이름이 여러 번 나오면 마지막 줄이 이깁니다.
+- launcher는 파일을 shell로 `source`하지 않고 두 이름의 줄만 읽습니다. 다른 이름이나 shell 문법(`$(…)`, 백틱)을 가진 줄은 무시하고 실행하지 않으며, 값 안의 `$`·백틱도 그대로의 글자입니다.
+- 우선순위: 환경 변수에 값이 있으면 환경 변수가 이깁니다(변수마다 따로 판단합니다. 빈 값은 없는 것으로 봅니다). 값이 없는 변수만 파일에서 읽습니다. 파일이 없으면 위 표의 "없을 때" 규칙입니다.
+- `python.env`의 `PROJECT_AGENT_PYTHON`이 가리키는 interpreter가 없거나 실행할 수 없으면 아래 `python_unavailable`과 같이 끝납니다. 다른 interpreter로 되돌아가지 않습니다.
+
 - `project-board`와 `project-item`은 `PYTHONNOUSERSITE=1`로 실행하므로, 사용자 site의 package는 보이지 않습니다. release의 package는 `PROJECT_AGENT_PYTHONPATH`로만 보입니다.
-- `PROJECT_AGENT_PYTHON`이 없거나 실행할 수 없는 파일이면 `agent-session`은 JSON 오류 `python_unavailable`(종료 코드 5)을, 버전이 3.10 미만이면 `python_version`을 출력합니다. `project-item`과 `project-board`는 stderr에 한 줄을 쓰고 종료 코드 5로 끝납니다.
-- 4단계 설치기는 이 두 변수의 값을 shim에 정합니다. 변수의 이름과 의미를 바꾸려면 먼저 이 절을 고칩니다.
+- `PROJECT_AGENT_PYTHON`이 없거나 실행할 수 없는 파일이면 `agent-session`은 JSON 오류 `python_unavailable`(종료 코드 5)을, 버전이 3.10 미만이면 `python_version`을 출력합니다. `project-item`, `project-board`와 `tmux_decide_status.sh`는 stderr에 한 줄을 쓰고 종료 코드 5로 끝납니다.
+- 4단계 설치기는 이 두 값을 shim 또는 `python.env`에 정합니다. 변수의 이름과 의미를 바꾸려면 먼저 이 절을 고칩니다.
 
 ## 7. 명령의 동작
 
@@ -324,6 +331,7 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 | --- | --- | --- | --- |
 | 등록 파일 위치 | 해결됨(DIST-003): 6절의 세 후보를 찾음 | 6절의 세 후보 | 2단계 |
 | CLI python 선택 | 해결됨(DIST-003): 6.1절의 공용 launcher가 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`를 받음 | 설치 때 고른 interpreter. `project-board`는 `PYTHONNOUSERSITE=1`이므로 release 안의 package를 `PYTHONPATH`로 넣어야 함 | 2단계 |
+| tmux helper의 Python 선택 | 해결됨(INSTALL-002): `tools/python.env`를 launcher가 읽고, 결정 표시는 `tmux_decide_status.sh`가 같은 launcher로 실행함 | 설치 때 고른 interpreter(6.1절) | 4단계(설치기가 `python.env`를 씀) |
 | 원격 runtime의 skill link | runtime의 건너뛰기는 해결됨(DIST-003): `install.json`이 있으면 `_install_skills`가 link를 만들지 않고 고치지 않음. 설치의 넘겨받기는 남음 | 설치본이 있으면 만들지 않고 고치지 않음(2절 규칙 6) | 4단계(설치의 넘겨받기) |
 | tmux 통합 파일의 경로 | 해결됨(TMUX-001): 통합 파일이 읽힌 디렉터리(`@project_agent_tmux_dir`)의 helper를 부름 | `current` 아래 경로 | 5단계 |
 | tmux 통합 파일의 binding | 해결됨(TMUX-001): 3.1절대로 binding하고 건너뜀 | 3.1절 | 5단계 |

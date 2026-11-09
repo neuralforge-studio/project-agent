@@ -18,7 +18,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | 동작 명세 | 등록, state, start·stop·restart·shutdown·resume, CR과 JOB의 연결 | `docs/project-team/spec.md` |
 | 설치 계약 | 설치·갱신·되돌리기·제거가 만들고 고치고 건드리지 않는 경로, 실행 중 HOME 쓰기 목록, 인수 test 명세. 설치기는 DIST-001 4단계에서 구현 | `docs/project-team/install-contract.md` |
 | 버전 규칙 | 버전 값(`VERSION`), 형식 버전(`tools/formats.json`)과 호환 범위, git tag 이름, 변경 기록(`CHANGELOG.md`) 작성 | `docs/project-team/release.md` |
-| tmux 연결 | Board 열기·닫기 binding, status 표시, 결정 대기 알림 | `integrations/tmux/tmux_project_board.sh`, `project-agent.conf`, `project_agent_bind.sh`, `tmux_decide_status.py` |
+| tmux 연결 | Board 열기·닫기 binding, status 표시, 결정 대기 알림 | `integrations/tmux/tmux_project_board.sh`, `project-agent.conf`, `project_agent_bind.sh`, `tmux_decide_status.sh`, `tmux_decide_status.py` |
 | 원격 seat 실행본 | SSH Worker seat에 보내는 Python helper와 guidance 문서 | `tools/agent-session/agent_session/remote.py`의 `source_archive()` |
 
 ## 구성 요소별 문서와 검증 위치
@@ -37,7 +37,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 
 | 종류 | 진입점 |
 | --- | --- |
-| CLI | `agent-session`, `project-item`, `project-board`. 각 `bin/` 파일을 `~/.local/bin`에 link합니다. 세 파일은 `tools/python-launcher.sh`로 Python을 고릅니다. 설치본은 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`로 interpreter와 package 경로를 넘깁니다([설치 계약 6.1절](install-contract.md#61-python-선택)). |
+| CLI | `agent-session`, `project-item`, `project-board`. 각 `bin/` 파일을 `~/.local/bin`에 link합니다. 세 파일과 `tmux_decide_status.sh`는 `tools/python-launcher.sh`로 Python을 고릅니다. 설치본은 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`(환경 변수 또는 release의 `tools/python.env`)로 interpreter와 package 경로를 넘깁니다([설치 계약 6.1절](install-contract.md#61-python-선택)). |
 | Python API | `agent_session.api`: 목록의 원본은 [api.py](../../tools/agent-session/agent_session/api.py)의 `__all__`이고 이름별 계약은 [명세 5절](spec.md#프로젝트-consumer용-python-api)이 기록합니다. `project_item.api`: 목록의 원본은 [api.py](../../tools/project-item/project_item/api.py)의 `__all__`이고 계층은 [project-item README](../../tools/project-item/README.md#layers-and-public-api)가 설명합니다. |
 | Hook·controller | `agent_session.internal`의 `register_from_hook`(Claude SessionStart hook), `register_current`(Codex 초기 도구), `mark_process`, `run_controller`([명세 5절](spec.md#provider-내부-등록)) |
 | 원격 seat | `python -m agent_session.remote_runtime`, `python -m agent_session.remote_bridge` |
@@ -109,7 +109,7 @@ CR ARCH-001이 합의한 목표는 모두 위 현행에 옮겼습니다(2026-11-
 3. `agent_session.internal`의 `register_from_hook`, `register_current`, `mark_process`, `run_controller`. Hook command, Codex 등록 command, `launch.sh`, `controller.sh`가 `tools/agent-session`의 절대 경로로 호출합니다.
 4. `python -m agent_session.remote_runtime`과 `python -m agent_session.remote_bridge`.
 5. 원격 zip의 배치. `agent-session/`, `project-item/`, `guidance/<저장소 상대 경로>`입니다. 어떤 guidance 문서를 싣는지는 `remote.py`의 `GUIDANCE_FILES`가 정하고, test가 skill 문서의 link와 맞는지 확인합니다.
-6. tmux 연결은 자기 디렉터리 기준의 상대 경로로 도구를 부릅니다(`tmux_project_board.sh`는 `../../tools/project-board/bin/project-board`, `tmux_decide_status.py`는 `tools/project-item`). `project-agent.conf`는 읽힌 디렉터리를 `@project_agent_tmux_dir`에 두고 binding·hook이 그 디렉터리의 `tmux_project_board.sh`와 `project_agent_bind.sh`를 부릅니다. 파일 이름 `integrations/tmux/project-agent.conf`는 설치 계약(2절)이 읽습니다.
+6. tmux 연결은 자기 디렉터리 기준의 상대 경로로 도구를 부릅니다(`tmux_project_board.sh`는 `../../tools/project-board/bin/project-board`, `tmux_decide_status.py`는 `tools/project-item`). 결정 표시는 `project-agent.conf`의 option이 `tmux_decide_status.sh`를 부르고, 이 wrapper가 launcher로 고른 interpreter로 `.py`를 실행합니다. `project-agent.conf`는 읽힌 디렉터리를 `@project_agent_tmux_dir`에 두고 binding·hook이 그 디렉터리의 `tmux_project_board.sh`와 `project_agent_bind.sh`를 부릅니다. 파일 이름 `integrations/tmux/project-agent.conf`는 설치 계약(2절)이 읽습니다.
 
 ## 검증
 

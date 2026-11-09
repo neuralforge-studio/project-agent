@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
+- Base: 3781d7baf6dcb7569834bb4c4e3c82f053ce1acf 2026-11-09T15:24:38+09:00
 
 ## Symptom
 project-agent seat 3~4개가 동시에 test를 돌리는 평소 운영 부하에서, README의 `python -m pytest -q -n 8 tools/agent-session/tests`가 여러 test를 실패시킵니다. 병렬 수를 줄이면 통과합니다. 검증 결과가 실행 때의 부하에 따라 달라져 회귀 판정을 흐립니다. TEST-001은 시간 단언 두 개만 고쳤고, 같은 부하에서 남은 실패는 원인이 다릅니다.
