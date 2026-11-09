@@ -26,7 +26,9 @@ import uuid
 
 # The end of a server, for ``release`` and the watchdog alike. Argument 1 is the socket path. Besides
 # the socket file, it removes the runtime directory Project Board's tmux_control makes for each server
-# (``/tmp/project-board-<uid>-<server pid>``, see ``_private_dir``), which the product never removes.
+# (``/tmp/project-board-<uid>-<server pid>``, see ``_private_dir``). The product removes a dead
+# server's directory only at the next Board command (BOARD-001), so a test that ends here removes it
+# now instead of leaving it until then.
 # project-board's test_tmux_control checks that this name is still the one the product uses.
 CLEANUP = (r'pid=$(tmux -S "$1" display-message -p "#{pid}" 2>/dev/null); '
            r'tmux -S "$1" kill-server >/dev/null 2>&1; rm -f "$1"; '
