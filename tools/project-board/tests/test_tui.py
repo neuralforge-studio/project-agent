@@ -9,7 +9,7 @@ import uuid
 
 import pytest
 
-from board_testing import Board, leader, session
+from board_testing import Board, leader, session, wait_until
 from project_board import model
 from project_board.tui import CRPopupApp, CSVScreen, PopupApp, SidebarApp, _seat_text
 from textual.widgets import Button, DataTable, Markdown, Static, TextArea
@@ -330,7 +330,8 @@ def test_cr_popup_opens_selected_cr_markdown(tmp_path):
             await pilot.pause()
             assert any(first.read_text(encoding="utf-8") == widget.source for widget in app.query(Markdown))
             await pilot.click("#cr-item-1")
-            await pilot.pause(0.1)
+            await wait_until(pilot, lambda: any(second.read_text(encoding="utf-8") == widget.source
+                                                for widget in app.query(Markdown)))
             assert any(second.read_text(encoding="utf-8") == widget.source for widget in app.query(Markdown))
 
     asyncio.run(check())
@@ -951,7 +952,7 @@ def test_popup_renders_markdown_and_csv_and_closes_editor_after_acceptance(tmp_p
             await pilot.click("#send")
             editor.text = "새 초안"
             release.set()
-            await pilot.pause(0.1)
+            await wait_until(pilot, lambda: "답변 접수 ·" in str(app.query_one("#popup-message", Static).content))
             assert sent == [("Falcon2", "D-20261107-01", "처음 보낸 답")]
             assert editor.text == "" and editor.disabled
             assert "답변 접수" in str(app.query_one("#popup-message", Static).content)
@@ -987,7 +988,7 @@ def test_accepted_answer_closes_editor_even_when_notification_is_uncertain(tmp_p
             editor = app.query_one("#answer", TextArea)
             editor.text = "A\n두 번째 줄"
             await pilot.click("#send")
-            await pilot.pause(0.2)
+            await wait_until(pilot, lambda: phrase in str(app.query_one("#popup-message", Static).content))
             assert sent == ["A\n두 번째 줄"]
             assert editor.text == "" and editor.disabled
             assert app.query_one("#send", Button).disabled
@@ -1012,7 +1013,7 @@ def test_unconfirmed_acceptance_response_keeps_the_draft(tmp_path):
             editor = app.query_one("#answer", TextArea)
             editor.text = "검증되지 않은 답"
             await pilot.click("#send")
-            await pilot.pause(0.1)
+            await wait_until(pilot, lambda: "접수를 확인하지 못했습니다" in str(app.query_one("#popup-message", Static).content))
             assert editor.text == "검증되지 않은 답" and not editor.disabled
             assert "접수를 확인하지 못했습니다" in str(app.query_one("#popup-message", Static).content)
 
@@ -1037,7 +1038,8 @@ def test_percent_encoded_local_csv_link_opens_a_table(tmp_path):
             await pilot.pause()
             widget = next(item for item in app.query(Markdown) if "my%20data.csv" in item.source)
             app.on_markdown_link_clicked(Markdown.LinkClicked(widget, "my%20data.csv"))
-            await pilot.pause(0.1)
+            await wait_until(pilot, lambda: isinstance(app.screen, CSVScreen)
+                             and app.screen.query(DataTable))
             assert isinstance(app.screen, CSVScreen)
             assert app.screen.query_one(DataTable).row_count == 1
 

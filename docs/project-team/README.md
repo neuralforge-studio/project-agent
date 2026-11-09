@@ -18,6 +18,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | 동작 명세 | 등록, state, start·stop·restart·shutdown·resume, CR과 JOB의 연결 | `docs/project-team/spec.md` |
 | 설치 계약 | 설치·갱신·되돌리기·제거가 만들고 고치고 건드리지 않는 경로, 실행 중 HOME 쓰기 목록, 인수 test 명세. | `docs/project-team/install-contract.md` |
 | 설치기 | 설치 계약대로 설치·갱신·되돌리기·제거·점검(`--dry-run` 포함). 표준 library만 씁니다. 인수 test는 `install/tests` | `install/` |
+| 버전 규칙 | 버전 값(`VERSION`), 형식 버전(`tools/formats.json`)과 호환 범위, git tag 이름, 변경 기록(`CHANGELOG.md`) 작성 | `docs/project-team/release.md` |
 | tmux 연결 | Board 열기·닫기 binding, status 표시, 결정 대기 알림 | `integrations/tmux/tmux_project_board.sh`, `project-agent.conf`, `project_agent_bind.sh`, `tmux_decide_status.py` |
 | 원격 seat 실행본 | SSH Worker seat에 보내는 Python helper와 guidance 문서 | `tools/agent-session/agent_session/remote.py`의 `source_archive()` |
 

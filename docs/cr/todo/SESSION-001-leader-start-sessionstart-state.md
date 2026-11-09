@@ -3,7 +3,6 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
-- Mode: read-only
 
 ## Symptom
 2026-11-09 13:52 project-agent Leader(run `df0fad2994a0410095a7024e7c34585d`)를 시작했습니다. SessionStart 내부 등록은 성공했습니다(window option `registered: true`, `start_error: null`, hook의 session_id가 기대값과 같음). 그러나 `agent/state.json`의 `leader`가 null이고 `ready: false`였습니다. 게시를 맡는 시작 controller process는 이미 없었습니다. Leader가 같은 `agent-session start --job leader`를 다시 실행하자 `_wait_ready`가 게시했습니다(`connected_at` 2026-11-09T04:55:03Z). 게시 전까지 Worker는 `send --job leader`로 보고할 수 없습니다.
@@ -21,20 +20,93 @@
 
 ## Disposition
 - 2026-11-09 Leader: 조사한다(Leader 판정, read-only). 이 project의 Leader 시작에서 관찰한 이상이며 원인은 확인하지 않았습니다. 조사는 위임 범위입니다. 결과에 따라 Leader가 고치기(todo), 판정 보류(open), 문제 없음(done waived)으로 옮깁니다. 시작 방법은 사용자에게 확인을 요청했습니다(2026-11-09 대화). 답을 받으면 이 절에 적습니다.
+- 2026-11-09 Leader: in-progress -> open. Result 검토: 관찰은 현재 계약(게시는 시작 controller만 함)대로의 결과이며 기존 test가 같은 동작을 확인합니다. 원인은 시작 dialog 대기로 controller가 먼저 끝난 경우가 가장 유력하나, 시작 방법을 확인하지 못해 확정하지 않습니다. 빈틈을 메우는 방법(안내 보강, hook 게시, 유지)은 설계 선택이므로 사용자 결정 D-20261109-03으로 묻습니다. 결정 뒤 고칠 일은 이 CR을 todo로 옮겨 Implementation을 씁니다.
+- 2026-11-09 Leader: D-20261109-03을 철회했습니다. 사용자 지시 원문: "D-20261109-03: 이걸 나한테 물어봐야해? 동작에 있어서 완벽하게 동작하지 못하는 거잖아. 어떻게 해야 최적의 방법인지는 너가 찾아야지. 절대 문제가 발생하지 않을 방법을 찾아야할거 잖아."
+- 2026-11-09 Leader: 고친다(Leader 판정, write로 전환). 등록에 성공한 run이 게시되지 않는 것은 동작 결함입니다. 결함 수정은 위임 범위이고, 결함을 없애는 데 필요한 명세 5절 계약 변경도 이 수정에 포함합니다. 근본 원인: canonical state 게시가 시작 controller 한 process의 생존에 달려 있습니다. 그 process는 dialog 대기 반환, signal, timeout, 호출한 shell의 종료로 등록 전에 끝날 수 있습니다. 안내나 자기 확인(이전 선택지 A)은 누군가의 행동에 기대므로 빈틈이 남습니다. 그래서 "등록에 성공한 run은 어느 경로로든 게시가 끝난다"는 닫힌 설계로 고칩니다(아래 Implementation). read-only 조사 때의 `- Base:`(aad704d)는 지웠습니다. write CR은 배정할 때의 main을 기준으로 새로 시작합니다. 이 수정은 project-agent 저장소에 들어가며, 이 workstation의 실행본(agent 저장소의 동결 사본)에는 agent DIST-001 6단계 전환 때 반영됩니다.
 
 ## Implementation
-- Mode는 read-only입니다. 업무 branch를 만들거나 commit·push하지 않습니다. 결과는 `## Result`에 씁니다.
-- 읽을 문서: [동작 명세](../../project-team/spec.md) 4절 Leader, 5절 "Provider 내부 등록", 7절 shutdown·resume.
+읽을 문서: [동작 명세](../../project-team/spec.md) 3절(state·실행 근거와 잠금), 4절 Leader, 5절 "Provider 내부 등록", 7절 shutdown·resume. 이 CR의 Result(경우별 코드 위치)가 결함 경로의 근거입니다. 명세를 먼저 고친 뒤 코드를 바꿉니다.
 
-1. Leader start가 등록을 기다려 게시하는 경로(`lifecycle.py`의 Leader start, `_wait_ready`, CLI의 timeout·signal 처리)를 따라, 게시 전에 controller가 끝날 수 있는 경우를 모두 나열합니다. 예: 호출한 shell·tool이 시간 제한으로 process를 끝냄, 사용자 중단(SIGINT·SIGHUP), timeout, 예외. 경우마다 window option·state·diagnostics에 남는 흔적을 적습니다.
-2. 관찰한 흔적(Evidence)과 맞는 경우를 고릅니다. 실행한 library는 agent 저장소의 동결 사본입니다. 이 저장소 코드와 다르면 그 차이를 적습니다.
-3. 결론을 셋 중 하나로 적습니다. (a) 제품 결함: 게시 전에 controller가 끝나는 것을 막거나, 끝나도 다음 행동(예: Worker의 `send`, Leader 자신의 hook)이 게시를 마치게 할 방법. (b) 호출 방법의 문제: 안내할 내용. (c) 판정 불가: 더 필요한 근거.
-4. 같은 현상을 격리 tmux server와 fake provider로 재현할 수 있으면 재현 절차를 적습니다.
+목표 계약: 등록(`registered: true`)에 성공한 현재 run은, 시작 controller가 살아 있든 없든 게시(`state`의 session, window `ready: true`)까지 끝납니다. 게시는 누가 하든 같은 함수, 같은 검증, 같은 대상 제어 잠금을 거칩니다.
 
-의존: 없음. 다른 CR과 병렬로 진행합니다.
+1. 게시 함수 하나: `lifecycle.py`의 `_wait_ready` 안 게시 단계(현재 pointer·binding 검증(`_same`), `store.update(publish)`, `write_meta(ready=True, start_error=None)`)를 대상 제어 잠금을 잡고 실행하는 함수 하나로 뽑습니다. 이미 `ready`이면 아무것도 바꾸지 않고 성공합니다(멱등). 현재 pointer가 다른 run이면 `target_changed`로 게시하지 않습니다. 시작 controller는 이 함수를 씁니다. controller는 대기 중 이미 잠금을 가지고 있으므로 잠금을 다시 잡지 않는 경로를 둡니다.
+2. 등록 쪽이 게시를 끝냄: `internal.py`의 `register_from_hook`(SessionStart)과 `register_current`(Codex)는 `_register` 뒤에 1의 함수를 부릅니다. 잠금 대기는 hook 제한(30초) 안의 한도로 둡니다. controller가 살아 있으면 controller가 0.1초 안에 먼저 게시하고 잠금을 놓으므로, 등록 쪽은 잠금을 얻은 뒤 `ready`를 보고 끝납니다. controller가 이미 끝났으면 잠금이 비어 있으므로 등록 쪽이 게시합니다. 지금의 "controller의 ready를 120초 기다림"(`internal.py`의 `_wait_ready`)은 이것으로 대체합니다.
+3. 남은 경우의 재시도: 등록은 됐는데 게시가 실패한 run(잠금 한도 초과, state 쓰기 실패, hook process 중단)을 다음 시점이 게시합니다.
+   - 같은 run의 다음 hook event(`Stop`, `StopFailure`): `registered`이고 `ready`가 아니면 1의 함수를 부릅니다. `SessionEnd`에서는 게시하지 않습니다(끝나는 대화).
+   - 대상을 고르는 명령(`_target`을 쓰는 `send`·`review`·`stop`·`restart`, 그리고 `start`): 고른 현재 run이 `registered`이고 `ready`가 아니며 `stopping`이 아니면 1의 함수로 게시한 뒤 진행합니다.
+   - 호출자 판정(`api.caller`): 호출한 대화가 자기 slot의 현재 run이고 `registered`인데 state에 없으면, 그 run을 1의 함수로 게시한 뒤 다시 판정합니다. 그래서 게시 전의 Leader가 자기 명령(`start --job <CR>` 등)을 거절당하지 않습니다.
+4. 원격 seat(`remote_seat`): 지금의 poll 게시 경로를 유지합니다. 3의 대상 명령 경로가 원격 run에도 같은 함수를 쓰는지 확인하고, 다르면 같은 검증을 거치게 맞춥니다.
+5. 시작 controller의 게시 뒤 단계는 `_sweep`(옛 window 정리)뿐입니다(`lifecycle.py` `_launch`). controller 없이 게시된 run은 다음 start의 sweep이 정리합니다. 이 사실을 명세에 적습니다.
+6. 명세를 고칩니다: 5절 "Canonical state는 시작 controller가 게시하며 등록 함수는 그 준비 결과를 기다립니다"와 4절 Leader의 "다시 실행한 start가 게시" 서술을 위 계약으로 바꿉니다. `needs_user_action` 뒤 dialog에 답하면 다시 start하지 않아도 게시된다는 사실과, 다시 실행한 start는 이미 게시된 run을 그대로 돌려준다는 사실을 적습니다. project-team skill(`skills/project-team/SKILL.md`)의 "사용자가 그 창에서 답한 뒤 같은 start를 다시 실행" 문장도 새 동작에 맞춥니다.
 
-위험 등급: 낮음(read-only).
+범위 밖: 등록 자체가 실패하는 경우(`registration_failed`, `start_error`)의 동작은 바꾸지 않습니다.
+
+의존: 없음. INSTALL-001·002와 병렬로 진행합니다(바꾸는 파일이 겹치지 않음).
+
+위험 등급: 높음. 모든 Leader·Worker의 시작과 state 게시 경로를 바꿉니다. 잠금 순서가 틀리면 교착이나 늦은 hook의 덮어쓰기가 생길 수 있습니다. 인수 전에 Leader가 잠금·게시 경로를 독립 검토(sub-agent)로 확인합니다.
 
 ## Verification
-1. Result에 나열한 경우마다 코드 위치(`path:line`)와 흔적이 있습니다.
-2. 결론이 (a)·(b)이면 재현 절차 또는 그 경우를 뒷받침하는 근거가 있습니다.
+결함 경로마다 test를 둡니다. 모두 격리 tmux server와 fake provider(기존 fixture)로 실행합니다.
+
+1. 재현(수정 전 실패): 시작 dialog에서 controller가 `needs_user_action`으로 끝난 뒤 사용자가 답해 등록되면, 다시 start하지 않는 한 `state.leader`가 null로 남습니다. 이 test가 Base에서 실패하고 수정 뒤 통과합니다. 기존 `test_start_held_at_a_startup_dialog_needs_the_user_and_resumes`의 기대는 새 계약에 맞게 고칩니다(답한 뒤 곧 게시, 다시 실행한 start는 같은 결과를 돌려줌).
+2. controller가 등록 전에 끝나는 다른 경우도 각각 test로 둡니다: SIGINT(`interrupted`), SIGTERM, SIGKILL, `--timeout` 만료. 모두 등록 뒤 다시 start하지 않아도 게시됩니다.
+3. controller가 살아 있는 정상 경로: 게시가 정확히 한 번 일어나고 `connected_at`이 한 번만 정해집니다. controller와 등록 쪽이 동시에 게시를 시도해도 state가 깨지지 않고 결과가 같습니다.
+4. 등록 쪽 게시 실패 주입(잠금 한도 초과, state 쓰기 실패): 같은 run의 다음 `Stop` hook이 게시합니다. 그 전에 Worker의 `send --job leader`나 Leader 자신의 명령(`start --job <CR>`)이 오면 그 명령이 게시를 마치고 진행합니다.
+5. 늦은 hook: 더 새로운 run이 slot을 이어받은 뒤 옛 run의 hook이 게시를 시도하면 `target_changed`로 아무것도 바꾸지 않습니다. `stopping` 중인 run은 명령 경로가 게시하지 않습니다.
+6. Codex `register_current` 경로가 1~4와 같은 결과를 냅니다.
+7. 영향 회귀: README의 agent-session suite(`-n 8`)와 project-item suite가 모두 통과합니다.
+8. 명세와 skill의 고친 문장이 코드 동작과 맞고, 고친 문서의 상대 link가 열립니다.
+
+## Result
+조사 결과 (Worker seat3, read-only, Base aad704d). 코드 변경·commit 없음. 제출 행 없음.
+
+### 결론
+**(b) 호출 방법의 문제로 보이는 쪽이 가장 유력하나, 시작 방법을 확인하지 못해 확정은 못 합니다. 동시에 (a)의 개선 여지가 있습니다.**
+- 확인한 사실: 게시는 시작 controller 한 곳만 합니다. 등록 hook은 게시하지 않습니다. controller가 등록 전에 끝나면 다음 start가 올 때까지 `ready:false`, `leader:null`이 유지되는 것이 현재 계약입니다(spec 4절 Leader·5절). 관찰한 상태는 이 계약대로의 결과입니다.
+- 가설(미확인): 이 run의 controller는 등록 전에 끝났습니다. 가장 가까운 원인은 시작 dialog 대기(`needs_user_action`, exit 3)입니다.
+
+### 1. 게시 전에 controller가 끝나는 경우 (모두 `_wait_ready` 대기 중 또는 그 이전)
+경로: `cli.py:140 main` → `lifecycle.py:~445 start(leader)` → `_launch`(`:325-338`) → `_wait_ready`(`:351-391`). 게시는 `:358-370`(`registered` 관찰 후 `store.update(publish)`, `write_meta(ready=True)`), 대기 loop 주기 0.1초(`:391`). 등록은 `internal.py:68-84 _register`가 `registered: true`만 씁니다. 게시는 하지 않습니다.
+
+| # | 경우 | 코드 | 남는 흔적 |
+| --- | --- | --- | --- |
+| 1 | 시작 dialog 감지 → `needs_user_action`(exit 3) 반환, controller 종료. 사용자가 창에서 답하면 CLI는 계속 진행해 등록 | `lifecycle.py:385-390` | stdout JSON(`dialog`)만. window: `registered:true`, `ready:false`, `start_error:null`. state `leader:null`. diagnostics 없음 |
+| 2 | 호출한 shell·tool이 시간 제한으로 controller를 SIGTERM/SIGKILL | `cli.py`에 signal handler 없음(`grep signal` 결과 `cli.py`·`lifecycle.py` 없음) | 출력 없음. 위와 같은 window·state. diagnostics 없음 |
+| 3 | SIGHUP(터미널·ssh 끊김, tmux pane 닫힘) | 2와 같음. handler 없음 | 같음 |
+| 4 | SIGINT(Ctrl-C) | `cli.py:200-203` `KeyboardInterrupt` → `interrupted` JSON, exit 4 | stdout JSON만. diagnostics 없음. 같은 window·state |
+| 5 | `--timeout`(기본 600, `cli.py:64`) 만료 | `lifecycle.py:65-70 remaining` → `timeout` exit 4 | stdout JSON만. 같은 window·state |
+| 6 | 등록 후 게시 중 오류: `_session` 검증, `_same`, `store.update`(`state_write_failed`, `target_changed` 등) | `lifecycle.py:358-370`, `state.py:202-231` | SessionError는 stdout JSON만. 비 SessionError는 `cli.py:204-210`이 `agent/diagnostics/`에 log를 남김 |
+| 7 | `provider_exited`(`:381`), `registration_failed`(`:373-378`), `target_changed`(`:356`) | 같은 함수 | 6과 같은 방식. 이 셋은 `registered`가 아니거나 `start_error`가 있어 관찰과 다름 |
+
+경우 1~5 이후 `registered:true`가 오면 아무도 게시하지 않습니다. 이 때 hook은 `internal.py:157-170 _wait_ready`에서 최대 120초 기다리다 `registration_timeout`으로 끝나지만(Claude hook 한도 30초가 먼저 자름), 이 실패는 `start_error`에 기록하지 않습니다(`_record_failure`는 `_bind` 실패만 호출, `internal.py:73-76`). 그래서 `start_error:null`이 관찰과 일치합니다.
+
+### 2. 관찰한 흔적과 맞는 경우
+- `agent/diagnostics/` 없음 → 6의 비 SessionError 예외는 아닙니다.
+- run 시작 13:52:27.9(`runs/df0fad.../launch.sh` mtime) → 등록 hook 13:53:30.6(`hook_observations.SessionStart.observed_at`). 63초. 같은 base의 다른 run은 6~8초입니다(`@389` 14:41:01→05:41:07Z, `@395` 14:45:42→14:45:50, `@398` 15:03:47→15:03:55). 이 run만 약 55초 늦었습니다.
+- controller가 등록 시점(13:53:30)에 살아 있었다면 0.1초 안에 게시했을 것입니다. 따라서 controller는 13:52:27~13:53:30 사이에 끝났습니다. 이 구간 동안 CLI는 정상 속도로 뜨지 못했습니다.
+- 가장 자연스러운 설명은 경우 1입니다. `--permission-mode bypassPermissions`로 시작하므로 `bypass_permissions` dialog(`providers/claude.py:73-77`)에서 CLI가 멈췄고, controller는 1~2초 안에 `needs_user_action`으로 끝났으며, 사용자가 약 1분 뒤 창에서 답해 hook이 등록했을 가능성입니다. 이 경우 spec 4절·5절·README 72행의 절차(답한 뒤 같은 start 재실행)가 게시를 맡습니다. Leader가 재실행하자 게시된 것과 맞습니다.
+- 경우 2·3(호출 tool·shell의 중간 종료)도 같은 흔적을 남기며, CLI 지연 55초가 별도 원인이어야 합니다. 현재 근거로 1과 구분할 수 없습니다. 구분에 필요한 것은 처음 start 호출의 stdout(`needs_user_action` 또는 무출력), 호출한 곳(터미널·Board·다른 session의 Bash tool), 13:52~13:54의 pane 화면입니다. 시작 방법은 CR 본문대로 사용자 확인 대기 중입니다.
+
+### 3. 동결 사본과의 차이
+실행한 사본(`/primehome/swain/Utils/agent/agent.base/codex/tools/agent-session`)과 이 저장소 `tools/agent-session`을 `diff -r`했습니다. `lifecycle.py`·`cli.py`·`internal.py`·`state.py`는 동일합니다(위 줄 번호는 양쪽에 같음). 다른 파일은 `remote.py`·`remote_runtime.py`·`tmux.py`(주석의 `project_board.conf`→`project-agent.conf`) 뿐이며 이 현상과 무관합니다.
+
+### 4. 재현 (격리 tmux server + fake provider)
+저장소의 테스트 fixture(`tests/fixtures/agent_session_fixture.py`의 `session_env`, `agent_session_fake_provider.py`의 `FakeProvider(dialog=True)`)로 경우 1을 재현했습니다. 이 재현은 경우 1의 상태를 만들 뿐 실제 원인이 1임을 증명하지 않습니다. 임시 test는 scratchpad에 두었고 저장소에는 없습니다.
+1. `FakeProvider(dialog=True)`로 `manager.start("leader")` → `needs_user_action`(exit 3), controller 종료.
+2. 창에 `approve`+Enter를 보내 CLI 등록.
+3. 관찰: `registered=True ready=False start_error=None leader=None` (3초 뒤에도 유지). Leader state를 게시하는 process 없음.
+4. `manager.start("leader")` 재실행 → `ready=True`, `leader={session_id, connected_at,...}`.
+이 결과는 이번 관찰과 같습니다. 같은 현상을 보이는 기존 test: `tools/agent-session/tests/test_lifecycle.py:302-325 test_start_held_at_a_startup_dialog_needs_the_user_and_resumes`(`leader is None` 단언 후 재실행 start가 `ready` 확인). 즉 현재 계약의 의도된 동작입니다. 경우 2·3(signal)은 같은 상태로 이어지는 것을 코드로 확인했고 별도 재현은 하지 않았습니다.
+
+### 5. 판단과 제안 (결정은 Leader 몫)
+- 호출 방법 안내(b): `start --job leader`의 stdout이 `needs_user_action`이거나 출력 없이 끝났다면 같은 start를 다시 실행해야 게시됩니다. 호출한 shell·tool의 시간 제한(600초 `--timeout`보다 짧은 제한)과 dialog 대기 시간에 주의합니다. 게시 여부는 `agent/state.json`의 `leader`가 null인지로 확인합니다.
+- 제품 개선(a, 범위·정책 선택이라 사용자 결정 대상일 수 있음): 등록과 게시 사이에 원인과 무관한 빈틈이 있습니다. dialog 반환 뒤 사용자가 답하면 등록은 되지만, 사용자가 이를 알 방법은 Leader가 `send`를 못 받는다는 간접 증상뿐입니다. 후보:
+  1. 등록 hook(`_register` 뒤)이 같은 게시를 대상 제어 잠금 아래 수행(spec 5절의 "시작 controller만 게시" 계약 변경 필요).
+  2. `send --job leader`·Worker 보고가 `registered && !ready`인 현재 run을 보면 게시를 마쳐 줌(`_wait_ready`의 publish 재사용).
+  3. 변경 없이 `needs_user_action` 메시지에 "답한 뒤 같은 start 재실행" 안내를 강화하고 `registered && !ready` 상태를 진단 출력에 노출.
+  어느 쪽도 이 CR 범위(조사)에서 구현하지 않았습니다.
+
+### 검증 (CR Verification 대응)
+1. 경우마다 코드 위치와 흔적: 위 1절 표.
+2. 결론 (b)의 근거: 2절 시간 대조(63초 vs 6~8초)와 4절 재현. 확정에 필요한 처음 start의 stdout과 시작 방법이 없음을 명시했습니다. 확정은 아닙니다(c 성격이 일부 남음).
+- 실행 명령: `pytest <scratchpad>/test_repro_session001.py -s` 통과(1 passed). 저장소 파일과 `__pycache__`는 정리했고 `git status` clean입니다.

@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Requester: agent, /primehome/swain/Utils/agent/agent.base, 2026-11-09
+- Base: 9458aba01535c1a12ee034ce725048aca5448c10 2026-11-09T14:40:54+09:00
 
 ## Symptom
 project-agent를 다른 직원에게 배포하려면 설치기가 있어야 합니다. 설치·갱신·되돌리기·제거 중 그 사람의 다른 설정에 영향이 없어야 합니다. 설치 계약은 정해졌지만 설치기는 아직 없습니다. 지금은 개발 checkout을 symlink로 거는 방식만 있습니다.
