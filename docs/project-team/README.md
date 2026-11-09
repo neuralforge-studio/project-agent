@@ -61,13 +61,31 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 
 `agent-session`과 `project-item`은 서로를 씁니다(양방향). project-item을 쓰는 쪽은 `project_item.api`만 씁니다([경계 test](../../codex/tools/project-item/tests/test_api_boundary.py)가 확인합니다). 이 표의 project-item 소비자 목록은 그 test의 `CONSUMERS`와 맞춥니다. agent-session을 쓰는 쪽은 `agent_session.api`만 씁니다([경계 test](../../codex/tools/agent-session/tests/test_api_boundary.py)가 `codex/tools`·`codex/scripts`·`tmux/scripts`의 다른 도구 파일을 모두 검사하고, agent-session 안에서 다른 모듈의 밑줄 이름을 import하는 것도 막습니다).
 
+### `sys.path` 조작 위치
+
+도구 사이를 잇는 `sys.path` 조작은 도구마다 한 곳입니다. 실행 진입점(`agent_session.py`, hook·controller command, `remote.py` bootstrap)은 자기 도구만 넣습니다.
+
+| 조작하는 쪽 | 넣는 도구 | 위치 |
+| --- | --- | --- |
+| `project_item.registry` | `agent-session` | `registry.py` module load |
+| `agent_session.jobs` | `project-item` | `jobs.item_api()` 안 |
+| `project_board.model` | `agent-session`, `project-item` | `model.py` module load |
+| `tmux/scripts/tmux_decide_status.py` | `project-item` | `load_project_item()` 안 |
+
+### 예외: 양방향 의존
+
+`agent-session`과 `project-item`의 양방향 의존은 해소하지 않고 남깁니다(2026-11-09 Leader 판정, CR ARCH-005).
+
+- **이유**: 두 방향은 서로 다른 계약을 씁니다. 등록과 호출자 규칙은 agent-session의 계약이고([동작 명세](spec.md) 2절·5절), CR 저장과 형식은 project-item의 계약입니다. 해소하려면 등록 해석을 별도 패키지로 빼야 합니다. 그러면 `agent_session.config`가 옮겨지고 원격 zip 배치와 hook의 import 경로가 바뀝니다. 이는 아래 실행 경로 계약을 바꾸는 일이라, 얻는 것보다 위험이 큽니다.
+- **적용 범위**: `project_item.registry`가 `agent_session.api`를 module load 때 import하는 것과, `agent_session.jobs.item_api()`가 `project_item.api`를 함수 안에서 import하는 것입니다. 각 방향은 상대의 공개 모듈만 씁니다. agent-session은 project-item을 지연 import하므로 import 시점 순환이 없습니다.
+- **영향받는 소비자**: `project_item.registry`와 이를 쓰는 project-item 전체, `agent_session.jobs`·`agent_session.remote_bridge`(`jobs.item_api()` 경유), project-board와 tmux script(위 표의 두 도구를 모두 가져옵니다), 원격 zip의 `agent-session/`·`project-item/` 배치.
+- **검증의 한계**: [순환 방지 test](../../codex/tools/agent-session/tests/test_import_cycle.py)는 `agent_session.api`·`project_item.api`·`project_board.model`·`agent_session.internal`을 새 interpreter에서 첫 import로 확인하고, agent-session이 project-item을 import 시점에 싣지 않는지도 봅니다. 이 네 순서만 보며, 다른 `sys.path` 구성이나 동적 import(`importlib`)가 만드는 순환은 보지 못합니다.
+
 ### 목표
 
-CR ARCH-001이 합의한 목표입니다. `project_item.api`(ARCH-003)와 `agent_session.api`(ARCH-004)는 적용해 위 현행에 옮겼습니다. 나머지는 아직 적용하지 않았으며, 단계마다 이 절을 현행으로 옮깁니다.
+CR ARCH-001이 합의한 목표입니다. `project_item.api`(ARCH-003), `agent_session.api`(ARCH-004), `sys.path` 조작 위치와 양방향 의존의 예외 기록(ARCH-005)은 위에 옮겼습니다. 나머지는 아직 적용하지 않았으며, 단계마다 이 절을 현행으로 옮깁니다.
 
 - 각 도구는 공개 인터페이스를 선언합니다(`project_item.api`·`agent_session.api` 적용함). 다른 도구와 tmux script는 그 인터페이스만 씁니다.
-- 도구 사이의 `sys.path` 조작은 도구마다 한 곳에 모읍니다.
-- `agent-session`과 `project-item`의 양방향 의존은 해소하거나, 남기면 이유를 이 문서에 기록합니다.
 
 ## 실행 경로 계약
 
