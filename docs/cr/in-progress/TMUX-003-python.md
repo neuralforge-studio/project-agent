@@ -24,6 +24,7 @@
 ## Disposition
 - 2026-11-10 Leader: 고친다. 재현 측정이 있는 결함이고, 사용자 지시가 있습니다(2026-11-10 대화 원문: "반복 조회 수정은 측정 결과 기다리지 말고 바로 시작해줘. 너무 느려."). SESSION-010과 파일이 겹치지 않아 동시에 진행합니다.
 - 2026-11-10 Leader: open -> todo. 사용자 지시로 즉시 수정
+- 2026-11-10 Leader: 제출 3084323f095af6cd20bcb1bbd123f50c2d226d8f를 인수합니다. Leader review: 캐시가 유효한 실행은 .view만 읽고 Python을 띄우지 않습니다(20회 중앙값 288~396ms -> 19~21ms). CACHE_TTL은 .py에만 있고 view 첫 줄(캐시 mtime+TTL)로 전달되어 원본이 하나입니다. 디렉터리 읽기·lock·새 결정 알림의 조건은 만료 뒤 Python 실행에서만 일어나 수정 전과 같습니다. 출력 문구는 리터럴 비교 test로 고정했습니다. XDG_CACHE_HOME 빈 값 처리도 .py와 .sh가 같습니다. 검증은 README 표 integrations/tmux 행 세 명령과 docs 행(link 확인, distribution boundary)입니다. 지적: 작업 중 git stash를 썼습니다(전역 규칙상 사용자 요청 없이 stash 금지). 바로 pop했고 남은 것이 없어 결과에는 영향이 없습니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [설치 계약](../../project-team/install-contract.md)(6.1 interpreter 선택, 5.3 run-shell), [tmux 통합](../../../integrations/tmux/project-agent-main.conf), [project-team Worker 절](../../../skills/project-team/SKILL.md).
