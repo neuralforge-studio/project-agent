@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: 183f619e84aa8972de73df498ca348cf0a463c52 2026-11-10T00:12:20+09:00
+- Outcome: fixed
 
 ## Symptom
 사용자 보고: "side bar 빈곳을 click 하면 현재 활성화 되어 있는 pane에서 error 발생"
@@ -19,6 +20,7 @@
 - 2026-11-09 Leader: 고친다(Leader 판정). 재현 가능한 동작 결함이므로 위임 범위입니다. BOARD-002 뒤에 시작합니다. 사용자 지시(2026-11-09 대화): "위와 같이 11개의 개선 요청 사항이 있어."
 - 2026-11-10 Leader: 선행 BOARD-002가 61e881e로 통합되었습니다(BOARD-003·004 병합). 그 구조를 따르십시오: Board pane은 본 window에 남고(최대 8개, 최근 본 순서), 보이지 않는 pane은 갱신하지 않으며(`project_board_visibility.sh`의 SIGUSR1), 파일은 바뀐 것만 다시 읽습니다(TUI 계획 2·5절). Board CR 다섯 개가 같은 `tui.py`·`tmux_control.py`를 고칠 수 있으므로 제출 전에 `origin/main`을 merge하십시오.
 - 2026-11-10 Leader: 제출 f66e65a213fb063d28e1fb5c55f53f5e7986e47b를 인수합니다. Leader review: 원인(Board pane click은 활성 pane을 바꾸지 않고, run-shell이 job의 출력과 0이 아닌 종료를 활성 작업 pane에 view-mode로 보임)과 수정(click 명령의 출력·종료 상태를 버림, 항목 click 동작·CLI·JSON 계약 불변, 계약 5.3절 한 줄)을 확인했습니다. 격리 tmux 재현과 수정 전 실패 test, integrations/tmux 94·test_tmux_control 17·install 261·project-board 146 passed, merge 뒤 영향 test 재실행. 범위 밖 관찰(toggle·hook의 run-shell도 같은 경로)은 BOARD-010으로 엽니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 5b969e9(Merge cr/BOARD-006, 제출 f66e65a). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [project-board README](../../../tools/project-board/README.md), [TUI 계획](../../project-board-tui-plan.md), [설치 계약 5.3·5.4절](../../project-team/install-contract.md), [README 검증 표](../../../README.md#검증).
