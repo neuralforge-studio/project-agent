@@ -1,6 +1,6 @@
 # project-agent 설치 계약
 
-이 계약은 확정 기준(사용자 결정 D-20261109-08·09)입니다. 설치기는 DIST-001 4단계에서 구현합니다.
+이 계약은 확정 기준(사용자 결정 D-20261109-08·09)입니다. 설치기는 `install/`가 구현하고(DIST-001 4단계) 인수 test는 `install/tests`입니다.
 이 문서는 설치기와 인수 test의 원본입니다. 설치기 구현과 test는 이 문서를 따릅니다. 이 문서와 다른 동작이 필요하면 먼저 이 문서를 고칩니다.
 
 - 대상: project-team 제품(이하 project-agent). 구성 요소는 [제품 지도](README.md)가 설명합니다.
@@ -26,12 +26,12 @@
 
 | 경로 | 종류 | 내용 |
 | --- | --- | --- |
-| `~/.local/lib/project-agent/releases/<version>-<hash>/` | 디렉터리 | 불변 release. 도구, skill, 문서, tmux 통합 파일, release 안의 외부 package를 담습니다. |
+| `~/.local/lib/project-agent/releases/<version>-<hash>/` | 디렉터리 | 불변 release. 도구, skill, 문서, tmux 통합 파일, 설치기(`install/`)를 담고 test·`__pycache__`·`docs/cr`는 담지 않습니다. 설치 interpreter를 적은 `tools/python.env`를 더합니다(6.1절). 외부 package는 담지 않습니다(사용자 결정 D-20261109-01 waive). 만들 때 설치 interpreter로 미리 compile하고(`__pycache__`) 쓰기 권한을 모두 뺍니다. 그래야 실행이 release에 파일을 더하지 않습니다. |
 | `~/.local/lib/project-agent/current` | symlink | 활성 release를 가리킵니다. 원자적으로 바꿉니다. |
 | `~/.local/lib/project-agent/tmux.conf` | 파일 | tmux include의 고정 대상입니다. `source-file -q ~/.local/lib/project-agent/current/integrations/tmux/project-agent.conf` 한 줄을 담습니다. 설치 때 한 번 쓰고 갱신하지 않습니다. |
 | `~/.local/lib/project-agent/install.json` | 파일 | 설치 기록 |
 | `~/.local/lib/project-agent/backup/` | 디렉터리 | 설치가 고친 기존 파일의 원본(3절). 고친 파일이 없으면 만들지 않습니다. |
-| `~/.local/bin/agent-session`, `project-item`, `project-board` | shim | `current` 아래 각 도구의 진입점으로 가는 symlink 또는 script. 반드시 `current`를 거칩니다. 형태는 4단계가 정합니다. |
+| `~/.local/bin/agent-session`, `project-item`, `project-board` | shim | `current/tools/<도구>/bin/<도구>`를 가리키는 절대 경로 symlink입니다. 반드시 `current`를 거칩니다. |
 | `~/.claude/skills/project-team`, `~/.claude/skills/project-item` | symlink | `current` 아래 skill 디렉터리로 가는 link |
 | `~/.codex/skills/project-team`, `~/.codex/skills/project-item` | symlink | 같은 skill 디렉터리로 가는 link |
 | `~/.config/project-agent/project.json` | 파일 | 등록 파일 초안. 6절의 조건에서만 만듭니다. 내용은 빈 등록(`{}`)입니다. `load_registry`가 빈 object를 project 0개로 읽습니다([config.py:152-153](../../tools/agent-session/agent_session/config.py)). |
@@ -70,7 +70,7 @@ source-file -q ~/.local/lib/project-agent/tmux.conf
 # <<< project-agent <<<
 ```
 
-표시 줄의 정확한 글자는 4단계가 정하고 이 문서에 옮깁니다. 블록은 첫 줄의 줄바꿈 하나를 포함합니다. 그래야 원본이 줄바꿈으로 끝나지 않아도 제거가 byte 단위로 되돌립니다.
+표시 줄은 위 세 줄의 글자 그대로입니다(설치기가 `~/.local/lib/project-agent/tmux.conf`를 `~` 그대로 적습니다). 블록은 첫 줄의 줄바꿈 하나를 포함합니다. 파일이 없어 새로 만들 때도 같은 블록을 씁니다(파일은 그 줄바꿈으로 시작합니다). 그래야 원본이 줄바꿈으로 끝나지 않아도 제거가 byte 단위로 되돌립니다.
 
 | 상황 | 동작 |
 | --- | --- |
@@ -100,7 +100,7 @@ tmux 통합 파일은 읽힐 때 tmux server에 binding과 hook을 넣습니다(
 - Claude·Codex 설정 파일: `settings.json`, `config.toml`, `.claude.json`. 실행 중의 신뢰 기록은 5절이 따로 다룹니다.
 - `CLAUDE.md`, `AGENTS.md`, 이 계약의 2절에 없는 다른 skill
 - shell rc와 PATH. `~/.local/bin`이 PATH에 없으면 안내만 출력합니다.
-- 전역 Python package. Board의 외부 package는 release 안에 넣습니다.
+- 전역 Python package. Board의 외부 package(`textual`)는 설치하지 않습니다. 설치 interpreter에 있어야 하며 `check`가 안내합니다(7절).
 - 등록 project의 저장소: `.gitignore`, `.git/info/exclude`, git 설정, project 안의 어떤 파일도 고치지 않습니다. base의 `agent/` 아래 untracked 파일에 대한 안내는 9.1절이 정합니다.
 - 위 3절의 한 파일을 뺀 모든 기존 파일. 읽기만 해도 되는 파일은 예외 없이 내용·권한·mtime이 같아야 합니다.
 
@@ -224,13 +224,17 @@ set-option -ag status-right '#{E:@project_agent_decide_status}'
 | 변수 | 뜻 | 없을 때 |
 | --- | --- | --- |
 | `PROJECT_AGENT_PYTHON` | 설치 때 고른 interpreter의 절대 경로. 값이 있으면 후보는 이것 하나입니다. 다른 interpreter로 되돌아가지 않습니다. | 개발 checkout 규칙: macOS는 `python3`, WSL은 `~/python/.venv/bin/python`만, 그 밖에는 `/primehome/tools/Inhouse/Python3/latest/bin/python3`, `~/python/.venv/bin/python`, `python3` 순서 |
-| `PROJECT_AGENT_PYTHONPATH` | release 안 외부 package 디렉터리(`textual` 등). `:`로 여럿을 이을 수 있습니다. `project-board`만 `PYTHONPATH`에 더합니다. | 더하지 않음 |
+| `PROJECT_AGENT_PYTHONPATH` | release 안 외부 package 디렉터리. `:`로 여럿을 이을 수 있습니다. `project-board`만 `PYTHONPATH`에 더합니다. 설치기는 외부 package를 넣지 않으므로 빈 값을 적습니다. | 더하지 않음 |
 
 - `project-board`와 `project-item`은 `PYTHONNOUSERSITE=1`로 실행하므로, 사용자 site의 package는 보이지 않습니다. release의 package는 `PROJECT_AGENT_PYTHONPATH`로만 보입니다.
 - `PROJECT_AGENT_PYTHON`이 없거나 실행할 수 없는 파일이면 `agent-session`은 JSON 오류 `python_unavailable`(종료 코드 5)을, 버전이 3.10 미만이면 `python_version`을 출력합니다. `project-item`과 `project-board`는 stderr에 한 줄을 쓰고 종료 코드 5로 끝납니다.
-- 4단계 설치기는 이 두 변수의 값을 shim에 정합니다. 변수의 이름과 의미를 바꾸려면 먼저 이 절을 고칩니다.
+- 설치기는 이 두 변수의 값을 release의 `tools/python.env`에 적습니다. 한 줄에 `NAME=값` 하나이고 이름은 위 두 개뿐이며 값은 따옴표 없이 줄 끝까지입니다. `PROJECT_AGENT_PYTHON`은 설치기를 실행한 interpreter의 절대 경로입니다. 개발 checkout에는 이 파일이 없습니다. 이 파일을 읽어 두 변수를 정하는 쪽은 release의 `bin/` 진입점입니다(INSTALL-002). shim은 환경 변수를 정하지 않고 `current`를 거치는 symlink입니다. 변수의 이름과 의미를 바꾸려면 먼저 이 절을 고칩니다.
 
 ## 7. 명령의 동작
+
+설치기는 `install/project-agent-install <명령>`입니다(개발 checkout과 `current/install/` 양쪽). 표준 library만 씁니다. `install`·`upgrade`는 release로 만들 Git checkout을 `--source PATH`로 받고(기본: 설치기가 있는 checkout), 모든 명령은 `--json`으로 결과를 JSON 하나로 출력합니다. 종료 코드는 0 완료(할 일이 없는 경우 포함), 1 `check` 실패, 2 옵션 오류, 3 아무것도 바꾸기 전의 거절(충돌, 떠 있는 run, 없는 VERSION 등), 4 바꾸는 중 실패해 되돌림입니다.
+
+release 이름 `<version>-<hash>`: `<version>`은 원본 root의 `VERSION` 첫 줄(공백 제거, `[0-9A-Za-z][0-9A-Za-z._+~-]*`)이고 파일이 없거나 형식이 틀리면 거절합니다. `<hash>`는 원본 HEAD commit의 앞 12자입니다. release에 들어가는 파일이 commit과 다르면(수정됐거나 추적되지 않은 파일이 있으면) 거절합니다. 내용 해시로 이름을 짓지 않습니다. release에 넣지 않는 경로(test, `__pycache__`, `docs/cr`)의 변경은 거절 사유가 아닙니다. 같은 이름의 release가 이미 있으면 다시 만들지 않고 씁니다.
 
 모든 명령은 `--dry-run`을 받습니다. `--dry-run`은 아무것도 만들지 않고 바뀔 경로를 모두 출력합니다. 출력과 실제 실행의 변경 목록이 같아야 합니다.
 
@@ -249,7 +253,8 @@ set-option -ag status-right '#{E:@project_agent_decide_status}'
 - tmux 블록이 기록된 파일에 있습니다. symlink 때문에 건너뛴 경우는 실패가 아니라 안내입니다.
 - `~/.local/bin`이 PATH에 있습니다. 없으면 안내입니다(실패가 아닙니다).
 - 건너뛴 tmux binding이 있으면 "binding 건너뜀"으로 알립니다(3.1절). 실패가 아닙니다.
-- 사용자가 소유 경로를 다른 것으로 바꿨으면 그 경로를 알립니다. `upgrade`와 `uninstall`은 그런 경로를 바꾸거나 지우지 않고 알립니다. 원격 runtime의 skill link가 같은 규칙을 씁니다([remote_runtime.py:74-90](../../tools/agent-session/agent_session/remote_runtime.py)) .
+- `project-board`가 쓰는 `textual`이 설치 interpreter에 `tools/project-board/requirements.txt`의 버전으로 있는지 안내합니다. 없거나 버전이 다르면 안내만 합니다(실패가 아닙니다).
+- 사용자가 소유 경로를 다른 것으로 바꿨으면 그 경로를 알리고 `check`는 실패로 끝납니다(위 첫 항목). `upgrade`와 `uninstall`은 그런 경로를 바꾸거나 지우지 않고 알립니다. 원격 runtime의 skill link가 같은 규칙을 씁니다([remote_runtime.py:74-90](../../tools/agent-session/agent_session/remote_runtime.py)) .
 
 ### 7.1 떠 있는 run
 
@@ -257,14 +262,14 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 
 1. `upgrade`와 `rollback`은 떠 있는 run에 영향을 주지 않습니다. 그 run은 시작된 release를 계속 씁니다. 새 run부터 `current`가 가리키는 release를 씁니다.
 2. 설치기는 사용 중인 release를 지우지 않습니다. 사용 중이란, 등록된 project의 `<base>/agent/runs/*/`의 script에 그 release 경로가 있고 그 run이 끝나지 않았다는 뜻입니다.
-3. `upgrade`는 이전 release를 지우지 않습니다. 오래된 release를 정리하는 명령의 이름과 시점은 4단계가 정합니다(DIST-001 4단계는 "정리 명령은 참조를 확인한 뒤 지웁니다"라고만 적었습니다).
+3. `upgrade`는 이전 release를 지우지 않습니다. 오래된 release를 정리하는 명령은 INSTALL-004가 정합니다. 실행 중인 run이 쓰는 release를 찾는 함수는 설치기의 `runs.releases_in_use`입니다.
 4. Board pane은 release에 고정되지 않습니다. 이미 실행 중인 Board process가 지워진 release의 파일을 나중에 읽는지는 **(미확인)**입니다. `upgrade` 출력은 Board를 다시 열도록 안내합니다.
 
 ### 7.2 `uninstall`의 거절
 
 관리 run이 살아 있으면 `uninstall`을 거절합니다. 거절하면 아무것도 바꾸지 않고, 살아 있는 run의 project와 slot을 출력합니다.
 
-- 판정 대상은 등록 파일의 모든 project입니다. 등록 파일을 읽을 수 없으면 판정할 수 없으므로 거절합니다.
+- 판정 대상은 등록 파일의 모든 project입니다. 등록 파일이 있는데 읽을 수 없으면 판정할 수 없으므로 거절합니다. 등록 파일이 어디에도 없으면 project가 없으므로 거절하지 않습니다. `<base>/agent/state.json`이 없는 project는 run이 없는 것으로 봅니다. 관리 run은 `AGENT_SESSION_SOCKET`의 tmux server(없으면 기본 server)에서 판정합니다.
 - 각 slot은 [`agent_session.api.liveness`](../../tools/agent-session/agent_session/api.py)로 분류합니다. `alive`와 `unknown`을 거절 근거로 봅니다. `stopped`만 통과합니다.
 - shutdown 기록(`<base>/agent/suspend.json`)에 남은 slot이 있으면 거절하고 그 slot을 출력합니다. 다시 재개할 대화가 남아 있는 채로 제품을 지우지 않기 위해서입니다([suspend.py:65-66](../../tools/agent-session/agent_session/suspend.py)). `liveness`가 `stopped`여도 같습니다.
 - 강제 옵션(`--force`)은 두지 않습니다. 이유: 강제로 지우면 살아 있는 run의 hook과 controller가 지워진 코드를 부릅니다. 그러면 그 run에 `send`·`stop`·`restart`를 보낼 수 없습니다. 해소 방법은 run을 먼저 끝내는 것입니다(`agent-session stop`, `shutdown`).
@@ -274,7 +279,7 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 
 ## 8. 인수 test 명세
 
-4단계가 구현합니다. 모든 경우에서 기대 변경 목록은 이 문서의 2·3·3.1·7절에서 얻습니다. 설치기의 설치 기록에서 얻지 않습니다.
+[install/tests](../../install/tests)가 구현합니다(`python -m pytest -q install/tests`). 모든 경우에서 기대 변경 목록은 이 문서의 2·3·3.1·7절에서 얻습니다. 설치기의 설치 기록에서 얻지 않습니다.
 
 ### 8.1 공통 하네스
 

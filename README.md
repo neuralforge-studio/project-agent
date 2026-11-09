@@ -10,6 +10,7 @@ project-agent는 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로
 | `tools/project-item/` | CR과 결정 항목의 생성·조회·이동·검사 | [README](tools/project-item/README.md) |
 | `tools/project-board/` | 모든 프로젝트의 상황을 보이는 tmux 화면 | [README](tools/project-board/README.md) |
 | `tools/` 바로 아래 | 세 CLI가 공유하는 `python-launcher.sh`와 저장소 수준 test(`conftest.py`, `test_*.py`) | [설치 계약 6.1절](docs/project-team/install-contract.md#61-python-선택) |
+| `install/` | 설치기(`install`·`upgrade`·`rollback`·`uninstall`·`check`, `--dry-run`)와 격리 HOME 인수 test | [설치 계약](docs/project-team/install-contract.md) |
 | `skills/project-team/`, `skills/project-item/` | Leader·Worker·운영자 절차와 CR·결정 항목 형식 | [SKILL.md](skills/project-team/SKILL.md), [SKILL.md](skills/project-item/SKILL.md) |
 | `integrations/tmux/` | Board binding, status 표시, 결정 대기 알림. 설치본은 `project-agent.conf`를 읽습니다 | 각 script의 머리말, [project-board README](tools/project-board/README.md) |
 | `docs/project-team/` | 제품 지도, 동작 명세, 설치 계약, 예제 JSON | [제품 지도](docs/project-team/README.md) |
@@ -25,10 +26,12 @@ python -m pytest -q -n 8 tools/agent-session/tests
 python -m pytest -q tools/project-item/tests
 python -m pytest -q tools/project-board/tests
 python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py
+python -m pytest -q -n 8 install/tests
 ```
 
-- 네 명령은 서로 독립이며 pytest 설정 파일 없이 각 디렉터리의 `conftest.py`로 동작합니다.
+- 다섯 명령은 서로 독립이며 pytest 설정 파일 없이 각 디렉터리의 `conftest.py`로 동작합니다.
 - Agent-session test는 load가 높으면 `AGENT_SESSION_TEST_TIMEOUT`(초)을 지정합니다. 자세한 사용법은 [agent-session README](tools/agent-session/README.md#프로젝트-api와-검사)가 설명합니다.
+- 설치기 test(`install/tests`)는 격리 HOME에서만 설치기를 실행합니다. 개발 중 설치기를 실제 HOME에 실행하지 않습니다. `tmux`와 `git`이 필요하고 계약 8절의 T1~T23을 구현합니다.
 - CLI smoke: `tools/<도구>/bin/<도구> --help`.
 
 ## 관련 문서

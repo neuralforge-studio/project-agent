@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Entry point of the project-agent installer (docs/project-team/install-contract.md).
+
+Run it from a development checkout (`install/project-agent-install install`) or from an installed
+release (`~/.local/lib/project-agent/current/install/project-agent-install check`). It uses only the
+standard library.
+"""
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 10):
+    sys.exit("project-agent-install: Python 3.10 or later is required.")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from project_agent_install.cli import main  # noqa: E402
+
+sys.exit(main())

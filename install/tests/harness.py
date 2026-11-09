@@ -1,0 +1,287 @@
+"""The acceptance harness of docs/project-team/install-contract.md section 8.1.
+
+Every run uses an isolated HOME. A snapshot walks HOME (TMPDIR lives inside it) without following
+symlinks; the expectation of each case is written from the contract, never read from the install record.
+Later installer CRs add cases by importing this module.
+"""
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+
+REPO = Path(__file__).resolve().parents[2]
+INSTALLER = REPO / "install" / "project-agent-install"
+LIB = ".local/lib/project-agent"
+# The names the contract gives (section 2). Written here, not imported from the installer.
+SHIMS = (".local/bin/agent-session", ".local/bin/project-item", ".local/bin/project-board")
+CLAUDE_LINKS = (".claude/skills/project-team", ".claude/skills/project-item")
+CODEX_LINKS = (".codex/skills/project-team", ".codex/skills/project-item")
+REGISTRY_DRAFT = ".config/project-agent/project.json"
+BLOCK = (b"\n# >>> project-agent (managed block, do not edit) >>>\n"
+         b"source-file -q ~/.local/lib/project-agent/tmux.conf\n# <<< project-agent <<<\n")
+TMUX_CONF = b"source-file -q ~/.local/lib/project-agent/current/integrations/tmux/project-agent.conf\n"
+OLD = 1_600_000_000_000_000_000       # mtime_ns of the user's files: far from "now"
+
+GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_AUTHOR_NAME": "t",
+           "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+
+
+def git(root, *args):
+    result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=60,
+                            env={**os.environ, **GIT_ENV})
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def build_product_repository(target):
+    """A Git repository of the product as it is in this checkout (committed or not), with a VERSION."""
+    target.mkdir(parents=True)
+    for name in ("tools", "skills", "docs", "integrations", "install"):
+        shutil.copytree(REPO / name, target / name, symlinks=True,
+                        ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", "cr"))
+    for name in ("README.md", "AGENTS.md"):
+        shutil.copy2(REPO / name, target / name)
+    (target / "VERSION").write_text("1.0.0\n")
+    git(target, "init", "-q", "-b", "main")
+    git(target, "add", "-A")
+    git(target, "commit", "-q", "-m", "product")
+    return target
+
+
+def commit_change(source, version):
+    """A new commit with a new VERSION and one changed product file, so an upgrade has a new release."""
+    (source / "VERSION").write_text(version + "\n")
+    notes = source / "docs" / "project-team" / "README.md"
+    notes.write_text(notes.read_text() + "\nchanged for %s\n" % version)
+    git(source, "add", "-A")
+    git(source, "commit", "-q", "-m", "change " + version)
+
+
+def release_name(source):
+    version = (Path(source) / "VERSION").read_text().splitlines()[0].strip()
+    return "%s-%s" % (version, git(source, "rev-parse", "HEAD")[:12])
+
+
+class Home:
+    """An isolated HOME with the user's own files that no command may change (8.1 item 5)."""
+
+    USER_FILES = {
+        ".claude/settings.json": b'{"theme": "dark"}\n',
+        ".claude/CLAUDE.md": b"my rules\n",
+        ".claude/skills/other-skill/SKILL.md": b"other skill\n",
+        ".claude.json": b'{"projects": {}}\n',
+        ".codex/config.toml": b'model = "x"\n',
+        ".codex/AGENTS.md": b"my agents\n",
+        ".codex/skills/other-skill/SKILL.md": b"other skill\n",
+        ".bashrc": b"export A=1\n",
+    }
+
+    def __init__(self):
+        self.root = Path(tempfile.mkdtemp(prefix="pi-"))
+        self.home = self.root / "h"
+        self.home.mkdir()
+        for relative, data in self.USER_FILES.items():
+            self.write(relative, data)
+        (self.home / "tmp").mkdir()
+        self.env = {key: value for key, value in os.environ.items()
+                    if not (key.startswith(("XDG_", "AGENT_SESSION_", "CLAUDE", "CODEX")) or key in (
+                        "TMUX", "TMUX_PANE", "TMPDIR", "PYTHONPATH", "PROJECT_AGENT_PYTHON", "PROJECT_AGENT_PYTHONPATH"))}
+        self.env.update(HOME=str(self.home), TMPDIR=str(self.home / "tmp"), PYTHONNOUSERSITE="1",
+                        TMUX_TMPDIR=str(self.root / "tt"),          # no command of a test can reach the user's tmux server
+                        PATH=str(self.home / ".local/bin") + os.pathsep + os.environ.get("PATH", ""),
+                        **GIT_ENV)
+
+    def close(self):
+        for directory, _, _ in os.walk(self.root):          # releases are read-only
+            os.chmod(directory, 0o755)
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def path(self, relative):
+        return self.home / relative
+
+    def write(self, relative, data, mode=None):
+        path = self.home / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        if mode is not None:
+            path.chmod(mode)
+        os.utime(path, ns=(OLD, OLD))
+        return path
+
+    def read(self, relative):
+        return (self.home / relative).read_bytes()
+
+    def run(self, *args, source=None, env=None, cwd=None, installer=None):
+        """Run the installer as a user would; `source` is the Git checkout to release."""
+        command = [sys.executable, str(installer or INSTALLER), *args]
+        if source is not None and args[0] in ("install", "upgrade"):
+            command += ["--source", str(source)]
+        return subprocess.run(command, capture_output=True, text=True, timeout=300, cwd=cwd or self.root,
+                              env={**self.env, **(env or {})})
+
+    def snapshot(self):
+        return snapshot(self.home)
+
+
+def snapshot(root):
+    """Every entry under root, not following symlinks: path -> (kind, mode, hash, target, mtime_ns).
+    A directory's own mtime is not recorded: it changes with its children, which are listed themselves."""
+    result = {}
+
+    def walk(directory, prefix):
+        with os.scandir(directory) as entries:
+            for entry in sorted(entries, key=lambda item: item.name):
+                relative = prefix + entry.name
+                info = entry.stat(follow_symlinks=False)
+                mode = stat.S_IMODE(info.st_mode)
+                if entry.is_symlink():
+                    result[relative] = ("symlink", mode, None, os.readlink(entry.path), None)
+                elif entry.is_dir(follow_symlinks=False):
+                    result[relative] = ("dir", mode, None, None, None)
+                    walk(entry.path, relative + "/")
+                elif entry.is_file(follow_symlinks=False):
+                    digest = hashlib.sha256(Path(entry.path).read_bytes()).hexdigest()
+                    result[relative] = ("file", mode, digest, None, info.st_mtime_ns)
+                else:
+                    result[relative] = ("other", mode, None, None, None)
+    walk(root, "")
+    return result
+
+
+def collapse(paths, trees):
+    """Replace every path under one of the `trees` by the tree's root (a release is one change)."""
+    result = set()
+    for path in paths:
+        for tree in trees:
+            if path == tree or path.startswith(tree + "/"):
+                path = tree
+                break
+        result.add(path)
+    return result
+
+
+def changes(before, after, trees=()):
+    created = collapse(set(after) - set(before), trees)
+    removed = collapse(set(before) - set(after), trees)
+    modified = collapse({path for path in set(before) & set(after) if before[path] != after[path]}, trees)
+    return created, removed, modified
+
+
+def assert_changes(before, after, created=(), removed=(), modified=(), trees=()):
+    """The contract's expectation: the sets of added, deleted and changed paths must be exactly these.
+    Anything else that differs (an unexpected path, or an unchanged expected one) is a failure."""
+    got = changes(before, after, trees)
+    want = (set(created), set(removed), set(modified))
+    names = ("created", "removed", "modified")
+    for name, actual, expected in zip(names, got, want):
+        assert actual == expected, "%s differ:\n  unexpected: %s\n  missing: %s" % (
+            name, sorted(actual - expected), sorted(expected - actual))
+
+
+def install_paths(name, claude=True, codex=True, draft=True, bin_dir=True, home_dirs=(".local", ".local/lib")):
+    """The paths a clean-HOME install creates, written from contract section 2 (not from the record)."""
+    paths = {LIB, LIB + "/releases", LIB + "/releases/" + name, LIB + "/current", LIB + "/tmux.conf",
+             LIB + "/install.json", *home_dirs}
+    if bin_dir:
+        paths |= {".local/bin", *SHIMS}
+    if claude:
+        paths |= set(CLAUDE_LINKS)
+    if codex:
+        paths |= set(CODEX_LINKS)
+    if draft:
+        paths |= {".config", ".config/project-agent", REGISTRY_DRAFT}
+    return paths
+
+
+FIXTURES = REPO / "tools" / "agent-session" / "tests" / "fixtures"
+SITECUSTOMIZE = '''\
+import os, sys
+lib = os.environ.get("FAKE_PROVIDER_LIB")
+if lib:
+    sys.path[:0] = [lib, os.environ["FAKE_PROVIDER_FIXTURES"]]
+    import agent_session.lifecycle as lifecycle
+    import agent_session.providers as providers
+    from agent_session_fake_provider import FakeProvider
+    lifecycle.get_provider = lambda name: FakeProvider()
+    providers.get_provider = lambda name: FakeProvider()
+'''
+
+
+class Runs:
+    """One registered project whose managed runs use a fake provider CLI, on a private tmux server.
+
+    The installed `agent-session` is the real one; only the provider is replaced (by the agent-session test
+    fixture's fake CLI, through a `sitecustomize` that exists only in this test's environment), so that
+    start, stop and the run files are the product's. Every command names the private socket: nothing here
+    reaches the user's tmux server. Create it before `install`, so the registry exists and no draft is made."""
+
+    PROJECT = "pifx"
+
+    def __init__(self, home):
+        self.home = home
+        self.socket_dir = Path(tempfile.mkdtemp(prefix="pi-t"))
+        self.socket = self.socket_dir / "s"
+        self.base = home.home / "proj" / "base"
+        (self.base).mkdir(parents=True)
+        home.write(REGISTRY_DRAFT, json.dumps({str(self.base): {
+            "project": self.PROJECT, "provider": "codex", "seats": [],
+            "path_cr": "agent/cr", "path_decide": "agent/decide"}}).encode())
+        self.hook = home.root / "hook"
+        self.hook.mkdir()
+        (self.hook / "sitecustomize.py").write_text(SITECUSTOMIZE)
+        home.env["TMUX_TMPDIR"] = str(self.socket_dir)          # even a missing option cannot reach the user's server
+        self.tmux("new-session", "-d", "-s", "harness", "sleep", "86400")
+
+    def tmux(self, *args, check=True):
+        result = subprocess.run(["tmux", "-S", str(self.socket), "-f", os.devnull, *args], capture_output=True,
+                                text=True, timeout=30, env=self.home.env)
+        assert not check or result.returncode == 0, result.stderr
+        return result
+
+    def cli_env(self):
+        return {**self.home.env, "PYTHONPATH": str(self.hook), "PROJECT_AGENT_PYTHON": os.path.abspath(sys.executable),
+                "FAKE_PROVIDER_LIB": str(self.home.home / LIB / "current/tools/agent-session"),
+                "FAKE_PROVIDER_FIXTURES": str(FIXTURES)}
+
+    def call(self, tool, *args):
+        command = [str(self.home.home / ".local/bin" / tool), *args]
+        return subprocess.run(command, capture_output=True, text=True, timeout=120, cwd=self.base, env=self.cli_env())
+
+    def agent(self, *args):
+        return self.call("agent-session", "--socket-path", str(self.socket), *args)
+
+    def start_leader(self):
+        result = self.agent("start", "--job", "leader")
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout)["data"]
+
+    def stop_leader(self):
+        result = self.agent("stop", "--job", "leader")
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def kill_cli(self):
+        """End the managed CLI process; its pane stays (remain-on-exit), so the run reads `stopped`."""
+        for line in self.tmux("list-panes", "-s", "-t", self.PROJECT, "-F", "#{pane_pid}").stdout.split():
+            os.kill(int(line), 9)
+        import time
+        for _ in range(100):
+            if "1" in self.tmux("list-panes", "-s", "-t", self.PROJECT, "-F", "#{pane_dead}").stdout.split():
+                return
+            time.sleep(0.1)
+        raise AssertionError("the pane did not die")
+
+    def kill_server(self):
+        self.tmux("kill-server", check=False)
+
+    def run_directories(self):
+        return sorted((self.base / "agent" / "runs").iterdir())
+
+    def close(self):
+        self.kill_server()
+        shutil.rmtree(self.socket_dir, ignore_errors=True)
