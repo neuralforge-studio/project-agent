@@ -428,6 +428,7 @@ Prompt 파일은 선택입니다.
 생략하면 프로젝트 지침과 Leader 역할로 시작합니다. Leader는 `project-item ls`로 결정 대기와 CR을 확인하고 사용자 지시를 기다립니다.
 현재 Leader가 실행 중이거나 종료를 확인할 수 없으면 새로 시작하지 않습니다.
 등록 전 시작 dialog에서 기다리는 Leader(5절 Provider 내부 등록)는 예외입니다. 다시 실행한 start는 새로 시작하지 않고 그 실행의 등록을 기다립니다.
+등록 전 hook이 실패해 `registration_failed`로 끝난 Leader도 같은 경로입니다. CLI가 살아 있으면 다시 실행한 start는 같은 오류를 바로 반환합니다. 새로 시작하지 않습니다. CLI가 끝난 실행의 복구 경로는 이 절이 정하지 않았습니다.
 정상 종료가 확인된 이전 Leader는 명시적인 새 시작을 막지 않습니다.
 새 Leader는 이전 Leader의 종료한 window를 이어받을 수 있습니다. 사용자가 그 window에 붙인 pane은 새 Leader 옆에 그대로 남습니다(3절 종료한 window 재사용).
 Leader 시작은 base의 Git 상태를 바꾸지 않습니다.
@@ -593,6 +594,17 @@ Claude의 CLAUDECODE·CLAUDE_CODE_SESSION_ID·CLAUDE_CODE_MESSAGING_*와 부모 
 이 화면 읽기는 dialog 탐지에만 사용합니다. 등록 뒤에는 읽지 않습니다.
 사용자가 그 창에서 dialog에 답한 뒤 같은 start를 다시 실행하면 그 실행의 등록을 기다려 게시합니다.
 기존에 승인한 프로젝트 설정을 사용하며 새 승인을 대신하는 키 입력을 보내지 않습니다.
+
+내부 등록의 provider binding 확인은 ListAgents에 이 pane의 행이 하나도 없을 때만 다시 조회합니다.
+여러 Leader를 동시에 시작하면 목록이 잠시 늦을 수 있기 때문입니다. 간격은 1초이고 전체 20초 안에서만 반복합니다. 이는 30초인 hook 제한 안입니다.
+행이 둘 이상이거나, 이름·UUID가 다르거나, tmux 위치를 알 수 없으면 일시적 누락이 아니므로 바로 실패합니다.
+send와 observe의 조회는 다시 시도하지 않습니다.
+등록이 실패하면 오류 code와 message를 그 run의 window option `start_error`(`{code, message}`)에 남깁니다.
+이미 다른 run이 target을 이어받았으면(`target_changed`) 남기지 않습니다. 이어받은 window에는 쓰지 않습니다.
+시작 controller는 등록 전까지 이 option을 읽습니다. 기록이 있으면 기다림을 멈추고 `registration_failed`(exit 4)를 반환합니다.
+오류 details에는 run 정보와 `hook_error`(hook의 원래 `{code, message}`)가 들어갑니다. 배정과 생성한 window는 보존합니다.
+`registered`가 `start_error`보다 앞섭니다. 이미 보고한 실패 뒤에 이 run이 등록에 성공하면 성공한 등록이 `start_error`를 지웁니다. 다음 start는 그 등록을 게시합니다.
+Hook은 SessionStart마다 한 번 실행하므로 실패한 run이 스스로 다시 등록하지는 않습니다.
 
 ### Claude 실행·전송·관찰
 

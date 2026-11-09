@@ -310,6 +310,10 @@ class ClaudeProvider:
             raise SessionError("session_not_bound", "Claude has no verified tmux locator.", 3)
         peers = parse_peers(client.tool("ListAgents", {}))
         matches = [peer for peer in peers if peer["pane_id"] == pane and peer["window_id"] == window and peer["tmux_session"] == tmux_session]
+        if not matches:
+            # Only a pane that no row names can be a listing that has not caught up yet (registration retries it).
+            raise SessionError("session_not_bound", "Claude ListAgents does not identify one managed pane.", 3,
+                               {"retryable": True})
         name = context.get("provider_name") or meta.get("provider_name")
         if name and not session.get("message_to"):
             matches = [peer for peer in matches if peer["name"] == name]

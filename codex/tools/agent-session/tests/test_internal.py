@@ -258,3 +258,81 @@ def test_liveness_reads_tmux_and_process_facts_without_a_provider(native_slot, m
     assert call() == {"0": {"session_id": previous["session_id"], "state": "stopped"}}
     fixture["tmux"].command("kill-window", "-t", previous["window_id"])
     assert call() == {"0": {"session_id": previous["session_id"], "state": "unknown"}}
+
+
+def _registering(fixture, monkeypatch, provider):
+    """A pending run that registers through `provider`; returns the call that registers it."""
+    control = fixture["tmux"]
+    pending = control.create_window("fixture", "new-conversation", fixture["seat"],
+                                    {"base": str(fixture["base"]), "target": "seat-0",
+                                     "job_id": "J-20261103-01", "run_id": "pending-run",
+                                     "provider": "codex", "endpoint": fixture["endpoint"],
+                                     "config_path": str(fixture["config"])})
+    control.set_current("fixture", "seat-0", pending)
+    script = fixture["base"].parent / "next-provider.sh"
+    script.write_text("#!/bin/bash\nexec sleep 86400\n")
+    control.launch(pending["window_id"], fixture["seat"], script)
+    monkeypatch.setattr(providers, "get_provider", lambda name: provider)
+    monkeypatch.setattr(internal, "_BINDING_INTERVAL", 0.01)
+    native_id = str(uuid.uuid4())
+    return pending, lambda: internal._register("pending-run", str(fixture["config"]), pending["socket_path"],
+                                               native_id, fixture["endpoint"], cwd=fixture["seat"])
+
+
+def _not_listed():
+    return SessionError("session_not_bound", "Claude ListAgents does not identify one managed pane.", 3,
+                        {"retryable": True})
+
+
+def test_registration_waits_out_a_listing_that_misses_the_pane_at_first(native_slot, monkeypatch):
+    calls = []
+
+    class Provider:
+        def verify_binding(self, session, context, metadata, timeout=20):
+            calls.append(timeout)
+            if len(calls) <= 2:
+                raise _not_listed()
+            return session
+
+    pending, register = _registering(native_slot, monkeypatch, Provider())
+    register()
+    assert len(calls) == 3 and all(0 < timeout <= 20 for timeout in calls)
+    current = native_slot["tmux"].get_current("fixture", "seat-0")
+    assert current["registered"] is True and not current.get("start_error")
+
+
+@pytest.mark.parametrize("error", [
+    SessionError("session_not_bound", "Claude ListAgents does not identify one managed pane.", 3),
+    SessionError("session_mismatch", "Claude UUID does not match the managed run.", 3),
+])
+def test_registration_does_not_retry_a_binding_that_is_not_transient(native_slot, monkeypatch, error):
+    calls = []
+
+    class Provider:
+        def verify_binding(self, session, context, metadata, timeout=20):
+            calls.append(timeout)
+            raise error
+
+    _, register = _registering(native_slot, monkeypatch, Provider())
+    with pytest.raises(SessionError) as caught:
+        register()
+    assert caught.value.code == error.code and len(calls) == 1
+
+
+def test_registration_gives_up_when_the_listing_never_shows_the_pane(native_slot, monkeypatch):
+    calls = []
+
+    class Provider:
+        def verify_binding(self, session, context, metadata, timeout=20):
+            calls.append(timeout)
+            raise _not_listed()
+
+    pending, register = _registering(native_slot, monkeypatch, Provider())
+    monkeypatch.setattr(internal, "_BINDING_TIMEOUT", 0.3)
+    with pytest.raises(SessionError) as caught:
+        register()
+    assert caught.value.code == "session_not_bound" and len(calls) > 1
+    failed = native_slot["tmux"].get_current("fixture", "seat-0")
+    assert failed.get("registered") is not True
+    assert failed["start_error"]["code"] == "session_not_bound"
+    assert "ListAgents" in failed["start_error"]["message"]

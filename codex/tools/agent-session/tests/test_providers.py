@@ -453,3 +453,26 @@ def test_codex_base_trust_write_failure_preserves_config(tmp_path, monkeypatch):
     assert CodexProvider().trust_base(tmp_path / "base") is False
     assert config.read_text() == original
     assert sorted(path.name for path in tmp_path.iterdir()) == ["config.toml"]
+
+
+def test_claude_marks_only_an_unlisted_pane_as_retryable(claude):
+    provider, fake, context, meta, _ = claude
+    fake.listing = listing(pane="%99")
+    with pytest.raises(SessionError) as caught:
+        provider.verify_binding({"session_id": IDENTITY}, context, meta)
+    assert caught.value.code == "session_not_bound" and caught.value.details == {"retryable": True}
+    # The pane is listed, but under another name: that is a mismatch, not a late listing.
+    fake.listing = listing(name="intruder")
+    context["provider_name"] = "worker"
+    with pytest.raises(SessionError) as caught:
+        provider.verify_binding({"session_id": IDENTITY}, context, meta)
+    assert caught.value.code == "session_not_bound" and not caught.value.details
+    # Two rows for the pane are ambiguous.
+    twice = listing()
+    twice["listing"] += "\n  twin [aaaaaa]  ·  interactive  ·  idle  ·  tmux project:@12.%24  ·  started 1s ago"
+    twice["sections"][0]["rows"].append({"name": "twin", "ref": "aaaaaa", "type": "interactive", "status": "idle"})
+    fake.listing = twice
+    context.pop("provider_name")
+    with pytest.raises(SessionError) as caught:
+        provider.verify_binding({"session_id": IDENTITY}, context, meta)
+    assert caught.value.code == "session_not_bound" and not caught.value.details
