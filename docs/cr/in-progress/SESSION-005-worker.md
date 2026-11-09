@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
+- Base: 7e35d2411a827df482e386643624eb7663330833 2026-11-09T19:53:55+09:00
 
 ## Symptom
 사용자 요청: "worker가 일을 안하는 상황, 잘못된 psgrep 등을 통해 무한 대기중인 상황에 대해 체크할 수 있는 방안 필요. cron으로 tui 창을 30분에 한번씩 비교하고, 변화가 없으면 worker에게 message를 보내는 script를 만들어서 해당 worker session을 깨우게 하는 것은 어떨까?"
