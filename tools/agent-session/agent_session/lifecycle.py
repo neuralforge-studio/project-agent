@@ -942,7 +942,7 @@ class Manager(SuspendMixin, WatchMixin):
                 self._hold_release(meta, check["reasons"])
                 return result
             cleanup = self._sweep(slot)
-            return {**result, "cleanup": {"closed": cleanup["closed"], "kept": kept + cleanup["kept"]}}
+            return {**result, "cleanup": {**cleanup, "kept": kept + cleanup["kept"]}}
 
     def pending_releases(self):
         """JOB ID -> {seat, since, reasons} for each assigned seat whose stopped run waits for release."""
@@ -979,7 +979,7 @@ class Manager(SuspendMixin, WatchMixin):
             extra = {"cleanup": {"closed": [], "kept": list(kept)}} if kept else {}
             return {**result, **extra, "deferred_cleanup": meta["target"]}
         cleanup = self._sweep(meta["target"])
-        return {**result, "cleanup": {"closed": cleanup["closed"], "kept": list(kept) + cleanup["kept"]}}
+        return {**result, "cleanup": {**cleanup, "kept": list(kept) + cleanup["kept"]}}
 
     def _self_control(self, operation, meta, job, seat):
         directory = launch_artifacts.run_directory(self.project, meta["run_id"])

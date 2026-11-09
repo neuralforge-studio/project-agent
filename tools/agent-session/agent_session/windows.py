@@ -130,9 +130,11 @@ def _pointer_run(tmux, project, target):
 def sweep(tmux, project, target, observe, owner=None):
     """Close the slot's retired windows; the current pointer's run and unsure windows stay.
 
+    A retired window that holds a person's panes loses only its managed pane and is listed in `pane_closed`.
+
     The caller holds the slot's control lock, so the current pointer cannot change meanwhile.
     """
-    closed, kept = [], []
+    closed, kept, pane_closed = [], [], []
     deadline = time.monotonic() + SWEEP_SECONDS
     try:
         current = _pointer_run(tmux, project, target)
@@ -149,13 +151,12 @@ def sweep(tmux, project, target, observe, owner=None):
             else:
                 reason = retained(project, meta, observe, owner)
                 if reason is None:
-                    tmux.close_window(window_id, meta)
-                    closed.append(window_id)
+                    (closed if tmux.close_window(window_id, meta) == "window" else pane_closed).append(window_id)
                     continue
         except SessionError as error:
             reason = error.code
         kept.append({"window_id": window_id, "reason": reason})
-    return {"closed": closed, "kept": kept}
+    return {"closed": closed, "kept": kept, **({"pane_closed": pane_closed} if pane_closed else {})}
 
 
 def discard_placeholder(tmux, project, meta, observe, remaining):
