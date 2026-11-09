@@ -3,6 +3,7 @@
 - Opened: 2026-11-10
 - Scope: project-agent
 - Severity: S2
+- Base: 602108469ce970b91db06ed991c72fc38c96a022 2026-11-10T02:36:23+09:00
 
 ## Symptom
 `tools/agent-session/tests/test_self_ended.py::test_a_claude_cli_that_still_has_a_live_process_group_is_not_confirmed`가 실행 환경에 따라 결과가 다릅니다. seat3 Worker 환경에서는 `{'reason': 'control_active'} != {'reason': 'termination_unconfirmed'}`(`test_self_ended.py:225`)로 실패합니다. 같은 commit을 base의 Leader 환경에서 실행하면 통과합니다. release 검증(다섯 명령)이 실행 환경에 따라 다른 결과를 냅니다.
@@ -19,6 +20,7 @@
 
 ## Disposition
 - 2026-11-10 Leader: 고친다(Leader 판정). 재현 근거가 있는 결함입니다(seat3에서 3/3 실패, base에서 통과). v0.2.0 release 검증의 전제입니다.
+- 2026-11-10 Leader: 제출 a4a7f12d824e04c87594ef1be4604e0e238877d4를 인수합니다. Leader review: 원인을 관찰로 확정했습니다. test와 server의 실제 pane-died hook(별도 interpreter)이 같은 run의 finish_ended를 경합하고, 실패한 run의 finish-result.json(finished: true, basis: process)과 ended.json 시각이 hook이 먼저 마무리했다는 직접 증거입니다. 두 마무리의 상호 배제는 control_lock이 정하므로 제품 결함이 아니고, 결과(control_active)도 명세대로입니다. 수정은 finish_ended를 직접 부르며 CLI를 죽이는 두 test에서만 hook을 빼는 no_exit_hook이며, 다른 직접 호출 test에는 경합이 없다는 판정을 확인했습니다. 같은 seat3 환경에서 6회 반복 통과, README 표 tools/agent-session/** 행 791 passed. 환경 변수(PYTHONNOUSERSITE 등)는 원인이 아니라 interpreter 시동 속도로만 영향을 준다는 판정을 인정합니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [동작 명세 3절 스스로 끝난 run의 마무리](../../project-team/spec.md#스스로-끝난-run의-마무리), [project-team Worker 절](../../../skills/project-team/SKILL.md).
@@ -39,3 +41,14 @@
 1. 수정 전: seat 환경에서 그 test가 실패하는 재현과 원인 증거.
 2. 수정 뒤: 같은 환경에서 반복(최소 5회) 통과.
 3. README 검증 표의 `tools/agent-session/**` 행(`tools/agent-session/tests` 전체, `-n 8`). 제품의 `api.py`·state 형식·tmux option 이름을 바꾸면 그 행의 나머지 명령도 실행합니다.
+
+## Result
+- 제출 commit: a4a7f12d824e04c87594ef1be4604e0e238877d4
+
+원인(관찰로 확정): 환경 변수·작업 경로가 아니라 test와 tmux server의 실제 `pane-died` hook의 경합입니다. test는 `session_env`에서 `TMUX`·`AGENT_SESSION_*`를 지우므로 환경을 물려받지 않습니다. 그러나 이 test는 `kill_cli`로 CLI를 죽이고 `finish_ended`를 직접 호출하며, 같은 순간 server가 실제 hook(별도 interpreter, monkeypatch가 닿지 않음)으로 같은 run의 `finish_ended`를 실행합니다. hook은 실제 process 사실을 보므로 process group이 비어 있어 `basis: process`로 확정하고 `ended.json`을 쓰고 `stopping`을 기록합니다. hook이 먼저 이기면 test의 호출은 `control_active`를 받습니다. 지면 `termination_unconfirmed`를 받아 통과합니다. hook의 interpreter 시동 시간이 test의 `sleep(0.5)`보다 짧은지에 따라 결과가 갈리므로 호스트·환경의 시동 속도에 의존합니다.
+- 수정 전 재현: seat3 Worker(이 run)에서 `PYTHONNOUSERSITE`·`TMUX_PLUGIN_MANAGER_PATH`를 뺀 환경으로 반복해 4회 중 1회, 별도 반복에서 첫 시도 1회가 실패했습니다(같은 환경 변수 있음 상태에서는 4/4 통과이므로 두 변수는 원인이 아니라 시동 속도 차이로만 영향을 줍니다. 가설). 실패한 run의 `finish-result.json`은 `finished: true, basis: process`, `ended.json`은 test의 호출보다 앞선 시각입니다. 즉 hook이 먼저 마무리했다는 직접 증거입니다. 제품 동작(hook의 마무리와 직접 호출의 상호 배제)은 `control_lock`이 의도대로 정하므로 제품 결함이 아니고 명세 변경은 없습니다.
+- 수정: `tools/agent-session/tests/test_self_ended.py`에 `no_exit_hook(monkeypatch)`(`Tmux.install_exit_hook`이 hook을 쓰지 않음)를 추가하고, `finish_ended`를 직접 호출하며 CLI를 죽이는 두 test(`test_a_claude_cli_that_still_has_a_live_process_group_is_not_confirmed`, `test_the_wrap_up_leaves_a_run_to_the_command_that_controls_it`)에 적용했습니다. 후자도 lock 해제 직후 hook이 끼어들 수 있어 같은 원인을 공유합니다. 나머지 `finish_ended` 직접 호출 test는 CLI가 살아 있거나(pane이 죽지 않음) stop이 반납한 run이거나 hook 결과를 기다리는 test라 경합이 없습니다. 제품 코드·명세는 바꾸지 않았습니다.
+- 수정 뒤 검증(같은 seat3 환경, 두 변수 제거 상태):
+  - `pytest tests/test_self_ended.py -k "live_process_group or leaves_a_run_to_the_command"` 6회 반복 모두 2 passed.
+  - README 검증 표 `tools/agent-session/**` 행: `python3 -m pytest -q -n 8 tools/agent-session/tests` → 791 passed (694초). 제품 `api.py`·state 형식·tmux option 이름은 바꾸지 않았으므로 나머지 명령은 실행하지 않았습니다.
+- 근거 재사용: origin/main merge 없음(Base 그대로).
