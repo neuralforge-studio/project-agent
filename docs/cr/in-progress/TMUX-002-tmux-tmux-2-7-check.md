@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
+- Base: 742d60b97631c837788b218a138ed6b21b70b832 2026-11-09T19:09:15+09:00
 
 ## Symptom
 통합 파일 `integrations/tmux/project-agent.conf`는 tmux 3.x 문법(`{ }` 명령 블록, 이름 붙은 hook index, `#{d:current_file}`, `run-shell -C` 등)을 씁니다. 이 workstation의 `/usr/bin/tmux`는 2.7이고, 사내 tmux 3.8(`/primehome/tools/Inhouse/tmux/latest/bin/tmux`)은 PATH에 사내 경로가 먼저 올 때만 쓰입니다. 개인 설정이 없는 새 직원은 2.7을 쓸 수 있습니다. 그러면 설치는 성공하지만 tmux 설정을 읽을 때 통합 파일이 오류를 내고, Board binding·hook이 들어가지 않습니다. 설치 계약에 tmux 최소 버전이 없고 설치기 `check`도 이를 알리지 않습니다.
