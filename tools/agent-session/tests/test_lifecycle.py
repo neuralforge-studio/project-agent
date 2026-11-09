@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -1246,6 +1247,34 @@ def test_claude_stop_that_times_out_on_a_background_shell_names_it_without_signa
                                    "command": "until ! pgrep -f x; do sleep 3; done"}]
     assert recorded(record) == []                   # no signal to the CLI, and none to its shell
     assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
+
+
+def test_claude_stop_ends_a_run_whose_last_report_names_only_its_session_cron(session_env, monkeypatch):
+    env = session_env
+    record = claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    (env.base / "agent" / "fixture-cron-seat-0").write_text("")      # idle; the Stop report keeps the self-check cron
+    result = env.manager(timeout=20).control("stop", job=worker["job_id"])
+    assert result["stopped"] is True
+    assert recorded(record) == [{"signal": "SIGTERM"}]
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is True
+
+
+def test_claude_stop_again_ends_a_run_that_was_left_stopping_with_only_a_session_cron(session_env, monkeypatch):
+    env = session_env
+    record = claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    (env.base / "agent" / "fixture-cron-seat-0").write_text("")
+    pane = env.tmux.pane_info(worker["pane_id"])
+    os.kill(int(env.tmux.read_meta(worker["window_id"])["cli_pid"]), signal.SIGTERM)    # the CLI ended on its own
+    deadline = time.monotonic() + 10
+    while not env.tmux.pane_info(worker["pane_id"])["pane_dead"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+    env.tmux.write_meta(worker["window_id"], {"stopping": True})       # what the timed-out stop left behind
+    assert pane["pane_dead"] is False
+    result = env.manager(timeout=20).control("stop", job=worker["job_id"])
+    assert result["stopped"] is True
+    assert recorded(record) == [{"signal": "SIGTERM"}]
 
 
 def test_claude_stop_that_times_out_after_the_signal_tells_it_apart_from_the_unsignalled_wait(session_env, monkeypatch):

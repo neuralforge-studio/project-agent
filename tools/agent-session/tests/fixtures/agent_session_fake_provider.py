@@ -83,6 +83,8 @@ class FakeClaudeProvider(FakeProvider):
         spec = super().launch_spec(context, prepared)
         record = Path(context["base"]) / "agent" / "fixture-cli.jsonl"
         spec["argv"] += ["--claude", "--record", str(record)]
+        from agent_session.providers.claude import ADOPT_ENV
+        spec["env"] = {**spec["env"], ADOPT_ENV[0]: ADOPT_ENV[1]}      # the real launch turns the exit handoff off
         return spec
 
     def verify_binding(self, session, context, meta, timeout=30):
@@ -107,6 +109,13 @@ class FakeClaudeProvider(FakeProvider):
         if (agent / ("fixture-background-" + context["target"])).exists():
             # Idle, but the last Stop report named a background task; that report stays after the CLI dies.
             return {**observed, "terminal": False, "background": ["task"]}
+        if (agent / ("fixture-cron-" + context["target"])).exists():
+            # Idle, and the last Stop report names only a session cron (the run's self-check); the real
+            # provider decides whether that cron keeps the run from resting.
+            from agent_session.providers.claude import report_background
+            background, crons = report_background(
+                {"background_tasks": [], "session_crons": [{"id": "585de34f"}]}, meta or context)
+            return {**observed, "terminal": not background, "background": background, "session_crons": crons}
         return observed
 
 
