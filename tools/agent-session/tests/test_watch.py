@@ -260,3 +260,43 @@ def test_a_failed_target_does_not_hide_the_others(session_env, monkeypatch):
     watch = Watch(Manager, config_path=env.config, socket_name=env.socket_name, timeout=command_timeout())
     [target] = watch.run(project="fixture")["projects"][0]["targets"]
     assert target["status"] == "error" and target["error"]["code"] == "x"
+
+
+def test_the_leader_watches_its_own_project_and_gets_the_evidence_instead_of_a_message(session_env, monkeypatch, capsys):
+    env = session_env
+    no_children(monkeypatch)
+    leader, cr, worker, _ = started(env)
+    capsys.readouterr()
+    with monkeypatch.context() as actor:
+        actor.setenv("CODEX_THREAD_ID", leader["session"]["session_id"])
+        assert run_command(env, "--project", "fixture") == 0
+        [target] = json.loads(capsys.readouterr().out)["data"]["projects"][0]["targets"]
+        assert target["status"] == "resting" and cr in target["evidence"] and "자식 process가 없습니다" in target["evidence"]
+        # The Worker is woken as in the operator's run; the Leader is not messaged by its own command.
+        assert len(messages(env, SLOT)) == 1 and messages(env, "leader") == []
+        # The same state again: the Worker is not woken twice and the Leader is still not messaged.
+        assert run_command(env, "--project", "fixture") == 0
+        assert len(messages(env, SLOT)) == 1 and messages(env, "leader") == []
+    # The Leader's own looks leave no notification record (`notified_at`) for the operator's run to skip.
+    assert "notified_at" not in (env.tmux.get_current("fixture", SLOT)["watch"].get("resting") or {})
+
+
+def test_only_this_projects_leader_may_watch_it_and_never_several_projects(session_env, monkeypatch, capsys):
+    env = session_env
+    no_children(monkeypatch)
+    leader, _, worker, _ = started(env)
+    other = env.add_project()
+    other_leader = env.manager_at(other).start("leader")
+    capsys.readouterr()
+
+    def refused(identity, *arguments):
+        with monkeypatch.context() as actor:
+            actor.setenv("CODEX_THREAD_ID", identity)
+            assert run_command(env, *arguments) != 0
+            return json.loads(capsys.readouterr().out)["error"]["code"]
+    assert refused(leader["session"]["session_id"], "--all") == "caller_unbound"       # two projects: not the Leader's
+    assert refused(leader["session"]["session_id"], "--project", "other") == "caller_unbound"
+    assert refused(other_leader["session"]["session_id"], "--project", "fixture") == "caller_unbound"
+    assert refused(worker["session"]["session_id"], "--project", "fixture") == "role_denied"
+    assert refused("someone-else", "--project", "fixture") == "caller_unbound"
+    assert messages(env) == []

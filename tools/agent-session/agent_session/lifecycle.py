@@ -105,8 +105,10 @@ class Manager(SuspendMixin, WatchMixin):
             if operation == "start" and slot == "leader":
                 return actor, identity
             raise SessionError("caller_unbound", "This agent is not a registered member of this project.")
-        if operation in ("shutdown", "resume", "watch") and actor != "operator":
+        if operation in ("shutdown", "resume") and actor != "operator":
             raise SessionError("role_denied", f"Only the operator may {operation} the project sessions.")
+        if operation == "watch" and actor not in ("operator", "leader"):
+            raise SessionError("role_denied", "Only the operator or this project's Leader may watch the project sessions.")
         if operation == "send_project" and (actor != "leader" or not identity):
             raise SessionError("role_denied", "Only this project's Leader may send to another project.")
         if actor == "leader" or actor.startswith("seat-"):

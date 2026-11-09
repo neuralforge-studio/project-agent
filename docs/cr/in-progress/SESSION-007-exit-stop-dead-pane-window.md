@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
+- Base: d4911beec6060bc2f46a88a17e979b1e9a675319 2026-11-09T21:55:14+09:00
 
 ## Symptom
 관리 대화(Leader·Worker) 안에서 `/exit`하거나 CLI가 비정상 종료하면 pane이 dead로 바뀌고 window가 그대로 남습니다. 정리는 누군가 `agent-session stop`을 실행하거나 다음 start의 sweep이 돌 때만 일어납니다. 사용자 보고(2026-11-09, 11개 요청의 9번): "exit을 해도 pane, window가 최종 destory까지 안됨."
