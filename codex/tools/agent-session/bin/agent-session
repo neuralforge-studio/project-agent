@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-agent_session_platform=$(uname -s)
-if [[ "$agent_session_platform" == Darwin ]]; then
-    agent_session_python=$(command -v python3 || true)
-elif [[ -n "${WSL_DISTRO_NAME:-}" || -n "${WSL_INTEROP:-}" || "$(uname -r)" == *[Mm]icrosoft* ]]; then
-    agent_session_python="$HOME/python/.venv/bin/python"
-else
-    agent_session_python=/primehome/tools/Inhouse/Python3/latest/bin/python3
-    export LD_LIBRARY_PATH="/primehome/tools/Inhouse/Python3/latest/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-fi
+agent_session_root="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
+source "$agent_session_root/python-launcher.sh"
+project_agent_select_python
+agent_session_python="$PY"
 
 if [[ -z "$agent_session_python" || ! -x "$agent_session_python" ]]; then
     printf '%s\n' '{"ok":false,"data":null,"error":{"code":"python_unavailable","message":"The configured Python interpreter is unavailable.","details":{}}}'

@@ -2,14 +2,11 @@
 # Entry point of project-item: CR and decision items of a registered project.
 # Source: agent repo codex/tools/project-item. Install: ln -s <this file> ~/.local/bin/project-item
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-IH=/primehome/tools/Inhouse
-if [ -x "$IH/Python3/latest/bin/python3" ]; then
-    PY="$IH/Python3/latest/bin/python3"         # Workstation: global in-house python
-    export LD_LIBRARY_PATH="$IH/Python3/latest/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-elif [ -x "$HOME/python/.venv/bin/python" ]; then
-    PY="$HOME/python/.venv/bin/python"          # WSL
-else
-    PY=python3
+source "$ROOT/../python-launcher.sh"
+project_agent_select_python
+if [ -z "$PY" ]; then
+    echo "The configured Python interpreter is unavailable." >&2
+    exit 5
 fi
 export PYTHONPATH="$ROOT"
 export PYTHONNOUSERSITE=1

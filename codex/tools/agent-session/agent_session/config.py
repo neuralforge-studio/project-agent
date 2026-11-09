@@ -60,6 +60,11 @@ def _object(pairs):
     return result
 
 
+# Standard registry locations, in the order the error message lists them
+# (docs/project-team/install-contract.md section 6).
+REGISTRY_LOCATIONS = ("~/.config/project-agent/project.json", "~/.codex/project.json", "~/.claude/project.json")
+
+
 def registry_path(config_path=None):
     """Choose one registry file without merging separate user inputs."""
     if config_path is not None:
@@ -68,18 +73,18 @@ def registry_path(config_path=None):
             raise SessionError("registry_not_found", "The selected project registry is unavailable.", 2,
                                {"path": str(path)})
         return path.resolve()
-    candidates = [Path.home() / tool / "project.json" for tool in (".codex", ".claude")]
+    candidates = [Path(location).expanduser() for location in REGISTRY_LOCATIONS]
     existing = [path for path in candidates if path.is_file()]
     if not existing:
-        raise SessionError("registry_not_found", "Register projects in ~/.codex/project.json or ~/.claude/project.json.", 2)
-    if len(existing) == 2:
-        try:
-            same = existing[0].samefile(existing[1])
-        except OSError as exc:
-            raise SessionError("registry_unavailable", "Cannot compare the project registries.", 5) from exc
-        if not same:
-            raise SessionError("registry_ambiguous", "Use --config when the two standard registry paths are separate files.", 2,
-                               {"paths": [str(path) for path in existing]})
+        raise SessionError("registry_not_found", "Register projects in " + ", ".join(REGISTRY_LOCATIONS[:-1])
+                           + " or " + REGISTRY_LOCATIONS[-1] + ".", 2)
+    try:
+        distinct = {(info.st_dev, info.st_ino) for info in (path.stat() for path in existing)}
+    except OSError as exc:
+        raise SessionError("registry_unavailable", "Cannot compare the project registries.", 5) from exc
+    if len(distinct) > 1:
+        raise SessionError("registry_ambiguous", "Use --config when the standard registry paths are separate files.", 2,
+                           {"paths": [str(path) for path in existing]})
     return existing[0].resolve()
 
 

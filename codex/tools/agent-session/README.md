@@ -47,9 +47,9 @@ SSH 서버는 Unix socket reverse forwarding을 허용해야 합니다.
 
 ## 등록과 실행
 
-등록 원본은 `~/.codex/project.json` 또는 `~/.claude/project.json` 하나입니다.
-두 경로를 사용하면 같은 파일로 연결합니다.
-서로 다른 파일이면 `--config PATH`로 사용할 원본을 명시합니다.
+등록 원본은 `~/.config/project-agent/project.json`, `~/.codex/project.json`, `~/.claude/project.json` 중 하나입니다.
+여러 경로를 사용하면 같은 파일로 연결합니다.
+서로 다른 파일이 둘 이상이면 `--config PATH`로 사용할 원본을 명시합니다.
 형식은 [등록 예제](../../../docs/project-team/project-registry.example.json)를 따릅니다.
 등록한 base 또는 seat 안에서 명령을 실행하면 현재 경로로 프로젝트를 선택합니다.
 배정·대화 연결은 프로젝트별 `<base>/agent/state.json`에 저장합니다.

@@ -11,7 +11,7 @@ project. Codex and Claude Code use the same copy.
 - Executable copies: `project_item/kinds.py`, `project_item/cr.py` and
   `project_item/decide.py`. `tests/test_doc_contract.py` fails when they differ from the
   documents.
-- Registry: the project registry of agent-session (`~/.codex/project.json`, contract in
+- Registry: the project registry of agent-session (standard locations in `docs/project-team/install-contract.md` section 6, contract in
   `docs/project-team/spec.md` section 2). The keys `path_cr` and `path_decide` give the item
   roots. This tool imports the registry parser from the sibling `codex/tools/agent-session`.
 - Product map: `docs/project-team/README.md`.
