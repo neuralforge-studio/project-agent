@@ -29,7 +29,7 @@ python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_d
 ```
 
 - 네 명령은 서로 독립이며 pytest 설정 파일 없이 각 디렉터리의 `conftest.py`로 동작합니다.
-- Agent-session test는 load가 높으면 `AGENT_SESSION_TEST_TIMEOUT`(초)을 지정합니다. 자세한 사용법은 [agent-session README](tools/agent-session/README.md#프로젝트-api와-검사)가 설명합니다.
+- Agent-session test는 seat 여럿이 같은 host에서 동시에 검증하는 평소 부하에서 같은 결과를 냅니다. 한도(`AGENT_SESSION_TEST_TIMEOUT`, 기본 120초)는 host가 이보다 심하게 느릴 때만 늘립니다. 자세한 사용법은 [agent-session README](tools/agent-session/README.md#프로젝트-api와-검사)가 설명합니다.
 - CLI smoke: `tools/<도구>/bin/<도구> --help`.
 
 ## 관련 문서
