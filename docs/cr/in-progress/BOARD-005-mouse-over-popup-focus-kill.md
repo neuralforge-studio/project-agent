@@ -19,6 +19,7 @@
 - 2026-11-09 Leader: 고친다(Leader 판정). 재현 가능한 동작 결함이므로 위임 범위입니다. BOARD-002가 popup 경로를 바꿀 수 있으므로 그 뒤에 시작합니다. 사용자 지시(2026-11-09 대화): "위와 같이 11개의 개선 요청 사항이 있어."
 - 2026-11-10 Leader: 선행 BOARD-002가 61e881e로 통합되었습니다(BOARD-003·004 병합). 그 구조를 따르십시오: Board pane은 본 window에 남고(최대 8개, 최근 본 순서), 보이지 않는 pane은 갱신하지 않으며(`project_board_visibility.sh`의 SIGUSR1), 파일은 바뀐 것만 다시 읽습니다(TUI 계획 2·5절). Board CR 다섯 개가 같은 `tui.py`·`tmux_control.py`를 고칠 수 있으므로 제출 전에 `origin/main`을 merge하십시오.
 - 2026-11-10 Leader: 제출 b7c44ec 검토. 원인(sidebar hover tooltip이 AppBlur에 지워지지 않음, display-popup은 원인 아님)과 focus 이동 때 지우는 수정, 수정 전 실패 test를 확인했습니다. 수정 요청: 알려진 한계로 둔 '마우스만 다른 pane으로 나감'(focus 그대로, tmux가 이 pane에 event를 주지 않음)은 사용자 보고("mouse over 에 따른 pop up 창이 … 남아있는 경우가 있음")의 흔한 경우이므로 이 CR에서 다룹니다. pane에 mouse event가 오지 않아도 tooltip이 남지 않게, 마지막 mouse motion 뒤 일정 시간(값과 근거를 TUI 계획에 적음)이 지나면 tooltip을 지우십시오.
+- 2026-11-10 Leader: 제출 ffbf1fcb9d3e17aac993b44c69427763e501126c를 인수합니다. Leader review: 수정 delta(AppBlur 즉시, 그 밖에는 마지막 mouse motion 5초 뒤 tooltip 제거, SidebarApp.TOOLTIP_IDLE, 값과 근거는 TUI 계획 3절)를 확인했습니다. 격리 tmux 재현(마우스만 다른 pane으로 나가면 수정 전 남음, 수정 뒤 사라짐)과 새 test, project-board 148 passed. 이전 검토(b7c44ec의 원인·AppBlur 수정)를 재사용합니다.
 
 ## Implementation
 읽을 문서: [project-board README](../../../tools/project-board/README.md), [TUI 계획](../../project-board-tui-plan.md), [설치 계약 5.3·5.4절](../../project-team/install-contract.md), [README 검증 표](../../../README.md#검증).
@@ -35,7 +36,7 @@
 
 ## Result
 
-- 제출 commit: b7c44ecc32146fb286b62f48032ba65e63be1966
+- 제출 commit: ffbf1fcb9d3e17aac993b44c69427763e501126c
 
 원인(확인): "mouse over로 뜬 popup"은 Board 사이드바의 hover tooltip(Textual `Tooltip`)입니다. Textual은 tooltip을 그 pane 안의 다음 mouse move에서만 지웁니다. tmux가 focus를 다른 pane·client로 옮기면 그 pane에는 mouse event가 오지 않고 `AppBlur`만 오는데, Textual은 `AppBlur`에서 tooltip을 지우지 않습니다(`textual/screen.py`의 `_clear_tooltip` 호출은 screen suspend와 `app.py:4133`뿐). 그래서 tooltip이 남고 mouse를 되돌려 움직여야 사라집니다.
 
@@ -49,4 +50,9 @@
 3. README 검증 표 `tools/project-board/**` 행: `python3 -m pytest -q tools/project-board/tests` 131 passed. `git diff --check` 통과.
 4. `origin/main`에 새 commit이 없어 merge 없음(`HEAD`가 `origin/main`을 포함). 근거 재사용 해당 없음.
 
-알려진 한계: pane의 focus는 그대로인 채 mouse만 다른 pane으로 나가면 tmux가 이 pane에 아무 event도 주지 않아 tooltip이 남습니다. 이는 focus를 잃는 경우가 아니어서 이 CR 범위 밖으로 두었습니다. 필요하면 별도 CR(tooltip idle 만료)로 다룹니다.
+수정 제출(Leader 수정 요청 2026-11-10): 마지막 mouse motion 5초 뒤 tooltip을 지웁니다(`SidebarApp.TOOLTIP_IDLE`, `on_mouse_move`가 시간을 다시 잼). 첫 제출 b7c44ec(AppBlur)에 얹은 commit과 `origin/main` merge(BOARD-008의 `tui.py`·test 변경 포함)로 이루어집니다. 값 5초와 근거(mouse가 나가면 tmux가 이 pane에 event를 주지 않음, 표시 지연 0.5초 뒤 긴 tooltip을 읽을 시간)는 `docs/project-board-tui-plan.md` 3절의 새 bullet에 있습니다.
+
+검증(수정 제출):
+1. 격리 tmux server(pty client attach, `focus-events on`)에서 hover로 tooltip을 띄운 뒤 focus를 옮기지 않고 mouse motion을 멈춰 7초를 기다림. b7c44ec 코드: 3회 모두 tooltip 줄이 남음. 수정 뒤: 3회 모두 사라짐. 이 pane에는 event가 가지 않으므로 mouse가 다른 pane으로 나간 경우와 같은 입력입니다.
+2. 새 test `test_hover_tooltip_expires_after_the_mouse_stops_moving`(Pilot, `TOOLTIP_IDLE=1.0`): motion이 이어지는 동안은 남고, 멈추면 스스로 사라지며 다시 뜨지 않음. b7c44ec 코드에서 실패, 수정 뒤 통과.
+3. `origin/main` merge 뒤 merge한 commit에서 `python3 -m pytest -q tools/project-board/tests` 148 passed(README 표 `tools/project-board/**` 행만). `git diff --check` 통과. merge가 `tui.py`·test를 바꾸었으므로 다시 실행했습니다.
