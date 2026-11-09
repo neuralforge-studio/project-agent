@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
+- Base: 7e35d2411a827df482e386643624eb7663330833 2026-11-09T19:53:55+09:00
 
 ## Symptom
 사용자 보고: "전체적으로 굉장히 큰 문제는 엄청 느림." sidebar 표시, 창 이동 뒤 갱신, popup 열기가 느립니다.
