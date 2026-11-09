@@ -21,6 +21,7 @@
 
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). 승인한 계획 agent DIST-001 4단계의 하위 결함입니다(TMUX-001 review에서 발견). 계약 6.1절이 정한 동작을 tmux helper 경로에도 지키게 하는 일이므로 위임 범위입니다. INSTALL-001에서 떼어 내 병렬로 진행합니다(사용자 지시 2026-11-09 "병렬로 진행 가능 한 것은 병렬로 진행해").
+- 2026-11-09 Leader: 제출 b3ec7334be420a187261c99bf2cba53c7b44e827를 인수합니다. Leader review: 수정 제출은 origin/main merge(b3ec733)만 더했습니다. docs/project-team/README.md 충돌은 RELEASE-001의 버전 규칙 행과 이 CR의 tmux 연결·CLI 행·실행 경로 계약 6항을 모두 보존했습니다(5c41f2d 대비 diff 확인). Result의 TEST-002 사실 정정과 merge 상태의 project-board 114 passed·네 번째 명령 70 passed를 확인했습니다. 이전 검토(5c41f2d의 launcher·wrapper·계약 6.1/5.3/9절, Leader snapshot 67 passed)를 재사용합니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 6.1절·3.1절·5.3절, [README의 검증](../../../README.md#검증), INSTALL-001의 Implementation 2단계(interface).
@@ -50,7 +51,9 @@
 3. 영향 회귀: README의 네 명령이 통과합니다(알려진 timing test 2개는 단독 실행 통과 확인).
 
 ## Result
-- 제출 commit: 5c41f2d9bc416f73ed747e9f847789753619fa71
+- 제출 commit: b3ec7334be420a187261c99bf2cba53c7b44e827
+
+수정 제출(Leader feedback): 1차 제출 5c41f2d에 `origin/main`(ee5edf0 이후)을 merge했습니다. `docs/project-team/README.md`의 충돌은 main의 버전 규칙 행과 이쪽의 tmux 연결 행(`tmux_decide_status.sh` 포함)을 모두 살려 풀었습니다. CLI 행과 실행 경로 계약 6항은 충돌 없이 이쪽 변경이 유지됩니다.
 
 변경(Base 9458aba 위 1 commit, `origin/cr/INSTALL-002`에 push):
 - `tools/python-launcher.sh`: 환경 변수에 값이 없는 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`를 같은 디렉터리의 `python.env`에서 읽습니다. 두 이름의 줄만 `case`로 읽고 `source`하지 않습니다. 환경 변수(빈 값은 없는 것으로 봄)가 파일보다 우선하며 변수마다 따로 판단합니다. 파일이 없으면 기존 개발 checkout 규칙 그대로입니다. interpreter가 없으면 기존 `python_unavailable`·종료 코드 5입니다.
@@ -71,8 +74,9 @@
    - `integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py`: 68 passed.
    - `tools/project-item/tests`: 120 passed.
    - `tools/agent-session/tests`: `-n 4`로 704 passed. 첫 실행(`-n 8`)은 695 passed·9 failed였는데, 부하 때문인 timing 실패입니다. `test_suspend.py`·`test_lifecycle.py`를 `-n 2`로 다시 돌리면 1개(`test_the_most_recent_runs_window_is_the_one_a_slot_takes`)만 실패했고, 그 test는 단독 실행에서 변경본과 base 모두 통과했습니다. 마지막으로 `-n 4` 전체 실행이 모두 통과했습니다.
-   - `tools/project-board/tests`: 113 passed·1 failed(`test_tui.py::test_popup_renders_markdown_and_csv_and_closes_editor_after_acceptance`). 이 CR의 변경과 무관한 기존 실패입니다. base(`git archive 9458aba`)에서도 단독 실행으로 같은 test가 실패합니다. 알려진 timing test 2개와는 다른 test입니다.
-4. 근거 재사용·재실행: 변경은 launcher·tmux helper와 문서뿐이므로 `agent-session`·`project-item`·`project-board`의 Python 코드는 바뀌지 않았습니다. 위 회귀는 그 범위의 영향 확인입니다. merge는 없었습니다(`origin/main`이 진행하지 않음).
+   - `tools/project-board/tests`: 1차 제출 시점(Base 9458aba)에는 113 passed·1 failed(`test_popup_renders_markdown_and_csv_and_closes_editor_after_acceptance`)였습니다. 이 test는 TEST-002가 고친 test이고 main 8839554에 통합됐으며 Base는 그 통합 전입니다. merge 상태(b3ec733)에서 다시 실행해 114 passed입니다.
+4. merge 뒤 재실행(b3ec733): `python -m pytest -q tools/project-board/tests` 114 passed. README 네 번째 명령(main이 `tools/test_release_files.py`를 더함) `integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py tools/test_release_files.py` 70 passed. merge로 바뀐 입력은 project-board test(TEST-002), agent-session test 파일 2개(TEST-001), 문서이므로 launcher·tmux 쪽 근거와 `project-item`·`agent-session` suite 결과는 재사용합니다(agent-session suite의 launcher·tmux 영향은 없음).
+5. 근거 재사용·재실행(1차 제출): 변경은 launcher·tmux helper와 문서뿐이므로 `agent-session`·`project-item`·`project-board`의 Python 코드는 바뀌지 않았습니다. 위 회귀는 그 범위의 영향 확인입니다. merge는 없었습니다(`origin/main`이 진행하지 않음).
 
 알려 둘 점:
 - 계약 6.1절에 "변수마다 따로 판단"을 적었습니다(CR 문구의 "환경 변수가 있으면 환경 변수가 이긴다"의 해석). 예: 환경에 `PROJECT_AGENT_PYTHON`만 있고 `PROJECT_AGENT_PYTHONPATH`가 없으면 후자는 파일에서 읽습니다.
