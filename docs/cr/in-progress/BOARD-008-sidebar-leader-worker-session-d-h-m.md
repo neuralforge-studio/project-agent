@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S3
+- Base: f3182143ab5b3c436d1c2f975c28fe784e4eadb9 2026-11-10T00:03:56+09:00
 
 ## Symptom
 사용자 요청: "Leader/Worker의 Session 동작 중인 시간에 대한 표시가 필요한 ??d ??h ??m"
