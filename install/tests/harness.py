@@ -16,6 +16,8 @@ import sys
 import tempfile
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools" / "tests"))  # tmux_test_server, shared by every tool's tests
+import tmux_test_server  # noqa: E402
 # PROJECT_AGENT_INSTALLER points the tests at another copy of the installer (to show that a test fails on an
 # older one); by default it is the checkout's.
 INSTALLER = Path(os.environ.get("PROJECT_AGENT_INSTALLER") or REPO / "install" / "project-agent-install")
@@ -238,6 +240,7 @@ class Runs:
         self.hook.mkdir()
         (self.hook / "sitecustomize.py").write_text(SITECUSTOMIZE)
         home.env["TMUX_TMPDIR"] = str(self.socket_dir)          # even a missing option cannot reach the user's server
+        tmux_test_server.watch_path(self.socket)
         self.tmux("new-session", "-d", "-s", "harness", "sleep", "86400")
 
     def tmux(self, *args, check=True):
@@ -279,13 +282,15 @@ class Runs:
         raise AssertionError("the pane did not die")
 
     def kill_server(self):
-        self.tmux("kill-server", check=False)
+        """Lose the server mid-test; the next command starts a new one, which the watchdog must cover again."""
+        tmux_test_server.release_path(self.socket)
+        tmux_test_server.watch_path(self.socket)
 
     def run_directories(self):
         return sorted((self.base / "agent" / "runs").iterdir())
 
     def close(self):
-        self.kill_server()
+        tmux_test_server.release_path(self.socket)
         shutil.rmtree(self.socket_dir, ignore_errors=True)
 
 

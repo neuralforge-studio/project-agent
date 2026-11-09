@@ -24,7 +24,11 @@ import shutil
 import tempfile
 import time
 
+import pytest
+
 OWNER = "owner"
+ROOT_ENV = "PROJECT_AGENT_TEST_ROOT"  # the root of the run in progress, passed on to its xdist workers
+PRIVATE_ROOT = pytest.StashKey[str]()
 WORKDIR = "t"  # pytest's basetemp inside the root: pytest empties its basetemp, which must not remove ``owner``
 KEEP_ENDED = 5
 UNKNOWN_OWNER_AGE = 24 * 60 * 60
@@ -79,3 +83,38 @@ def prune(parent=None, keep=KEEP_ENDED, unknown_age=UNKNOWN_OWNER_AGE, now=None)
     for directory in removed:
         shutil.rmtree(directory, ignore_errors=True)
     return removed
+
+
+def configure(config, temp=False):
+    """The ``pytest_configure`` of a conftest: prune old roots and give this run a root of its own.
+
+    An explicit ``--basetemp`` is kept as given. With ``temp``, ``tempfile`` of the run (and of its
+    xdist workers) also makes its directories inside the root (``m``), for tests that call
+    ``mkdtemp`` themselves and so would leave them behind when pytest is killed.
+    """
+    if hasattr(config, "workerinput"):
+        if temp and os.environ.get(ROOT_ENV):
+            _temp_inside(os.environ[ROOT_ENV])
+        return
+    if config.option.basetemp is not None:
+        return
+    prune()
+    root = create()
+    config.option.basetemp = basetemp(root)
+    config.stash[PRIVATE_ROOT] = root
+    if temp:
+        os.environ[ROOT_ENV] = root
+        _temp_inside(root)
+
+
+def finish(session, exitstatus):
+    """The ``pytest_sessionfinish`` of a conftest: a passing run removes its root."""
+    root = session.config.stash.get(PRIVATE_ROOT, None)
+    if root and exitstatus == 0:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _temp_inside(root):
+    directory = Path(root, "m")
+    directory.mkdir(exist_ok=True)
+    tempfile.tempdir = str(directory)

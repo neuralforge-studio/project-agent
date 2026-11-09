@@ -7,6 +7,7 @@ import tempfile
 import pytest
 
 from harness import Home, build_product_repository, release_name
+import private_root  # noqa: E402  (harness puts tools/tests on sys.path)
 
 
 @pytest.fixture(scope="session")
@@ -25,6 +26,11 @@ def home():
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "mutates: the test commits to or edits its source repository")
+    private_root.configure(config, temp=True)  # the `pi-*` directories below go inside the run's private root
+
+
+def pytest_sessionfinish(session, exitstatus):
+    private_root.finish(session, exitstatus)
 
 
 @pytest.fixture

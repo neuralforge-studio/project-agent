@@ -55,28 +55,39 @@ def claim(prefix, owner=None):
 
 
 def watch(name, owner=None):
-    """Start the watchdog for a socket name chosen by the caller (once per name)."""
-    if name in _watchdogs:
-        return
-    if not _watchdogs:
-        atexit.register(release_all)
-    _watchdogs[name] = subprocess.Popen(
-        ["sh", "-c", WATCHDOG, "sh", str(socket_path(name)), str(owner or os.getpid())],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    """Start the watchdog for a ``-L`` socket name chosen by the caller (once per name)."""
+    watch_path(socket_path(name), owner)
 
 
 def release(name):
     """End the server, its panes' processes and its socket file; safe to call again."""
-    watchdog = _watchdogs.pop(name, None)
+    release_path(socket_path(name))
+
+
+def watch_path(path, owner=None):
+    """``watch`` for a server the test addresses by socket path (``-S``), as the installer tests do."""
+    path = str(path)
+    if path in _watchdogs:
+        return
+    if not _watchdogs:
+        atexit.register(release_all)
+    _watchdogs[path] = subprocess.Popen(
+        ["sh", "-c", WATCHDOG, "sh", path, str(owner or os.getpid())],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def release_path(path):
+    path = str(path)
+    watchdog = _watchdogs.pop(path, None)
     if watchdog is not None:
         try:
             os.killpg(watchdog.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         watchdog.wait()
-    subprocess.run(["sh", "-c", CLEANUP, "sh", str(socket_path(name))], capture_output=True, timeout=10)
+    subprocess.run(["sh", "-c", CLEANUP, "sh", path], capture_output=True, timeout=10)
 
 
 def release_all():
-    for name in list(_watchdogs):
-        release(name)
+    for path in list(_watchdogs):
+        release_path(path)

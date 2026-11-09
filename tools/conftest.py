@@ -11,27 +11,15 @@ owns that rule and its reasons.
 """
 
 from pathlib import Path
-import shutil
 import sys
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "tests"))
 import private_root  # noqa: E402
 
-PRIVATE_ROOT = pytest.StashKey[str]()
-
 
 def pytest_configure(config):
-    if config.option.basetemp is not None or hasattr(config, "workerinput"):
-        return
-    private_root.prune()
-    root = private_root.create()
-    config.option.basetemp = private_root.basetemp(root)
-    config.stash[PRIVATE_ROOT] = root
+    private_root.configure(config)
 
 
 def pytest_sessionfinish(session, exitstatus):
-    root = session.config.stash.get(PRIVATE_ROOT, None)
-    if root and exitstatus == 0:
-        shutil.rmtree(root, ignore_errors=True)
+    private_root.finish(session, exitstatus)
