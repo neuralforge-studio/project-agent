@@ -16,6 +16,7 @@ _HOOK_BUDGET = 25          # seconds from the hook's start to its deadline; the 
 _PUBLISH_RESERVE = 6       # seconds of that budget kept for the control lock, the state lock and the writes
 _BINDING_TIMEOUT = 20      # seconds at most for the binding check, which ends before the reserve
 _BINDING_INTERVAL = 1.0
+_FINISH_BUDGET = 120       # seconds for the wrap-up of a run that ended itself, lock wait and window cleanup included
 _HOST_TIMEOUT = 8          # seconds for the provider's background listing inside the hook
 _HOOK_FIELDS = ("session_id", "hook_event_name", "cwd", "source", "reason", "background_tasks", "session_crons")
 
@@ -268,3 +269,47 @@ def run_controller(request_file):
             manager.sweep_after_result(cleanup, owner)
         except Exception:
             pass                                   # retained windows are closed by a later sweep
+
+
+def finish_ended(socket_path, window_id, pane_id):
+    """Wrap up the managed run whose pane just died; the tmux server's `pane-died` hook runs this.
+
+    Everything comes from the window's own metadata. Whatever the wrap-up finds (done, left to a command,
+    not confirmed) is saved in the run's directory as `finish-result.json`; nothing is printed, because the
+    hook has no one to read it. A window or run that is no longer the pane's is not this call's concern."""
+    from .launch_artifacts import run_directory
+    from .lifecycle import Manager
+    from .util import write_json
+
+    control = tmux_control(socket_path)
+    meta = control.read_meta(window_id)
+    if meta.get("pane_id") != pane_id or not all(meta.get(key) for key in ("base", "config_path", "run_id", "target")):
+        return None
+    manager = Manager(meta["base"], meta["config_path"], socket_path=socket_path, timeout=_FINISH_BUDGET)
+    try:
+        output = {"ok": True, "data": manager.finish_ended(meta["run_id"], meta["target"], pane_id), "error": None}
+    except SessionError as exc:
+        output = {"ok": False, "data": None, "error": exc.as_dict()}
+    except Exception as exc:
+        output = {"ok": False, "data": None, "error": {"code": "finish_failed", "message": str(exc), "details": {}}}
+    try:
+        write_json(run_directory(manager.project, meta["run_id"]) / "finish-result.json", output)
+    except OSError:
+        pass                                    # a closed window leaves nothing to inform
+    return output
+
+
+def _main(arguments):
+    if len(arguments) == 4 and arguments[0] == "finish-ended":
+        try:
+            finish_ended(*arguments[1:])
+        except SessionError:
+            pass                                # a window that is gone is already finished
+        return 0
+    return 2
+
+
+if __name__ == "__main__":
+    import sys
+
+    raise SystemExit(_main(sys.argv[1:]))

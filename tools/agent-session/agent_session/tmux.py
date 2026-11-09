@@ -17,6 +17,31 @@ from . import process
 
 _PREFIX = "@agent_session_"
 PANE_ID_OPTION = _PREFIX + "pane_id"    # window option naming the managed pane; project-agent.conf repeats it
+EXIT_HOOK = "pane-died[agent-session]"  # the server-wide hook element that starts the wrap-up of a run that ended itself
+_HOOK_WORD = re.compile(r"[A-Za-z0-9_./:@%+=,-]+")  # what a hook command may carry as a path: no quote, space, or `$`
+COMPANY_TMUX = "/primehome/tools/Inhouse/tmux/latest/bin"   # install contract 3.2: put this directory first in PATH
+# The minimum tmux version has one definition: `@project_agent_tmux_min` in the integration file (install
+# contract 3.2). The product tree keeps that file at `integrations/tmux/` beside `tools/`; a tree without it
+# (the remote runtime's bundle) has no minimum to check.
+_INTEGRATION_FILE = Path(__file__).resolve().parents[3] / "integrations" / "tmux" / "project-agent.conf"
+_MINIMUM = re.compile(r"^set-option -g @project_agent_tmux_min '([^']+)'$", re.MULTILINE)
+_VERSION = re.compile(r"(?:next-)?(\d+)\.(\d+)")      # `3.8`, `3.6a`, `next-3.9`; anything else counts as too old
+
+
+def minimum_version():
+    """The minimum tmux version the product requires, or None when the integration file is not in this tree."""
+    try:
+        found = _MINIMUM.search(_INTEGRATION_FILE.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    return found.group(1) if found else None
+
+
+def _version_number(text):
+    found = _VERSION.match(text or "")
+    return int(found.group(1)) * 1000 + int(found.group(2)) if found else 0
+
+
 _IDENTITY = ("base", "target", "job_id", "run_id", "project_id", "window_id", "pane_id",
              "server_pid", "server_started", "server_birth", "socket_path")
 
@@ -456,6 +481,45 @@ class Tmux:
             arguments += [";", "set-option", "-wu", "-t", window_id, _PREFIX + key]
         self._run(*arguments)
         return "pane"
+
+    def require_version(self):
+        """Refuse a tmux older than the minimum, before a run is started: the named hook index of
+        `install_exit_hook` needs the same tmux the integration file does (install contract 3.2).
+
+        The running server's version counts; with no server yet, the first `tmux` in PATH. A tree without
+        the integration file has no minimum, and nothing is checked."""
+        wanted = minimum_version()
+        if wanted is None:
+            return
+        version = self._run("display-message", "-p", "#{version}", allow_missing=True)
+        if not version:
+            try:
+                parts = subprocess.run(["tmux", "-V"], capture_output=True, text=True, timeout=10).stdout.split()
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise SessionError("tmux_unavailable", "The tmux executable is unavailable.", 5) from exc
+            version = parts[-1] if parts else ""
+        if _version_number(version) < _version_number(wanted):
+            raise SessionError(
+                "tmux_too_old", f"agent-session needs tmux {wanted} or newer; this tmux is {version or 'of an unknown version'}. "
+                f"Put {COMPANY_TMUX} first in PATH and restart the tmux server.", 5,
+                {"version": version, "minimum": wanted, "company_tmux": COMPANY_TMUX})
+
+    def install_exit_hook(self, python, library):
+        """Make the tmux server run the wrap-up of a managed run whose pane died (`internal.finish_ended`).
+
+        One server-wide `pane-died` hook element serves every project and run: it fires only for a pane that
+        a managed window names as its own (`PANE_ID_OPTION`), and the wrap-up reads everything else from that
+        window. It is an element of its own, so the hooks of a person's configuration still run (a window-scope
+        hook would replace them). The command is written again at every launch with that launch's interpreter
+        and library. Returns False, without a hook, when a path has a character the command cannot carry."""
+        words = (str(python), str(library))
+        if any(_HOOK_WORD.fullmatch(word) is None for word in words):
+            return False
+        shell = (f"exec env PYTHONPATH={words[1]} {words[0]} -m agent_session.internal finish-ended "
+                 "#{socket_path} #{window_id} #{pane_id} >/dev/null 2>&1")
+        command = ("if-shell -F '#{==:#{" + PANE_ID_OPTION + "},\"#{pane_id}\"}' 'run-shell -b \"" + shell + "\"'")
+        self._run("set-hook", "-g", EXIT_HOOK, command)
+        return True
 
     def notify(self, text, milliseconds):
         """Show a message on every attached client for the given time. Return how many clients got it.
