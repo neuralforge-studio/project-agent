@@ -910,6 +910,11 @@ class Manager(SuspendMixin, WatchMixin):
         `stop`/`start`: one a command is controlling (stopping, a pending or running controller, a held control
         lock), one that a shutdown ended (it is resumed), and one whose end cannot be confirmed."""
         try:
+            # A run that stopped left its slot's pointer before this hook started, and a run never becomes
+            # current again. Say so without the control lock: holding it here makes a `start` that follows the
+            # stop find the slot busy and take another seat.
+            if not self._is_current(run_id, target, pane_id):
+                return {"finished": False, "reason": "not_current"}
             with control_lock(self.project, target, min(FINISH_LOCK_SECONDS, self.remaining())):
                 meta = self.tmux.get_current(self.project.project_id, target)
                 if not meta or meta.get("run_id") != run_id or meta.get("pane_id") != pane_id:
@@ -933,6 +938,14 @@ class Manager(SuspendMixin, WatchMixin):
                 return {"finished": True, "basis": basis, **self._settle(meta)}
         except SessionError as error:
             return {"finished": False, "reason": error.code}
+
+    def _is_current(self, run_id, target, pane_id):
+        """Whether `run_id` and `pane_id` are still the slot's current run. An unreadable pointer counts as current."""
+        try:
+            meta = self.tmux.get_current(self.project.project_id, target)
+        except SessionError:
+            return True
+        return bool(meta) and meta.get("run_id") == run_id and meta.get("pane_id") == pane_id
 
     def _ended_basis(self, meta):
         """How the end of a run whose pane died is confirmed, or None: `provider` as `stop` confirms it, or `process`.
