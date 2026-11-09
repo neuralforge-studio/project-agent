@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Show the open decision items of every registered project in the tmux status line.
 
-usage: tmux_decide_status.py
+usage: tmux_decide_status.sh   (runs this script with the release interpreter)
 
 Output example (tmux style markup, white on red):
     결정 4

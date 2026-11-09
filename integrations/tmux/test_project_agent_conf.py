@@ -14,7 +14,8 @@ import time
 import pytest
 
 TMUX_DIR = Path(__file__).resolve().parent
-FILES = ("project-agent.conf", "project_agent_bind.sh", "tmux_project_board.sh")
+FILES = ("project-agent.conf", "project_agent_bind.sh", "tmux_project_board.sh", "tmux_decide_status.sh", "tmux_decide_status.py")
+LAUNCHER = TMUX_DIR.parents[1] / "tools" / "python-launcher.sh"
 PRODUCT_PREFIX = "tmux_project_board.sh toggle"
 PRODUCT_MOUSE = "tmux_project_board.sh click"
 MOUSE_DEFAULT = r"select-pane -t = \; send-keys -M"
@@ -85,7 +86,11 @@ def conf(request, tmp_path):
 
 
 def make_release(root, tag, log):
-    """A release layout whose Board entry point and decision script only record their calls."""
+    """A release layout whose Board entry point and installed interpreter only record their calls.
+
+    tools/python.env names the release's own interpreter, as the installer writes it. The decision
+    wrapper must run the decision script with that interpreter.
+    """
     target = root / "integrations" / "tmux"
     target.mkdir(parents=True)
     for name in FILES:
@@ -93,9 +98,11 @@ def make_release(root, tag, log):
     board = root / "tools" / "project-board" / "bin" / "project-board"
     board.parent.mkdir(parents=True)
     board.write_text('#!/bin/sh\necho "%s board $*" >> "%s"\n' % (tag, log))
-    decide = target / "tmux_decide_status.py"
-    decide.write_text('#!/bin/sh\necho "%s decide" >> "%s"\n' % (tag, log))
-    for path in (board, decide):
+    shutil.copy2(LAUNCHER, root / "tools")
+    python = root / "installed-python"
+    python.write_text('#!/bin/sh\necho "%s decide-python $(basename "$1") nousersite=$PYTHONNOUSERSITE" >> "%s"\n' % (tag, log))
+    (root / "tools" / "python.env").write_text("PROJECT_AGENT_PYTHON=%s\nPROJECT_AGENT_PYTHONPATH=\n" % python)
+    for path in (board, python):
         path.chmod(0o755)
     return root
 
@@ -227,7 +234,7 @@ def test_decide_status_entry_expands_to_the_decision_script(server, tmp_path):
     attach = subprocess.Popen(["script", "-qc", "tmux -L %s attach-session -t home" % tmux.name, "/dev/null"],
                               stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        wait_for(log, "r1 decide", timeout=max(1, deadline - time.time()))
+        wait_for(log, "r1 decide-python tmux_decide_status.py nousersite=1", timeout=max(1, deadline - time.time()))
     finally:
         attach.kill()
         attach.wait()
