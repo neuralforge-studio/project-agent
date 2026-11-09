@@ -203,10 +203,7 @@ def project_view(project, now: dt.datetime) -> dict:
             view["decide"] = decide_items(project.path_decide, project.path_cr)
         except Exception as error:
             view["errors"].append({"source": "decide", **_error(error)})
-    try:
-        waiting = api.pending_releases(project.base, config_path=project.config_path) if state else {}
-    except SessionError:
-        waiting = {}                                    # an unreadable tmux is not a pending release
+    waiting = _releases.get(project.project_id, {}) if state else {}
     in_progress = {item["id"]: item for item in (view["crs"] or {}).get("in-progress", [])}
     leader = state["leader"] if state else None
     reviewing = leader.get("reviewing") if leader else None
@@ -256,10 +253,18 @@ def snapshot(config=None, now: dt.datetime | None = None, project_id: str | None
             "projects": [project_view(project, now) for project in projects], "error": None}
 
 
+# JOB ID -> release hold of each project, as the last `liveness()` read it. Both facts come from
+# tmux (several `tmux` processes per assigned seat), so they are read on the 10-second run-fact
+# refresh and not on the 2-second file refresh that `snapshot` is (BOARD-002). A hold that ended is
+# shown until the next run-fact refresh.
+_releases: dict[str, dict] = {}
+
+
 def liveness(config=None) -> dict:
     """Per project, `alive`, `stopped` or `unknown` for each bound slot.
 
     The rule is owned by docs/project-team/spec.md section 5 (`agent_session.api.liveness`).
+    It also refreshes the release holds that `snapshot` shows.
     """
     out = {}
     for project in load_registry(config):
@@ -267,6 +272,10 @@ def liveness(config=None) -> dict:
             out[project.project_id] = api.project_liveness(project)
         except SessionError as error:
             out[project.project_id] = {} if error.code == "state_not_found" else {"error": _error(error)}
+        try:
+            _releases[project.project_id] = api.project_pending_releases(project)
+        except SessionError:
+            _releases[project.project_id] = {}          # an unreadable tmux is not a pending release
     return out
 
 

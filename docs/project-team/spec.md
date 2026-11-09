@@ -581,6 +581,7 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | RemoteSeat | 원격 Worker seat의 등록 항목 형식. `Project.seats`의 원소가 이 형식이면 원격 seat |
 | SessionError | 공통 오류. `code`·`message`·`exit_code`·`details` |
 | pending_releases(cwd=None, config_path=None, socket=None) | 반납 대기인 seat를 `{JOB ID: {seat, since, reasons}}`로 반환. tmux 실행 근거만 읽고, 읽을 수 없는 run은 나열하지 않음 |
+| project_pending_releases(project, socket=None) | `pending_releases`와 같되 이미 `load_registry`로 얻은 project를 받음 |
 | finish_release(cwd, job_id, config_path=None, socket=None) | JOB의 반납 대기를 마침. CR이 in-progress를 떠난 뒤에 호출. 대기가 없으면 None, 있으면 `{job_id, seat, released, reasons}`. 반납 조건은 stop과 같고 맞지 않으면 배정을 보존하고 이유를 반환 |
 | Tmux | tmux control 클래스. 소비자는 socket 경로를 주어 만들고 option 조회·pane 조작에 씀 |
 | PANE_ID_OPTION | 관리 window의 pane을 가리키는 tmux window option 이름(`@agent_session_pane_id`). 정의는 `agent_session/tmux.py`. tmux 설정 파일은 import할 수 없어 같은 문자열을 주석과 함께 씀 |
@@ -588,7 +589,7 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 `PANE_ID_OPTION`·`RemoteSeat`·`SessionError`·`Tmux`는 이름과 형식을 제공하는 값이고, 나머지는 함수입니다.
 agent-session 내부 모듈은 서로의 밑줄 이름을 import하지 않습니다. 함께 쓰는 helper는 소유 모듈의 공개 이름입니다.
 
-`read_state`·`project_state`·`check_binding`·`liveness`·`project_liveness`·`pending_releases`·`caller`·`require_live`는 읽기 전용이고, `finish_release`는 반납 대기를 마치는 쓰기 호출입니다(project-item이 CR을 옮긴 직후 부름).
+`read_state`·`project_state`·`check_binding`·`liveness`·`project_liveness`·`pending_releases`·`project_pending_releases`·`caller`·`require_live`는 읽기 전용이고, `finish_release`는 반납 대기를 마치는 쓰기 호출입니다(project-item이 CR을 옮긴 직후 부름).
 호출자는 선택한 등록 파일과 socket을 전달할 수 있습니다.
 전달하지 않은 등록 경로는 CLI와 같은 표준 경로 규칙을 적용합니다.
 상태 손상·미등록·현재 소유자 불일치·관찰 불가를 구분해 공통 오류로 반환합니다.

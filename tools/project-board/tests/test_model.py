@@ -315,7 +315,10 @@ def test_a_seat_whose_stopped_worker_waits_for_release_shows_release_pending(boa
                        "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)},
                        "1": {"job_id": "TOOL-002", "git_hash": None, "session": session(1)}})
     hold = {"seat": 0, "since": "2026-11-05T10:00:00Z", "reasons": ["the CR is still in-progress"]}
-    monkeypatch.setattr(model.api, "pending_releases", lambda cwd, config_path=None: {"TOOL-001": hold})
+    monkeypatch.setattr(model.api, "project_pending_releases", lambda project, socket=None: {"TOOL-001": hold})
+    monkeypatch.setattr(model.api, "project_liveness", lambda project, socket=None: {"0": {}})
+    assert model.snapshot(board.config, now=NOW)["projects"][0]["seats"][0]["status"] == "working"   # not read on the file refresh
+    model.liveness(board.config)                                   # the run-fact refresh reads it
     seats = model.snapshot(board.config, now=NOW)["projects"][0]["seats"]
     assert [(s["job_id"], s["status"]) for s in seats] == [("TOOL-001", "release_pending"), ("TOOL-002", "working")]
     assert seats[0]["release_pending"] == hold and seats[1]["release_pending"] is None
@@ -326,9 +329,11 @@ def test_an_unreadable_release_record_does_not_hide_the_seats(board, monkeypatch
     board.cr(base, "in-progress", "TOOL-001")
     board.state(base, {"leader": leader(), "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)}})
 
-    def unreadable(cwd, config_path=None):
+    def unreadable(project, socket=None):
         raise model.SessionError("tmux_unknown", "tmux is unreadable")
 
-    monkeypatch.setattr(model.api, "pending_releases", unreadable)
+    monkeypatch.setattr(model.api, "project_pending_releases", unreadable)
+    monkeypatch.setattr(model.api, "project_liveness", lambda project, socket=None: {"0": {}})
+    model.liveness(board.config)
     project = model.snapshot(board.config, now=NOW)["projects"][0]
     assert project["errors"] == [] and project["seats"][0]["status"] == "working"

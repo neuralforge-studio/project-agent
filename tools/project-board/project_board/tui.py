@@ -11,6 +11,7 @@ import io
 import json
 import os
 import re
+import signal
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -150,6 +151,8 @@ class SidebarApp(App):
         click_socket: str | None = None,
         expanded_reader: ExpandedReader | None = None,
         expanded_toggler: ExpandedToggler | None = None,
+        mark_ready: Callable[[], bool] | None = None,
+        visibility_reader: Callable[[], bool] | None = None,
     ):
         super().__init__()
         self.config = config
@@ -163,6 +166,9 @@ class SidebarApp(App):
         self.click_socket = click_socket
         self.expanded_reader = expanded_reader
         self.expanded_toggler = expanded_toggler
+        self.mark_ready = mark_ready
+        self.visibility_reader = visibility_reader
+        self._visible = True
         self.snapshot_data: dict = {"projects": [], "error": None}
         self.live_data: dict = {}
         self._actions: dict[str, tuple] = {}
@@ -190,9 +196,47 @@ class SidebarApp(App):
         self._queue(self.refresh_liveness())
         self.set_interval(2, lambda: self._queue(self.refresh_snapshot()))
         self.set_interval(10, lambda: self._queue(self.refresh_liveness()))
+        self._watch_visibility()
+
+    def _watch_visibility(self) -> None:
+        """Stop reading while no client shows this pane's window (BOARD-002).
+
+        tmux hooks send SIGUSR1 when this pane's window is shown or hidden
+        (integrations/tmux/project_board_visibility.sh); the pane asks tmux which one it is.
+        `mark_ready` comes after the handler exists, because the signal's default action ends
+        the process, and tells the hook that it may signal this pane.
+        """
+        if self.mark_ready is None or self.visibility_reader is None:
+            return
+        try:
+            asyncio.get_running_loop().add_signal_handler(
+                signal.SIGUSR1, lambda: self._queue(self.sync_visibility(self.visibility_reader)))
+        except (NotImplementedError, RuntimeError, ValueError):
+            return                                   # not the main thread: keep refreshing
+        self._queue(self.sync_visibility(self.mark_ready))
+
+    async def sync_visibility(self, reader: Callable[[], bool]) -> None:
+        try:
+            visible = await asyncio.to_thread(reader)
+        except Exception:                            # unknown is not hidden: keep refreshing
+            visible = True
+        if not self._stopping:
+            self.set_visible(visible)
+
+    def set_visible(self, visible: bool) -> None:
+        shown = visible and not self._visible
+        self._visible = visible
+        if shown:                                    # a window shown again is read at once
+            self._queue(self.refresh_snapshot())
+            self._queue(self.refresh_liveness())
 
     def on_unmount(self) -> None:
         self._stopping = True
+        if self.mark_ready is not None:
+            try:
+                asyncio.get_running_loop().remove_signal_handler(signal.SIGUSR1)
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass
         if self._click_server is not None:
             self._click_server.close()
             if self.click_socket:
@@ -274,7 +318,7 @@ class SidebarApp(App):
         return {"ok": True, "data": {"widget": widget.id}, "error": None}
 
     async def refresh_snapshot(self) -> None:
-        if self._snapshot_busy or self._stopping:
+        if self._snapshot_busy or self._stopping or not self._visible:
             return
         self._snapshot_busy = True
         try:
@@ -291,7 +335,7 @@ class SidebarApp(App):
             self._snapshot_busy = False
 
     async def refresh_liveness(self) -> None:
-        if self._live_busy or self._stopping:
+        if self._live_busy or self._stopping or not self._visible:
             return
         self._live_busy = True
         try:
@@ -917,10 +961,13 @@ def run_sidebar(
     click_socket: str | None = None,
     expanded_reader: ExpandedReader | None = None,
     expanded_toggler: ExpandedToggler | None = None,
+    mark_ready: Callable[[], bool] | None = None,
+    visibility_reader: Callable[[], bool] | None = None,
 ) -> int:
     SidebarApp(config, on_project=on_project, on_decision=on_decision, on_cr=on_cr, on_seat=on_seat,
                click_socket=click_socket or os.environ.get("PROJECT_BOARD_CLICK_SOCKET"),
-               expanded_reader=expanded_reader, expanded_toggler=expanded_toggler).run()
+               expanded_reader=expanded_reader, expanded_toggler=expanded_toggler,
+               mark_ready=mark_ready, visibility_reader=visibility_reader).run()
     return 0
 
 

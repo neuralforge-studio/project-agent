@@ -13,7 +13,7 @@ from .tmux import PANE_ID_OPTION, Tmux
 __all__ = (
     "PANE_ID_OPTION", "RemoteSeat", "SessionError", "Tmux",
     "caller", "check_binding", "finish_release", "liveness", "load_registry", "pending_releases",
-    "project_liveness", "project_state",
+    "project_liveness", "project_pending_releases", "project_state",
     "read_state", "require_live", "resolve_project",
 )
 
@@ -201,14 +201,14 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
     }
 
 
-def _manager(cwd, config_path, socket, timeout):
+def _manager(cwd, config_path, socket, timeout, project=None):
     from .lifecycle import Manager          # lifecycle imports this module
     socket = socket or os.environ.get("AGENT_SESSION_SOCKET")
     if isinstance(socket, dict):
         kwargs = socket
     else:
         kwargs = {"socket_path": str(socket)} if socket else {}
-    return Manager(cwd, config_path, timeout=timeout, **kwargs)
+    return Manager(cwd, config_path, timeout=timeout, project=project, **kwargs)
 
 
 def pending_releases(cwd=None, config_path=None, socket=None):
@@ -216,6 +216,11 @@ def pending_releases(cwd=None, config_path=None, socket=None):
     because the CR was still in-progress. Read-only; an unreadable run is not listed.
     """
     return _manager(cwd, config_path, socket, 60).pending_releases()
+
+
+def project_pending_releases(project, socket=None):
+    """`pending_releases` of a project the caller already holds (from `load_registry`)."""
+    return _manager(None, None, socket, 60, project=project).pending_releases()
 
 
 def finish_release(cwd, job_id, config_path=None, socket=None):

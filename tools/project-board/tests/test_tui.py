@@ -4,6 +4,7 @@ import html
 import json
 import os
 import re
+import signal
 import threading
 
 import pytest
@@ -913,6 +914,70 @@ def test_slow_refresh_keeps_clicks_responsive_and_does_not_overlap(tmp_path):
         asyncio.run(check())
     finally:
         release.set()
+
+
+def test_a_sidebar_nobody_watches_reads_nothing_until_it_is_shown(tmp_path):
+    board = _make_sidebar_board(tmp_path)
+    reads = []
+    lives = []
+
+    def snapshot(config):
+        reads.append(config)
+        return model.snapshot(config)
+
+    def liveness(config):
+        lives.append(config)
+        return {}
+
+    app = SidebarApp(str(board.config), poll=False, snapshot_reader=snapshot, liveness_reader=liveness)
+
+    async def check():
+        async with app.run_test(size=(25, 25)) as pilot:
+            await app.refresh_snapshot()
+            await app.refresh_liveness()
+            assert (len(reads), len(lives)) == (1, 1)
+            app.set_visible(False)
+            await app.refresh_snapshot()
+            await app.refresh_liveness()
+            assert (len(reads), len(lives)) == (1, 1)             # hidden: no read
+            app.set_visible(True)                                   # shown again: one read of each at once
+            await wait_until(pilot, lambda: (len(reads), len(lives)) == (2, 2))
+            app.set_visible(True)                                   # already shown: nothing more
+            await pilot.pause(0.1)
+            assert (len(reads), len(lives)) == (2, 2)
+
+    asyncio.run(check())
+
+
+def test_sigusr1_makes_a_sidebar_ask_tmux_whether_its_window_is_shown(tmp_path):
+    board = _make_sidebar_board(tmp_path)
+    shown = {"value": True}
+    marked = []
+    reads = []
+
+    def snapshot(config):
+        reads.append(config)
+        return model.snapshot(config)
+
+    app = SidebarApp(str(board.config), snapshot_reader=snapshot, liveness_reader=lambda config: {},
+                     mark_ready=lambda: marked.append(True) or shown["value"],
+                     visibility_reader=lambda: shown["value"])
+
+    async def check():
+        async with app.run_test(size=(25, 25)) as pilot:
+            await wait_until(pilot, lambda: marked and reads)        # ready, and read once while shown
+            shown["value"] = False
+            os.kill(os.getpid(), signal.SIGUSR1)
+            await wait_until(pilot, lambda: not app._visible)
+            count = len(reads)
+            await app.refresh_snapshot()
+            assert len(reads) == count
+            shown["value"] = True
+            os.kill(os.getpid(), signal.SIGUSR1)
+            await wait_until(pilot, lambda: app._visible and len(reads) > count)
+
+    asyncio.run(check())
+    assert signal.getsignal(signal.SIGUSR1) in (signal.SIG_DFL, None)   # the handler leaves with the app
 
 
 def test_popup_renders_markdown_and_csv_and_closes_editor_after_acceptance(tmp_path):

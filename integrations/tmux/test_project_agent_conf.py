@@ -4,12 +4,16 @@ Every server is private (`tmux -L <unique name> -f /dev/null`) and is ended by `
 end of the test (or when pytest dies), so the user's default server never gets a binding or a hook.
 """
 
+import fcntl
 import os
 from pathlib import Path
+import pty
 import re
 import shutil
+import struct
 import subprocess
 import sys
+import termios
 import time
 
 import pytest
@@ -17,7 +21,7 @@ import pytest
 TMUX_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TMUX_DIR.parents[1] / "tools" / "tests"))  # tmux_test_server, shared by every tool's tests
 import tmux_test_server  # noqa: E402
-FILES = ("project-agent.conf", "project-agent-main.conf", "project_agent_bind.sh", "tmux_project_board.sh", "tmux_decide_status.sh", "tmux_decide_status.py")
+FILES = ("project-agent.conf", "project-agent-main.conf", "project_agent_bind.sh", "project_board_visibility.sh", "tmux_project_board.sh", "tmux_decide_status.sh", "tmux_decide_status.py")
 LAUNCHER = TMUX_DIR.parents[1] / "tools" / "python-launcher.sh"
 PRODUCT_PREFIX = "tmux_project_board.sh toggle"
 PRODUCT_MOUSE = "tmux_project_board.sh click"
@@ -222,8 +226,11 @@ def test_a_window_change_starts_sync_only_when_the_window_lacks_its_board_pane(s
     move(without_board)
     assert syncs() == 0                      # the Board is off: nothing to reconcile
     tmux.run("set-option", "-g", "@project_board_enabled", "1")
+    tmux.run("set-option", "-p", "-t", pane, "@project_board_managed", "1")
     move(with_board)
     assert syncs() == 0                      # the window shows its Board pane at the saved width
+    # The same event ran the visibility script: no client is attached, so no client shows the pane.
+    assert tmux.run("show-options", "-pqv", "-t", pane, "@project_board_visible") == "0"
     move(without_board)
     wait_for(log, "board sync")              # no Board pane here yet
     assert syncs() == 1
@@ -233,6 +240,63 @@ def test_a_window_change_starts_sync_only_when_the_window_lacks_its_board_pane(s
     while syncs() < 2 and time.time() < wait_for_count:
         time.sleep(0.1)
     assert syncs() == 2                      # a width other than the saved one is reconciled
+
+
+def test_visibility_script_wakes_only_the_ready_panes_whose_window_state_changed(server, tmp_path):
+    """BOARD-002: a Board pane nobody watches stops reading; the hook tells it with SIGUSR1."""
+    tmux = server()
+    tmux.run("new-session", "-d", "-s", "two", "sleep", "300")
+    windows = {name: tmux.run("display-message", "-p", "-t", name, "#{window_id}") for name in ("home", "two")}
+    # A "Board" that counts the signals it gets; the third pane has not marked itself ready.
+    command = 'trap "echo got >> %s/$0" USR1; while :; do sleep 0.1; done'
+    panes = {}
+    for key, window in (("home", windows["home"]), ("two", windows["two"]), ("late", windows["two"])):
+        panes[key] = tmux.run("split-window", "-d", "-t", window, "-P", "-F", "#{pane_id}", "sh", "-c", command % tmp_path, key)
+        tmux.run("set-option", "-p", "-t", panes[key], "@project_board_managed", "1")
+        if key != "late":
+            tmux.run("set-option", "-p", "-t", panes[key], "@project_board_ready", "1")
+    time.sleep(0.5)                                            # the shells install their trap
+
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    env = {**os.environ, "TERM": "xterm-256color"}
+    env.pop("TMUX", None)
+    client = subprocess.Popen(["tmux", "-L", tmux.name, "-f", "/dev/null", "attach-session", "-t", "home"],
+                              stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env=env)
+    os.close(slave)
+    try:
+        time.sleep(1.0)
+        socket = tmux.run("display-message", "-p", "#{socket_path}")
+        script = TMUX_DIR / "project_board_visibility.sh"
+
+        def run():
+            subprocess.run([str(script), "--socket", socket], check=True, timeout=20)
+            time.sleep(0.6)                                    # a signal is handled by the shell between sleeps
+
+        def got(key):
+            path = tmp_path / key
+            return path.read_text().count("got") if path.exists() else 0
+
+        def option(pane, name):
+            return tmux.run("show-options", "-pqv", "-t", pane, name)
+
+        run()
+        assert option(panes["home"], "@project_board_visible") == ""        # shown, as an unset pane is assumed to be
+        assert option(panes["two"], "@project_board_visible") == "0"
+        assert option(panes["late"], "@project_board_visible") == "0"        # recorded even though not signalled
+        assert tmux.run("show-options", "-wqv", "-t", windows["home"], "@project_board_seen").isdigit()
+        assert tmux.run("show-options", "-wqv", "-t", windows["two"], "@project_board_seen") == ""
+        assert (got("home"), got("two"), got("late")) == (0, 1, 0)
+        run()
+        assert (got("home"), got("two"), got("late")) == (0, 1, 0)           # nothing changed: nobody is woken
+        tmux.run("switch-client", "-c", tmux.run("list-clients", "-F", "#{client_name}"), "-t", "two")
+        run()
+        assert option(panes["home"], "@project_board_visible") == "0"
+        assert option(panes["two"], "@project_board_visible") == "1"
+        assert (got("home"), got("two"), got("late")) == (1, 2, 0)
+    finally:
+        client.terminate()
+        os.close(master)
 
 
 def test_installed_link_is_kept_and_the_next_call_follows_an_upgrade(server, tmp_path):
