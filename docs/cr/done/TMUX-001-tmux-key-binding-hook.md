@@ -5,6 +5,7 @@
 - Severity: S2
 - Requester: agent, /primehome/swain/Utils/agent/agent.base, 2026-11-09
 - Base: 12084899d30248c3adf10539cad950b71186786f 2026-11-09T14:17:21+09:00
+- Outcome: fixed
 
 ## Symptom
 Board의 tmux 연결은 agent 저장소의 개인 tmux 설정 경로를 전제로 합니다(`~/.tmux/scripts/tmux_project_board.sh`, 저장소 상대 경로로 project-item 찾기). 사용자가 이미 지정한 `prefix B`와 root `MouseDown1Pane` binding을 말없이 덮어쓰고, hook 배열 이름도 일반 이름(`[board]`)이라 사용자 hook과 겹칠 수 있습니다. 설치본만 있는 환경에서는 동작하지 않거나 다른 설정에 영향을 줍니다.
@@ -26,6 +27,7 @@ Board의 tmux 연결은 agent 저장소의 개인 tmux 설정 경로를 전제�
 - 2026-11-09 Leader: 판정 보류(open 유지). REPO-001이 저장소 배치를 바꾸는 중이므로, 그 통합 뒤의 경로로 Implementation·Verification을 써서 판정합니다. 판정에 필요한 입력은 REPO-001이 통합한 배치입니다. 순서는 사용자가 2026-11-09 대화에서 지시했습니다. 사용자 원문: "제안 진행 순서대로 진행".
 - 2026-11-09 Leader: 고친다(Leader 판정). REPO-001이 1e06cac로 통합되어 판정 입력이 갖춰졌습니다. 이 CR은 agent의 승인한 계획 DIST-001 5단계입니다. 목표 동작은 설치 계약 3.1절과 5.3절이 이미 정했습니다. 사용자 binding을 덮어쓰는 현재 동작은 그 계약의 위반입니다. 따라서 위임 범위(승인한 작업의 하위 작업, 근거가 있는 결함 수정)입니다. 2026-11-09 격리 tmux 3.8 server에서 확인: `set-hook -g 'client-attached[board]' …`는 숫자 index가 아닌 이름 `[board]`로 저장되고, `[0]`·`[7]`과 따로 남습니다. 그러므로 이름만 제품 전용으로 바꾸면 사용자 hook과 겹치지 않습니다. REPO-001 review에서 넘긴 문서 정정 두 가지를 이 CR에 넣습니다.
 - 2026-11-09 Leader: 제출 15a1c4dc582c3f4f648b276fefe0b33a54f16f6d를 인수합니다. Leader review: project-agent.conf·project_agent_bind.sh·계약 3.1/5.3/9절·test diff를 확인했습니다. 제출 snapshot에서 integrations/tmux·test_distribution_boundary·test_tmux_control 50개 통과. 추가 확인: 사용자 설정(-f)이 include하는 server 시작 경로에서도 사용자 prefix B는 그대로, @project_agent_board_skipped=prefix:B, 사용자 binding이 없으면 제품 binding이 들어갑니다. 넘길 사항: release 안 helper가 부르는 bin/project-board와 tmux_decide_status.py(#!/usr/bin/env python3)는 shim 환경 없이 실행되므로, 설치 interpreter·package 경로로 실행되게 하는 일은 INSTALL-001 Implementation에 넣습니다.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 e5ac6db(Merge cr/TMUX-001, 제출 15a1c4d). origin/main 반영 확인.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 2절(`tmux.conf` 행), 3절, 3.1절, 5.3절, 8절 T20·T21. [project-board README](../../../tools/project-board/README.md). 이 CR의 Contract가 범위의 원본입니다.
