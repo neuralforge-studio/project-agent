@@ -17,6 +17,8 @@ from . import process
 
 _PREFIX = "@agent_session_"
 PANE_ID_OPTION = _PREFIX + "pane_id"    # window option naming the managed pane; project-agent.conf repeats it
+EXIT_HOOK = "pane-died[agent-session]"  # the server-wide hook element that starts the wrap-up of a run that ended itself
+_HOOK_WORD = re.compile(r"[A-Za-z0-9_./:@%+=,-]+")  # what a hook command may carry as a path: no quote, space, or `$`
 _IDENTITY = ("base", "target", "job_id", "run_id", "project_id", "window_id", "pane_id",
              "server_pid", "server_started", "server_birth", "socket_path")
 
@@ -456,6 +458,23 @@ class Tmux:
             arguments += [";", "set-option", "-wu", "-t", window_id, _PREFIX + key]
         self._run(*arguments)
         return "pane"
+
+    def install_exit_hook(self, python, library):
+        """Make the tmux server run the wrap-up of a managed run whose pane died (`internal.finish_ended`).
+
+        One server-wide `pane-died` hook element serves every project and run: it fires only for a pane that
+        a managed window names as its own (`PANE_ID_OPTION`), and the wrap-up reads everything else from that
+        window. It is an element of its own, so the hooks of a person's configuration still run (a window-scope
+        hook would replace them). The command is written again at every launch with that launch's interpreter
+        and library. Returns False, without a hook, when a path has a character the command cannot carry."""
+        words = (str(python), str(library))
+        if any(_HOOK_WORD.fullmatch(word) is None for word in words):
+            return False
+        shell = (f"exec env PYTHONPATH={words[1]} {words[0]} -m agent_session.internal finish-ended "
+                 "#{socket_path} #{window_id} #{pane_id} >/dev/null 2>&1")
+        command = ("if-shell -F '#{==:#{" + PANE_ID_OPTION + "},\"#{pane_id}\"}' 'run-shell -b \"" + shell + "\"'")
+        self._run("set-hook", "-g", EXIT_HOOK, command)
+        return True
 
     def notify(self, text, milliseconds):
         """Show a message on every attached client for the given time. Return how many clients got it.

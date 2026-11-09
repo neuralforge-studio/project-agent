@@ -367,6 +367,7 @@ Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않
 1. 반납 성공: stop은 state를 반납한 뒤 대상 제어 잠금 안에서 현재 실행 포인터가 이 run을 가리키는지 대조하고 포인터를 지웁니다. 그 뒤 정리합니다.
 2. 새 실행: start·restart는 새 run의 시작 완료 뒤 정리합니다.
 3. 반납 보류(`released: false`): 현재 실행 포인터와 그 window를 유지합니다.
+4. 스스로 끝난 run: 아무 명령 없이 tmux server의 hook이 마무리를 시작합니다(아래 "스스로 끝난 run의 마무리"). 반납하면 위 1과 같이 정리하고, 반납을 보류하면 3과 같습니다.
 
 정리는 현재 실행 포인터의 run을 제외한 같은 base·target의 관리 window 가운데 다음을 모두 만족하는 것만 닫습니다.
 
@@ -389,6 +390,25 @@ Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않
 직접 실행한 명령은 결과의 `cleanup`에 닫은 window(`closed`)와 남긴 window·이유(`kept`)를 보고합니다.
 남긴 window는 같은 target의 다음 정리가 다시 검사합니다.
 `agent/runs/<run_id>/`의 실행 산출물은 정리하지 않습니다.
+
+### 스스로 끝난 run의 마무리
+
+사용자가 대화 안에서 `/exit`하거나 CLI가 비정상 종료하면, 이 run을 끝낼 명령이 없습니다. 마무리는 아무의 명령 없이 끝나야 하므로 `stop`이 종료를 확인한 뒤 하는 일과 같은 함수(`Manager._settle`)를 씁니다.
+
+시작: tmux server가 관리 pane의 종료(`pane-died`)를 알립니다. start·restart·resume·Worker 배정이 CLI를 띄우기 직전에 server 전체의 hook 요소 `pane-died[agent-session]`을 씁니다. 이 hook은 pane이 어떤 관리 window의 pane(`@agent_session_pane_id`)일 때만 `python -m agent_session.internal finish-ended <socket> <window> <pane>`을 실행합니다. 이 요소 하나가 모든 project와 run을 맡고, 나머지는 window의 관리 정보에서 읽습니다. 사용자 설정의 `pane-died` hook은 그대로 실행됩니다(window에 쓰는 hook은 그것들을 대체하므로 쓰지 않습니다). command를 만드는 경로(interpreter·library)에 따옴표·공백 등 hook이 실을 수 없는 문자가 있으면 hook을 쓰지 않고, 그 run은 지금처럼 `stop`이 마무리합니다. hook은 출력하지 않고 결과를 `agent/runs/<run_id>/finish-result.json`에 남깁니다.
+
+마무리는 대상 제어 잠금 안에서 다음을 모두 확인한 run만 합니다. 하나라도 아니면 아무것도 바꾸지 않고 이유(`finished: false`, `reason`)만 남깁니다.
+
+- 그 slot의 현재 실행 포인터가 이 run과 이 pane을 가리킵니다(`not_current`). 로컬이고 게시를 마친(`registered`·`ready`) run입니다(`not_published`). 등록하지 못한 run은 start가 근거를 읽으므로 지금처럼 둡니다. 원격 seat는 SSH 표시 창의 종료가 Worker의 종료가 아니므로 다룰 수 없습니다.
+- 명령이 제어하는 run이 아닙니다(`control_active`): stopping이 아니고, control_pending이 false이며, 살아 있는 controller가 없습니다. stop·restart·shutdown은 자기 잠금 안에서 stopping을 쓰고 끝냅니다. 그래서 실행 중인 stop·restart의 중복 마무리와, restart가 새 run을 띄우는 window의 정리가 없고, shutdown이 끝낸 run(resume이 이어받음)은 정리하지 않습니다. 잠금이 잡혀 있으면 5초 기다리고, 그래도 잡혀 있으면 그 명령에 맡기고 끝납니다.
+- 종료를 확인했습니다(`termination_unconfirmed`). pane이 dead이고 provider의 관찰이 stop과 같은 기준으로 종료를 보고합니다. Claude는 종료한 CLI가 SessionEnd hook을 실행하지 못했을 수 있으므로, pane이 dead이고 CLI·process group·추적한 background PID가 모두 없으면(forced shutdown의 확인과 같은 근거) 종료입니다. 최대 15초 기다려 process group이 정리되는 것을 봅니다. background 대화로 옮겨진 run은 이 기준을 쓰지 않습니다. 확인하지 못하면 보존합니다.
+
+확인하면 먼저 `agent/runs/<run_id>/ended.json`에 종료 근거를 씁니다. 근거는 run_id·target·job_id·session_id·`cli_pid`·`cli_birth`·process group·`basis`(`provider` 또는 `process`)·`ended_at`입니다. 그 뒤 stopping을 쓰고 이름을 바꾸고(`-exited-`), stop의 반납 판정을 그대로 적용합니다.
+
+- 반납 조건이 맞으면(CR이 in-progress가 아니거나 Leader) 반납하고 포인터를 지운 뒤 window를 정리합니다(위 규칙. 사용자 pane이 있으면 관리 pane만 닫음).
+- CR이 in-progress이면 반납하지 않고 반납 대기를 기록합니다. 이 경우 state의 배정과 현재 실행 포인터, window는 반납 대기의 근거로 유지됩니다(stop과 같음). 그 CR을 `project-item move`로 옮기면 같은 명령이 반납을 마치고 window를 정리합니다(7절 stop).
+
+`ended.json`은 그 run의 종료 근거입니다. `_observe`는 pane이 dead이고 기록의 run_id·session_id·`cli_pid`·`cli_birth`가 run과 같으면 provider를 부르지 않고 종료로 봅니다. stop·restart·start와 window 정리·재사용이 같은 판정을 씁니다. 그래서 window와 pane이 없어져도 기록으로 종료를 확인할 수 있고, SessionEnd가 없는 비정상 종료도 정리할 수 있습니다. 이 파일은 종료의 근거일 뿐 배정의 원본이 아닙니다.
 
 ### 종료한 window 재사용
 
@@ -699,6 +719,7 @@ SendMessage 성공을 읽음이나 사용자 승인으로 기록하지 않습니
 
 Stop·StopFailure hook은 해당 UUID/run의 turn 종료와 background 관찰을 기록합니다.
 SessionEnd는 정상 CLI 종료 관찰을 추가합니다.
+CLI가 스스로 끝났을 때 마무리를 시작하는 것은 이 hook이 아니라 tmux의 `pane-died`입니다. SessionEnd는 CLI가 살아 있는 동안 실행되고, 강제 종료된 CLI는 실행하지 못합니다(3절 "스스로 끝난 run의 마무리").
 관찰값에는 판정에 쓰는 field만 남깁니다. 응답 본문 같은 대화 내용은 저장하지 않습니다.
 관찰 원본은 위 window option과 runs의 hook 진단이며 JOB 업무 상태를 변경하지 않습니다.
 Stop hook 부재·누락된 background 필드를 빈 목록으로 가정하지 않습니다.
@@ -980,6 +1001,7 @@ Worker는 아래 반납 검사를 추가로 확인합니다.
 CR이 in-progress라서 반납하지 못했으면 종료한 run의 window에 반납 대기를 기록합니다(`release_pending`: 처음 기록한 UTC 시각 `since`와 `reasons`). state의 배정은 그대로 둡니다. 실행 근거이므로 state에 쓰지 않고, 같은 window를 다음 run이 이어받으면 다른 run 값처럼 null로 돌아갑니다.
 Leader가 그 CR을 `project-item move`로 in-progress에서 옮기면(done·todo·open·deferred) 같은 명령이 이 반납을 마칩니다. 반납 조건은 위 검사를 그대로 씁니다. 조건이 안 맞으면 반납하지 않고 이유를 출력하며, 반납 대기는 유지합니다. 이미 CR을 옮긴 뒤의 stop은 이 기록 없이 위처럼 반납합니다.
 `project-item ls`와 Board sidebar는 반납 대기인 seat를 표시합니다.
+사용자가 대화를 끝내거나 CLI가 스스로 끝난 run도 같은 반납 판정과 반납 대기를 씁니다. 명령 없이 tmux server의 hook이 시작합니다(3절 "스스로 끝난 run의 마무리").
 보류로 todo에 둔 CR의 배정이 남으면 같은 CR의 start가 같은 seat에서 새 대화로 이어받습니다(4절).
 종료 성공·반납 보류는 exit 0입니다. 실제 종료 미확인은 exit 4입니다.
 보존한 session은 종료한 대화의 이력이며 송신 가능을 뜻하지 않습니다.
