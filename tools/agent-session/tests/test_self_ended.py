@@ -223,3 +223,49 @@ def test_the_hook_keeps_the_hooks_of_a_persons_configuration(session_env):
     while not mark.exists() and time.monotonic() < deadline:
         time.sleep(0.1)
     assert mark.exists()
+
+
+# The tmux minimum (install contract 3.2): the named hook index needs it.
+
+def test_the_minimum_tmux_version_is_the_one_of_the_integration_file_and_the_contract():
+    import re
+    from agent_session import tmux as tmux_module
+
+    contract = (Path(__file__).resolve().parents[3] / "docs/project-team/install-contract.md").read_text(encoding="utf-8")
+    assert tmux_module.minimum_version() == re.search(r"^최소 버전: tmux (\S+)$", contract, re.MULTILINE).group(1)
+
+
+@pytest.mark.parametrize("version, refused", [("3.8", False), ("3.10", False), ("next-3.9", False), ("3.6a", True),
+                                              ("2.7", True), ("master", True), ("", True)])
+def test_a_tmux_older_than_the_minimum_is_refused_with_a_named_error(monkeypatch, tmp_path, version, refused):
+    stub = tmp_path / "tmux"
+    stub.write_text("#!/bin/sh\n" + ('[ "$1" = "-V" ] && echo "%s"\n' % ("tmux " + version if version else "")) +
+                    'echo "no server running" >&2\nexit 1\n')
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    control = Tmux(socket_name="agent-version-test")
+    if not refused:
+        control.require_version()
+        return
+    with pytest.raises(SessionError) as error:
+        control.require_version()
+    assert (error.value.code, error.value.exit_code) == ("tmux_too_old", 5)
+    assert error.value.details == {"version": version, "minimum": "3.8",
+                                   "company_tmux": "/primehome/tools/Inhouse/tmux/latest/bin"}
+    assert "3.8" in error.value.message and "/primehome/tools/Inhouse/tmux/latest/bin" in error.value.message
+
+
+def test_start_restart_and_resume_are_refused_before_anything_is_created_on_an_old_tmux(session_env, monkeypatch):
+    from agent_session import tmux as tmux_module
+
+    env = session_env
+    leader = env.manager().start("leader")
+    handoff = env.handoff("leader", "continue")
+    monkeypatch.setattr(tmux_module, "minimum_version", lambda: "99.0")
+    for call in (lambda: env.manager().start(env.cr()), lambda: env.manager().control("restart", job="leader")):
+        with pytest.raises(SessionError) as error:
+            call()
+        assert error.value.code == "tmux_too_old"
+    assert env.store.read()["0"] == EMPTY and windows(env) == [leader["window_id"]]
+    assert env.tmux.get_current("fixture", "leader")["run_id"] == leader["run_id"]
+    assert env.manager().control("stop", job="leader")["stopped"] is True      # a stop needs no hook

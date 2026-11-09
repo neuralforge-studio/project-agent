@@ -367,12 +367,9 @@ class Manager(SuspendMixin, WatchMixin):
             "stopping": False,
         })
         script = launch_artifacts.write_launch_script(self.project, context, launch)
-        try:
-            # Before the CLI exists, so that even an immediate exit is seen. Without it the dead pane stays
-            # as before and `stop` still ends the run.
-            self.tmux.install_exit_hook(context["python"], context["library_path"])
-        except SessionError:
-            pass
+        # Before the CLI exists, so that even an immediate exit is seen. A path the hook command cannot carry
+        # leaves the hook out (the dead pane then stays until `stop`); a tmux that refuses it is an error.
+        self.tmux.install_exit_hook(context["python"], context["library_path"])
         context = self.tmux.launch(context["window_id"], context["cwd"], script)
         result = self._wait_ready(context)
         return {**result, "cleanup": self._sweep_regained(context["target"])}
@@ -529,6 +526,7 @@ class Manager(SuspendMixin, WatchMixin):
     def start(self, job, prompt_file=None, seat=None):
         leader = job == "leader"
         check_start_arguments(job, prompt_file, seat)
+        self.tmux.require_version()
         if seat is not None and (isinstance(seat, bool) or not isinstance(seat, int)
                                  or not 0 <= seat < len(self.project.seats)):
             raise SessionError("seat_invalid", "The seat number is outside the registry.", 2)
@@ -824,6 +822,8 @@ class Manager(SuspendMixin, WatchMixin):
         """Stop or restart one run. A self-controller defers window cleanup until it saved its result."""
         if operation not in ("stop", "restart"):
             raise SessionError("invalid_input", "Use stop or restart.", 2)
+        if operation == "restart":
+            self.tmux.require_version()            # a stop needs no hook, so it still works on an older tmux
         selected = self._target(job, seat, recovery=True)
         actor, _ = self._authorize(operation, selected["target"])
         if expected_run and selected["run_id"] != expected_run:

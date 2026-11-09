@@ -98,16 +98,30 @@ def test_uninstall_prints_the_commands_that_undo_the_server_state_and_they_work(
     server.read_installed()
     server.run("bind-key", "-T", "prefix", "B", "display-message", "mine")        # a user key the product skipped
     server.read_installed()
+    server.run("set-hook", "-g", "pane-died[agent-session]", "run-shell true")       # what agent-session writes at a launch
     result = home.run("uninstall", env={"AGENT_SESSION_SOCKET": str(server.socket)})
     assert result.returncode == 0, result.stderr
     commands = [line.strip() for line in result.stdout.splitlines() if line.strip().startswith("tmux ")]
     assert "tmux unbind-key -T prefix B" not in commands                          # skipped keys are not undone
     assert any("set-hook -gu 'client-attached[project-agent]'" in line for line in commands)
-    assert len([line for line in commands if "set-hook" in line]) == 8
+    assert "tmux set-hook -gwu 'pane-died[agent-session]'" in commands
+    assert len([line for line in commands if "set-hook" in line]) == 9
     for line in commands:
         import shlex
         server.run(*shlex.split(line)[1:])
     assert "display-message mine" in server.key("prefix", "B")
     assert MOUSE_DEFAULT in server.key("root", "MouseDown1Pane")
     assert not server.run("show-hooks", "-g").count("[project-agent]")
+    assert "[agent-session]" not in server.run("show-hooks", "-g", "pane-died")
     assert "project-agent" not in server.run("show-hooks", "-gw")
+
+
+def test_uninstall_undoes_the_hook_name_that_agent_session_writes():
+    import re
+    from harness import REPO
+
+    def constant(path, name):
+        return re.search(r'^%s = "([^"]+)"' % name, (REPO / path).read_text(), re.MULTILINE).group(1)
+
+    assert (constant("tools/agent-session/agent_session/tmux.py", "EXIT_HOOK")
+            == constant("install/project_agent_install/commands.py", "AGENT_SESSION_HOOK"))

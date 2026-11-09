@@ -504,6 +504,8 @@ def _kept_notes(env, plan):
 HOOKS = ("client-attached", "client-detached", "client-session-changed", "session-window-changed",
          "after-resize-pane")
 WINDOW_HOOKS = ("window-created", "window-closed", "pane-died")
+# The server-wide hook that agent-session writes at every run launch (tmux.py `EXIT_HOOK`; a test compares them).
+AGENT_SESSION_HOOK = "pane-died[agent-session]"
 MOUSE_DEFAULT = "tmux bind-key -T root MouseDown1Pane select-pane -t = '\\;' send-keys -M"
 
 
@@ -518,6 +520,7 @@ def binding_undo(key, skipped):
         lines.append(MOUSE_DEFAULT)
     lines += ["tmux set-hook -gu '%s[project-agent]'" % hook for hook in HOOKS]
     lines += ["tmux set-hook -gwu '%s[project-agent]'" % hook for hook in WINDOW_HOOKS]
+    lines.append("tmux set-hook -gwu '%s'" % AGENT_SESSION_HOOK)
     return lines
 
 
