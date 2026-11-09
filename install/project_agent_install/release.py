@@ -1,0 +1,100 @@
+"""The source tree of a release: which files go in, the version, and the commit that names it."""
+
+from dataclasses import dataclass
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+from .layout import InstallerError
+
+PRODUCT_DIRS = ("tools", "skills", "docs", "integrations", "install")
+VERSION_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+~-]*")
+HASH_LENGTH = 12
+PYTHON_ENV = "tools/python.env"
+MINIMUM_PYTHON = (3, 10)
+
+
+def included(relative):
+    """Whether a tracked file of the repository belongs to a release (contract: product paths and root
+    documents; no tests, `__pycache__`, or `docs/cr`)."""
+    parts = relative.split("/")
+    if len(parts) == 1:
+        return True
+    if parts[0] not in PRODUCT_DIRS or relative.startswith("docs/cr/"):
+        return False
+    if any(part in ("tests", "__pycache__") for part in parts[:-1]):
+        return False
+    name = parts[-1]
+    return not ((name.startswith("test_") and name.endswith(".py")) or name == "conftest.py")
+
+
+@dataclass(frozen=True)
+class Source:
+    root: Path
+    version: str
+    commit: str
+    files: tuple
+
+    @property
+    def name(self):
+        return "%s-%s" % (self.version, self.commit[:HASH_LENGTH])
+
+
+def _git(root, *args):
+    try:
+        result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, timeout=60,
+                                env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
+    except (OSError, subprocess.SubprocessError) as error:
+        raise InstallerError("git_unavailable", "Cannot run git: %s" % error) from error
+    if result.returncode:
+        raise InstallerError("source_not_git", "The release source is not a Git work tree.",
+                             {"source": str(root), "git": result.stderr.decode(errors="replace").strip()})
+    return result.stdout
+
+
+def load_source(root):
+    """Read the source tree. Refuses a tree without `VERSION` and a tree whose release files differ
+    from the commit (changed or untracked), because the release is named by the commit alone."""
+    root = Path(root).resolve()
+    if not (root / ".git").exists():
+        raise InstallerError("source_not_git", "The release source is not a Git work tree. Run the installer "
+                             "from a checkout, or pass --source.", {"source": str(root)})
+    version_file = root / "VERSION"
+    try:
+        lines = version_file.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as error:
+        raise InstallerError("version_missing", "The source has no readable VERSION file.",
+                             {"source": str(root)}) from error
+    version = lines[0].strip() if lines else ""
+    if not VERSION_PATTERN.fullmatch(version):
+        raise InstallerError("version_invalid", "The first line of VERSION is not a version.",
+                             {"source": str(root), "version": version})
+    commit = _git(root, "rev-parse", "HEAD").decode().strip()
+    tracked = [name.decode() for name in _git(root, "ls-files", "-z").split(b"\0") if name]
+    dirty = []
+    for entry in _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all").split(b"\0"):
+        entry = entry.decode(errors="replace")
+        if len(entry) > 3 and included(entry[3:]):
+            dirty.append(entry[3:])
+    if dirty:
+        raise InstallerError("source_dirty", "The release files differ from the commit %s; commit or restore "
+                             "them first." % commit[:HASH_LENGTH], {"files": sorted(dirty)[:20], "count": len(dirty)})
+    files = tuple(sorted(name for name in tracked if included(name)))
+    if "VERSION" not in files or not any(name.startswith("tools/agent-session/") for name in files):
+        raise InstallerError("source_invalid", "The source tree is not a project-agent checkout.",
+                             {"source": str(root)})
+    return Source(root, version, commit, files)
+
+
+def python_env(python, python_path=""):
+    """The release's `tools/python.env`: the two names the entry points read (contract section 6.1)."""
+    return ("PROJECT_AGENT_PYTHON=%s\nPROJECT_AGENT_PYTHONPATH=%s\n" % (python, python_path)).encode()
+
+
+def installer_python():
+    """The interpreter that runs the installer is the one the release will use."""
+    if sys.version_info < MINIMUM_PYTHON:
+        raise InstallerError("python_version", "Python 3.10 or later is required.")
+    return os.path.abspath(sys.executable)
