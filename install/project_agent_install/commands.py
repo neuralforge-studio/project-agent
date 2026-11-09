@@ -7,7 +7,7 @@ import json
 import os
 import subprocess
 
-from . import actions, journal, record as records, release as releases, runs, tmuxconf
+from . import actions, journal, paths, record as records, release as releases, runs, tmuxconf
 from .layout import SKILLS, TOOLS, InstallerError
 
 
@@ -17,6 +17,7 @@ class Plan:
     steps: list = field(default_factory=list)
     notes: list = field(default_factory=list)
     journal_path: object = None          # where the run keeps its journal (journal.path_for)
+    places: object = None                # paths.Places: the one source of every path the steps touch
 
 
 class Builder:
@@ -24,7 +25,8 @@ class Builder:
 
     def __init__(self, env, command):
         self.env = env
-        self.plan = Plan(command, journal_path=journal.path_for(env))
+        self.places = paths.Places(env, dict(env.provider_homes()))
+        self.plan = Plan(command, journal_path=journal.path_for(env), places=self.places)
         self.conflicts = []
         self.created_dirs = []
         self._planned = set()
@@ -50,7 +52,7 @@ class Builder:
             self.conflict(current, "exists and is not a directory")
             return False
         for directory in reversed(missing):
-            self.add(actions.mkdir(directory))
+            self.add(actions.mkdir(self.places, self.places.dir_id(directory)))
             self._planned.add(directory)
             if track:
                 self.created_dirs.append(self.env.display(directory))
@@ -78,6 +80,8 @@ def plan_install(env, source, python):
     new = records.new_record(source.name)
     owned = new["owned"]
     release_dir = env.releases / source.name
+    places = b.places
+    new["provider_homes"] = {provider: env.display(home) for provider, home in places.homes.items()}
 
     if os.path.lexists(env.lib):
         if env.lib.is_symlink() or not env.lib.is_dir():
@@ -86,13 +90,13 @@ def plan_install(env, source, python):
             b.conflict(env.lib, "is not empty and has no install record")
     b.ensure_dir(env.lib)
     b.ensure_dir(env.releases)
-    b.add(actions.build_release(release_dir, source.files, source.root,
+    b.add(actions.build_release(places, source.name, source.files, source.root,
                                 {releases.PYTHON_ENV: releases.python_env(python)}))
     owned.append(records.owned(env.display(release_dir), "dir"))
-    b.add(actions.symlink(env.current, "releases/" + source.name))
+    b.add(actions.new_link(places, "current", "releases/" + source.name))
     owned.append(records.owned(env.display(env.current), "symlink", target="releases/" + source.name))
     tmux_conf = tmuxconf.INTEGRATION.encode()
-    b.add(actions.write_file(env.tmux_conf, tmux_conf))
+    b.add(actions.new_file(places, "tmux_conf", tmux_conf))
     owned.append(records.owned(env.display(env.tmux_conf), "file", sha256=actions.sha256(tmux_conf)))
 
     if b.ensure_dir(env.bin):
@@ -101,8 +105,8 @@ def plan_install(env, source, python):
             if os.path.lexists(path):
                 b.conflict(path, "already exists")
                 continue
-            target = str(env.current / "tools" / tool / "bin" / tool)
-            b.add(actions.symlink(path, target))
+            target = places.link_target("shim:" + tool)
+            b.add(actions.new_link(places, "shim:" + tool, target))
             owned.append(records.owned(env.display(path), "symlink", target=target))
     _plan_skill_links(env, b, owned)
     _plan_registry_draft(env, b)
@@ -114,7 +118,7 @@ def plan_install(env, source, python):
     plan = b.finish()
     new["created_dirs"] = b.created_dirs
     owned.append(records.owned(env.display(env.record), "file"))
-    plan.steps.append(actions.replace_file(env.record, records.encode(new)))
+    plan.steps.append(actions.replace_record(places, records.encode(new)))
     return plan
 
 
@@ -132,7 +136,8 @@ def _adoptable(env, link, name):
 
 
 def _plan_skill_links(env, b, owned):
-    for provider, home in env.provider_homes():
+    places = b.places
+    for provider, home in places.homes.items():
         if not os.path.isdir(home):
             b.note("The %s home %s does not exist; its skill links were not made." % (provider, env.display(home)))
             continue
@@ -143,12 +148,13 @@ def _plan_skill_links(env, b, owned):
             b.note("%s is a symlink; its links are placed in %s." % (env.display(skills), os.path.realpath(skills)))
         for name in SKILLS:
             link = skills / name
-            target = str(env.current / "skills" / name)
+            ident = "skill:%s:%s" % (provider, name)
+            target = places.link_target(ident)
             entry = records.owned(env.display(link), "symlink", target=target, provider=provider)
             if not os.path.lexists(link):
-                b.add(actions.symlink(link, target))
+                b.add(actions.new_link(places, ident, target))
             elif _adoptable(env, link, name):
-                b.add(actions.swap_symlink(link, target, "-> %s (adopt the remote runtime's link)" % target))
+                b.add(actions.swap_link(places, ident, target, "-> %s (adopt the remote runtime's link)" % target))
                 entry["adopted"] = True
             else:
                 b.conflict(link, "already exists")
@@ -163,25 +169,29 @@ def _plan_registry_draft(env, b):
         b.conflict(env.registry, "exists and is not a file")
         return
     if b.ensure_dir(env.registry.parent, track=False):
-        b.add(actions.write_file(env.registry, b"{}\n", "registry draft"))
+        b.add(actions.new_file(b.places, "registry", b"{}\n", "registry draft"))
 
 
 def _plan_tmux_block(env, b, new):
     tmux = new["tmux"]
     target = tmuxconf.target(env)
+    places = b.places
     reload = "To apply it in a running tmux server: %s" % tmuxconf.RELOAD
     if target is None:
         path = env.tmux_candidates[0]
-        b.add(actions.write_file(path, tmuxconf.BLOCK, "tmux include block"))
+        b.add(actions.new_file(places, places.tmux_id(path), tmuxconf.BLOCK, "tmux include block"))
         tmux.update(state="inserted", file=env.display(path), created=True)
         b.note(reload)
         return
     display = env.display(target)
-    if target.is_symlink() or not target.is_file():
+    info = os.lstat(target)
+    reason = ("a symlink" if target.is_symlink() else "not a regular file" if not target.is_file() else
+              "linked under more than one name" if info.st_nlink != 1 else "larger than 1 MiB"
+              if info.st_size > tmuxconf.LIMIT else None)
+    if reason:
         tmux.update(state="manual", file=display)
         b.note("%s is %s, so it was not changed. Add this line to the file it points to (or to your tmux "
-               "settings):\n    %s" % (display, "a symlink" if target.is_symlink() else "not a regular file",
-                                      tmuxconf.SOURCE))
+               "settings):\n    %s" % (display, reason, tmuxconf.SOURCE))
         return
     data = target.read_bytes()
     if tmuxconf.has_block(data):
@@ -189,12 +199,13 @@ def _plan_tmux_block(env, b, new):
         b.note("%s already has a project-agent block that this installer did not add; it is left as it is." % display)
         return
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    backup = env.backup / ("%s-%s" % (stamp, target.name))
+    name = "%s-%s" % (stamp, target.name)
+    backup = env.backup / name
     if not os.path.lexists(env.backup):
-        b.add(actions.mkdir(env.backup))
+        b.add(actions.mkdir(places, "backup"))
         new["owned"].append(records.owned(env.display(env.backup), "dir"))
-    b.add(actions.backup_file(backup, target, data))
-    b.add(actions.append_block(target, tmuxconf.BLOCK, data, os.lstat(target)))
+    b.add(actions.backup_file(places, name, target, data))
+    b.add(actions.append_block(places, places.tmux_id(target), data, tmuxconf.BLOCK, info))
     tmux.update(state="inserted", file=display, created=False, backup=env.display(backup))
     b.note(reload)
 
@@ -235,7 +246,8 @@ def _switch(env, installed, name, previous):
 def plan_upgrade(env, source, python):
     installed = _require_record(env)
     _require_current(env, installed)
-    plan = Plan("upgrade")
+    places = paths.record_places(env, installed)
+    plan = Plan("upgrade", places=places, journal_path=journal.path_for(env))
     if source.name == installed["current"]:
         plan.notes.append("Release %s is already current. Nothing to change." % source.name)
         return plan
@@ -252,11 +264,11 @@ def plan_upgrade(env, source, python):
                                  "installer with the interpreter it was made with, or bump VERSION." % source.name)
         plan.notes.append("Release %s already exists; `current` is pointed at it." % source.name)
     else:
-        plan.steps.append(actions.build_release(release_dir, source.files, source.root,
+        plan.steps.append(actions.build_release(places, source.name, source.files, source.root,
                                                 {releases.PYTHON_ENV: python_env}))
         new["owned"].append(records.owned(env.display(release_dir), "dir"))
-    plan.steps.append(actions.swap_symlink(env.current, "releases/" + source.name))
-    plan.steps.append(actions.replace_file(env.record, records.encode(new)))
+    plan.steps.append(actions.swap_link(places, "current", "releases/" + source.name))
+    plan.steps.append(actions.replace_record(places, records.encode(new)))
     _changed_notes(env, installed, plan)
     plan.notes.append("Runs that are up keep the release they started with. Reopen Project Board to use the new "
                       "release.")
@@ -270,9 +282,10 @@ def plan_rollback(env):
     if not previous or not os.path.isdir(env.releases / previous):
         raise InstallerError("no_previous", "There is no previous release to roll back to.")
     new = _switch(env, installed, previous, installed["current"])
-    plan = Plan("rollback")
-    plan.steps.append(actions.swap_symlink(env.current, "releases/" + previous))
-    plan.steps.append(actions.replace_file(env.record, records.encode(new)))
+    places = paths.record_places(env, installed)
+    plan = Plan("rollback", places=places, journal_path=journal.path_for(env))
+    plan.steps.append(actions.swap_link(places, "current", "releases/" + previous))
+    plan.steps.append(actions.replace_record(places, records.encode(new)))
     _changed_notes(env, installed, plan)
     plan.notes.append("Runs that are up keep the release they started with. Reopen Project Board to use %s."
                       % previous)
@@ -289,7 +302,8 @@ def plan_uninstall(env, source_root, socket=None):
                              "(`agent-session stop`, or `resume` and then `stop`). Nothing was changed.",
                              {"runs": [{"project": item["project"], "slot": item["slot"], "state": item["state"]}
                                        for item in live]})
-    plan = Plan("uninstall", journal_path=journal.path_for(env))
+    places = paths.record_places(env, installed)
+    plan = Plan("uninstall", journal_path=journal.path_for(env), places=places)
     removed = set()
     changed = {path for path, _, _ in records.mismatches(env, installed)}
     record_path = env.display(env.record)
@@ -302,12 +316,13 @@ def plan_uninstall(env, source_root, socket=None):
             if os.path.lexists(path):
                 plan.notes.append("%s was changed by you; it is left as it is." % entry["path"])
             continue
-        if entry["kind"] == "dir":
-            plan.steps.append(actions.remove_tree(path))
-        elif entry["kind"] == "symlink":
-            plan.steps.append(actions.remove_link(path, entry["target"]))
+        kind, ident = places.identify(path)
+        if kind == "tree":
+            plan.steps.append(actions.remove_tree(places, ident))
+        elif kind == "link":
+            plan.steps.append(actions.remove_link(places, ident, entry["target"]))
         else:
-            plan.steps.append(actions.remove_file(path, entry.get("sha256")))
+            plan.steps.append(actions.remove_file(places, ident, entry.get("sha256")))
         removed.add(path)
     removed.add(env.record)
     removed.add(plan.journal_path)
@@ -321,10 +336,10 @@ def plan_uninstall(env, source_root, socket=None):
                 directory / child in removed for child in os.listdir(directory)):
             (late if directory == holding or directory in holding.parents else early).append(directory)
             removed.add(directory)
-    plan.steps += [actions.remove_dir(directory) for directory in early]
-    plan.steps.append(actions.remove_file(env.record))     # the record goes after everything it lists
+    plan.steps += [actions.remove_dir(places, places.dir_id(directory)) for directory in early]
+    plan.steps.append(actions.remove_file(places, "record"))     # the record goes after everything it lists
     plan.steps.append(actions.drop_journal(plan.journal_path))
-    plan.steps += [actions.remove_dir(directory) for directory in late]
+    plan.steps += [actions.remove_dir(places, places.dir_id(directory)) for directory in late]
     _kept_notes(env, plan)
     return plan
 
@@ -334,10 +349,15 @@ def _plan_tmux_removal(env, installed, plan):
     if tmux.get("state") != "inserted":
         return
     path = env.expand(tmux["file"])
-    if path.is_symlink() or not path.is_file() or tmuxconf.BLOCK not in path.read_bytes():
+    try:
+        data, _ = actions.read_user_file(path)
+    except OSError:
+        data = b""
+    if tmuxconf.BLOCK not in data:
         plan.notes.append("The project-agent block was not found in %s; it is left as it is." % tmux["file"])
         return
-    plan.steps.append(actions.remove_block(path, tmuxconf.BLOCK, bool(tmux.get("created")), path.read_bytes()))
+    places = plan.places
+    plan.steps.append(actions.cut_block(places, places.tmux_id(path), data, bool(tmux.get("created"))))
 
 
 def _kept_notes(env, plan):

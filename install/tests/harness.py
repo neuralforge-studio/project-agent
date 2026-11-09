@@ -299,16 +299,27 @@ if spec:
 
     def checkpoint(where, number):
         if where == position and number == int(index):
-            os.kill(os.getpid(), getattr(signal, name))
+            if name == "PLANT":               # a user creates a file at this moment
+                with open(os.environ["INSTALLER_PLANT_FILE"], "w") as stream:
+                    stream.write(os.environ["INSTALLER_PLANT_TEXT"])
+            else:
+                os.kill(os.getpid(), getattr(signal, name))
     actions.checkpoint = checkpoint
 '''
 
 
 def stop_at(home, position, index, signal_name="SIGKILL"):
-    """Environment for `Home.run` that sends `signal_name` to the installer at a step boundary
-    (`position` is "before" or "after" step number `index`)."""
+    """Environment for `Home.run` that sends `signal_name` to the installer at a boundary: "before" or "after"
+    step number `index`, or "temp": right after the `index`-th temporary file, link or directory was made."""
     hook = home.root / "stop-hook"
     hook.mkdir(exist_ok=True)
     (hook / "sitecustomize.py").write_text(STOP_HOOK)
     return {"PYTHONPATH": str(hook), "INSTALLER_DIR": str(INSTALLER.parent),
             "INSTALLER_STOP": "%s:%d:%s" % (position, index, signal_name)}
+
+
+def plant_at(home, position, index, relative, text):
+    """Like `stop_at`, but at that moment a user creates the file `relative` (under HOME) with `text`."""
+    env = stop_at(home, position, index, "PLANT")
+    env.update(INSTALLER_PLANT_FILE=str(home.path(relative)), INSTALLER_PLANT_TEXT=text)
+    return env

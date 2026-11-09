@@ -82,11 +82,13 @@ def _emit(env, arguments, plan=None, applied=False, failures=(), notices=(), err
 
 
 def _pending(env, arguments):
-    """An interrupted run is dealt with before anything else. Returns a note, or "finished" when an
-    interrupted uninstall was completed (that is then the whole command)."""
+    """An interrupted run is dealt with before anything else. Returns (note, notes about what was left alone);
+    the note is "finished" when an interrupted uninstall was completed (that is then the whole command)."""
+    if arguments.command != "check" and not arguments.dry_run:
+        journal.clean_temporary(env)
     path = journal.find(env)
     if path is None:
-        return None
+        return None, []
     pending = journal.read(env, path)
     if arguments.dry_run:
         raise InstallerError("run_interrupted", "A previous %s was interrupted (%s). Run the command without "
@@ -95,13 +97,12 @@ def _pending(env, arguments):
         if arguments.command != "uninstall":
             raise InstallerError("uninstall_interrupted", "A previous uninstall was interrupted. Run `uninstall` "
                                  "to finish it before anything else.")
-        journal.resume(env, pending)
-        return "finished"
-    failures = journal.recover(env, pending)
+        return "finished", journal.resume(env, pending)
+    failures, notes = journal.recover(env, pending)
     if failures:
         raise InstallerError("recovery_failed", "The interrupted %s could not be undone (%s). Nothing else was "
                              "done; run the command again." % (pending.command, "; ".join(failures)), exit_code=4)
-    return "A previous %s was interrupted; it was undone." % pending.command
+    return "A previous %s was interrupted; it was undone." % pending.command, notes
 
 
 def main(argv=None):
@@ -109,13 +110,11 @@ def main(argv=None):
     arguments = parser.parse_args(argv)
     env = Env()
     try:
-        if arguments.command != "check":
-            recovered = _pending(env, arguments)
-            if recovered == "finished":
-                _emit(env, arguments, commands.Plan("uninstall"), notices=["The interrupted uninstall was finished."])
-                return 0
-        else:
-            recovered = None
+        recovered, left = (None, []) if arguments.command == "check" else _pending(env, arguments)
+        if recovered == "finished":
+            _emit(env, arguments, commands.Plan("uninstall"),
+                  notices=["The interrupted uninstall was finished."] + left)
+            return 0
         if arguments.command == "check":
             failures, notices = commands.run_check(env)
             _emit(env, arguments, failures=failures, notices=notices)
@@ -131,8 +130,8 @@ def main(argv=None):
         else:
             plan = commands.plan_uninstall(env, root)
         if not arguments.dry_run:
-            journal.execute(env, plan)
-        _emit(env, arguments, plan, notices=[recovered] if recovered else ())
+            left += journal.execute(env, plan)
+        _emit(env, arguments, plan, notices=([recovered] if recovered else []) + left)
         return 0
     except InstallerError as error:
         _emit(env, arguments, error=error)

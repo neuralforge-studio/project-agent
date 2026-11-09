@@ -1,18 +1,18 @@
-"""The steps of a plan, and the operations they are made of.
+"""The steps of a plan, and the operations they are made of (contract section 2, rule 5).
 
-A step names one change (`dry-run` prints the same list) and carries a declarative spec that survives a
-crash:
+A step names one change (`dry-run` prints the same list) and carries a spec that survives a crash:
 
-* `undo` (install, upgrade, rollback): what restores the state before the step. It is computed at plan
-  time and written to the journal before the first change, so it is safe to run whether the step ran,
-  ran half, or never ran. A failure, a signal, or the next command after a crash runs the undo specs in
-  reverse order.
-* `redo` (uninstall): the removal itself. Removing is not undone; the journal lets the next `uninstall`
-  finish the work. Every redo operation tolerates what an earlier run already removed.
+* `undo` (install, upgrade, rollback): what restores the state before the step. Computed at plan time and
+  written to the journal before the first change, so it is safe whether the step ran, ran half, or never ran.
+* `redo` (uninstall): the removal itself. Removing is not undone; the journal lets the next `uninstall` finish.
 
-Every write goes through `raw_write`, `raw_pwrite` and `raw_ftruncate`, which loop over short writes and let
-the tests inject failures. `checkpoint` is called around each step and does nothing; the tests replace it
-to stop the process at a step boundary.
+A spec holds an operation, a closed-set identifier and state fingerprints, never a path (paths.py). Every
+operation first looks at what is there and acts only if it is the state the installer made (principle B); it
+reports anything else in `ctx.notes` and leaves it. The user's tmux file is replaced by renaming a complete
+temporary file over it, so it is always the bytes from before or after (principle C).
+
+`checkpoint` is called around each step and when a temporary file or link exists; it does nothing and the
+tests replace it to stop the process there.
 """
 
 import base64
@@ -23,36 +23,37 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import stat
 from typing import Callable
+
+from . import tmuxconf
+from .paths import temp_of
+
+_temp_events = [0]
 
 
 def checkpoint(position, index):
-    """Called before ("before") and after ("after") step `index`. The tests replace it."""
+    """Called before ("before") and after ("after") step `index`, and as "temp" for each temporary file."""
+
+
+def temp_created():
+    index = _temp_events[0]
+    _temp_events[0] += 1
+    checkpoint("temp", index)
 
 
 def raw_write(fd, data):
     return os.write(fd, data)
 
 
-def raw_pwrite(fd, data, offset):
-    return os.pwrite(fd, data, offset)
-
-
-def raw_ftruncate(fd, size):
-    os.ftruncate(fd, size)
-
-
-def write_all(fd, data, offset=None):
-    """Write every byte; a short write continues where it stopped (appending when `offset` is None)."""
+def write_all(fd, data):
+    """Write every byte; a short write continues where it stopped."""
     view = memoryview(data)
-    position = offset
     while view:
-        count = raw_write(fd, view) if offset is None else raw_pwrite(fd, view, position)
+        count = raw_write(fd, view)
         if count <= 0:
             raise OSError(errno.EIO, "a write made no progress")
         view = view[count:]
-        if offset is not None:
-            position += count
 
 
 def read_all(fd):
@@ -73,8 +74,27 @@ def b64(data):
     return base64.b64encode(data).decode("ascii")
 
 
+def fsync_dir(directory):
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 class Changed(OSError):
-    """A file is not what the plan read: it changed after the plan. Nothing is written to it."""
+    """A file is not what the plan read: nothing is written to it."""
+
+
+@dataclass
+class Context:
+    """What an operation may use besides its spec: the places, a list for what it leaves alone, and whether a
+    changed file refuses the run (the first run) or is only reported (a resumed uninstall)."""
+
+    places: object
+    journal_path: Path = None
+    strict: bool = True
+    notes: list = field(default_factory=list)
 
 
 @dataclass
@@ -83,13 +103,50 @@ class Step:
     path: Path
     kind: str            # dir | file | symlink | tree | block
     detail: str
-    do: Callable[[], None]
+    run: Callable[[Context], None]
     undo: dict = None
     redo: dict = None
     internal: bool = False      # bookkeeping that the plan does not list (the journal itself)
 
 
-# ---------------------------------------------------------------- operations (also what the journal replays)
+# ---------------------------------------------------------------- what is on disk
+
+def unlink(path):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+def inspect(path):
+    """("absent"|"file"|"link"|"dir"|"other", fingerprint): a file's hash, a link's target."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return "absent", None
+    if stat.S_ISLNK(info.st_mode):
+        return "link", os.readlink(path)
+    if stat.S_ISDIR(info.st_mode):
+        return "dir", None
+    if stat.S_ISREG(info.st_mode):
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            return "file", sha256(read_all(fd))
+        finally:
+            os.close(fd)
+    return "other", None
+
+
+def tree_digest(root):
+    """The listing of a release: its sorted relative file names, without bytecode caches."""
+    names = []
+    for directory, dirs, files in os.walk(root):
+        for name in files + [entry for entry in dirs if os.path.islink(os.path.join(directory, entry))]:
+            relative = os.path.relpath(os.path.join(directory, name), root)
+            if "__pycache__" not in relative.split(os.sep):
+                names.append(relative.replace(os.sep, "/"))
+    return sha256("\n".join(sorted(names)).encode())
+
 
 def force_rmtree(path):
     """Remove a tree whose directories were made read-only. A failure is raised, not ignored; a symlink is
@@ -106,220 +163,321 @@ def force_rmtree(path):
         raise OSError(errno.EIO, "cannot remove %s (%s)" % (path, "; ".join(errors[:3])))
 
 
-def _unlink(path):
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
+# ---------------------------------------------------------------- making things
 
-
-def _swap(path, target):
-    temporary = Path(str(path.parent / (".%s.tmp-%d" % (path.name, os.getpid()))))
-    _unlink(temporary)
+def swap_path(path, target):
+    """Point a symlink at a new target by renaming a complete temporary link over it: never missing."""
+    temporary = temp_of(path)
+    unlink(temporary)
     os.symlink(target, temporary)
+    temp_created()
     try:
         os.replace(temporary, path)
     except BaseException:
-        _unlink(temporary)
+        unlink(temporary)
         raise
 
 
-def _write_atomic(path, data):
-    temporary = path.parent / (".%s.tmp-%d" % (path.name, os.getpid()))
+def create_new(path, data, guard=None):
+    """Make a file that does not exist yet, complete: write a temporary file, then `link` it to the name (which
+    fails if the name exists, so nothing is overwritten) and remove the temporary file."""
+    temporary = temp_of(path)
+    unlink(temporary)
+    if guard:
+        guard()
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666)
     try:
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o666)
+        write_all(fd, data)
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        unlink(temporary)
+        raise
+    os.close(fd)
+    temp_created()
+    try:
+        os.link(temporary, path)
+    except OSError as error:
+        if error.errno not in (errno.EPERM, errno.ENOTSUP, errno.EMLINK):
+            raise
+        out = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)        # a file system without hard links
         try:
-            write_all(fd, data)
-            os.fsync(fd)
+            write_all(out, data)
         finally:
-            os.close(fd)
+            os.close(out)
+    finally:
+        unlink(temporary)
+    fsync_dir(path.parent)
+
+
+def replace_atomic(path, data, mode, mtime_ns=None, expect=None):
+    """Replace a file by renaming a complete temporary file over it. `expect` is (inode, size, mtime) the file
+    must still have; `mode` is the permission the new file gets."""
+    temporary = temp_of(path)
+    unlink(temporary)
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, mode)
+        write_all(fd, data)
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        unlink(temporary)
+        raise
+    os.close(fd)
+    temp_created()
+    try:
+        if expect is not None:
+            info = os.lstat(path)
+            if (info.st_ino, info.st_size, info.st_mtime_ns) != expect:
+                raise Changed(errno.EBUSY, "%s changed while it was being rewritten; nothing was changed" % path)
         os.replace(temporary, path)
     except BaseException:
-        _unlink(temporary)
+        unlink(temporary)
         raise
+    fsync_dir(path.parent)
+    if mtime_ns is not None:
+        os.utime(path, ns=(mtime_ns, mtime_ns))
 
 
-def _restore_fd(fd, original, info):
-    """Put a file's bytes and times back after a failed rewrite (best effort: it runs while failing)."""
-    write_all(fd, original, 0)
-    raw_ftruncate(fd, len(original))
-    os.utime(fd, ns=(info.st_atime_ns, info.st_mtime_ns))
-
-
-def _cut_block(spec):
-    """Remove the exact block from the user's file. The bytes are read from the open file and must be what the
-    plan read; a block at the end is cut by one truncate, otherwise the tail moves up and the file is cut."""
-    path = Path(spec["path"])
-    block = base64.b64decode(spec["block"])
+def read_user_file(path):
+    """(bytes, stat) of a regular file the user owns, read through the open file."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
-        fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
-    except FileNotFoundError:
-        return              # an earlier run already deleted the file the installer had created
-    try:
-        info = os.fstat(fd)
-        data = read_all(fd)
-        at = data.find(block)
-        if at < 0:
-            return
-        if spec.get("expect") and sha256(data) != spec["expect"]:
-            raise Changed(errno.EBUSY, "%s changed after the plan; nothing was changed" % path)
-        if spec.get("delete_if_empty") and data == block:
+        return read_all(fd), os.fstat(fd)
+    finally:
+        os.close(fd)
+
+
+def _freeze(root):
+    """Remove every write bit: a release does not change after it is made (nothing may add `__pycache__`)."""
+    for directory, _, files in os.walk(root, topdown=False):
+        for name in files:
+            entry = os.path.join(directory, name)
+            if not os.path.islink(entry):
+                os.chmod(entry, os.stat(entry).st_mode & ~0o222)
+        os.chmod(directory, os.stat(directory).st_mode & ~0o222)
+
+
+# ---------------------------------------------------------------- undo and redo operations
+
+def _leave(ctx, path):
+    ctx.notes.append("%s is not as the installer left it; it is left as it is." % path)
+
+
+def _op_dir(ctx, spec):
+    path = ctx.places.dir(spec["id"])
+    if inspect(path)[0] == "dir":
+        try:
+            os.rmdir(path)
+        except OSError as error:
+            if error.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+                raise
+            ctx.notes.append("%s is not empty; it is left as it is." % path)
+
+
+def _op_file(ctx, spec):
+    path = ctx.places.file(spec["id"])
+    unlink(temp_of(path))
+    state, fingerprint = inspect(path)
+    if state == "file" and fingerprint == spec["sha"]:
+        unlink(path)
+    elif state != "absent":
+        _leave(ctx, path)
+
+
+def _op_link(ctx, spec):
+    path = ctx.places.link(spec["id"])
+    state, fingerprint = inspect(path)
+    if state == "link" and fingerprint == spec["target"]:
+        unlink(path)
+    elif state != "absent":
+        _leave(ctx, path)
+
+
+def _op_swap(ctx, spec):
+    path = ctx.places.link(spec["id"])
+    temporary = temp_of(path)
+    if os.path.islink(temporary):
+        unlink(temporary)
+    state, fingerprint = inspect(path)
+    if state == "link" and fingerprint == spec["new"]:
+        swap_path(path, spec["previous"])
+    elif not (state == "link" and fingerprint == spec["previous"]):
+        _leave(ctx, path)
+
+
+def _op_record(ctx, spec):
+    path = ctx.places.file("record")
+    unlink(temp_of(path))
+    state, fingerprint = inspect(path)
+    if state == "file" and fingerprint == spec["after_sha"]:
+        if spec["previous"] is None:
+            unlink(path)
+        else:
+            replace_atomic(path, base64.b64decode(spec["previous"]), stat.S_IMODE(os.lstat(path).st_mode),
+                           spec["mtime_ns"])
+    elif not ((state == "file" and fingerprint == spec["before_sha"])
+              or (state == "absent" and spec["previous"] is None)):
+        _leave(ctx, path)
+
+
+def _op_release(ctx, spec):
+    places = ctx.places
+    temporary = places.release_temp(places.release_name(spec["id"]))
+    if os.path.isdir(temporary) and not os.path.islink(temporary):
+        force_rmtree(temporary)
+    path = places.tree(spec["id"])
+    state, _ = inspect(path)
+    if state == "dir":
+        if tree_digest(path) == spec["digest"]:
+            force_rmtree(path)
+        else:
+            _leave(ctx, path)
+    elif state != "absent":
+        _leave(ctx, path)
+
+
+def _tmux_state(path):
+    """(state, sha, stat) of the user's tmux file; "other" for what the installer will not rewrite."""
+    state, _ = inspect(path)
+    if state != "file":
+        return state, None, None
+    data, info = read_user_file(path)
+    if info.st_nlink != 1:
+        return "other", None, info
+    return "file", sha256(data), info
+
+
+def _op_tmux(ctx, spec):
+    path = ctx.places.file(spec["id"])
+    unlink(temp_of(path))
+    state, fingerprint, info = _tmux_state(path)
+    if state == "file" and fingerprint == spec["after_sha"]:
+        replace_atomic(path, base64.b64decode(spec["before_bytes"]), stat.S_IMODE(info.st_mode), spec["mtime_ns"],
+                       expect=(info.st_ino, info.st_size, info.st_mtime_ns))
+    elif not (state == "file" and fingerprint == spec["before_sha"]):
+        ctx.notes.append("%s changed after the installer's edit; its project-agent block is left in it. Remove the "
+                         "lines from `# >>> project-agent` to `# <<< project-agent <<<` yourself." % path)
+
+
+def _op_rm_file(ctx, spec):
+    path = ctx.places.file(spec["id"])
+    state, fingerprint = inspect(path)
+    if state == "file" and spec["sha"] in (None, fingerprint):
+        unlink(path)
+    elif state != "absent":
+        _leave(ctx, path)
+
+
+def _op_rm_tree(ctx, spec):
+    path = ctx.places.tree(spec["id"])
+    state, _ = inspect(path)
+    if state == "dir":
+        force_rmtree(path)
+    elif state != "absent":
+        _leave(ctx, path)
+
+
+def _op_rm_dir(ctx, spec):
+    path = ctx.places.dir(spec["id"])
+    if inspect(path)[0] == "dir":
+        try:
+            os.rmdir(path)
+        except OSError as error:
+            if error.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+                raise
+
+
+def _op_cut(ctx, spec):
+    """Remove the managed block from the user's tmux file: only a file that is exactly as the plan read it (or
+    already cut) is touched; anything else is the user's edit."""
+    path = ctx.places.file(spec["id"])
+    unlink(temp_of(path))
+    state, fingerprint, info = _tmux_state(path)
+    if state == "absent" or (state == "file" and fingerprint == spec["after_sha"]):
+        return
+    if state == "file" and fingerprint == spec["before_sha"]:
+        data, info = read_user_file(path)
+        if spec["delete"] and data == tmuxconf.BLOCK:
             os.unlink(path)
             return
-        try:
-            if at + len(block) == len(data):
-                raw_ftruncate(fd, at)
-            else:
-                write_all(fd, data[at + len(block):], at)
-                raw_ftruncate(fd, len(data) - len(block))
-        except BaseException:
-            try:
-                _restore_fd(fd, data, info)
-            except OSError:
-                pass
-            raise
-    finally:
-        os.close(fd)
-
-
-def _untruncate(spec):
-    """Undo an append: cut the block back off if (and only if) the file still ends as the append left it."""
-    path = Path(spec["path"])
-    block = base64.b64decode(spec["block"])
-    size = spec["size"]
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    except FileNotFoundError:
+        if tmuxconf.BLOCK in data:
+            replace_atomic(path, data.replace(tmuxconf.BLOCK, b"", 1), stat.S_IMODE(info.st_mode),
+                           expect=(info.st_ino, info.st_size, info.st_mtime_ns))
         return
-    try:
-        data = read_all(fd)
-    finally:
-        os.close(fd)
-    appended = data[size:]
-    if not appended or len(appended) > len(block) or not block.startswith(appended):
-        return              # nothing was appended, or the file moved on: leave the user's bytes alone
-    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
-    try:
-        raw_ftruncate(fd, size)
-        os.utime(fd, ns=(spec["atime_ns"], spec["mtime_ns"]))
-    finally:
-        os.close(fd)
+    if ctx.strict:
+        raise Changed(errno.EBUSY, "%s changed after the plan; nothing was changed" % path)
+    ctx.notes.append("%s was changed after the plan; its project-agent block is left in it. Remove the lines from "
+                     "`# >>> project-agent` to `# <<< project-agent <<<` yourself." % path)
 
 
-def _rmdir_if_empty(path):
-    try:
-        os.rmdir(path)
-    except (FileNotFoundError, NotADirectoryError):
-        pass
-    except OSError as error:
-        if error.errno not in (errno.ENOTEMPTY, errno.EEXIST):
-            raise
+def _op_drop_journal(ctx, spec):
+    unlink(ctx.journal_path)
 
 
-def apply_spec(spec):
+OPERATIONS = {"dir": _op_dir, "file": _op_file, "link": _op_link, "swap": _op_swap, "record": _op_record,
+              "release": _op_release, "tmux": _op_tmux, "rm_link": _op_link, "rm_file": _op_rm_file,
+              "rm_tree": _op_rm_tree, "rm_dir": _op_rm_dir, "cut": _op_cut, "drop_journal": _op_drop_journal}
+
+
+def apply_spec(ctx, spec):
     """Run one journal operation. Every operation is safe to run again and when its target is already gone."""
-    op = spec["op"]
-    path = Path(spec["path"]) if "path" in spec else None
-    if op in ("rmdir", "rmdir_empty"):
-        if not os.path.islink(path):
-            _rmdir_if_empty(path)
-    elif op == "unlink":
-        if not os.path.isdir(path) or os.path.islink(path):
-            _unlink(path)
-    elif op == "unlink_link":
-        if os.path.islink(path) and os.readlink(path) == spec["target"]:
-            _unlink(path)
-    elif op == "relink":
-        if os.path.islink(path) and os.readlink(path) in (spec["previous"], spec["new"]):
-            _swap(path, spec["previous"])
-    elif op == "restore":
-        if spec["previous"] is None:
-            _unlink(path)
-        else:
-            previous = base64.b64decode(spec["previous"])
-            try:
-                unchanged = path.read_bytes() == previous
-            except OSError:
-                unchanged = False
-            if not unchanged:
-                _write_atomic(path, previous)
-                if spec.get("mtime_ns") is not None:
-                    os.utime(path, ns=(spec["mtime_ns"], spec["mtime_ns"]))
-    elif op == "rmtree":
-        force_rmtree(path)
-        if spec.get("temp"):
-            force_rmtree(Path(spec["temp"]))
-    elif op == "untruncate":
-        _untruncate(spec)
-    elif op == "cut_block":
-        _cut_block(spec)
-    elif op == "rm_link":
-        if os.path.islink(path) and os.readlink(path) == spec["target"]:
-            _unlink(path)
-    elif op == "rm_file":
-        if os.path.isfile(path) and not os.path.islink(path):
-            if spec.get("sha256") is None or sha256(Path(path).read_bytes()) == spec["sha256"]:
-                _unlink(path)
-    elif op == "rm_tree":
-        force_rmtree(path)
-    elif op == "drop_journal":
-        _unlink(path)
-    else:
-        raise ValueError("unknown journal operation %r" % op)
+    OPERATIONS[spec["op"]](ctx, spec)
 
 
 # ---------------------------------------------------------------- steps that make or change
 
-def mkdir(path):
-    return Step("create", path, "dir", "", lambda: os.mkdir(path), undo={"op": "rmdir", "path": str(path)})
+def mkdir(places, ident):
+    path = places.dir(ident)
+    return Step("create", path, "dir", "", lambda ctx: os.mkdir(path), undo={"op": "dir", "id": ident})
 
 
-def write_file(path, data, detail=""):
-    """Create a new file; an existing path is an error."""
-    def do():
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
-        try:
-            write_all(fd, data)
-        finally:
-            os.close(fd)
-    return Step("create", path, "file", detail, do, undo={"op": "unlink", "path": str(path)})
+def new_file(places, ident, data, detail="", guard=None):
+    """Create a file that does not exist; an existing name is an error and is left alone."""
+    path = places.file(ident)
+    return Step("create", path, "file", detail, lambda ctx: create_new(path, data, guard),
+                undo={"op": "file", "id": ident, "sha": sha256(data)})
 
 
-def symlink(path, target):
-    return Step("create", path, "symlink", "-> " + str(target), lambda: os.symlink(target, path),
-                undo={"op": "unlink_link", "path": str(path), "target": str(target)})
+def new_link(places, ident, target):
+    path = places.link(ident)
+    return Step("create", path, "symlink", "-> " + str(target), lambda ctx: os.symlink(target, path),
+                undo={"op": "link", "id": ident, "target": str(target)})
 
 
-def swap_symlink(path, target, detail=""):
-    """Point an existing symlink at a new target in one atomic rename: a reader never sees it missing."""
-    previous = os.readlink(path)
-    return Step("replace", path, "symlink", detail or "-> " + str(target), lambda: _swap(path, target),
-                undo={"op": "relink", "path": str(path), "previous": previous, "new": str(target)})
+def swap_link(places, ident, target, detail=""):
+    path = places.link(ident)
+    return Step("replace", path, "symlink", detail or "-> " + str(target), lambda ctx: swap_path(path, target),
+                undo={"op": "swap", "id": ident, "previous": os.readlink(path), "new": str(target)})
 
 
-def replace_file(path, data):
-    """Write a file through a temporary file in the same directory and an atomic rename."""
-    try:
-        previous = path.read_bytes()
-        mtime = path.stat().st_mtime_ns
-    except FileNotFoundError:
-        previous, mtime = None, None
+def replace_record(places, data):
+    path = places.file("record")
+    state, fingerprint = inspect(path)
+    previous = path.read_bytes() if state == "file" else None
+    mtime = os.lstat(path).st_mtime_ns if state == "file" else None
+    mode = 0o644 if previous is None else stat.S_IMODE(os.lstat(path).st_mode)
     return Step("replace" if previous is not None else "create", path, "file", "",
-                lambda: _write_atomic(path, data),
-                undo={"op": "restore", "path": str(path), "previous": None if previous is None else b64(previous),
-                      "mtime_ns": mtime})
+                lambda ctx: replace_atomic(path, data, mode),
+                undo={"op": "record", "previous": None if previous is None else b64(previous),
+                      "before_sha": fingerprint, "after_sha": sha256(data), "mtime_ns": mtime})
 
 
-def build_release(destination, files, source_root, extra):
+def build_release(places, name, files, source_root, extra):
     """Copy `files` (relative paths of the source tree) into a new release directory, precompile it for the
     installing interpreter, make it read-only, then rename it into place, so that the directory appears only
     when complete. `extra` maps a release-relative path to the bytes written after the copy."""
-    temporary = destination.parent / (".tmp-%s-%d" % (destination.name, os.getpid()))
+    ident = "release:" + name
+    destination, temporary = places.tree(ident), places.release_temp(name)
+    names = sorted(list(files) + list(extra))
 
-    def do():
-        if temporary.exists():
+    def run(ctx):
+        if os.path.lexists(temporary):
             force_rmtree(temporary)
         try:
+            os.mkdir(temporary)
+            temp_created()
             for relative in files:
                 source = source_root / relative
                 target = temporary / relative
@@ -339,92 +497,73 @@ def build_release(destination, files, source_root, extra):
         except BaseException:
             force_rmtree(temporary)
             raise
-    return Step("create", destination, "tree", "%d files" % (len(files) + len(extra)), do,
-                undo={"op": "rmtree", "path": str(destination), "temp": str(temporary)})
+        fsync_dir(destination.parent)
+    return Step("create", destination, "tree", "%d files" % len(names), run,
+                undo={"op": "release", "id": ident, "digest": sha256("\n".join(names).encode())})
 
 
-def _freeze(root):
-    """Remove every write bit: a release does not change after it is made (nothing may add `__pycache__`)."""
-    for directory, _, files in os.walk(root, topdown=False):
-        for name in files:
-            entry = os.path.join(directory, name)
-            if not os.path.islink(entry):
-                os.chmod(entry, os.stat(entry).st_mode & ~0o222)
-        os.chmod(directory, os.stat(directory).st_mode & ~0o222)
-
-
-def backup_file(destination, source, expected):
+def backup_file(places, name, source, original):
     """Copy the user's file into backup/. The bytes read now must be the ones the plan read."""
-    def do():
-        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
-        try:
-            data = read_all(fd)
-        finally:
-            os.close(fd)
-        if sha256(data) != sha256(expected):
+    def guard():
+        data, _ = read_user_file(source)
+        if sha256(data) != sha256(original):
             raise Changed(errno.EBUSY, "%s changed after the plan; nothing was changed" % source)
-        out = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
-        try:
-            write_all(out, data)
-        finally:
-            os.close(out)
-    return Step("create", destination, "file", "backup of %s" % source, do,
-                undo={"op": "unlink", "path": str(destination)})
+    return new_file(places, "backup:" + name, original, "backup of %s" % source, guard)
 
 
-def append_block(path, block, original, info):
-    """Append the managed block to the user's tmux file in place (inode, mode and owner stay). The undo is in
-    the journal before the first byte is written; the file must still be the bytes the plan read."""
-    undo = {"op": "untruncate", "path": str(path), "size": len(original), "block": b64(block),
-            "atime_ns": info.st_atime_ns, "mtime_ns": info.st_mtime_ns}
+def append_block(places, ident, original, block, info):
+    """Append the managed block to the user's tmux file by renaming a complete new file over it. The file must
+    still be the bytes the plan read; the journal holds those bytes and both hashes."""
+    path = places.file(ident)
 
-    def do():
-        fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW)
-        try:
-            if sha256(read_all(fd)) != sha256(original):
-                raise Changed(errno.EBUSY, "%s changed after the plan; nothing was changed" % path)
-            write_all(fd, block)
-        finally:
-            os.close(fd)
-    return Step("modify", path, "block", "append the managed block", do, undo=undo)
+    def run(ctx):
+        data, current = read_user_file(path)
+        if current.st_nlink != 1 or sha256(data) != sha256(original):
+            raise Changed(errno.EBUSY, "%s changed after the plan; nothing was changed" % path)
+        replace_atomic(path, data + block, stat.S_IMODE(current.st_mode),
+                       expect=(current.st_ino, current.st_size, current.st_mtime_ns))
+    return Step("modify", path, "block", "append the managed block", run,
+                undo={"op": "tmux", "id": ident, "before_bytes": b64(original), "before_sha": sha256(original),
+                      "after_sha": sha256(original + block), "mtime_ns": info.st_mtime_ns})
 
 
 # ---------------------------------------------------------------- steps that remove (uninstall)
 
 def _removal(action, path, kind, detail, spec):
-    return Step(action, path, kind, detail, lambda: apply_spec(spec), redo=spec)
+    return Step(action, path, kind, detail, lambda ctx: apply_spec(ctx, spec), redo=spec)
 
 
-def remove_link(path, target):
-    return _removal("remove", path, "symlink", "", {"op": "rm_link", "path": str(path), "target": target})
+def remove_link(places, ident, target):
+    return _removal("remove", places.link(ident), "symlink", "", {"op": "rm_link", "id": ident, "target": target})
 
 
-def remove_file(path, expected_sha=None):
-    return _removal("remove", path, "file", "", {"op": "rm_file", "path": str(path), "sha256": expected_sha})
+def remove_file(places, ident, expected_sha=None):
+    return _removal("remove", places.file(ident), "file", "", {"op": "rm_file", "id": ident, "sha": expected_sha})
 
 
-def remove_tree(path):
-    return _removal("remove", path, "tree", "", {"op": "rm_tree", "path": str(path)})
+def remove_tree(places, ident):
+    return _removal("remove", places.tree(ident), "tree", "", {"op": "rm_tree", "id": ident})
 
 
-def remove_dir(path):
-    return _removal("remove", path, "dir", "", {"op": "rmdir_empty", "path": str(path)})
+def remove_dir(places, ident):
+    return _removal("remove", places.dir(ident), "dir", "", {"op": "rm_dir", "id": ident})
 
 
-def remove_block(path, block, delete_if_empty, original):
-    """Cut the exact block (with its leading newline) out of the file; nothing else changes. A file that the
-    installer created and that holds nothing else is deleted (the step then reports `remove`)."""
-    delete = delete_if_empty and original == block
-    spec = {"op": "cut_block", "path": str(path), "block": b64(block), "expect": sha256(original),
-            "delete_if_empty": bool(delete_if_empty)}
+def cut_block(places, ident, original, delete_if_empty):
+    """Cut the managed block (with its leading newline) out of the user's tmux file. A file that the installer
+    created and that holds nothing else is deleted (the step then reports `remove`)."""
+    path = places.file(ident)
+    delete = bool(delete_if_empty) and original == tmuxconf.BLOCK
+    spec = {"op": "cut", "id": ident, "before_sha": sha256(original),
+            "after_sha": sha256(original.replace(tmuxconf.BLOCK, b"", 1)), "delete": delete}
     return Step("remove" if delete else "modify", path, "file" if delete else "block",
-                "" if delete else "remove the managed block", lambda: apply_spec(spec), redo=spec)
+                "" if delete else "remove the managed block", lambda ctx: apply_spec(ctx, spec), redo=spec)
 
 
 def drop_journal(journal_path):
     """The journal goes before the directories that may hold it are removed."""
-    return Step("remove", journal_path, "file", "interrupted-run journal", lambda: _unlink(journal_path),
-                redo={"op": "drop_journal", "path": str(journal_path)}, internal=True)
+    return Step("remove", journal_path, "file", "interrupted-run journal",
+                lambda ctx: apply_spec(ctx, {"op": "drop_journal"}), redo={"op": "drop_journal"}, internal=True)
 
 
 @dataclass
@@ -434,4 +573,5 @@ class Journal:
     path: Path
     command: str
     mode: str                                   # "undo" or "redo"
+    homes: dict = field(default_factory=dict)   # provider -> home directory (str)
     specs: list = field(default_factory=list)

@@ -19,7 +19,7 @@ import pytest
 from harness import BLOCK, INSTALLER, LIB, REGISTRY_DRAFT, commit_change, release_name, stop_at
 
 sys.path.insert(0, str(INSTALLER.parent))
-from project_agent_install import actions, commands  # noqa: E402
+from project_agent_install import actions, commands, paths  # noqa: E402
 from project_agent_install.layout import Env, InstallerError  # noqa: E402
 try:
     from project_agent_install import journal  # noqa: E402
@@ -84,77 +84,92 @@ def test_a_record_that_names_what_the_installer_does_not_make_is_refused_by_ever
     assert "record_invalid" in home.run("uninstall").stderr
 
 
-# ---------------------------------------------------------------- 2. removing the tmux block
+# ---------------------------------------------------------------- 2. 3. the user's tmux file: write, cut, undo
 
-def inject(monkeypatch, name, limit=2, fail_on=None):
-    """Replace actions.<name> (raw_write or raw_pwrite) by a version that writes at most `limit` bytes per call
-    and raises OSError on call number `fail_on`."""
-    real, calls = getattr(actions, name), []
+def inject(monkeypatch, limit=2, fail_on=None):
+    """Make actions.raw_write write at most `limit` bytes per call and raise OSError on call number `fail_on`."""
+    real, calls = actions.raw_write, []
 
-    def fake(fd, data, *offset):
+    def fake(fd, data):
         calls.append(1)
         if fail_on is not None and len(calls) == fail_on:
             raise OSError(5, "injected write failure")
-        return real(fd, bytes(data[:limit]), *offset)
-    monkeypatch.setattr(actions, name, fake)
+        return real(fd, bytes(data[:limit]))
+    monkeypatch.setattr(actions, "raw_write", fake)
     return calls
 
 
-def tmux_file(home, content, mtime=1_600_000_000_000_000_000):
-    path = home.write(".tmux.conf", content)
+def places_of(home, monkeypatch):
+    monkeypatch.setenv("HOME", str(home.home))
+    env = Env()
+    return env, paths.Places(env, {"claude": env.home / ".claude", "codex": env.home / ".codex"})
+
+
+def tmux_file(home, content, mtime=1_600_000_000_000_000_000, mode=0o644):
+    path = home.write(".tmux.conf", content, mode=mode)
     os.utime(path, ns=(mtime, mtime))
     return path
+
+
+def temporaries(home):
+    return sorted(name for name in os.listdir(home.home) if name.endswith(".pi-tmp"))
 
 
 MIDDLE = b"set -g mouse on\n" + BLOCK + b"set -g status off\n"
 AT_END = b"set -g mouse on\n" + BLOCK
 
 
-def cut(path, original, created=False):
-    return actions.remove_block(path, BLOCK, created, original)
+def cut(places, original, created=False):
+    return actions.cut_block(places, "tmux:0", original, created)
 
 
-def test_removing_a_block_in_the_middle_survives_short_writes(home, monkeypatch):
-    path = tmux_file(home, MIDDLE)
-    calls = inject(monkeypatch, "raw_pwrite", limit=2)
-    cut(path, MIDDLE).do()
-    assert path.read_bytes() == b"set -g mouse on\nset -g status off\n" and len(calls) > 1
+@pytest.mark.parametrize("original", [MIDDLE, AT_END])
+def test_removing_a_block_survives_short_writes_and_leaves_no_temporary_file(home, monkeypatch, original):
+    env, places = places_of(home, monkeypatch)
+    path = tmux_file(home, original, mode=0o600)
+    calls = inject(monkeypatch, limit=2)
+    cut(places, original).run(actions.Context(places))
+    assert path.read_bytes() == original.replace(BLOCK, b"", 1) and len(calls) > 1
+    assert os.stat(path).st_mode & 0o777 == 0o600 and not temporaries(home)
 
 
-def test_a_write_failure_while_removing_restores_the_file_byte_for_byte(home, monkeypatch):
+def test_a_write_failure_while_removing_leaves_the_file_exactly_as_it_was(home, monkeypatch):
+    env, places = places_of(home, monkeypatch)
     path = tmux_file(home, MIDDLE)
     before = os.stat(path)
-    inject(monkeypatch, "raw_pwrite", limit=3, fail_on=2)
+    inject(monkeypatch, limit=3, fail_on=2)
     with pytest.raises(OSError):
-        cut(path, MIDDLE).do()
-    assert path.read_bytes() == MIDDLE and os.stat(path).st_mtime_ns == before.st_mtime_ns
+        cut(places, MIDDLE).run(actions.Context(places))
+    after = os.stat(path)
+    assert path.read_bytes() == MIDDLE and (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    assert not temporaries(home)
 
 
-def test_a_block_at_the_end_is_cut_by_one_truncate_and_a_failure_changes_nothing(home, monkeypatch):
-    path = tmux_file(home, AT_END)
-    writes = inject(monkeypatch, "raw_pwrite")
-    cut(path, AT_END).do()
-    assert path.read_bytes() == b"set -g mouse on\n" and not writes          # no byte was rewritten
-    path = tmux_file(home, AT_END)
-    monkeypatch.setattr(actions, "raw_ftruncate", lambda fd, size: (_ for _ in ()).throw(OSError(5, "injected")))
-    with pytest.raises(OSError):
-        cut(path, AT_END).do()
-    assert path.read_bytes() == AT_END
-
-
-def test_a_file_that_changed_after_the_plan_is_not_touched(home):
+def test_a_file_that_changed_after_the_plan_is_refused_by_the_run_and_only_reported_by_a_resume(home, monkeypatch):
+    env, places = places_of(home, monkeypatch)
     path = tmux_file(home, MIDDLE)
-    step = cut(path, MIDDLE)
+    step = cut(places, MIDDLE)
     changed = MIDDLE + b"# added after the plan\n"
     path.write_bytes(changed)
     with pytest.raises(actions.Changed):
-        step.do()
-    assert path.read_bytes() == changed
+        step.run(actions.Context(places))
+    resumed = actions.Context(places, strict=False)
+    step.run(resumed)
+    assert path.read_bytes() == changed and len(resumed.notes) == 1 and "project-agent block" in resumed.notes[0]
+
+
+def test_a_file_that_was_already_cut_is_not_cut_again(home, monkeypatch):
+    env, places = places_of(home, monkeypatch)
+    path = tmux_file(home, MIDDLE)
+    step = cut(places, MIDDLE)
+    step.run(actions.Context(places))
+    once = path.read_bytes()
+    step.run(actions.Context(places))
+    assert path.read_bytes() == once
 
 
 def test_uninstall_refused_by_a_changed_tmux_file_changes_nothing(home, source, monkeypatch):
-    """The plan reads the file, the run re-reads it: a change in between (here: made by the plan's own caller)
-    stops the run before the first removal."""
+    """The plan reads the file, the run re-reads it: a change in between stops the run before the first removal."""
     installed(home, source)
     before = home.snapshot()
     monkeypatch.setenv("HOME", str(home.home))
@@ -171,49 +186,76 @@ def test_uninstall_refused_by_a_changed_tmux_file_changes_nothing(home, source, 
     assert journal.find(env) is None
 
 
-# ---------------------------------------------------------------- 3. appending the block and its backup
-
-def append_plan(home, original):
-    env = Env()
+def append_plan(home, monkeypatch, original):
+    env, places = places_of(home, monkeypatch)
     path = home.path(".tmux.conf")
     home.path(LIB + "/backup").mkdir(parents=True, exist_ok=True)
-    backup = home.path(LIB + "/backup/20261109T000000Z-.tmux.conf")
-    steps = [actions.backup_file(backup, path, original),
-             actions.append_block(path, BLOCK, original, os.lstat(path))]
-    return env, commands.Plan("install", steps, journal_path=home.path(".pi-journal")), backup
+    name = "20261109T000000Z-.tmux.conf"
+    steps = [actions.backup_file(places, name, path, original),
+             actions.append_block(places, "tmux:0", original, BLOCK, os.lstat(path))]
+    return env, commands.Plan("install", steps, journal_path=home.path(".pi-journal"), places=places), home.path(
+        LIB + "/backup/" + name)
 
 
 @pytest.mark.parametrize("original", [b"set -g mouse on\n", b"set -g mouse on", b""])
 def test_append_survives_short_writes_and_the_backup_is_the_original(home, monkeypatch, original):
-    monkeypatch.setenv("HOME", str(home.home))
     path = tmux_file(home, original)
-    env, plan, backup = append_plan(home, original)
-    inject(monkeypatch, "raw_write", limit=3)
+    env, plan, backup = append_plan(home, monkeypatch, original)
+    inject(monkeypatch, limit=3)
     journal.execute(env, plan)
-    assert path.read_bytes() == original + BLOCK and backup.read_bytes() == original
+    assert path.read_bytes() == original + BLOCK and backup.read_bytes() == original and not temporaries(home)
 
 
 @pytest.mark.parametrize("original", [b"set -g mouse on\n", b"set -g mouse on", b""])
 def test_a_failed_append_restores_the_file_and_removes_the_backup(home, monkeypatch, original):
-    monkeypatch.setenv("HOME", str(home.home))
     path = tmux_file(home, original)
     before = os.stat(path)
-    env, plan, backup = append_plan(home, original)
-    inject(monkeypatch, "raw_write", limit=3, fail_on=2)
+    env, plan, backup = append_plan(home, monkeypatch, original)
+    inject(monkeypatch, limit=3, fail_on=3)                   # the backup is written first; fail in the append
     with pytest.raises(InstallerError):
         journal.execute(env, plan)
     assert path.read_bytes() == original and os.stat(path).st_mtime_ns == before.st_mtime_ns
-    assert not backup.exists()
+    assert not backup.exists() and not temporaries(home)
 
 
 def test_a_file_that_changed_after_the_plan_gets_neither_a_backup_nor_the_block(home, monkeypatch):
-    monkeypatch.setenv("HOME", str(home.home))
     path = tmux_file(home, b"set -g mouse on\n")
-    env, plan, backup = append_plan(home, b"set -g mouse on\n")
+    env, plan, backup = append_plan(home, monkeypatch, b"set -g mouse on\n")
     path.write_bytes(b"set -g mouse off\n")
     with pytest.raises(InstallerError):
         journal.execute(env, plan)
     assert path.read_bytes() == b"set -g mouse off\n" and not backup.exists()
+
+
+def test_the_undo_of_an_append_restores_the_original_only_when_the_file_is_as_the_append_left_it(home, monkeypatch):
+    env, places = places_of(home, monkeypatch)
+    original = b"set -g mouse on\n"
+    path = tmux_file(home, original)
+    step = actions.append_block(places, "tmux:0", original, BLOCK, os.lstat(path))
+    step.run(actions.Context(places))
+    ctx = actions.Context(places, strict=False)
+    actions.apply_spec(ctx, step.undo)
+    assert path.read_bytes() == original and os.stat(path).st_mtime_ns == 1_600_000_000_000_000_000 and not ctx.notes
+    step.run(actions.Context(places))
+    edited = original + BLOCK + b"\n"                                       # the user added a blank line
+    path.write_bytes(edited)
+    ctx = actions.Context(places, strict=False)
+    actions.apply_spec(ctx, step.undo)
+    assert path.read_bytes() == edited and len(ctx.notes) == 1
+
+
+def test_a_journal_that_cannot_be_synced_is_removed_and_says_so(home, source, monkeypatch):
+    installed(home, source)
+    monkeypatch.setenv("HOME", str(home.home))
+    env = Env()
+    monkeypatch.setattr(commands.runs, "run_slots", lambda *args, **kwargs: [])
+    plan = commands.plan_uninstall(env, Path("."))
+    before = home.snapshot()
+    monkeypatch.setattr(actions, "fsync_dir", lambda directory: (_ for _ in ()).throw(OSError(5, "injected")))
+    with pytest.raises(InstallerError) as error:
+        journal.execute(env, plan)
+    assert error.value.code == "journal_unwritable" and journal.find(env) is None
+    assert home.snapshot() == before
 
 
 # ---------------------------------------------------------------- 4. removal errors are errors
@@ -370,8 +412,8 @@ def test_a_failed_atomic_write_leaves_no_temporary_file(home, monkeypatch):
     target = home.root / "record.json"
     monkeypatch.setattr(actions, "write_all", lambda *arguments, **keywords: (_ for _ in ()).throw(OSError(5, "x")))
     with pytest.raises(OSError):
-        actions._write_atomic(target, b"data")
-    assert sorted(path.name for path in home.root.iterdir() if path.name.startswith(".record")) == []
+        actions.replace_atomic(target, b"data", 0o644)
+    assert sorted(path.name for path in home.root.iterdir() if path.name.endswith(".pi-tmp")) == []
 
 
 # ---------------------------------------------------------------- 6. no bytecode in the checkout

@@ -15,7 +15,7 @@ FORMAT = 1
 
 def new_record(current):
     return {"format": FORMAT, "current": current, "previous": None, "releases": [current],
-            "created_dirs": [], "owned": [], "tmux": {"state": "none"}}
+            "created_dirs": [], "owned": [], "tmux": {"state": "none"}, "provider_homes": {}}
 
 
 def encode(record):

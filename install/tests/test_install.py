@@ -189,7 +189,7 @@ def test_t8_a_reader_never_sees_current_missing_or_dangling_while_it_is_swapped(
     reader.start()
     try:
         for index in range(3000):
-            actions.swap_symlink(link, "ab"[index % 2]).do()
+            actions.swap_path(link, "ab"[index % 2])
     finally:
         stop.set()
         reader.join()
@@ -447,13 +447,14 @@ def test_t15_a_failure_in_the_middle_leaves_the_home_as_it_was(home, source):
         home.path(".local/bin").chmod(0o755)
 
 
-@pytest.mark.skipif(os.getuid() == 0, reason="permissions do not stop root")
 def test_t15_a_failure_at_the_last_step_undoes_the_tmux_edit_and_the_backup(home, source):
     registry(home)
-    home.write(".tmux.conf", b"set -g mouse on\n", mode=0o444)
+    home.write(".tmux.conf", b"set -g mouse on\n")
     before = home.snapshot()
-    result = home.run("install", source=source)
-    assert result.returncode == 4
+    last = json.loads(home.run("install", "--dry-run", "--json", source=source).stdout)["changes"]
+    from harness import stop_at
+    result = home.run("install", source=source, env=stop_at(home, "before", len(last) - 1, "SIGTERM"))
+    assert result.returncode == 4 and "undone" in result.stderr
     assert home.snapshot() == before
 
 

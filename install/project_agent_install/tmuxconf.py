@@ -7,6 +7,7 @@ END = "# <<< project-agent <<<"
 # when the original did not end with a newline.
 BLOCK = ("\n%s\n%s\n%s\n" % (BEGIN, SOURCE, END)).encode()
 INTEGRATION = "source-file -q ~/.local/lib/project-agent/current/integrations/tmux/project-agent.conf\n"
+LIMIT = 1 << 20                 # a larger tmux file is not rewritten: the installer prints the line instead
 RELOAD = "tmux source-file ~/.local/lib/project-agent/tmux.conf"
 
 

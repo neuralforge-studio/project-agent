@@ -46,12 +46,17 @@
 2. 부모 디렉터리가 없으면 설치가 만들고 설치 기록에 `created_dirs`로 남깁니다. 제거는 그 디렉터리가 비어 있을 때만 지웁니다.
 3. provider 홈이 없으면 그 provider의 skill link를 만들지 않고 안내만 출력합니다. 설치가 쓰지 않는 provider의 홈을 만들지 않기 위해서입니다. provider 홈의 경로는 아래 규칙 7이 정합니다.
 4. 부모 디렉터리가 symlink이면 link를 따라가서 만듭니다. link는 가리키는 디렉터리 안에 놓입니다. 설치 기록과 출력에는 `~` 기준 경로를 적고, 실제 위치를 함께 출력합니다. 이 workstation의 `~/.claude/skills`가 그 경우입니다(DIST-001 6단계가 `.gitignore`로 다룹니다).
-5. **실패와 중단은 정해진 상태로 돌아갑니다.** 설치기는 첫 변경 전에 진행 기록(journal) `.project-agent-install-journal.json`을 씁니다. 위치는 lib 경로(`~/.local/lib/project-agent`)와 그 조상(`~/.local/lib`, `~/.local`, HOME) 중 실행 전에 있는 가장 가까운 디렉터리입니다. 기록에는 변경마다 되돌리는 명세(`install`·`upgrade`·`rollback`) 또는 지우는 명세(`uninstall`)가 있고, 설치 기록은 마지막에 확정합니다.
-   - 명령이 실패하거나 SIGINT·SIGTERM·SIGHUP을 받으면 `install`·`upgrade`·`rollback`은 이미 한 변경을 되돌려 실행 전 상태로 돌리고(종료 코드 4) journal을 지웁니다. 임시 파일(`.tmp-*`)도 지웁니다.
-   - SIGKILL이나 전원 차단처럼 잡을 수 없는 종료 뒤에는 journal이 남습니다. 다음 명령(`check`는 실패로 알리기만 함)은 요청받은 일보다 먼저 그 되돌림을 끝내 실행 전 상태를 만들고 이어서 자기 일을 합니다. "lib는 있는데 설치 기록이 없어" 막히는 상태가 생기지 않습니다. `--dry-run`은 journal이 있으면 아무것도 바꾸지 않고 거절합니다.
-   - `uninstall`은 지운 것을 되돌리지 않습니다. 중단되면 journal이 남고 `install`·`upgrade`·`rollback`은 거절하며 다음 `uninstall`만 지우기를 마칩니다. 삭제 오류는 숨기지 않고 실패(종료 코드 4)로 보고하며 설치 기록은 다른 삭제가 모두 끝난 뒤에 지웁니다. symlink는 tree로 지우지 않습니다.
-   - 설치 기록과 journal은 읽을 때 모든 경로와 이름을 설치기가 만드는 위치(release·`backup/` 바로 아래, lib의 고정 파일, shim·skill link 자리, tmux 후보 파일)와 대조합니다. `..`이나 그 밖의 경로가 있으면 아무것도 바꾸지 않고 `record_invalid`·`journal_invalid`로 거절합니다(종료 코드 3).
-   - 사용자 tmux 파일은 열린 fd에서 bytes를 계획 때와 대조한 뒤(다르면 거절) 한 줄이라도 바꿉니다. 쓰기는 짧은 write를 이어 쓰고, 지우기는 블록이 끝이면 truncate 한 번, 아니면 뒤를 당긴 뒤 truncate합니다. 실패하면 바꾸기 전 bytes와 시각을 되돌립니다. backup은 실행 시점의 bytes로 만들고 계획 때와 다르면 거절합니다.
+5. **실패와 중단은 정해진 상태로 돌아갑니다.** 설치기는 첫 변경 전에 진행 기록(journal) `.project-agent-install-journal.json`을 씁니다. 위치는 lib 경로(`~/.local/lib/project-agent`)와 그 조상(`~/.local/lib`, `~/.local`, HOME) 중 실행 전에 있는 가장 가까운 디렉터리입니다. 설치 기록은 마지막에 확정합니다.
+   - 실패하거나 SIGINT·SIGTERM·SIGHUP을 받으면 `install`·`upgrade`·`rollback`은 이미 한 변경을 되돌려 실행 전 상태로 돌리고(종료 코드 4) journal을 지웁니다.
+   - SIGKILL이나 전원 차단 뒤에는 journal이 남습니다. 다음 명령(`check`는 실패로 알리기만 함)은 요청받은 일보다 먼저 그 되돌림을 끝내고 이어서 자기 일을 합니다. "lib는 있는데 설치 기록이 없어" 막히는 상태가 생기지 않습니다. `--dry-run`은 journal이 있으면 아무것도 바꾸지 않고 거절합니다.
+   - `uninstall`은 지운 것을 되돌리지 않습니다. 중단되면 journal이 남고 다른 명령은 거절하며 다음 `uninstall`만 지우기를 마칩니다. 삭제 오류는 숨기지 않고 실패(종료 코드 4)로 보고하며 설치 기록은 다른 삭제가 모두 끝난 뒤에 지웁니다. symlink는 tree로 지우지 않습니다.
+   - journal을 쓰다가 실패하면(디렉터리 fsync 실패 포함) journal을 지우고 "아무것도 바꾸지 않았다"고만 말합니다.
+
+   복구·제거는 세 원칙을 따릅니다. 이 원칙이 설치기 구현과 test의 원본입니다.
+
+   - **원칙 A. 경로의 출처는 설치기 하나입니다.** 복구·제거가 다루는 모든 경로(대상, 임시 파일, journal 자신)는 설치기가 계산한 배치에서 나옵니다. journal은 step의 종류·식별자(`current`, `shim:<도구>`, `skill:<provider>:<이름>`, `release:<이름>`, `tmux:<후보 번호>` 등 닫힌 집합)와 상태 지문(내용 hash, link 대상)만 담고 경로 문자열은 담지 않습니다. 설치 기록의 경로는 설치기가 계산한 배치와 정확히 같을 때만 받습니다. 둘 다 읽을 때 종류·식별자·형식을 검증하고 어긋나면 아무것도 바꾸지 않고 거절합니다(종료 코드 3). 임시 파일 이름은 대상에서 정해진 이름(`.<이름>.pi-tmp`, release는 `releases/.tmp-<이름>`)이라 다음 실행과 복구가 찾아 지웁니다. skill link 자리는 설치 기록에 적힌 provider 홈(`CLAUDE_CONFIG_DIR`·`CODEX_HOME` 반영) 아래 `skills/<이름>`뿐입니다.
+   - **원칙 B. 되돌림·제거는 "설치기가 만든 그 상태"일 때만 그 경로를 건드립니다.** 파일은 설치기가 쓴 내용의 hash, link는 설치기가 만든 대상, 디렉터리는 비어 있음, release는 파일 목록 지문이 지금과 같을 때만 지웁니다. 다르면(사용자가 그 사이에 만들거나 고침) 건드리지 않고 알립니다. 오류로 명령을 막지 않습니다. 새 파일은 임시 파일에 다 쓴 뒤 `link`로 이름을 얻으므로 이미 있는 이름은 덮어쓰지 않고, 이름이 생긴 파일은 내용이 완전합니다.
+   - **원칙 C. 사용자 tmux 파일은 언제 끊겨도 바꾸기 전 bytes 또는 바꾼 뒤 bytes 둘 중 하나입니다.** 제자리에서 쓰지 않습니다. 같은 디렉터리의 임시 파일에 새 내용을 쓰고 fsync한 뒤 rename하고 디렉터리를 fsync합니다. 권한은 원래 파일과 같습니다. rename 직전에 파일이 읽을 때와 같은지(inode·크기·시각) 다시 확인하고, 다르면 바꾸지 않습니다. journal은 바꾸기 전 bytes와 바꾸기 전·뒤 hash를 두고, 복구와 제거는 지금 hash가 "바꾼 뒤"일 때만 되돌리며, "바꾸기 전"이면 아무것도 하지 않고, 둘 다 아니면(사용자가 고침) 건드리지 않고 알립니다.
 
 6. **원격 runtime의 skill link를 넘겨받습니다.** 원격 runtime은 `~/.codex/skills/project-team`·`project-item` link를 만들고 소유를 `~/.cache/agent-session/skills.json`에 적습니다([remote_runtime.py:46-94](../../tools/agent-session/agent_session/remote_runtime.py)). 같은 제품이 만든 link이므로 설치는 이를 충돌로 보지 않습니다.
    - 넘겨받는 조건은 runtime이 소유를 판단하는 조건과 같습니다. 이름이 `skills.json`에 있고, link의 소유자가 현재 사용자이고, link의 대상이 기록한 대상과 같습니다([remote_runtime.py:72-76](../../tools/agent-session/agent_session/remote_runtime.py)). 하나라도 다르면 충돌입니다.
@@ -83,7 +88,7 @@ source-file -q ~/.local/lib/project-agent/tmux.conf
 | 둘 다 없음 | 블록만 담은 `~/.tmux.conf`를 만듭니다. 설치 기록에 `created: true`로 남깁니다. `~/.config/tmux/`는 만들지 않습니다. |
 | 블록이 이미 있음 | 파일을 바꾸지 않습니다. 그 블록을 설치기가 넣지 않았다면, 제거도 그 블록을 지우지 않습니다. |
 | 블록을 넣음 | 고치기 전에 원본을 `backup/`에 둡니다. 파일 이름은 `<UTC 시각>-<원본 파일 이름>`입니다. |
-| 대상이 symlink | 파일도 link 대상도 고치지 않습니다. 그 사실과 사용자가 넣을 줄을 출력합니다. 나머지 설치는 계속합니다. 종료 코드는 0입니다. `check`는 이 상태를 "수동 연결 필요"로 알립니다(실패가 아닙니다) . |
+| 대상이 symlink, 또는 hard link가 여럿(`st_nlink > 1`)인 파일, 또는 1 MiB를 넘는 파일 | 파일도 link 대상도 고치지 않습니다(rename으로 바꾸면 다른 이름의 같은 파일과 갈라지기 때문입니다). 그 사실과 사용자가 넣을 줄을 출력합니다. 나머지 설치는 계속합니다. 종료 코드는 0입니다. `check`는 이 상태를 "수동 연결 필요"로 알립니다(실패가 아닙니다) . |
 | 실행 중인 tmux server | 다시 읽히지 않습니다. 설치는 다시 읽는 명령 `tmux source-file ~/.local/lib/project-agent/tmux.conf`만 출력합니다. 사용자의 전체 설정을 다시 읽는 명령은 권하지 않습니다. |
 | `upgrade`·`rollback` | 블록을 다시 고치지 않습니다. `current`만 바뀌기 때문입니다. |
 | `uninstall` | 설치기가 넣은 표시된 블록(앞의 줄바꿈 포함)만 지웁니다. `created: true`이고 지운 뒤 내용이 없으면 파일도 지웁니다. |
