@@ -12,6 +12,7 @@
 - Leader(2026-11-10, base, bb0e0e2): `python3 -m pytest -q tools/agent-session/tests/test_self_ended.py -k live_process_group` → 1 passed(11.9초).
 - TEST-007 Result(seat0, 0530de3 = bb0e0e2의 제품·test와 같음): agent-session 전체 790 passed, 실패 0.
 - `control_active`는 `Manager.finish_ended`(`lifecycle.py` 922-927행 부근)가 `stopping`·`control_pending` 또는 살아 있는 `controller_pid`를 볼 때 돌려줍니다. 이 test는 실제 격리 tmux에서 CLI를 죽이므로 server의 `pane-died[agent-session]` hook(별도 interpreter, monkeypatch가 닿지 않음)도 같은 run의 `finish_ended`를 실행합니다. 이 hook과 test의 직접 호출이 경합하는지는 아직 확인하지 않았습니다(가설).
+- 환경 비교(2026-11-10): seat3 Worker의 환경 변수는 `/primehome/swain/tmp/claude-1028/-primehome-swain-Utils-project-agent-project-agent-base/9882d26b-f3ea-4f92-80e6-97dea7945eb0/scratchpad/seat3-env.txt`, Leader 것은 같은 디렉터리의 `leader-env.txt`입니다(secret 값은 이름만). 변수 이름의 차이는 Leader에만 있는 `PYTHONNOUSERSITE`와 `TMUX_PLUGIN_MANAGER_PATH`입니다. Leader run은 agent 저장소의 동결 사본으로, seat3 run은 설치본 0.1.0으로 시작했습니다. 두 환경 모두 `AGENT_SESSION_SOCKET`·`TMUX`가 실제 server `/tmp/tmux-1028/default`를 가리킵니다. test가 이 값을 물려받는지도 확인 대상입니다.
 
 ## Contract
 - README 검증: test는 seat 여럿이 같은 host에서 동시에 검증하는 평소 부하에서 같은 결과를 냅니다. 실행하는 seat·환경 변수·경로에 따라 결과가 달라지지 않습니다.
