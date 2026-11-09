@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S3
+- Base: 9680c181adfe8581eac20844e8c00998be5de8b6 2026-11-10T00:29:30+09:00
 
 ## Symptom
 사용자 요청: "현재 활성화 중인 session, window가 sidebar에 있는 것이 라면 해당 부분 high light ( ex: project-agent leader window가 활성화 되어 있으면 side bar에서 project-agent 부분이 highlight )"
