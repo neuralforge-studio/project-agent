@@ -19,7 +19,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | 설치 계약 | 설치·갱신·되돌리기·제거가 만들고 고치고 건드리지 않는 경로, 실행 중 HOME 쓰기 목록, 인수 test 명세. | `docs/project-team/install-contract.md` |
 | 설치기 | 설치 계약대로 설치·갱신·되돌리기·제거·점검(`--dry-run` 포함). 표준 library만 씁니다. 인수 test는 `install/tests` | `install/` |
 | 버전 규칙 | 버전 값(`VERSION`), 형식 버전(`tools/formats.json`)과 호환 범위, git tag 이름, 변경 기록(`CHANGELOG.md`) 작성 | `docs/project-team/release.md` |
-| tmux 연결 | Board 열기·닫기 binding, status 표시, 결정 대기 알림 | `integrations/tmux/tmux_project_board.sh`, `project-agent.conf`, `project-agent-main.conf`, `project_agent_bind.sh`, `project_board_visibility.sh`, `tmux_decide_status.sh`, `tmux_decide_status.py` |
+| tmux 연결 | Board 열기·닫기 binding, status 표시, 결정 대기 알림 | `integrations/tmux/tmux_project_board.sh`, `project-agent.conf`, `project-agent-main.conf`, `project_agent_bind.sh`, `project_agent_run.sh`, `project_board_visibility.sh`, `tmux_decide_status.sh`, `tmux_decide_status.py` |
 | 원격 seat 실행본 | SSH Worker seat에 보내는 Python helper와 guidance 문서 | `tools/agent-session/agent_session/remote.py`의 `source_archive()` |
 
 ## 구성 요소별 문서와 검증 위치
@@ -76,7 +76,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | `windows` | 한 slot의 run을 담는 tmux window: 이름, 반납된 window의 재사용, 생성·current 지정, 이름 바꾸기, 정리(sweep), 시작 실패한 대기 pane의 정리. 종료 판정은 호출자가 넘긴 `observe`로 합니다. slot 제어 잠금은 호출자가 잡습니다. | `lifecycle`·`suspend`를 import하지 않습니다. `launch_artifacts.run_directory`를 씁니다. |
 | `handoff` | slot의 인계 파일: 경로, 이번 run이 쓴 것인지(`launch.sh` 이후 갱신) 판단, restart의 `handoff_required`, 인계 문서 경로 검증. | `lifecycle`·`suspend`를 import하지 않습니다. `launch_artifacts.run_directory`를 씁니다. |
 | `suspend` | `SuspendStore`(shutdown 기록), `SuspendMixin`(한 대상의 shutdown·resume 단계), `Fleet`(운영자 명령). | `lifecycle`을 import하지 않습니다. `SuspendMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
-| `watch` | `WatchMixin`(한 Worker seat의 쉼 판정과 점검 전송), `Watch`(운영자 명령. `Fleet`을 확장). | `lifecycle`을 import하지 않습니다(`suspend`와 같은 방향). `WatchMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
+| `watch` | `WatchMixin`(한 seat·Leader의 대화 기록 정체 판정과 점검 전송), `Watch`(운영자 명령. `Fleet`을 확장). | `lifecycle`을 import하지 않습니다(`suspend`와 같은 방향). `WatchMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
 
 ### `sys.path` 조작 위치
 
@@ -111,7 +111,7 @@ CR ARCH-001이 합의한 목표는 모두 위 현행에 옮겼습니다(2026-11-
 3. `agent_session.internal`의 `register_from_hook`, `register_current`, `mark_process`, `run_controller`, `finish_ended`(`python -m agent_session.internal finish-ended`). Hook command, Codex 등록 command, `launch.sh`, `controller.sh`와 tmux server의 `pane-died[agent-session]` hook이 `tools/agent-session`의 절대 경로로 호출합니다. 떠 있는 server의 hook은 갱신 전 경로를 가리키므로 이름과 인자 순서(socket, window, pane)가 그대로여야 합니다.
 4. `python -m agent_session.remote_runtime`과 `python -m agent_session.remote_bridge`.
 5. 원격 zip의 배치. `agent-session/`, `project-item/`, `guidance/<저장소 상대 경로>`입니다. 어떤 guidance 문서를 싣는지는 `remote.py`의 `GUIDANCE_FILES`가 정하고, test가 skill 문서의 link와 맞는지 확인합니다.
-6. tmux 연결은 자기 디렉터리 기준의 상대 경로로 도구를 부릅니다(`tmux_project_board.sh`는 `../../tools/project-board/bin/project-board`, `tmux_decide_status.py`는 `tools/project-item`). 결정 표시는 `project-agent-main.conf`의 option이 `tmux_decide_status.sh`를 부르고, 이 wrapper가 launcher로 고른 interpreter로 `.py`를 실행합니다. `project-agent-main.conf`는 읽힌 디렉터리를 `@project_agent_tmux_dir`에 두고 binding·hook이 그 디렉터리의 `tmux_project_board.sh`와 `project_agent_bind.sh`를 부릅니다. 파일 이름 `integrations/tmux/project-agent.conf`는 설치 계약(2절)이 읽습니다. 이 파일은 tmux 2.x도 parse하는 판정만 하고, tmux가 최소 버전 이상일 때만 `project-agent-main.conf`를 읽습니다(설치 계약 3.2절).
+6. tmux 연결은 자기 디렉터리 기준의 상대 경로로 도구를 부릅니다(`tmux_project_board.sh`는 `../../tools/project-board/bin/project-board`, `tmux_decide_status.py`는 `tools/project-item`). 결정 표시는 `project-agent-main.conf`의 option이 `tmux_decide_status.sh`를 부르고, 이 wrapper가 launcher로 고른 interpreter로 `.py`를 실행합니다. `project-agent-main.conf`는 읽힌 디렉터리를 `@project_agent_tmux_dir`에 두고 binding·hook이 그 디렉터리의 `tmux_project_board.sh`와 `project_agent_bind.sh`를 `project_agent_run.sh`로 감싸 부릅니다(`run-shell` 규칙은 설치 계약 5.3절). 파일 이름 `integrations/tmux/project-agent.conf`는 설치 계약(2절)이 읽습니다. 이 파일은 tmux 2.x도 parse하는 판정만 하고, tmux가 최소 버전 이상일 때만 `project-agent-main.conf`를 읽습니다(설치 계약 3.2절).
 
 ## 검증
 

@@ -103,13 +103,13 @@ Tmux window와 provider session은 유지하고 후속 메시지에서 관리를
 보고를 받으면 CR 파일·run·제출 hash를 대조합니다.
 이전 run이나 종결 CR의 늦은 보고만으로 완료한 CR을 다시 배정하지 않습니다.
 
-## 쉬는 Worker 점검(watch)
+## 정체 점검(watch)
 
 동작 계약은 [동작 명세의 watch](../../docs/project-team/spec.md#watch)가 소유합니다. 반복 실행은 system crontab이 아니라 Claude Leader·Worker가 각자 자기 session cron으로 합니다. 등록 방법·cron 식·점검 prompt는 [자기 점검](references/self-check.md)이 소유합니다. 첫 prompt와 resume 메시지가 등록을 지시하므로 등록 직후 첫 행동으로 따릅니다. Codex에는 session cron이 없어 등록하지 않습니다.
-in-progress CR을 맡은 Worker가 turn을 끝낸 채 30분 넘게 새 입력과 보고가 없고 CPU를 쓰는 자식 process도 없으면, watch가 Worker에게 `[agent-session watch]` 점검 메시지를 한 번 보내고 같은 근거를 Leader에게도 보냅니다. 제출·질문 뒤 Leader의 회신을 기다리는 Worker와 `review` 중인 JOB은 대상이 아닙니다.
+정체는 원인과 무관하게 대화 기록(transcript)의 가장 새 기록이 30분 넘게 오래됨으로 판정합니다. in-progress CR을 맡은 Worker가 정체하면 watch가 Worker에게 `[agent-session watch]` 점검 메시지를 한 번 보내고 같은 근거를 Leader에게도 보냅니다. 제출해서 Leader 회신을 기다리는 Worker도 대상입니다. 점검 메시지는 Leader에게 짧게 다시 알리라고 합니다. in-progress CR이 있는데 Leader의 기록이 정체하면 Leader에게도 한 번 보냅니다.
 
-- Worker: 점검 메시지는 사용자 승인이 아닙니다. 메시지의 근거(background 작업, 자식 process의 명령·실행 시간·CPU)를 보고 실제로 진행 중인지 판단합니다. 끝나지 않는 대기(예: `pgrep -f` loop)면 풀고 이어서 하며, 제출하거나 막혔으면 Leader에게 보고합니다. 점검에 대한 접수 회신은 보내지 않습니다.
-- Leader: 알림(자기 점검에서 직접 실행한 `watch`는 결과의 `evidence`)은 Worker를 강제로 끊었다는 뜻이 아닙니다. 같은 상태가 이어지면 Worker에게는 다시 가지 않고 Leader에게만 `--minutes`마다 다시 옵니다. 필요하면 Worker 화면과 CR을 보고 feedback을 보내거나 restart·stop을 판단합니다.
+- Worker: 점검 메시지는 사용자 승인이 아닙니다. 제출해서 Leader 회신을 기다리는 중이면 Leader에게 CR ID와 제출 commit을 짧게 다시 알립니다. 아니면 메시지의 근거(background 작업, 자식 process의 명령·실행 시간·CPU)를 보고 실제로 진행 중인지 판단합니다. 끝나지 않는 대기(예: `pgrep -f` loop)면 풀고 이어서 하며, 제출하거나 막혔으면 Leader에게 보고합니다. 점검에 대한 접수 회신은 보내지 않습니다.
+- Leader: 알림(자기 점검에서 직접 실행한 `watch`는 결과의 `evidence`)은 Worker를 강제로 끊었다는 뜻이 아닙니다. 같은 상태가 이어지면 Worker에게는 다시 가지 않고 Leader에게만 `--minutes`마다 다시 옵니다. review 대기 CR(제출 행의 hash가 Disposition에 없는 것)을 먼저 처리하고, 필요하면 Worker 화면과 CR을 보고 feedback을 보내거나 restart·stop을 판단합니다.
 
 ## Worker
 

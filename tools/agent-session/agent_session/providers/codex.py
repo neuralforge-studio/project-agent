@@ -10,7 +10,8 @@ import tomllib
 
 from ..errors import SessionError
 from .. import remote
-from .common import clean_env, context_timeout, deadline, executable, json_result, run, session_id, text_file
+from .common import (clean_env, context_timeout, deadline, executable, json_result, last_record_time, run,
+                     session_id, text_file)
 from .websocket import WebSocketRPC
 
 
@@ -309,6 +310,24 @@ class CodexProvider:
         if re.search(r"\bFolder access\b", screen) and re.search(r"\bTrust this folder\?", screen):
             return "workspace_trust"
         return None
+
+    def last_record(self, session_id):
+        """When this thread's session file last got a record: `{"at": epoch seconds or None, "reason": ...}`.
+
+        Codex keeps `$CODEX_HOME/sessions/<year>/<month>/<day>/rollout-<start time>-<thread id>.jsonl`, whose
+        lines carry a `timestamp`. No Codex session file was available when this was written, so this layout
+        is the documented behavior of Codex, not an observed one."""
+        if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9-]+", session_id):
+            return {"at": None, "reason": "transcript_not_found"}
+        root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser() / "sessions"
+        try:
+            files = list(root.glob(f"*/*/*/rollout-*-{session_id}.jsonl"))
+            if not files:
+                return {"at": None, "reason": "transcript_not_found"}
+            at = last_record_time(max(files, key=lambda path: path.stat().st_mtime))
+        except OSError:
+            return {"at": None, "reason": "transcript_unreadable"}
+        return {"at": at, "reason": None if at is not None else "no_record_with_time"}
 
     def registration_hooks(self, context):
         # SessionStart alone does not prove which tmux run created a thread.

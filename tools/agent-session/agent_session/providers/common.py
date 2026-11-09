@@ -1,5 +1,6 @@
 """Small process and deadline helpers shared by the provider transports."""
 
+import datetime as dt
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,8 @@ import subprocess
 import time
 
 from ..errors import SessionError
+
+TRANSCRIPT_TAIL = 65536                    # bytes read from the end of a conversation record to find its last record
 
 
 class Deadline:
@@ -97,3 +100,24 @@ def text_file(path, field):
     if not value.strip():
         raise SessionError("invalid_provider_input", f"{field} is empty.", 2)
     return value
+
+
+def last_record_time(path, tail=TRANSCRIPT_TAIL):
+    """The UTC epoch seconds of the newest complete record with a `timestamp` in a conversation record file.
+
+    A conversation record is a JSON-lines file that only grows at its end, so its last records tell when the
+    conversation last moved. Only the last `tail` bytes are read. The first line of a cut tail may be partial
+    and a last line that is still being written is not valid JSON; both are skipped, as are records without a
+    timestamp (bookkeeping lines a CLI appends). Returns None when no such record is found."""
+    with path.open("rb") as stream:
+        size = stream.seek(0, os.SEEK_END)
+        start = max(0, size - tail)
+        stream.seek(start)
+        lines = stream.read().split(b"\n")
+    for line in reversed(lines[1:] if start else lines):
+        try:
+            stamp = json.loads(line).get("timestamp")
+            return dt.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+        except (ValueError, AttributeError, TypeError):
+            continue
+    return None
