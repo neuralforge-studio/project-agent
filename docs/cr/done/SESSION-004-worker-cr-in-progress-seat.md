@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: 7e35d2411a827df482e386643624eb7663330833 2026-11-09T19:53:55+09:00
+- Outcome: fixed
 
 ## Symptom
 다른 project의 Leader 보고(사용자 전달): RUST-058 조사가 16:20쯤 끝났는데 Leader가 CR을 done으로 옮기기 전에 seat1을 stop해서 "CR이 아직 진행 중"이라 반납이 거절됐고, Leader가 다른 일을 하는 동안 seat1이 약 40분 놀았습니다. 사용자 요청: "이런일이 발생하지 않게 script 보완 필요."
@@ -20,6 +21,7 @@
 - 2026-11-09 Leader: 고친다(Leader 판정). 운영에서 seat가 40분 논 결함이고, 사람의 순서에 기대는 설계가 원인이므로 위임 범위입니다. 사용자 지시(2026-11-09 대화): "위와 같이 11개의 개선 요청 사항이 있어."
 - 2026-11-09 Leader: 제출 cf0b72d 검토. 반납 대기 기록(`release_pending`), `project-item move`가 같은 판정(`workspace.check_release`)으로 반납을 마침, 조건 불충족 시 이유 출력, `ls`·Board 표시, 수정 전 재현과 새 test를 확인했습니다. 내용은 인수 가능합니다. 수정 요청 한 가지: 제출 뒤 SESSION-005(39c915d)가 main에 통합되어 `docs/project-team/spec.md`, `tools/agent-session/agent_session/tmux.py`(`_RUN_VALUES`), `tools/agent-session/tests/test_tmux.py`가 충돌합니다. `origin/main`을 merge해 두 CR의 window option을 모두 살리십시오. `test_registration_publishes_when_the_controller_ends_before_it[sigint]`의 부하 실패는 세 번째 관찰이라 TEST-005로 따로 고칩니다.
 - 2026-11-09 Leader: 제출 5c6f4dd715ad859373dc03fe410d26dded26ca59를 인수합니다. Leader review: 수정 제출은 origin/main(5af70ab) merge만 더했습니다. 충돌 3건(spec.md, tmux.py _RUN_VALUES, test_tmux.py)에서 release_pending과 SESSION-005의 last_sent·last_received·watch를 모두 살렸고, merge가 바꾼 test(test_tmux·test_watch·test_cli·test_api_boundary 147, test_lifecycle 관련 44)를 다시 실행해 통과했습니다. 이전 검토(cf0b72d의 반납 대기·move의 반납 마무리·ls/Board 표시·수정 전 재현)를 재사용합니다.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 8640c76(Merge cr/SESSION-004, 제출 5c6f4dd). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [동작 명세](../../project-team/spec.md) 3·7절, [project-team skill](../../../skills/project-team/SKILL.md), [README 검증 표](../../../README.md#검증).
