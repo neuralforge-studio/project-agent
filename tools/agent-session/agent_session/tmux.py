@@ -54,6 +54,7 @@ _RUN_VALUES = {
     "resume": False, "expected_session_id": None, "handoff_file": None, "leader_request": None,
     "remote_seat": None, "remote_native": None, "upstream": None, "upstream_bin": None,
     "moved_to_background": None, "last_sent": None, "last_received": None, "watch": None,
+    "release_pending": None,
 }
 _VALUES_MARK = "agent-session-values"
 _SEAT_TARGET = re.compile(r"seat-(0|[1-9][0-9]*)")
@@ -430,7 +431,10 @@ class Tmux:
         return handles
 
     def close_window(self, window_id, expected):
-        """Close a retired window whose only pane is its dead managed pane."""
+        """Close a retired window's dead managed pane: "window" when it was the only pane, else "pane".
+
+        A window that holds panes a person added keeps them. The managed pane goes and the window stops
+        being a managed one (its options are unset, `remain-on-exit` too) in one tmux command sequence."""
         meta = self.read_meta(_safe_text(window_id, "window handle"))
         keys = ("base", "target", "run_id", "project_id", "window_id", "pane_id")
         if not meta.get("run_id") or any(meta.get(key) != expected.get(key) for key in keys):
@@ -439,13 +443,19 @@ class Tmux:
         if any(meta.get(key) != value for key, value in server.items()):
             raise SessionError("tmux_owner_mismatch", "The window was restored or belongs to another server.")
         panes = self._run("list-panes", "-t", window_id, "-F", "#{pane_id}").splitlines()
-        if panes != [meta["pane_id"]]:
-            raise SessionError("window_shared", "The window has panes that agent-session does not manage.",
+        if meta["pane_id"] not in panes:
+            raise SessionError("target_changed", "The window no longer holds the managed pane.",
                                details={"panes": panes})
         if not self.pane_info(meta["pane_id"])["pane_dead"]:
             raise SessionError("target_running", "The managed pane is still running.")
-        self._run("kill-window", "-t", window_id)
-        return True
+        if panes == [meta["pane_id"]]:
+            self._run("kill-window", "-t", window_id)
+            return "window"
+        arguments = ["kill-pane", "-t", meta["pane_id"], ";", "set-option", "-wu", "-t", window_id, "remain-on-exit"]
+        for key in meta:
+            arguments += [";", "set-option", "-wu", "-t", window_id, _PREFIX + key]
+        self._run(*arguments)
+        return "pane"
 
     def notify(self, text, milliseconds):
         """Show a message on every attached client for the given time. Return how many clients got it.

@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S3
+- Base: 5af70aba1765dd5f043b6e4aaa1003d1e75d90e6 2026-11-09T20:55:46+09:00
 
 ## Symptom
 SESSION-001이 더한 `tools/agent-session/tests/test_lifecycle.py::test_registration_publishes_when_the_controller_ends_before_it[sigint]`가 `-n 8` 병렬 실행에서 실패하고 단독 실행에서는 통과합니다. 세 CR의 검증에서 같은 실패가 나왔고 매번 단독 재실행으로 넘어갔습니다.

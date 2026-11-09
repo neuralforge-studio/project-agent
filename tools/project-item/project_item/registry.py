@@ -69,6 +69,23 @@ def caller(project) -> tuple[str, str | None]:
     return actor, identity
 
 
+def pending_releases(project) -> dict:
+    """JOB ID -> {seat, since, reasons} of the seats whose release waits for their CR to leave
+    in-progress (agent-session's record). A project that cannot say has none."""
+    try:
+        return api.pending_releases(project.base, project.config_path)
+    except SessionError:
+        return {}
+
+
+def finish_release(project, job_id: str) -> dict | None:
+    """Finish the release that `agent-session stop` left pending for the JOB; None when none is pending."""
+    try:
+        return api.finish_release(project.base, job_id, project.config_path)
+    except SessionError as error:
+        raise _registry_error(error) from error
+
+
 def item_root(project, kind: str) -> Path:
     root = getattr(project, KEYS[kind])
     if root is None:

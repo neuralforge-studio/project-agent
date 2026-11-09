@@ -266,7 +266,7 @@ State는 배정과 연결의 원본이며 실행 process 정보의 원본은 아
 | Tmux 실행 | 실제 socket 경로, server PID·시작 시각, session/window/pane ID |
 | Process 실행 | CLI PID·생성 시각·process group, 추적한 background PID·생성 시각 |
 | Provider 연결 | 실제 session_id, Claude message_to 또는 Codex endpoint |
-| 제어와 관찰 | stopping 여부, provider 실행 시도 여부, 등록 완료 여부, 게시 의도(`publishing`), hook 관찰값, controller PID·생성 시각, background로 옮겨짐(`moved_to_background`), 받은·보낸 메시지의 시각(`last_received`·`last_sent`), watch가 보낸 점검의 기록(`watch`) |
+| 제어와 관찰 | stopping 여부, 반납 대기(`release_pending`), provider 실행 시도 여부, 등록 완료 여부, 게시 의도(`publishing`), hook 관찰값, controller PID·생성 시각, background로 옮겨짐(`moved_to_background`), 받은·보낸 메시지의 시각(`last_received`·`last_sent`), watch가 보낸 점검의 기록(`watch`) |
 
 JOB 값은 CR을 가리키는 값(8절)만 둡니다. CR 본문은 option에 복제하지 않고 CR 파일에서 읽습니다.
 
@@ -371,9 +371,14 @@ Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않
 정리는 현재 실행 포인터의 run을 제외한 같은 base·target의 관리 window 가운데 다음을 모두 만족하는 것만 닫습니다.
 
 - 관리 정보의 base·target·run_id·window_id·pane_id와 server PID·시작 시각·생성 정보가 일치합니다. 관리 정보가 없거나 복원한 window는 채택하지 않습니다.
-- Window의 pane이 관리 pane 하나뿐이고 그 pane이 종료했습니다. 사용자가 pane을 추가한 window는 보존합니다.
+- Window의 관리 pane이 종료했습니다. 사용자가 pane을 추가했는지는 닫는 방식만 정합니다(아래).
 - 그 run의 실제 종료를 stop과 같은 기준으로 확인했습니다. 확인하지 못하면 보존합니다.
 - control_pending이 false이고 살아 있는 controller가 없습니다. 자기 controller의 예외는 7절 자기 종료·자기 재시작에 따릅니다.
+
+닫는 방식은 window의 pane이 관리 pane 하나뿐인지에 따릅니다.
+
+- 관리 pane뿐이면 window를 닫습니다.
+- 사용자가 추가한 pane이 있으면 사용자 pane을 건드리지 않고 관리 pane만 닫습니다. 같은 tmux 명령 sequence로 관리 정보와 `remain-on-exit`을 지워, 그 window를 사용자의 평범한 window로 돌려줍니다. 사용자 pane이 끝나면 tmux가 window를 닫습니다. 이 window는 더 이상 관리 window가 아니므로 이어받거나 다시 정리하지 않고, 이름은 바꾸지 않습니다. 결과의 `cleanup.pane_closed`에 그 window를 적습니다(없으면 이 key를 쓰지 않습니다).
 
 정리는 그 target의 대상 제어 잠금 안에서 현재 실행 포인터를 읽고 후보 검사와 닫기를 마칩니다.
 자기 controller의 마지막 정리는 이 잠금을 기다리지 않고 시도합니다. 잠금이 사용 중이면 닫지 않고, 잠금을 가진 명령의 정리가 대신합니다.
@@ -389,12 +394,11 @@ Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않
 
 새 run(start·restart·resume·Worker 배정)은 새 window를 만들기 전에 같은 project·target의 종료한 window를 이어받을 수 있는지 대상 제어 잠금 안에서 봅니다.
 대상 window는 현재 실행 포인터가 있으면 그 window 하나입니다. 포인터가 없으면(반납 뒤) 같은 target의 관리 window 가운데 가장 최근 run의 것 하나입니다. 최근 판단은 `agent/runs/<run_id>/launch.sh`의 시각입니다.
-이어받으려면 위 정리 조건에서 "pane이 관리 pane 하나뿐" 조건만 뺀 나머지를 모두 만족해야 합니다.
+이어받으려면 위 정리 조건을 모두 만족해야 합니다. 사용자 pane의 유무는 보지 않습니다.
 
 - 관리 정보의 base·target·run_id·window_id·pane_id와 server PID·시작 시각·생성 정보가 일치합니다. 복원한 window는 채택하지 않습니다.
 - 관리 pane이 그 window에 있고 종료했습니다.
 - 그 run의 실제 종료를 stop과 같은 기준으로 확인했습니다. control_pending이 false이고 살아 있는 controller가 없습니다.
-- 사용자가 추가한 pane이 있는지는 보지 않습니다. 사용자 pane이 없는 window도 같은 방식으로 이어받습니다.
 
 자기 restart는 예외입니다. 분리 controller가 `restart`를 수행하는 중이면, 끝낸 그 run의 control_pending과 그 controller(기록한 PID·생성 시각이 지금 process와 같음)는 이어받는 조건을 막지 않습니다. 다른 controller나 다른 pending은 막습니다.
 
@@ -408,7 +412,7 @@ Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않
 2와 3 사이에 실패하면 대기 process를 종료해 window를 이전 run의 종료 근거로 되돌립니다. 3의 sequence는 한 번에 적용되므로 window는 이전 run의 종료 근거이거나 새 run의 실행 전 대기 pane입니다. 둘 다 다음 start·stop이 처리하는 상태입니다.
 이어받지 못하면 지금처럼 새 window를 만들고 옛 window는 정리가 판단합니다. 종료 확인·반납 보류·수동 복구의 근거를 지우지 않기 위해서입니다.
 
-반납(stop) 뒤 사용자 pane이 있는 window는 정리가 닫지 않으므로 다음 start까지 `-exited-` 이름으로 남습니다. 다음 start가 그 window를 이어받고 이름을 되돌립니다. 사용자 pane이 없는 window는 지금처럼 정리가 닫습니다.
+반납(stop) 뒤에는 정리가 관리 pane을 닫으므로(사용자 pane이 있으면 그 window는 사용자의 window로 남습니다) 이어받을 window가 없고, 다음 start는 새 window를 만듭니다. 이어받는 경우는 현재 실행 포인터가 남은 window(반납 보류·restart)와 정리가 남긴 window입니다.
 Tmux server를 다시 띄운 뒤의 resume·start는 이전 window가 없으므로 새 window를 만듭니다.
 
 ### Background로 옮겨진 대화와 등록되지 않은 run의 종료 판정
@@ -457,7 +461,7 @@ Prompt 파일은 선택입니다.
 등록 전 hook이 실패해 `registration_failed`로 끝난 Leader도 같은 경로입니다. CLI가 살아 있으면 다시 실행한 start는 같은 오류를 바로 반환합니다. 새로 시작하지 않습니다. CLI가 끝난 것이 확인되면 새 대화로 시작합니다(3절 "Background로 옮겨진 대화와 등록되지 않은 run의 종료 판정").
 Background로 옮겨진 대화의 Leader는 그 대화와 CLI가 모두 끝난 것이 확인될 때만 새로 시작합니다. 아니면 start는 `conversation_backgrounded` 또는 `execution_unknown`입니다.
 정상 종료가 확인된 이전 Leader는 명시적인 새 시작을 막지 않습니다.
-새 Leader는 이전 Leader의 종료한 window를 이어받을 수 있습니다. 사용자가 그 window에 붙인 pane은 새 Leader 옆에 그대로 남습니다(3절 종료한 window 재사용).
+새 Leader는 이전 Leader의 종료한 window를 이어받을 수 있습니다(반납하지 않은 종료·restart). 사용자가 그 window에 붙인 pane은 새 Leader 옆에 그대로 남습니다(3절 종료한 window 재사용). 반납한 Leader의 window는 정리가 관리 pane을 닫으므로 이어받지 않습니다.
 Leader 시작은 base의 Git 상태를 바꾸지 않습니다.
 
 ### Worker
@@ -574,13 +578,15 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | resolve_project(cwd=None, config_path=None) | 현재 디렉토리를 포함하는 가장 깊은 등록 base·seat의 project를 반환. 없거나 모호하면 `SessionError` |
 | RemoteSeat | 원격 Worker seat의 등록 항목 형식. `Project.seats`의 원소가 이 형식이면 원격 seat |
 | SessionError | 공통 오류. `code`·`message`·`exit_code`·`details` |
+| pending_releases(cwd=None, config_path=None, socket=None) | 반납 대기인 seat를 `{JOB ID: {seat, since, reasons}}`로 반환. tmux 실행 근거만 읽고, 읽을 수 없는 run은 나열하지 않음 |
+| finish_release(cwd, job_id, config_path=None, socket=None) | JOB의 반납 대기를 마침. CR이 in-progress를 떠난 뒤에 호출. 대기가 없으면 None, 있으면 `{job_id, seat, released, reasons}`. 반납 조건은 stop과 같고 맞지 않으면 배정을 보존하고 이유를 반환 |
 | Tmux | tmux control 클래스. 소비자는 socket 경로를 주어 만들고 option 조회·pane 조작에 씀 |
 | PANE_ID_OPTION | 관리 window의 pane을 가리키는 tmux window option 이름(`@agent_session_pane_id`). 정의는 `agent_session/tmux.py`. tmux 설정 파일은 import할 수 없어 같은 문자열을 주석과 함께 씀 |
 
 `PANE_ID_OPTION`·`RemoteSeat`·`SessionError`·`Tmux`는 이름과 형식을 제공하는 값이고, 나머지는 함수입니다.
 agent-session 내부 모듈은 서로의 밑줄 이름을 import하지 않습니다. 함께 쓰는 helper는 소유 모듈의 공개 이름입니다.
 
-`read_state`·`check_binding`·`liveness`·`caller`·`require_live`는 읽기 전용입니다.
+`read_state`·`check_binding`·`liveness`·`pending_releases`·`caller`·`require_live`는 읽기 전용이고, `finish_release`는 반납 대기를 마치는 쓰기 호출입니다(project-item이 CR을 옮긴 직후 부름).
 호출자는 선택한 등록 파일과 socket을 전달할 수 있습니다.
 전달하지 않은 등록 경로는 CLI와 같은 표준 경로 규칙을 적용합니다.
 상태 손상·미등록·현재 소유자 불일치·관찰 불가를 구분해 공통 오류로 반환합니다.
@@ -971,6 +977,9 @@ Worker는 아래 반납 검사를 추가로 확인합니다.
 조건이 안 맞으면 종료만 수행하고 JOB·hash·대화 기록을 보존합니다.
 이때 `leader.reviewing`이 이 JOB이면 null로 만들고 현재 실행 포인터와 window는 유지합니다.
 이 경우 `stopped: true, released: false`와 이유를 반환합니다.
+CR이 in-progress라서 반납하지 못했으면 종료한 run의 window에 반납 대기를 기록합니다(`release_pending`: 처음 기록한 UTC 시각 `since`와 `reasons`). state의 배정은 그대로 둡니다. 실행 근거이므로 state에 쓰지 않고, 같은 window를 다음 run이 이어받으면 다른 run 값처럼 null로 돌아갑니다.
+Leader가 그 CR을 `project-item move`로 in-progress에서 옮기면(done·todo·open·deferred) 같은 명령이 이 반납을 마칩니다. 반납 조건은 위 검사를 그대로 씁니다. 조건이 안 맞으면 반납하지 않고 이유를 출력하며, 반납 대기는 유지합니다. 이미 CR을 옮긴 뒤의 stop은 이 기록 없이 위처럼 반납합니다.
+`project-item ls`와 Board sidebar는 반납 대기인 seat를 표시합니다.
 보류로 todo에 둔 CR의 배정이 남으면 같은 CR의 start가 같은 seat에서 새 대화로 이어받습니다(4절).
 종료 성공·반납 보류는 exit 0입니다. 실제 종료 미확인은 exit 4입니다.
 보존한 session은 종료한 대화의 이력이며 송신 가능을 뜻하지 않습니다.
@@ -982,7 +991,7 @@ Provider 실행 시도가 명시적으로 false인 예약도 stop할 수 있습�
 공통 코드는 그 PID에 정상 SIGTERM을 요청하고 실제 종료를 확인합니다.
 Native provider 관찰은 수행하지 않습니다. Provider를 시작한 적이 없기 때문입니다.
 반납 검사는 그대로 적용합니다. CR이 in-progress에 있으면 첫 stop은 released=false입니다.
-Leader는 실제 종료 후 CR을 todo로 되돌리고 stop을 다시 호출해 반납합니다.
+Leader가 실제 종료 후 CR을 todo로 옮기면 그 move가 반납을 마칩니다.
 이 경로의 API binding은 session=null·ready=false·alive=false입니다.
 Termination-confirmed는 대기 pane·PID·그룹이 모두 종료했을 때만 true입니다.
 실행 시도가 true 또는 누락인 미등록 실행에는 이 경로를 적용하지 않습니다.

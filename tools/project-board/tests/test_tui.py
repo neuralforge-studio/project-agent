@@ -110,6 +110,10 @@ def test_empty_seat_shows_index_and_dash():
     assert _seat_text({"index": 1, "job_id": None}) == "  1 -"
 
 
+def test_a_seat_waiting_for_release_is_marked():
+    assert _seat_text({"index": 0, "job_id": "TOOL-001", "status": "release_pending"}) == "반납대기 0 TOOL-001"
+
+
 def test_remote_seat_names_its_host_before_the_job():
     assert _seat_text({"index": 2, "job_id": "TOOL-001", "host": "macbook-worker"}) == (
         "  2@macbook-worker TOOL-001")

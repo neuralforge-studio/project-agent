@@ -77,6 +77,7 @@ agent-session send --project pm_vip --job leader "<CR ID> <제목> <CR 파일 �
 제출 hash가 바뀌면 변경된 코드와 검증을 확인합니다. 변경하지 않은 범위의 유효한 검토 근거는 재사용합니다.
 완료 보고만으로 CR을 done으로 옮기거나 seat를 비우지 않습니다.
 `released: false`이면 배정을 보존하고 반환한 이유를 처리합니다. CR이 in-progress에 남아 있거나 결과가 origin에 없으면 반납하지 않습니다.
+CR이 in-progress라서 거절됐으면 seat는 반납 대기입니다(`project-item ls`·Board에 표시). 그 CR을 `project-item move`로 옮기면 같은 명령이 반납을 마치므로 stop을 다시 실행하지 않습니다. 반납 조건이 맞지 않으면 move가 이유를 출력하고 반납 대기가 남습니다.
 보류한 todo CR의 배정이 남았으면 같은 `agent-session start --job <CR-ID>`로 같은 seat에서 재개합니다.
 
 ## 운영자: 서버를 내리기 전과 뒤
