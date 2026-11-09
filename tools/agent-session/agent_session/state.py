@@ -65,6 +65,10 @@ class FileLock:
             finally:
                 os.close(fd)
 
+    @property
+    def held(self):
+        return self._fd is not None
+
     def __enter__(self):
         self.acquire()
         return self
@@ -109,30 +113,103 @@ def bound(previous, session, leader=False):
 _RUN_IDENTITY = ("run_id", "window_id", "pane_id", "job_id", "remote_seat", "remote_native")
 
 
-def publish_session(project, tmux, store, meta, session, window=None):
-    """Write a run's connection to canonical state and mark its window ready, in one place.
+def _slot_session(value, slot):
+    return value["leader"] if slot == "leader" else value[slot[len("seat-"):]]["session"]
+
+
+def _current_run(project, tmux, meta):
+    """The slot's current run when it is still `meta`'s run, JOB, window and pane and this project's, else None."""
+    current = tmux.get_current(project.project_id, meta["target"])
+    if not current or any(current.get(key) != meta.get(key) for key in _RUN_IDENTITY):
+        return None
+    check_owner(project, meta["target"], None, current)
+    return current
+
+
+def _finished(run_id, session):
+    """The window options of a finished publication, written in one tmux update."""
+    return {"run_id": run_id, "session_id": session["session_id"], "registered": True,
+            **({"message_to": session["message_to"]} if "message_to" in session else {}),
+            "publishing": None, "ready": True, "start_error": None}
+
+
+def publish_session(project, tmux, store, meta, session):
+    """Publish a run's connection: the one writer of a local run's state session.
 
     The caller holds the target control lock. The slot's current run must still be `meta`'s run, JOB,
-    window and pane, and this project's; otherwise `target_changed` and nothing is written. A seat's JOB
-    must still own the seat. `window` options are written in the same tmux update as `ready`, so a
-    registered run is never unpublished. Publishing the same conversation again keeps its connection time."""
+    window and pane, and this project's; otherwise `target_changed` and nothing is written. Steps: the
+    window records what it will publish (`publishing`); the state write is the commit; the window then
+    becomes registered and ready in one update. A failure before the commit publishes nothing. A failure
+    after it puts the slot's previous session back, under the same lock, so a failed publication leaves
+    nothing published. A process that ends between the commit and the window update leaves the intent and
+    the committed state for `complete_publication`."""
     slot = meta["target"]
-    current = tmux.get_current(project.project_id, slot)
-    if not current or any(current.get(key) != meta.get(key) for key in _RUN_IDENTITY):
+    current = _current_run(project, tmux, meta)
+    if current is None:
         raise SessionError("target_changed", "The run is no longer the slot's current execution.")
-    check_owner(project, slot, None, current)
+    window, run_id = current["window_id"], current["run_id"]
+    before = []
+    written = []
 
-    def publish(value):
+    def commit(value):
         if slot == "leader":
+            before.append(value["leader"])
             value["leader"] = bound(value["leader"], session, leader=True)
+            written.append(value["leader"])
         else:
-            key = slot[len("seat-"):]
-            if value[key]["job_id"] != current["job_id"]:
+            row = value[slot[len("seat-"):]]
+            if row["job_id"] != current["job_id"]:
                 raise SessionError("target_changed", "The JOB changed before binding publication.")
-            value[key]["session"] = bound(value[key]["session"], session)
-    store.update(publish)
-    return tmux.write_meta(current["window_id"], {"run_id": current["run_id"], **(window or {}),
-                                                  "ready": True, "start_error": None})
+            before.append(row["session"])
+            row["session"] = bound(row["session"], session)
+            written.append(row["session"])
+
+    def put_back(value):
+        if _slot_session(value, slot) == written[0]:
+            if slot == "leader":
+                value["leader"] = before[0]
+            else:
+                value[slot[len("seat-"):]]["session"] = before[0]
+
+    tmux.write_meta(window, {"run_id": run_id, "publishing": session})
+    try:
+        store.update(commit)
+    except BaseException:
+        _clear_intent(tmux, window, run_id)
+        raise
+    try:
+        return tmux.write_meta(window, _finished(run_id, session))
+    except BaseException:
+        try:
+            store.timeout = max(store.timeout, 3)
+            store.update(put_back)
+            _clear_intent(tmux, window, run_id)
+        except SessionError:
+            pass                                   # the intent stays: the committed state is finished later
+        raise
+
+
+def _clear_intent(tmux, window, run_id):
+    try:
+        tmux.write_meta(window, {"run_id": run_id, "publishing": None})
+    except SessionError:
+        pass                                       # the original error is the one to report
+
+
+def complete_publication(project, tmux, store, meta):
+    """Finish the window update of a publication whose state write committed; the caller holds the lock.
+
+    Only for a run that is the slot's current run, is not ready, and whose `publishing` session is what the
+    state names for the slot. It decides nothing new: the commit was made by the registration. Returns the
+    window metadata after the update, or None when the run has nothing to finish."""
+    current = _current_run(project, tmux, meta)
+    intent = current and current.get("publishing")
+    if not isinstance(intent, dict) or current.get("ready"):
+        return None
+    session = _slot_session(store.read(missing_ok=True), meta["target"])
+    if not session or any(session.get(key) != value for key, value in intent.items()):
+        return None
+    return tmux.write_meta(current["window_id"], _finished(current["run_id"], intent))
 
 
 def binding_identity(session, provider):

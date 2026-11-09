@@ -265,7 +265,7 @@ State는 배정과 연결의 원본이며 실행 process 정보의 원본은 아
 | Tmux 실행 | 실제 socket 경로, server PID·시작 시각, session/window/pane ID |
 | Process 실행 | CLI PID·생성 시각·process group, 추적한 background PID·생성 시각 |
 | Provider 연결 | 실제 session_id, Claude message_to 또는 Codex endpoint |
-| 제어와 관찰 | stopping 여부, provider 실행 시도 여부, 등록 완료 여부, hook 관찰값, controller PID·생성 시각, background로 옮겨짐(`moved_to_background`) |
+| 제어와 관찰 | stopping 여부, provider 실행 시도 여부, 등록 완료 여부, 게시 의도(`publishing`), hook 관찰값, controller PID·생성 시각, background로 옮겨짐(`moved_to_background`) |
 
 JOB 값은 CR을 가리키는 값(8절)만 둡니다. CR 본문은 option에 복제하지 않고 CR 파일에서 읽습니다.
 
@@ -352,8 +352,8 @@ CR 항목 루트 잠금은 재진입하지 않습니다. 잠금을 가진 호출
 State 잠금 안에서 provider·외부 명령을 호출하지 않습니다.
 Read-state와 check-binding은 잠금을 획득하지 않는 읽기 전용 API입니다.
 원자 교체한 snapshot을 읽고 외부 관찰 뒤 다시 읽어 JOB·run·연결 변경을 거절합니다.
-내부 등록은 binding을 확인한 뒤 대상 제어 잠금을 잡고(hook 제한 30초 안의 한도) 게시합니다. 잠금 안에서 현재 run·JOB·window·pane을 다시 대조합니다.
-다르면 `target_changed`이고 state와 window에 아무것도 쓰지 않습니다. 같으면 state의 session과 window의 `registered`·`ready`를 함께 씁니다.
+내부 등록은 binding을 확인한 뒤 대상 제어 잠금을 잡고 게시합니다(deadline과 쓰기 순서는 5절). 잠금 안에서 현재 run·JOB·window·pane을 다시 대조합니다.
+다르면 `target_changed`이고 state와 window에 아무것도 쓰지 않습니다.
 Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않고 자기 window의 관찰값만 갱신합니다.
 늦은 hook이 옛 window를 갱신해도 새 실행의 state session을 덮어쓸 수 없습니다.
 
@@ -608,9 +608,18 @@ Claude는 시작 때 지정한 UUID와 실제 hook의 session·cwd·source를 �
 run이 resume인지는 그 window의 `resume` option이 정합니다. hook의 matcher도 같은 값을 씁니다.
 Codex는 실제 도구 문맥의 CODEX_THREAD_ID와 endpoint를 확인합니다.
 내부 등록은 현재 run과 자기 window를 대조하고 그 window의 binding만 기록합니다.
-등록은 binding 확인 뒤 대상 제어 잠금(hook 제한 30초 안의 한도) 아래에서 현재 포인터·JOB과 binding을 다시 검증해 canonical state에 게시합니다.
-같은 slot의 기존 session과 비교해 `connected_at`·`reviewing`을 보존하는 규칙은 3절을 따릅니다. state와 window의 `registered`·`ready`는 함께 바뀝니다.
-잠금을 한도 안에 얻지 못하거나 state 쓰기가 실패하면 등록 실패입니다. `start_error`를 남기고 `registered`·`ready`는 거짓으로 둡니다.
+등록은 하나의 deadline 안에서 일합니다. deadline은 hook(Codex는 도구 호출)이 시작한 시각에서 25초 뒤입니다. hook 제한 30초보다 짧습니다. binding 확인(최대 20초)은 deadline 6초 전에 끝나야 하고, 대상 제어 잠금과 state 잠금은 남은 시간을 나눠 씁니다. deadline이 지나면 등록 실패입니다.
+게시는 대상 제어 잠금을 잡고 다음 순서로 합니다.
+
+1. 현재 포인터·JOB·window·pane과 binding을 다시 대조합니다. 다르면 `target_changed`이고 아무것도 쓰지 않습니다.
+2. window에 게시 의도(`publishing`: 게시할 session)를 씁니다.
+3. state에 그 slot의 session을 씁니다(같은 slot의 기존 session과 비교해 `connected_at`·`reviewing`을 보존하는 규칙은 3절). 이 쓰기가 게시의 commit 지점입니다.
+4. window에 `session_id`·`registered`·`ready`를 한 번에 쓰고 `publishing`·`start_error`를 지웁니다.
+
+3 전에 실패하면 아무것도 게시되지 않고 `start_error`를 남깁니다. 4가 실패하면 같은 잠금 안에서 state의 그 slot을 쓰기 전 값으로 되돌린 뒤 `start_error`를 남깁니다. 되돌린 뒤에야 "실패한 등록은 게시된 것이 없음"입니다. `registered`·`ready`는 거짓으로 남습니다.
+등록 process가 3과 4 사이에 끝나면(SIGKILL 등) 되돌릴 기회가 없습니다. 그때 state는 `publishing`과 같은 session을 이미 가리키고 window만 미완입니다. 기다리는 시작 controller와 다시 실행한 start는 대상 제어 잠금 안에서 "현재 run이고, state가 이 run의 `publishing` session을 가리키며 window가 ready가 아님"을 확인하면 4만 마칩니다. 새 게시 결정이 아니라 이미 commit된 게시의 마무리입니다. 이 조건 밖에서는 controller가 state를 쓰지 않습니다.
+로컬 run이 `registered`이고 `ready`가 아닌 상태는 이 절차가 만들지 않습니다. 이전 release가 남긴 상태입니다. 시작 controller는 이를 기다리지 않고 곧바로 `registration_incomplete`(exit 4)로 끝나며 그 run을 stop 또는 restart하라고 안내합니다. controller가 대신 게시하지 않습니다(binding을 다시 검증할 수 없기 때문입니다).
+시작 controller는 대상 제어 잠금을 놓고 기다린 뒤 잠금을 다시 잡아 옛 window 정리를 이어갑니다. 다시 잡지 못해도(시간 부족) 게시된 사실은 그대로 보고하고 정리는 다음 start가 합니다. 잠금을 다시 잡은 뒤(못 잡았으면 그냥) 현재 포인터를 다시 읽어, 그 run이 다른 run으로 바뀌었으면 `target_changed`, 멈추는 중이면 `target_stopping`으로 보고합니다. 옛 snapshot으로 성공을 보고하지 않습니다.
 시작 controller의 게시 뒤 일은 옛 window 정리뿐입니다. controller가 먼저 끝나면 다음 start의 정리가 대신합니다.
 Record-ready가 끝나기 전에는 Worker의 일반 작업을 시작하지 않습니다.
 새 CLI 실행 전에 부모의 중첩 실행 표시·세션 ID·메시지 IPC 환경을 제거합니다.
@@ -625,7 +634,7 @@ Claude의 CLAUDECODE·CLAUDE_CODE_SESSION_ID·CLAUDE_CODE_MESSAGING_*와 부모 
 기존에 승인한 프로젝트 설정을 사용하며 새 승인을 대신하는 키 입력을 보내지 않습니다.
 
 내부 등록의 provider binding 확인은 ListAgents에 이 pane의 행이 하나도 없을 때만 다시 조회합니다.
-여러 Leader를 동시에 시작하면 목록이 잠시 늦을 수 있기 때문입니다. 간격은 1초이고 전체 20초 안에서만 반복합니다. 이는 30초인 hook 제한 안입니다.
+여러 Leader를 동시에 시작하면 목록이 잠시 늦을 수 있기 때문입니다. 간격은 1초이고 전체 20초 안에서만 반복하며, 등록의 deadline이 더 이르면 그때 끝납니다.
 행이 둘 이상이거나, 이름·UUID가 다르거나, tmux 위치를 알 수 없으면 일시적 누락이 아니므로 바로 실패합니다.
 send와 observe의 조회는 다시 시도하지 않습니다.
 등록이 실패하면 오류 code와 message를 그 run의 window option `start_error`(`{code, message}`)에 남깁니다.
@@ -1092,7 +1101,7 @@ Provider가 Claude인 project만 처리합니다. Codex project는 건드리지 
 
 - 종료 기록이 있고 state의 job_id·session_id가 그 기록과 같은 Worker seat는 현재 실행 포인터가 없어도 `start --job <CR>`로 시작할 수 있습니다. 같은 seat에서 새 대화로 시작하며 Git 준비를 다시 하지 않습니다. 시작하면 그 기록을 지웁니다.
 - 기록이 없거나 state와 다르면 지금처럼 execution_unknown입니다. 재부팅으로 내려간 slot은 `resume --lost`가 먼저 기록을 만듭니다.
-- `start --job leader`는 실행 포인터가 없으면 새 Leader로 시작합니다. 시작하면 Leader의 기록을 지웁니다.
+- `start --job leader`는 실행 포인터가 없으면 새 Leader로 시작합니다. 시작하면 시작 전에 있던 Leader의 기록을 지웁니다. 시작을 기다리는 사이 새 run에 대해 shutdown이 남긴 기록은 지우지 않습니다(run_id가 다릅니다).
 - 시작하지 못한 resume의 run이 CLI 종료로 등록 전에 끝났으면 그 포인터를 지워 위 경로가 열리게 합니다.
 
 ### 종료 근거가 부족한 실행의 수동 복구

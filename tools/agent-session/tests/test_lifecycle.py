@@ -510,7 +510,7 @@ def test_a_registration_that_cannot_publish_is_not_registered(session_env, monke
         import agent_session.lifecycle as lifecycle
         from agent_session_fake_provider import FakeProvider
 
-        with_flags(monkeypatch, "--lock-timeout", "1")
+        with_flags(monkeypatch, "--hook-budget", "1")
         monkeypatch.setattr(lifecycle, "get_provider", lambda name: FakeProvider(dialog=True))
         with pytest.raises(SessionError) as error:
             env.manager().start("leader")
@@ -535,6 +535,149 @@ def test_a_registration_that_cannot_publish_is_not_registered(session_env, monke
     with pytest.raises(SessionError) as again:
         env.manager().start("leader")
     assert again.value.code == "registration_failed" and again.value.details["hook_error"]["code"] == expected
+
+
+def test_a_failed_window_update_leaves_nothing_published(session_env, monkeypatch):
+    """The state write is the commit; a window update that fails after it puts the state back."""
+    env = session_env
+    with_flags(monkeypatch, "--fail-window-write")
+    with pytest.raises(SessionError) as error:
+        env.manager().start("leader")
+    assert error.value.code == "registration_failed"
+    assert error.value.details["hook_error"]["code"] == "tmux_command_failed"
+    meta = env.tmux.get_current("fixture", "leader")
+    assert meta["registered"] is False and meta["ready"] is False and not meta.get("publishing")
+    assert env.store.read()["leader"] is None
+
+
+@pytest.fixture
+def held_leader(session_env, monkeypatch):
+    """A Leader run whose CLI sits at its startup dialog, after the controller that started it ended."""
+    import agent_session.lifecycle as lifecycle
+    from agent_session_fake_provider import FakeProvider
+
+    monkeypatch.setattr(lifecycle, "get_provider", lambda name: FakeProvider(dialog=True))
+    with pytest.raises(SessionError) as error:
+        session_env.manager().start("leader")
+    assert error.value.code == "needs_user_action"
+    return session_env, session_env.tmux.get_current("fixture", "leader")
+
+
+def test_a_start_finishes_a_publication_whose_registration_committed_the_state(held_leader):
+    """The registration ended after its state write; the next start only finishes its window update."""
+    env, meta = held_leader
+    binding = {"session_id": str(uuid.uuid4()), "endpoint": meta["endpoint"]}
+    committed = {**binding, "connected_at": "2026-11-09T00:00:00Z", "reviewing": None}
+    env.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "publishing": binding})
+    env.store.update(lambda value: value.__setitem__("leader", committed))
+    result = env.manager().start("leader")
+    assert result["ready"] is True and result["session"] == binding
+    finished = env.tmux.get_current("fixture", "leader")
+    assert finished["ready"] is True and finished["registered"] is True
+    assert finished["session_id"] == binding["session_id"] and finished["publishing"] is None
+    assert env.store.read()["leader"] == committed
+
+
+def test_a_start_publishes_nothing_for_an_intent_the_state_does_not_name(held_leader):
+    env, meta = held_leader
+    binding = {"session_id": str(uuid.uuid4()), "endpoint": meta["endpoint"]}
+    env.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "publishing": binding})
+    with pytest.raises(SessionError) as error:
+        env.manager(timeout=command_timeout() / 6).start("leader")
+    assert error.value.code in ("timeout", "needs_user_action")
+    assert env.store.read()["leader"] is None
+    after = env.tmux.get_current("fixture", "leader")
+    assert after["ready"] is False and after["registered"] is False
+
+
+def legacy_registered(env, meta):
+    """The state an earlier release left: registered, not ready, nothing published, no start_error."""
+    env.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "session_id": str(uuid.uuid4()),
+                                            "registered": True})
+
+
+@pytest.mark.parametrize("who", ["leader", "worker"])
+def test_a_registered_run_that_was_never_published_is_reported_not_waited_for(session_env, monkeypatch, who):
+    import agent_session.lifecycle as lifecycle
+    from agent_session_fake_provider import FakeProvider
+
+    env = session_env
+    monkeypatch.setattr(lifecycle, "get_provider", lambda name: FakeProvider(dialog=True))
+    job, slot = ("leader", "leader") if who == "leader" else (env.cr(), "seat-0")
+    with pytest.raises(SessionError) as error:
+        env.manager().start(job)
+    assert error.value.code == "needs_user_action"
+    legacy_registered(env, env.tmux.get_current("fixture", slot))
+    before = env.store.read()
+    started = time.monotonic()
+    with pytest.raises(SessionError) as error:
+        env.manager().start(job)
+    assert error.value.code == "registration_incomplete" and error.value.exit_code == 4
+    assert time.monotonic() - started < command_timeout() / 2, "it waited instead of ending"
+    assert error.value.details["resolution"] == ["stop", "restart"]
+    assert f"--job {job}" in error.value.message
+    assert env.store.read() == before                    # the controller publishes nothing it cannot verify
+    assert env.tmux.get_current("fixture", slot)["ready"] is False
+
+
+@pytest.mark.parametrize("change", ["stopping", "replaced"])
+def test_a_start_reports_the_run_as_it_is_after_waiting_without_the_lock(session_env, monkeypatch, change):
+    """The control lock is out of hand while the start waits; what happens meanwhile is what it reports."""
+    import agent_session.lifecycle as lifecycle
+    from agent_session.suspend import SuspendStore
+
+    env = session_env
+    observe = lifecycle.Manager._observe_ready
+
+    def then_someone_else_acts(self, context):
+        result = observe(self, context)
+        meta = self.tmux.get_current("fixture", "leader")
+        SuspendStore(env.project).record("leader", None, meta["run_id"], meta["session_id"], False)
+        if change == "stopping":
+            self.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "stopping": True})
+        else:
+            self.tmux.clear_current("fixture", "leader", meta["run_id"])
+        return result
+
+    monkeypatch.setattr(lifecycle.Manager, "_observe_ready", then_someone_else_acts)
+    with pytest.raises(SessionError) as error:
+        env.manager().start("leader")
+    assert error.value.code == ("target_stopping" if change == "stopping" else "target_changed")
+    record = SuspendStore(env.project).read()["leader"]
+    assert record["run_id"] and record["session_id"]     # the record of the run that was started stays
+
+
+def test_starting_a_leader_keeps_a_shutdown_record_made_for_the_new_run():
+    from agent_session.suspend import SuspendStore
+    import tempfile
+    from types import SimpleNamespace
+
+    with tempfile.TemporaryDirectory() as directory:
+        store = SuspendStore(SimpleNamespace(runtime_path=Path(directory)))
+        store.record("leader", None, "old-run", "old-session", False)
+        store.forget_before("leader", "new-run")
+        assert store.read() == {}
+        store.record("leader", None, "new-run", "new-session", False)
+        store.forget_before("leader", "new-run")
+        assert store.read()["leader"]["run_id"] == "new-run"
+
+
+def test_a_published_run_is_reported_even_when_the_lock_cannot_be_taken_again(session_env, monkeypatch):
+    from agent_session import state
+
+    env = session_env
+    acquire = state.FileLock.acquire
+
+    def refuse_a_wait_for_the_lock(self, timeout=None, blocking=None):
+        if blocking is True:                  # the retakes after the wait ask for it by name
+            raise SessionError("lock_timeout", "Timed out waiting for the command lock.", 4)
+        return acquire(self, timeout, blocking)
+
+    monkeypatch.setattr(state.FileLock, "acquire", refuse_a_wait_for_the_lock)
+    result = env.manager().start("leader")
+    assert result["ready"] is True
+    assert result["cleanup"]["kept"] == [{"window_id": None, "reason": "lock_timeout"}]   # left to the next start
+    assert env.store.read()["leader"]["session_id"] == result["session"]["session_id"]
 
 
 def test_commands_do_not_wait_for_a_controller_that_waits_for_registration(session_env):

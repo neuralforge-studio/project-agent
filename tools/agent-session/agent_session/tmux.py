@@ -53,7 +53,7 @@ _RUN_VALUES = {
     "session_id": None, "message_to": None, "start_error": None, "launch_file": None, "provider_name": None,
     "resume": False, "expected_session_id": None, "handoff_file": None, "leader_request": None,
     "remote_seat": None, "remote_native": None, "upstream": None, "upstream_bin": None,
-    "moved_to_background": None,
+    "moved_to_background": None, "publishing": None,
 }
 _VALUES_MARK = "agent-session-values"
 _SEAT_TARGET = re.compile(r"seat-(0|[1-9][0-9]*)")

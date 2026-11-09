@@ -150,7 +150,7 @@ def test_registration_waits_for_the_control_lock_inside_its_limit(native_slot, m
 
     fixture = native_slot
     pending = pending_run(fixture, monkeypatch)
-    monkeypatch.setattr(internal, "_PUBLISH_TIMEOUT", 1)
+    monkeypatch.setattr(internal, "_HOOK_BUDGET", 1)
     before = fixture["store"].read()
     with control_lock(fixture["project"], "seat-0"):
         with pytest.raises(SessionError) as error:
@@ -161,6 +161,132 @@ def test_registration_waits_for_the_control_lock_inside_its_limit(native_slot, m
     assert current["registered"] is False and current["ready"] is False
     assert current["start_error"]["code"] == "lock_timeout"
     assert fixture["store"].read() == before
+
+
+class Killed(BaseException):
+    """Stands for a process that ends where it is raised: nothing after it, no clean-up, runs."""
+
+
+def test_a_failed_window_update_puts_the_published_session_back(native_slot, monkeypatch):
+    fixture = native_slot
+    before = fixture["store"].read()
+    pending = pending_run(fixture, monkeypatch)
+    original = Tmux.write_meta
+
+    def lose_window_update(self, window_id, updates):
+        if updates.get("ready") is True:
+            raise SessionError("tmux_command_failed", "The fixture lost the window update.", 5)
+        return original(self, window_id, updates)
+
+    monkeypatch.setattr(Tmux, "write_meta", lose_window_update)
+    with pytest.raises(SessionError) as error:
+        internal._register("pending-run", str(fixture["config"]), pending["socket_path"],
+                           str(uuid.uuid4()), fixture["endpoint"], cwd=fixture["seat"])
+    assert error.value.code == "tmux_command_failed"
+    assert fixture["store"].read() == before                  # nothing stays published
+    current = fixture["tmux"].get_current("fixture", "seat-0")
+    assert current["registered"] is False and current["ready"] is False and current.get("publishing") is None
+    assert current["start_error"]["code"] == "tmux_command_failed"
+
+
+def test_a_process_that_ends_after_the_commit_leaves_what_complete_publication_finishes(native_slot, monkeypatch):
+    from agent_session.state import complete_publication, control_lock
+
+    fixture = native_slot
+    pending = pending_run(fixture, monkeypatch)
+    native_id = str(uuid.uuid4())
+    original = Tmux.write_meta
+
+    def end_at_window_update(self, window_id, updates):
+        if updates.get("ready") is True:
+            raise Killed()
+        return original(self, window_id, updates)
+
+    saves = []
+    update = StateStore.update
+
+    def only_the_commit(self, mutator):
+        saves.append(True)
+        if len(saves) > 1:
+            raise SessionError("state_write_failed", "The state cannot be saved again.", 5)
+        return update(self, mutator)
+
+    # The process ends at the window update and its clean-up cannot save the state either, as when it is
+    # killed there: nothing is put back.
+    monkeypatch.setattr(Tmux, "write_meta", end_at_window_update)
+    monkeypatch.setattr(StateStore, "update", only_the_commit)
+    with pytest.raises(Killed):
+        internal._register("pending-run", str(fixture["config"]), pending["socket_path"],
+                           native_id, fixture["endpoint"], cwd=fixture["seat"])
+    monkeypatch.setattr(Tmux, "write_meta", original)
+    monkeypatch.setattr(StateStore, "update", update)
+    # The state names the new conversation, the window has the intent and is not ready.
+    committed = fixture["store"].read()["0"]["session"]
+    assert committed["session_id"] == native_id
+    current = fixture["tmux"].get_current("fixture", "seat-0")
+    assert current["ready"] is False and current["registered"] is False
+    assert current["publishing"] == {"session_id": native_id, "endpoint": fixture["endpoint"]}
+    with control_lock(fixture["project"], "seat-0"):
+        finished = complete_publication(fixture["project"], fixture["tmux"], fixture["store"], current)
+    assert finished["ready"] is True and finished["registered"] is True and finished["session_id"] == native_id
+    assert finished["publishing"] is None
+    assert fixture["store"].read()["0"]["session"] == committed       # decided nothing new
+
+
+def test_complete_publication_finishes_nothing_the_state_does_not_name(native_slot, monkeypatch):
+    from agent_session.state import complete_publication, control_lock
+
+    fixture = native_slot
+    pending = pending_run(fixture, monkeypatch)
+    before = fixture["store"].read()
+    other = {"session_id": str(uuid.uuid4()), "endpoint": fixture["endpoint"]}
+    fixture["tmux"].write_meta(pending["window_id"], {"run_id": "pending-run", "publishing": other})
+    current = fixture["tmux"].get_current("fixture", "seat-0")
+    with control_lock(fixture["project"], "seat-0"):
+        assert complete_publication(fixture["project"], fixture["tmux"], fixture["store"], current) is None
+    assert fixture["store"].read() == before
+    after = fixture["tmux"].get_current("fixture", "seat-0")
+    assert after["ready"] is False and after["registered"] is False
+
+
+def run_register(fixture, budget, session_id=None):
+    """Register the pending run with a small deadline; return the error and the seconds it took."""
+    started = time.monotonic()
+    with pytest.raises(SessionError) as error:
+        internal._register("pending-run", str(fixture["config"]), fixture["pending"]["socket_path"],
+                           session_id or str(uuid.uuid4()), fixture["endpoint"], cwd=fixture["seat"])
+    return error.value, time.monotonic() - started
+
+
+@pytest.mark.parametrize("slow", ["binding", "control_lock", "state_lock"])
+def test_every_step_of_a_registration_ends_inside_its_one_deadline(native_slot, monkeypatch, slow):
+    from agent_session.state import control_lock
+
+    fixture = native_slot
+    fixture["pending"] = pending_run(fixture, monkeypatch)
+    before = fixture["store"].read()
+    monkeypatch.setattr(internal, "_HOOK_BUDGET", 3)
+    monkeypatch.setattr(internal, "_PUBLISH_RESERVE", 1)
+    monkeypatch.setattr(internal, "_BINDING_INTERVAL", 0.2)
+    if slow == "binding":
+        class Slow:
+            def verify_binding(self, session, context, metadata, timeout=20):
+                raise SessionError("session_not_bound", "The listing does not show the pane yet.", 3,
+                                   {"retryable": True})
+        monkeypatch.setattr(providers, "get_provider", lambda name: Slow())
+        error, seconds = run_register(fixture, 3)
+    elif slow == "control_lock":
+        with control_lock(fixture["project"], "seat-0"):
+            error, seconds = run_register(fixture, 3)
+    else:
+        with locked(fixture["project"].state_path.with_name("state.lock")):
+            error, seconds = run_register(fixture, 3)
+    assert error.code == ("session_not_bound" if slow == "binding" else "lock_timeout")
+    assert seconds < 6, "the steps did not share the 3 second deadline"     # added limits would be far above
+    assert fixture["store"].read() == before
+    current = fixture["tmux"].get_current("fixture", "seat-0")
+    assert current["registered"] is False and current["ready"] is False and current.get("publishing") is None
+    assert current["start_error"]["code"] == error.code
 
 
 @pytest.mark.parametrize("mismatch", ["cwd", "endpoint"])

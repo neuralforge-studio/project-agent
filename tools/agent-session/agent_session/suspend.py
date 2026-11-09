@@ -104,6 +104,14 @@ class SuspendStore:
         self.update(lambda value: value.__setitem__(slot, entry))
         return entry
 
+    def forget_before(self, slot, run_id):
+        """Drop a slot's record unless it is the record of `run_id`, a run started after it was made."""
+        def drop(value):
+            if slot in value and value[slot]["run_id"] != run_id:
+                del value[slot]
+        if slot in self.read():
+            self.update(drop)
+
     def forget(self, slot, run_id=None):
         """Drop a slot's record; with a run, only the record of that run."""
         def drop(value):
@@ -119,7 +127,7 @@ class SuspendMixin:
     The mixin relies on these members of the `lifecycle.Manager` it is mixed into; changing one of
     them there changes this contract:
     - attributes: `project`, `store`, `tmux`, `provider`
-    - lock and deadline: `_lock(slot)`, `remaining()`
+    - lock and deadline: `_lock(slot)`, `_regain(slot)`, `remaining()`
     - run evidence: `_owned`, `_observe`, `_session`, `_process_facts`, `_retire_name`,
       `_restore_stopping`
     - starting a conversation: `_context`, `_new_window`, `_launch`
@@ -255,6 +263,7 @@ class SuspendMixin:
 
         The slot then has no tmux evidence and a record, so start can open a new conversation."""
         try:
+            self._regain(context["target"])     # a failed wait may have left the control lock
             meta = self.tmux.get_current(self.project.project_id, context["target"])
             if (meta and meta.get("run_id") == context["run_id"] and not meta.get("registered")
                     and self.tmux.pane_info(meta["pane_id"])["pane_dead"]):
@@ -369,7 +378,7 @@ class SuspendMixin:
             job = jobs.claim(self.project, item["job_id"])
             context = self._new_window(self._context(slot, job))
             result = self._launch(context, NEW_CONVERSATION)
-            SuspendStore(self.project, self.remaining()).forget(slot)
+            SuspendStore(self.project, self.remaining()).forget_before(slot, result["run_id"])
             return result
 
     def notify_resumed(self, slot, text):
