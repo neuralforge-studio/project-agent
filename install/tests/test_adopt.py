@@ -12,7 +12,7 @@ import threading
 
 import pytest
 
-from harness import (CLAUDE_LINKS, CODEX_LINKS, LIB, SHIMS, assert_changes, install_paths, snapshot)
+from harness import (CLAUDE_LINKS, CODEX_LINKS, INSTALLER, LIB, SHIMS, assert_changes, install_paths, snapshot)
 
 LINKS = (*SHIMS, *CLAUDE_LINKS, *CODEX_LINKS)
 OLD_RELATIVE = {path: "../../codex/skills/" + path.rsplit("/", 1)[1] for path in CLAUDE_LINKS}
@@ -283,3 +283,44 @@ def test_t28_no_observer_sees_an_entry_point_missing_or_dangling_during_the_take
         stop.set()
         reader.join()
     assert count[0] > 10 and not bad, bad[:3]
+
+
+# ---------------------------------------------------------------- T29: a link the user changes after the plan
+
+REPLACE_HOOK = '''\
+import os, sys
+spec = os.environ.get("INSTALLER_REPLACE")
+if spec:
+    sys.path.insert(0, os.environ["INSTALLER_DIR"])
+    from project_agent_install import actions
+    index, link, target = spec.split("|")
+
+    def checkpoint(where, number):
+        if where == "before" and number == int(index):      # the user swaps the link just before the installer does
+            os.unlink(link)
+            os.symlink(target, link)
+    actions.checkpoint = checkpoint
+'''
+
+
+@pytest.mark.parametrize("relative", [SHIMS[0], CLAUDE_LINKS[1], CODEX_LINKS[0]])
+def test_t29_a_link_the_user_changes_after_the_plan_is_not_overwritten_and_the_run_is_undone(station, source, relative):
+    home = station.home
+    plan = json.loads(station.adopt(source, "--dry-run", "--json").stdout)["changes"]
+    index = next(number for number, change in enumerate(plan) if change["path"] == "~/" + relative)
+    hook = home.root / "replace-hook"
+    hook.mkdir()
+    (hook / "sitecustomize.py").write_text(REPLACE_HOOK)
+    mine = home.root / "mine"
+    mine.mkdir()
+    link = real_link(station, relative)
+    before = station.snapshot()
+    result = station.adopt(source, env={"PYTHONPATH": str(hook), "INSTALLER_DIR": str(INSTALLER.parent),
+                                        "INSTALLER_REPLACE": "%d|%s|%s" % (index, link, mine)})
+    assert result.returncode == 4, result.stdout + result.stderr
+    assert os.readlink(link) == str(mine)                         # the user's link is still the user's
+    after_home, after_dev = station.snapshot()
+    home_name, dev_name = (relative, None) if link.is_relative_to(home.home) else (None, "claude/skills/" + relative.rsplit("/", 1)[1])
+    for snap, was, name in ((after_home, before[0], home_name), (after_dev, before[1], dev_name)):
+        changed = {path for path in set(snap) | set(was) if snap.get(path) != was.get(path)}
+        assert changed == ({name} if name else set()), changed    # everything else was undone
