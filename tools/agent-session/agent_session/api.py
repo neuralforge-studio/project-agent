@@ -12,10 +12,19 @@ from .tmux import PANE_ID_OPTION, Tmux
 # The public names. spec 5 (docs/project-team/spec.md) records each one's input and result.
 __all__ = (
     "PANE_ID_OPTION", "RemoteSeat", "SessionError", "Tmux",
-    "caller", "check_binding", "finish_release", "liveness", "load_registry", "pending_releases",
+    "caller", "check_binding", "finish_release", "liveness", "load_registry", "pane_slot", "pending_releases",
     "project_liveness", "project_pending_releases", "project_state",
     "read_state", "require_live", "resolve_project",
 )
+
+
+def pane_slot(pane, tmux=None):
+    """`(project_id, slot)` of the managed window that holds this tmux pane, or None for another window.
+
+    `slot` is `leader` or `seat-N` (the vocabulary of `caller`), or None when the window's target is not
+    a slot. It reads the window's tmux options only, so it never fails on stale state.
+    """
+    return (tmux or tmux_module.control()).pane_slot(pane)
 
 
 def caller(project, tmux=None, store=None):

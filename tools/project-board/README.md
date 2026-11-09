@@ -81,7 +81,7 @@ An SSH seat shows `number@host` before its CR ID. Its tooltip shows the register
 host and remote path. An unavailable execution check keeps the seat assigned and shows
 `실행 확인 불가` with the unknown-state color.
 When the window a client is viewing is a managed `agent-session` window (it has
-`@agent_session_project_id`), the sidebar highlights that project with a blue name row and a
+a project option), the sidebar highlights that project with a blue name row and a
 `▶` mark, and the slot too: the Leader row or the seat's row when the seats are expanded, or
 the `▸` button (with `현재 창: …` in its tooltip) when they are folded. Each window's Board
 pane marks its own window, so the mark follows the client when it changes window. It reads the

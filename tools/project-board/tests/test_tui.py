@@ -229,7 +229,7 @@ def test_sidebar_highlights_the_project_and_slot_of_the_managed_window_being_sho
             assert not app.query_one("#project-0-seats", Button).has_class("slot-active")
             assert not app.query_one("#project-0-seat-0", Button).has_class("slot-active")
             # A seat window: only that seat's row is marked, and the Leader row is not.
-            value["active"] = {"project_id": "Falcon2", "slot": 0}
+            value["active"] = {"project_id": "Falcon2", "slot": "seat-0"}
             await app.refresh_context()
             await pilot.pause()
             assert [w.has_class("slot-active") for w in app.query(".leader")] == [False]
@@ -238,7 +238,7 @@ def test_sidebar_highlights_the_project_and_slot_of_the_managed_window_being_sho
             svg = app.export_screenshot()
             assert "▶ Falcon2" in html.unescape(svg).replace("\xa0", " ")
             # The other project's seat number does not match this project.
-            value["active"] = {"project_id": "ProjectB", "slot": 0}
+            value["active"] = {"project_id": "ProjectB", "slot": "seat-0"}
             await app.refresh_context()
             await pilot.pause()
             assert str(app.query_one("#project-0-name", Button).label) == "Falcon2"
@@ -253,7 +253,7 @@ def test_sidebar_highlights_the_project_and_slot_of_the_managed_window_being_sho
             await app.refresh_context()
             await pilot.pause()
             assert _marked(app) == []
-            value["active"] = {"project_id": "Falcon2", "slot": 7}
+            value["active"] = {"project_id": "Falcon2", "slot": "seat-7"}
             await app.refresh_context()
             await pilot.pause()
             assert _marked(app) == ["▶ Falcon2"]

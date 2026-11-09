@@ -470,7 +470,7 @@ class SidebarApp(App):
     def _is_active(self, project: dict) -> bool:
         return bool(self._active) and self._active.get("project_id") == project["id"]
 
-    def _active_slot(self, project: dict) -> str | int | None:
+    def _active_slot(self, project: dict) -> str | None:
         """The slot of this pane's window in `project`; None for another project or a window without a slot."""
         return self._active.get("slot") if self._is_active(project) else None
 
@@ -535,7 +535,7 @@ class SidebarApp(App):
             fold.tooltip = "좌석 접기" if expanded else "좌석 펼치기"
             if slot is not None and not expanded:       # the slot's own row is folded away
                 fold.add_class("slot-active")
-                fold.tooltip += " · 현재 창: " + ("Leader" if slot == "leader" else f"seat {slot}")
+                fold.tooltip += " · 현재 창: " + ("Leader" if slot == "leader" else slot.replace("-", " "))
             counters.append(fold)
             self._actions[fold_id] = ("seats", project["id"])
             children = [name, decision, Horizontal(*counters, classes="counts")]
@@ -547,7 +547,7 @@ class SidebarApp(App):
                 children.append(leader_row)
             for seat in (project.get("seats", []) if expanded else []):
                 button_id = f"project-{number}-seat-{seat['index']}"
-                classes = "seat slot-active" if slot == seat["index"] else "seat"
+                classes = "seat slot-active" if slot == f"seat-{seat['index']}" else "seat"
                 if seat.get("job_id") is None:
                     classes += " seat-empty"
                 elif seat.get("status") == "pending":

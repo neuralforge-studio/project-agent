@@ -814,8 +814,8 @@ def test_active_context_reads_the_managed_project_and_slot_of_the_pane_window(mo
             if managed:
                 _managed(name, f"Falcon2:{label}", *managed)
         expected = {"leader": {"project_id": "Falcon2", "slot": "leader"},
-                    "seat": {"project_id": "Falcon2", "slot": 2},
-                    "other": {"project_id": "ProjectB", "slot": 10},
+                    "seat": {"project_id": "Falcon2", "slot": "seat-2"},
+                    "other": {"project_id": "ProjectB", "slot": "seat-10"},
                     "odd": {"project_id": "Falcon2", "slot": None},
                     "nobody": None}
         for label, want in expected.items():

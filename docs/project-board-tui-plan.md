@@ -57,10 +57,10 @@ R 0 GPU-007
 - SSH seat는 번호 뒤에 `@호스트`를 붙입니다. Tooltip은 호스트와 원격 경로를 표시합니다. 실행 관찰이 실패하면 확인 불가로 표시합니다. 등록과 실행 근거의 계약은 [Agent Session 명세](project-team/spec.md)가 소유합니다.
 - `R`은 Leader의 `reviewing` 값이 그 seat의 CR ID와 같을 때만 붙입니다. Review 행을 별도로 만들거나 CR ID를 중복 표시하지 않습니다.
 - 제출 후 검토 대기(`review_wait`)는 `R`이 아닙니다. 필요하면 행의 색과 도움말로 구분합니다.
-- 지금 보는 창 강조(BOARD-009): sidebar가 보이는 client의 활성 window가 관리 window이면 그 project와 slot을 강조합니다. 관리 window는 window option `@agent_session_project_id`(project ID)와 `@agent_session_target`(`leader` 또는 `seat-N`)을 가집니다([명세 3절](project-team/spec.md#실행-근거와-잠금)). 값은 JSON입니다.
-  - 기준 window는 Board pane 자신의 window입니다(`tmux_control.active_context`가 `TMUX_PANE`으로 읽습니다). Board pane은 window마다 하나이고 같은 window를 보는 client는 그 pane을 공유하므로, 그 sidebar를 보는 client의 활성 window는 항상 이 window입니다. client가 여럿이어도 client마다 판정하지 않으며, 다른 window를 보는 client는 그 window의 Board pane이 자기 window를 기준으로 강조합니다.
+- 지금 보는 창 강조(BOARD-009): sidebar가 보이는 client의 활성 window가 관리 window이면 그 project와 slot을 강조합니다. 관리 window는 window option으로 project ID와 target(`leader` 또는 `seat-N`)을 가집니다([명세 3절](project-team/spec.md#실행-근거와-잠금)).
+  - 기준 window는 Board pane 자신의 window입니다(`tmux_control.active_context`가 `TMUX_PANE`으로 `agent_session.api.pane_slot`을 불러 읽습니다. option 이름과 `leader`·`seat-N` 문법은 agent-session이 소유하며 Board는 반환값 `(project_id, slot)`만 씁니다). Board pane은 window마다 하나이고 같은 window를 보는 client는 그 pane을 공유하므로, 그 sidebar를 보는 client의 활성 window는 항상 이 window입니다. client가 여럿이어도 client마다 판정하지 않으며, 다른 window를 보는 client는 그 window의 Board pane이 자기 window를 기준으로 강조합니다.
   - 강조 대상: project 이름 줄은 `▶ ` 표식과 파란 배경입니다. 좌석을 펼친 project에서는 그 slot의 줄(Leader 줄 또는 `target`의 seat 번호 줄)도 같은 파란 배경입니다. 접힌 project에서는 slot 줄이 없으므로 `▸` 버튼을 같은 배경으로 칠하고 도움말에 `현재 창: Leader` 또는 `현재 창: seat N`을 붙입니다. 좌석을 펼치거나 접는 상태(서버 option)는 강조 때문에 바꾸지 않습니다.
-  - 강조하지 않는 경우: 관리 window가 아니거나(`@agent_session_project_id`가 없음), 그 project가 등록 목록에 없거나, tmux 밖에서 실행한 경우. `target`이 `leader`·`seat-N`이 아니거나 그 seat 번호가 없으면 project만 강조합니다. Leader 줄은 Leader session이 게시된 때만 있으므로(위 동작 시간) 그 전에는 Leader slot의 줄이 없습니다.
+  - 강조하지 않는 경우: 관리 window가 아니거나(`pane_slot`이 None), 그 project가 등록 목록에 없거나, tmux 밖에서 실행한 경우. `target`이 `leader`·`seat-N`이 아니거나 그 seat 번호가 없으면 project만 강조합니다. Leader 줄은 Leader session이 게시된 때만 있으므로(위 동작 시간) 그 전에는 Leader slot의 줄이 없습니다.
   - 읽는 때: pane을 시작할 때, 창이 보이게 되어 SIGUSR1로 가시성을 다시 물을 때(창 이동 직후), 그리고 10초 실행 상태 읽기와 같은 주기입니다. 창을 바꾸면 이동한 window의 pane이 보이게 되는 그 읽기에서 곧바로 강조가 정해집니다. 2초 파일 읽기에는 tmux 호출을 넣지 않습니다. Board pane이 관리 window보다 먼저 만들어지는 경우(`window-created`) 관리 option은 10초 안에 반영됩니다. 읽기 실패와 보이지 않는 window는 이전 강조를 유지하며 읽지 않습니다. 강조가 바뀔 때만 다시 그립니다.
 - `path_cr` 또는 `path_decide`가 없는 project는 해당 개수를 `-`로 표시합니다. 읽기 오류도 `0`으로 바꾸지 않습니다.
 - 화면은 등록 순서를 유지합니다. 긴 project 이름과 CR ID는 tooltip과 가로 스크롤로 전체 값을 볼 수 있게 합니다.
