@@ -19,6 +19,7 @@
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). 운영에서 seat가 40분 논 결함이고, 사람의 순서에 기대는 설계가 원인이므로 위임 범위입니다. 사용자 지시(2026-11-09 대화): "위와 같이 11개의 개선 요청 사항이 있어."
 - 2026-11-09 Leader: 제출 cf0b72d 검토. 반납 대기 기록(`release_pending`), `project-item move`가 같은 판정(`workspace.check_release`)으로 반납을 마침, 조건 불충족 시 이유 출력, `ls`·Board 표시, 수정 전 재현과 새 test를 확인했습니다. 내용은 인수 가능합니다. 수정 요청 한 가지: 제출 뒤 SESSION-005(39c915d)가 main에 통합되어 `docs/project-team/spec.md`, `tools/agent-session/agent_session/tmux.py`(`_RUN_VALUES`), `tools/agent-session/tests/test_tmux.py`가 충돌합니다. `origin/main`을 merge해 두 CR의 window option을 모두 살리십시오. `test_registration_publishes_when_the_controller_ends_before_it[sigint]`의 부하 실패는 세 번째 관찰이라 TEST-005로 따로 고칩니다.
+- 2026-11-09 Leader: 제출 5c6f4dd715ad859373dc03fe410d26dded26ca59를 인수합니다. Leader review: 수정 제출은 origin/main(5af70ab) merge만 더했습니다. 충돌 3건(spec.md, tmux.py _RUN_VALUES, test_tmux.py)에서 release_pending과 SESSION-005의 last_sent·last_received·watch를 모두 살렸고, merge가 바꾼 test(test_tmux·test_watch·test_cli·test_api_boundary 147, test_lifecycle 관련 44)를 다시 실행해 통과했습니다. 이전 검토(cf0b72d의 반납 대기·move의 반납 마무리·ls/Board 표시·수정 전 재현)를 재사용합니다.
 
 ## Implementation
 읽을 문서: [동작 명세](../../project-team/spec.md) 3·7절, [project-team skill](../../../skills/project-team/SKILL.md), [README 검증 표](../../../README.md#검증).
@@ -42,7 +43,7 @@
 
 ## Result
 
-- 제출 commit: cf0b72dafce06334da5c03cdf036559fbef9f791
+- 제출 commit: 5c6f4dd715ad859373dc03fe410d26dded26ca59
 
 `cr/SESSION-004`(origin에 push함). 구현 commit `9011ad0`에 `origin/main`(`ba99bbe`)을 merge한 commit입니다.
 
@@ -68,3 +69,13 @@
 알려진 한계
 - 반납 대기는 이 변경 이후의 stop부터 기록됩니다. 이미 거절돼 남은 seat(기록 없음)는 지금처럼 Leader가 stop을 다시 실행해야 합니다.
 - 이 workstation의 관리 run은 동결 사본을 쓰므로(AGENTS.md) 실제 run에서는 아직 동작하지 않습니다.
+
+### 수정 제출: SESSION-005 통합 뒤 merge
+
+- 제출 commit: 5c6f4dd715ad859373dc03fe410d26dded26ca59 (위 제출 `cf0b72d`에 `origin/main` `5af70ab`을 merge함. `cr/SESSION-004`에 push함)
+- 충돌 3건(`docs/project-team/spec.md` 실행 근거 표, `tools/agent-session/agent_session/tmux.py` `_RUN_VALUES`, `tools/agent-session/tests/test_tmux.py` 재사용 window의 기대값)은 두 CR의 값을 모두 살려 풀었습니다. `release_pending`과 `last_sent`·`last_received`·`watch`가 함께 있습니다. `lifecycle.py`는 자동 merge이며 `finish_release`·`_hold_release`와 SESSION-005의 `WatchMixin`·`last_sent` 기록이 모두 있습니다.
+- merge가 입력을 바꾼 test만 merge한 상태에서 다시 실행했습니다.
+  - `test_tmux.py`·`test_watch.py`·`test_cli.py`·`test_api_boundary.py`: 147 passed.
+  - `test_lifecycle.py -k "stop or release or move or window"`(내가 추가한 4개 포함): 44 passed.
+- 근거 재사용: project-item·project-board test와 `install/tests`, 네 번째 명령은 merge가 그 입력(코드·launcher)을 바꾸지 않아 다시 돌리지 않았습니다(앞 제출의 결과 유효). `test_lifecycle.py`의 `-k`에 걸리지 않은 test와 sigint test는 이번에 다시 돌리지 않았습니다. sigint의 부하 실패는 Leader 지시대로 TEST-005가 다룹니다.
+- `git diff --check` 깨끗.
