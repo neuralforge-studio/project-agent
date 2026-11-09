@@ -510,6 +510,21 @@ def mark_ready(socket=None) -> bool:
     return board_visible(socket)
 
 
+def active_context(socket=None) -> dict | None:
+    """The managed project and slot of this Board pane's window, or None (BOARD-009).
+
+    The pane shares its window with every client that watches it, so that window is the active
+    window of each client showing this sidebar. `slot` is `leader`, `seat-N`, or None when the window's
+    target is not a slot. Returns None outside tmux and for a window that is not managed. Which options
+    name the project and slot belongs to agent-session (`agent_session.api.pane_slot`).
+    """
+    pane = os.environ.get("TMUX_PANE")
+    if not pane:
+        return None
+    found = api.pane_slot(pane, _control(socket))
+    return None if found is None else {"project_id": found[0], "slot": found[1]}
+
+
 def reconcile(config=None, socket=None) -> dict:
     """Match Board panes to windows currently watched by attached clients."""
     try:

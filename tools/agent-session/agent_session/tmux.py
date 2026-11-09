@@ -576,6 +576,27 @@ class Tmux:
         """The visible text of a pane; read only to find a provider's startup dialog."""
         return self._run("capture-pane", "-p", "-t", _safe_text(pane_id, "pane handle"))
 
+    def pane_slot(self, pane_id):
+        """`(project_id, target)` of the managed window that holds the pane, or None for another window.
+
+        `target` is `leader`, `seat-N`, or None when the window's target is not a slot. The values are
+        the JSON of the window's `project_id` and `target` options; a missing or malformed project_id
+        means the window is not managed. One tmux call, so Board panes can ask on every window change."""
+        keys = ("project_id", "target")
+        raw = self._run("display-message", "-p", "-t", _safe_text(pane_id, "pane handle"),
+                        "\t".join("#{" + _PREFIX + key + "}" for key in keys))
+        values = []
+        for part in raw.split("\t"):
+            try:
+                values.append(json.loads(part))
+            except ValueError:
+                values.append(None)
+        if len(values) != len(keys) or not isinstance(values[0], str) or not values[0]:
+            return None
+        target = values[1]
+        valid = isinstance(target, str) and (target == "leader" or _SEAT_TARGET.fullmatch(target) is not None)
+        return values[0], target if valid else None
+
     def pane_info(self, pane_id):
         """The pane's fields. A dead pane may have no pane_pid (tmux 3.8 clears it); it is None then.
 

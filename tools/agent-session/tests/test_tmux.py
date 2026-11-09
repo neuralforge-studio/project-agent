@@ -677,6 +677,23 @@ def test_a_write_naming_the_retired_run_cannot_reach_the_window_of_the_next_run(
     assert tmux.read_meta(old["window_id"]) == reused
 
 
+def test_pane_slot_names_the_project_and_slot_of_a_managed_window_only(tmp_path, tmux):
+    seat = new_window(tmux, tmp_path)
+    leader = tmux.create_window("demo", "demo-leader", tmp_path,
+                                {"base": str(tmp_path), "run_id": "run-leader", "target": "leader", "job_id": "leader"})
+    assert tmux.pane_slot(seat["pane_id"]) == ("demo", "seat-0")
+    assert tmux.pane_slot(leader["pane_id"]) == ("demo", "leader")
+    # A window that agent-session did not make has neither option.
+    plain = tmux.command("new-window", "-d", "-t", "demo", "-P", "-F", "#{pane_id}", "sleep", "60")
+    assert tmux.pane_slot(plain) is None
+    # The project is known but the target is not a slot: the project is still reported.
+    tmux.command("set-option", "-w", "-t", seat["window_id"], "@agent_session_target", json.dumps("worker"))
+    assert tmux.pane_slot(seat["pane_id"]) == ("demo", None)
+    # A project_id that is not JSON means the window is not managed.
+    tmux.command("set-option", "-w", "-t", seat["window_id"], "@agent_session_project_id", "demo")
+    assert tmux.pane_slot(seat["pane_id"]) is None
+
+
 # BOARD-011: a `run-shell` job of the product leaves nothing in the pane the user is working in.
 
 def attach_client(tmux, request):

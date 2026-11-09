@@ -80,6 +80,14 @@ shows its number followed by `-`.
 An SSH seat shows `number@host` before its CR ID. Its tooltip shows the registered
 host and remote path. An unavailable execution check keeps the seat assigned and shows
 `실행 확인 불가` with the unknown-state color.
+When the window a client is viewing is a managed `agent-session` window (it has
+a project option), the sidebar highlights that project with a blue name row and a
+`▶` mark, and the slot too: the Leader row or the seat's row when the seats are expanded, or
+the `▸` button (with `현재 창: …` in its tooltip) when they are folded. Each window's Board
+pane marks its own window, so the mark follows the client when it changes window. It reads the
+window options when the pane starts, when its window is shown again, and every 10 seconds. A
+plain window, or a project that is not registered, highlights nothing. The rule is in
+`docs/project-board-tui-plan.md` section 3.
 Click a project name to switch the clicking client to that project's tmux session and
 current window. If that session is unavailable, the Board shows an error. Click a CR
 count to open its CR list, `D` to read decisions, or a seat with a Worker session to switch

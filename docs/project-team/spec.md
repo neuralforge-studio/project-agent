@@ -594,6 +594,7 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | check_binding(cwd, target, expected_session_id=None, config_path=None, socket=None) | Target은 leader 또는 현재 JOB ID. 현재 배정·실제 실행·선택적 예상 session_id를 대조하여 seat·작업 경로·run_id·session과 종료 관찰 결과 반환 |
 | liveness(cwd=None, config_path=None, socket=None) | Session이 있는 slot(`leader`, seat 번호)마다 판정한 `session_id`와 `state`(`alive`·`stopped`·`unknown`) 반환. tmux 실행 근거와 CLI process만 조회하고 provider를 호출하지 않음 |
 | project_liveness(project, socket=None) | `liveness`와 같되 이미 `load_registry`로 얻은 project를 받음 |
+| pane_slot(pane, tmux=None) | tmux pane이 든 관리 window의 `(project_id, slot)`을 반환. slot은 `leader`·`seat-N`이고 target이 slot이 아니면 None. 관리 window가 아니면(project_id option이 없거나 JSON이 아님) None. window option만 한 번의 tmux 호출로 읽음. Board가 지금 보는 창의 project·slot을 알 때 씀 |
 | caller(project, tmux=None, store=None) | 이 명령을 실행하는 쪽을 `(slot, session_id)`로 반환. slot은 `leader`·`seat-N`·`operator`(관리 실행 밖 CLI, session_id는 None)·`unmanaged-agent`(이 project의 구성원이 아닌 agent). 환경의 대화 ID를 state의 binding과 대조하고, 없으면 관리 실행의 tmux pane으로 판정. project 도구의 유일한 caller 규칙 |
 | require_live(project, slot, identity, tmux=None) | Leader·Worker caller의 slot이 아직 그 대화의 살아 있는 관리 CLI를 가졌는지 확인. 아니면 `caller_not_running` 오류. 반환값 없음 |
 | load_registry(config_path=None) | 등록 파일의 모든 project 튜플을 반환([2절](#2-등록과-프로젝트-선택)) |
