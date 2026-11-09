@@ -37,8 +37,9 @@ def test_sidebar_click_callbacks_keep_the_client_identity(monkeypatch):
     monkeypatch.setattr(tmux_control, "toggle_expanded_project", toggle_expanded)
 
     def sidebar(config, *, on_project, on_decision, on_cr, on_seat,
-                expanded_reader, expanded_toggler):
+                expanded_reader, expanded_toggler, mark_ready, visibility_reader):
         assert config == "/tmp/projects.json"
+        assert mark_ready is tmux_control.mark_ready and visibility_reader is tmux_control.board_visible
         assert expanded_reader() == {"Falcon2"}
         assert expanded_toggler("ProjectB") == {"Falcon2", "ProjectB"}
         on_project("Falcon2", client="/dev/ttys2")

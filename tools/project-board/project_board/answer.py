@@ -62,7 +62,7 @@ def _notification(project, text: str) -> dict:
         if not state or not state.get("leader"):
             result = _fail("leader_unavailable", "The project Leader is not running.")
         else:
-            live = model.api.liveness(project.base, config_path=project.config_path).get("leader", {})
+            live = model.api.project_liveness(project).get("leader", {})
             if live.get("session_id") == state["leader"]["session_id"] and live.get("state") == "stopped":
                 result = _fail("leader_stopped", "The project Leader has stopped.")
             else:

@@ -52,13 +52,20 @@ project-board popup --project PROJECT_ID      # show that project's unfinished d
 project-board cr --project PROJECT_ID --state open  # show a CR list
 ```
 
-The sidebar refreshes source files every 2 seconds and run liveness every 10 seconds.
+The sidebar refreshes source files every 2 seconds and run liveness every 10 seconds. A refresh
+parses again only the CR and decision files whose size or modification time changed; a popup
+reads only its own project.
 The TUI keeps clicks and scrolling responsive during reads and answer delivery. Decision
 answers require the `operator` caller classification from `agent-session`; a managed or
 unmanaged agent session cannot submit an approval.
 
 In tmux, prefix `B` or click `Board` in the status line to toggle the sidebar for every
-attached client. The same window shares one Board pane. Each visible window gives the Board
+attached client. The same window shares one Board pane. A window keeps its Board pane after
+the last client leaves it, so returning to a window shows the Board at once instead of starting
+it again; turning the Board off removes every Board pane. A window that no client has watched
+has none. At most 8 Board panes are kept (about 50 MB each); a ninth removes the pane of the
+window that no client showed for longest. A pane whose window no client shows stops reading and
+reads once as soon as the window is shown. Each visible window gives the Board
 25 columns by default and shows existing panes in the remaining space. A width adjusted in
 tmux is used when the Board pane moves to another window or is created again. Turning the
 Board off restores the previous pane layout and focus. A window with too little space for
@@ -120,7 +127,7 @@ submission. The owner of this rule is this section; `review_wait` and `cited` in
   check of `project-item move` (`project_item.cr.accepted`), which needs the exact 40-hex
   acceptance entry that `project-item accept` writes.
 - The seat status is chosen in this order: no job (`empty`), a stopped Worker whose release
-  waits for its CR to leave in-progress (`release_pending`, from `agent_session.api.pending_releases`),
+  waits for its CR to leave in-progress (`release_pending`, from `agent_session.api.project_pending_releases` as the 10-second run-fact refresh read it),
   no session (`pending`), the Leader's `reviewing` job (`reviewing`), `review_wait`, else `working`. The `R` mark and the
   colors are owned by `docs/project-board-tui-plan.md`.
 

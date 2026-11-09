@@ -1,7 +1,8 @@
 """tmux placement and client-directed actions for the Project Board TUI.
 
-The server owns one global toggle. A Board pane exists only in a window watched by
-an attached client. Multiple clients watching the same window share that pane; a
+The server owns one global toggle. A Board pane is created in a window when an attached
+client first watches it, and stays until the toggle is turned off, the window's managed pane
+dies, or the window closes. Multiple clients watching the same window share that pane; a
 mouse binding sends each click's client and pane-relative coordinates over a local
 socket so actions still target the client that clicked.
 """
@@ -33,7 +34,14 @@ WINDOW_PANE = "@project_board_pane"
 WINDOW_RESTORE = "@project_board_restore"
 PANE_MARK = "@project_board_managed"
 PANE_SOCKET = "@project_board_click_socket"
+PANE_READY = "@project_board_ready"
+WINDOW_SEEN = "@project_board_seen"
 SIDEBAR_WIDTH = 25
+# The most Board panes kept at once. One Board process holds about 50 MB (RSS, measured) and reads
+# the project files only while its window is shown, so the bound is memory, not CPU: 8 panes are
+# about 400 MB at most. The windows a user moves among in a working session (a project's Leader and
+# Workers) fit; a pane over the bound is removed from the window that no client showed for longest.
+MAX_KEPT = 8
 CLICK_TIMEOUT = 2
 LAUNCHER = Path(__file__).resolve().parents[1] / "bin" / "project-board"
 
@@ -376,6 +384,36 @@ def _can_fit_width(control: Tmux, window: str, width: int) -> bool:
     return window_width > width + 1
 
 
+def _evict(control: Tmux, shown_kept: list[str], created: list[str], failures: list) -> list[str]:
+    """Remove Board panes beyond MAX_KEPT, from the windows that were shown longest ago.
+
+    A window a client shows now is never removed. `@project_board_seen` is the time a client last
+    showed the window (project_board_visibility.sh writes it; a new pane starts at now).
+    """
+    now = str(int(time.time()))
+    for window in created:
+        control.command("set-option", "-w", "-t", window, WINDOW_SEEN, now)
+    shown = set(shown_kept) | set(created)
+    boards = []
+    for window in _lines(control, "list-windows", "-a", "-F", "#{window_id}"):
+        pane = _options(control, "-w", "-t", window, WINDOW_PANE)
+        if pane:
+            seen = _options(control, "-w", "-t", window, WINDOW_SEEN)
+            boards.append((window, pane, int(seen) if seen.isdecimal() else 0))
+    evicted = []
+    excess = len(boards) - MAX_KEPT
+    for window, pane, _seen in sorted((b for b in boards if b[0] not in shown), key=lambda b: b[2]):
+        if excess <= 0:
+            break
+        try:
+            _remove(control, window, pane)
+            evicted.append(window)
+            excess -= 1
+        except (SessionError, OSError, ValueError) as error:
+            failures.append({"window": window, "reason": str(error)})
+    return evicted
+
+
 def _reconcile(control: Tmux) -> dict:
     enabled = _options(control, "-g", ENABLED) == "1"
     config = _options(control, "-g", CONFIG) or None
@@ -387,10 +425,13 @@ def _reconcile(control: Tmux) -> dict:
         try:
             panes = _panes(control, window)
             board = _board_pane(control, window, panes)
-            show = enabled and window in visible and not _managed_pane_dead(control, window, panes)
-            if board and (not show or panes[board]):
+            usable = enabled and not _managed_pane_dead(control, window, panes)
+            # A Board pane stays in a window nobody watches: it is the process that costs seconds
+            # to start, and the next client to arrive finds it already showing.
+            if board and (not usable or panes[board]):
                 to_remove.append((window, board))
                 board = None
+            show = usable and window in visible
             if show and board is None and panes:
                 to_create.append(window)
             elif show and board:
@@ -434,10 +475,39 @@ def _reconcile(control: Tmux) -> dict:
             created.append(window)
         except (SessionError, OSError, ValueError) as error:
             failures.append({"window": window, "reason": str(error)})
+    for window in _evict(control, [w for w, _ in to_keep], created, failures):
+        removed.append(window)
     if to_remove or to_keep or to_create:
         control.command("set-option", "-g", WIDTH, str(width))
     return {"enabled": enabled, "visible_windows": sorted(visible),
             "created": created, "removed": removed, "failures": failures}
+
+
+def board_visible(socket=None) -> bool:
+    """Whether a client shows the window of this Board pane (read from the pane itself).
+
+    The answer comes from tmux's clients, not from `@project_board_visible`, which is only the
+    change record of project_board_visibility.sh.
+    """
+    control = _control(socket)
+    pane = os.environ.get("TMUX_PANE")
+    if not pane:
+        return True
+    window = control.command("display-message", "-p", "-t", pane, "#{window_id}")
+    return window in _lines(control, "list-clients", "-F", "#{window_id}")
+
+
+def mark_ready(socket=None) -> bool:
+    """Tell project_board_visibility.sh that this pane handles SIGUSR1, then return whether it is shown.
+
+    The mark comes first so that a change after the read is signalled; the read comes after so
+    that a change before the mark is not lost.
+    """
+    control = _control(socket)
+    pane = os.environ.get("TMUX_PANE")
+    if pane:
+        control.command("set-option", "-p", "-t", pane, PANE_READY, "1")
+    return board_visible(socket)
 
 
 def reconcile(config=None, socket=None) -> dict:
@@ -552,7 +622,7 @@ def switch_seat(config, project_id: str, seat_index: int, client: str | None = N
             return _fail("project_not_found", "The project is not registered.")
         if not isinstance(seat_index, int) or isinstance(seat_index, bool) or not 0 <= seat_index < len(project.seats):
             return _fail("seat_invalid", "The seat does not exist in this project.")
-        state = api.read_state(project.base, config_path=project.config_path)
+        state = api.project_state(project)
         session = state[str(seat_index)]["session"]
         if session is None:
             return _fail("seat_not_running", "The seat has no Worker session.")

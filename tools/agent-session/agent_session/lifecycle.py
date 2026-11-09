@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 
 from . import api, background, ended, git_ops, handoff, jobs, launch_artifacts, process, windows, workspace
-from .config import RemoteSeat, current_project, load_registry
+from .config import RemoteSeat, current_project, load_registry, require_base
 from .errors import SessionError
 from .providers import get_provider
 from .state import StateStore, complete_publication, control_lock, locked, publish_session
@@ -49,8 +49,8 @@ def check_start_arguments(job, prompt_file=None, seat=None):
 
 
 class Manager(SuspendMixin, WatchMixin):
-    def __init__(self, cwd=None, config_path=None, socket_name=None, socket_path=None, timeout=600):
-        self.project = current_project(cwd, config_path)
+    def __init__(self, cwd=None, config_path=None, socket_name=None, socket_path=None, timeout=600, project=None):
+        self.project = require_base(project) if project is not None else current_project(cwd, config_path)
         self.timeout = timeout
         self.end = time.monotonic() + timeout
         self.store = StateStore(self.project, timeout=timeout)

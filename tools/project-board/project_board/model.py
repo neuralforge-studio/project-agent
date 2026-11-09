@@ -2,11 +2,13 @@
 
 The TUI plan (docs/project-board-tui-plan.md) owns the display contract. The registry,
 state.json and run liveness come from agent_session; CR and decision files are read with
-project_item. Nothing is cached.
+project_item. A CR or decision file is parsed again only when its size or modification time
+changed (`_cached`); every directory listing, state file and run liveness is read on each call.
 """
 from __future__ import annotations
 
 import datetime as dt
+import os
 import re
 import sys
 from pathlib import Path
@@ -20,7 +22,7 @@ for _name in ("agent-session", "project-item"):
 from agent_session import api  # noqa: E402
 from agent_session.api import RemoteSeat, SessionError, load_registry  # noqa: E402
 from project_item.api import (CR, DECIDE, cr_states, decision_stage, file_id,  # noqa: E402
-                              item_files, sections, submitted_hash)
+                              item_files, submitted_hash, text_sections)
 
 CR_STATES = ("open", "todo", "in-progress")           # done and deferred are not shown
 HASH_TOKEN = re.compile(r"\b[0-9a-f]{7,40}\b")
@@ -64,31 +66,68 @@ def _last_entry(result: str) -> str:
     return "\n".join(lines[starts[-1]:]) if starts else result
 
 
+_cache: dict[tuple, dict[str, tuple]] = {}
+
+
+def _cached(scope: tuple, paths: list[Path], build):
+    """`build(path)` for each path, reusing the last result of a file whose size and modification
+    time are unchanged. A source file costs one `stat` per call and is read only after a change.
+
+    `scope` names one directory tree of one kind (the cache key); a path that is no longer listed
+    leaves the cache. A file that cannot be stat-ed is built again each call, so its error reaches
+    the caller instead of an old result.
+    """
+    old = _cache.get(scope, {})
+    kept: dict[str, tuple] = {}
+    out = []
+    for path in paths:
+        key = str(path)
+        try:
+            info = os.stat(path)
+            signature = (info.st_mtime_ns, info.st_size, info.st_ino)
+        except OSError:
+            out.append(build(path))
+            continue
+        hit = old.get(key)
+        if hit is not None and hit[0] == signature:
+            kept[key] = hit
+            out.append(hit[1])
+            continue
+        value = build(path)
+        kept[key] = (signature, value)
+        out.append(value)
+    _cache[scope] = kept
+    return out
+
+
+def _cr_item(state: str):
+    def build(path: Path) -> dict:
+        text = path.read_text(encoding="utf-8")
+        parsed = CR.fmt.parse_text(text, path, state)
+        item = {"id": parsed.cr_id or path.stem, "title": parsed.title or path.stem,
+                "state": state, "path": str(path)}
+        if state == "in-progress":
+            parts = dict(text_sections(text))
+            base = parsed.headers.get("Base")
+            mode = parsed.headers.get("Mode", "write")
+            result = parts.get("Result", "")
+            item.update({
+                "mode": mode, "base": base.split()[0] if base else None,
+                "branch": f"cr/{item['id']}" if mode == "write" else None,
+                "submitted": submitted_hash(result) if mode == "write" else None,
+                "review_wait": review_wait(state, parsed.headers, parts),
+                "result_markdown": _last_entry(result) if result.strip() else "",
+                "contract_markdown": parts.get("Contract", ""),
+            })
+        return item
+    return build
+
+
 def cr_items(root: Path) -> dict:
     """open, todo and in-progress CRs. In-progress items carry what the seat drawer shows."""
-    out = {}
-    for state in CR_STATES:
-        rows = []
-        for path in item_files(CR, root, state):
-            parsed = CR.fmt.parse(path, state)
-            item = {"id": parsed.cr_id or path.stem, "title": parsed.title or path.stem,
-                    "state": state, "path": str(path)}
-            if state == "in-progress":
-                parts = dict(sections(path))
-                base = parsed.headers.get("Base")
-                mode = parsed.headers.get("Mode", "write")
-                result = parts.get("Result", "")
-                item.update({
-                    "mode": mode, "base": base.split()[0] if base else None,
-                    "branch": f"cr/{item['id']}" if mode == "write" else None,
-                    "submitted": submitted_hash(result) if mode == "write" else None,
-                    "review_wait": review_wait(state, parsed.headers, parts),
-                    "result_markdown": _last_entry(result) if result.strip() else "",
-                    "contract_markdown": parts.get("Contract", ""),
-                })
-            rows.append(item)
-        out[state] = rows
-    return out
+    return {state: [dict(item) for item in
+                    _cached(("cr", str(root), state), item_files(CR, root, state), _cr_item(state))]
+            for state in CR_STATES}
 
 
 def read_cr_markdown(project: dict, item: dict, state: str) -> str:
@@ -102,21 +141,29 @@ def read_cr_markdown(project: dict, item: dict, state: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _decision(state: str):
+    def build(path: Path) -> dict:
+        text = path.read_text(encoding="utf-8")
+        parsed = DECIDE.fmt.parse_text(text, path, state)
+        return {"id": parsed.item_id or path.stem, "title": parsed.title or path.stem,
+                "path": str(path.resolve()), "state": state, "headers": parsed.headers,
+                "sections": [{"name": name, "body": body} for name, body in text_sections(text)
+                             if body and name not in DECIDE_HIDDEN]}
+    return build
+
+
 def decide_items(root: Path, cr_root: Path | None = None) -> list[dict]:
     items = []
     states = cr_states(cr_root)
     for state in DECIDE.states:
-        for path in item_files(DECIDE, root, state):
-            parsed = DECIDE.fmt.parse(path, state)
-            item = {"id": parsed.item_id or path.stem, "title": parsed.title or path.stem,
-                    "state": state, "headers": parsed.headers, "sections": sections(path)}
+        for read in _cached(("decide", str(root), state), item_files(DECIDE, root, state), _decision(state)):
+            headers = read["headers"]
             items.append({
-                "id": item["id"], "title": item["title"], "path": str(path.resolve()),
-                "state": state, "display_state": decision_stage(item, states),
-                "urgency": parsed.headers.get("Urgency", "normal"), "blocks": parsed.headers.get("Blocks"),
-                "related": parsed.headers.get("Related"), "opened": parsed.headers.get("Opened"),
-                "sections": [{"name": name, "body": body} for name, body in item["sections"]
-                             if body and name not in DECIDE_HIDDEN],
+                "id": read["id"], "title": read["title"], "path": read["path"], "state": state,
+                "display_state": decision_stage({"state": state, "headers": headers}, states),
+                "urgency": headers.get("Urgency", "normal"), "blocks": headers.get("Blocks"),
+                "related": headers.get("Related"), "opened": headers.get("Opened"),
+                "sections": read["sections"],
             })
     return items
 
@@ -128,7 +175,7 @@ def _display(path: Path) -> str:
 
 def _read_state(project):
     try:
-        return api.read_state(project.base, config_path=project.config_path)
+        return api.project_state(project)
     except SessionError as error:
         if error.code == "state_not_found":             # no team has started in this project yet
             return None
@@ -156,10 +203,7 @@ def project_view(project, now: dt.datetime) -> dict:
             view["decide"] = decide_items(project.path_decide, project.path_cr)
         except Exception as error:
             view["errors"].append({"source": "decide", **_error(error)})
-    try:
-        waiting = api.pending_releases(project.base, config_path=project.config_path) if state else {}
-    except SessionError:
-        waiting = {}                                    # an unreadable tmux is not a pending release
+    waiting = _releases.get(project.project_id, {}) if state else {}
     in_progress = {item["id"]: item for item in (view["crs"] or {}).get("in-progress", [])}
     leader = state["leader"] if state else None
     reviewing = leader.get("reviewing") if leader else None
@@ -196,27 +240,42 @@ def project_view(project, now: dt.datetime) -> dict:
     return view
 
 
-def snapshot(config=None, now: dt.datetime | None = None) -> dict:
+def snapshot(config=None, now: dt.datetime | None = None, project_id: str | None = None) -> dict:
+    """Every registered project, or only `project_id` (a popup shows one project)."""
     now = now or dt.datetime.now(dt.timezone.utc)
     try:
         projects = load_registry(config)
     except SessionError as error:
         return {"now": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "projects": [], "error": _error(error)}
+    if project_id is not None:
+        projects = [project for project in projects if project.project_id == project_id]
     return {"now": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "projects": [project_view(project, now) for project in projects], "error": None}
+
+
+# JOB ID -> release hold of each project, as the last `liveness()` read it. Both facts come from
+# tmux (several `tmux` processes per assigned seat), so they are read on the 10-second run-fact
+# refresh and not on the 2-second file refresh that `snapshot` is (BOARD-002). A hold that ended is
+# shown until the next run-fact refresh.
+_releases: dict[str, dict] = {}
 
 
 def liveness(config=None) -> dict:
     """Per project, `alive`, `stopped` or `unknown` for each bound slot.
 
     The rule is owned by docs/project-team/spec.md section 5 (`agent_session.api.liveness`).
+    It also refreshes the release holds that `snapshot` shows.
     """
     out = {}
     for project in load_registry(config):
         try:
-            out[project.project_id] = api.liveness(project.base, config_path=project.config_path)
+            out[project.project_id] = api.project_liveness(project)
         except SessionError as error:
             out[project.project_id] = {} if error.code == "state_not_found" else {"error": _error(error)}
+        try:
+            _releases[project.project_id] = api.project_pending_releases(project)
+        except SessionError:
+            _releases[project.project_id] = {}          # an unreadable tmux is not a pending release
     return out
 
 

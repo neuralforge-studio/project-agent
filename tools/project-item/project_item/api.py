@@ -15,7 +15,7 @@ from .cr import outcome_kind, submitted_hash
 from .decide import MAX_ANSWER_BYTES, decision_stage
 from .errors import ItemError
 from .kinds import CR, DECIDE
-from .read import cr_states, sections
+from .read import cr_states, sections, text_sections
 from .registry import item_root, projects
 from .render import render as render_decision_page
 from .store import answer_decide, file_id, item_files, root_lock
@@ -26,7 +26,7 @@ JOB_ID = re.compile(_cr.ID_RE)
 __all__ = [
     "CR", "DECIDE", "ItemError", "JOB_ID",
     "projects", "item_root", "root_lock", "item_files", "file_id",
-    "sections", "cr_states", "decision_stage", "submitted_hash", "outcome_kind",
+    "sections", "text_sections", "cr_states", "decision_stage", "submitted_hash", "outcome_kind",
     "answer_decide", "MAX_ANSWER_BYTES", "render_decision_page",
     "lookup", "lookup_locked", "claim", "unclaim", "set_base",
 ]
