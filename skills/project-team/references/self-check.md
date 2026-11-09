@@ -1,6 +1,6 @@
 # 자기 점검 (Claude Leader·Worker)
 
-Claude Leader와 Worker는 각자 자기 TUI의 session cron(`CronCreate`)으로 30분마다 스스로 점검합니다. session cron은 그 instance가 쉬고 있을 때만 실행되고(turn 중에는 끼어들지 않음) instance가 끝나면 사라집니다. 그래서 점검은 "turn이 끝난 채 멈춘" 상태에만 깨어나고, 수명이 instance와 같습니다. 이 점검이 못 보는 정체(예: Leader가 review를 잊고 쉬는 중)는 `agent-session watch`의 화면 비교가 잡습니다([동작 명세 7절 watch](../../../docs/project-team/spec.md#watch)). 사람이나 system crontab이 등록·해제하는 단계는 없습니다.
+Claude Leader와 Worker는 각자 자기 TUI의 session cron(`CronCreate`)으로 30분마다 스스로 점검합니다. session cron은 그 instance가 쉬고 있을 때만 실행되고(turn 중에는 끼어들지 않음) instance가 끝나면 사라집니다. 그래서 점검은 "turn이 끝난 채 멈춘" 상태에만 깨어나고, 수명이 instance와 같습니다. 이 점검이 못 보는 정체(예: Leader가 review를 잊고 쉬는 중)는 `agent-session watch`의 대화 기록 판정이 잡습니다([동작 명세 7절 watch](../../../docs/project-team/spec.md#watch)). 사람이나 system crontab이 등록·해제하는 단계는 없습니다.
 
 이 문서가 cron 식과 점검 prompt의 원본입니다. 첫 prompt와 resume 메시지는 이 문서를 가리키기만 합니다([동작 명세 7절 watch](../../../docs/project-team/spec.md#watch)).
 
@@ -36,7 +36,7 @@ cron 식: `8,38 * * * *`
 
 ```text
 [자기 점검] 사용자 입력이 아닙니다. 쉬는 동안 30분마다 실행하는 Leader 자기 점검입니다(project-team skill의 references/self-check.md). 아래를 순서대로 봅니다.
-1. `agent-session watch --project <이 base의 등록 항목의 project 이름>`을 실행합니다. 결과의 `resting` target은 화면이 30분 넘게 바뀌지 않은 Worker이고(이미 점검 메시지를 받았으며 `evidence`에 근거가 있음) Worker 화면과 CR을 보고 feedback·restart·stop을 판단합니다.
+1. `agent-session watch --project <이 base의 등록 항목의 project 이름>`을 실행합니다. 결과의 `resting` target은 대화 기록이 30분 넘게 갱신되지 않은 Worker이고(이미 점검 메시지를 받았으며 `evidence`에 근거가 있음) Worker 화면과 CR을 보고 feedback·restart·stop을 판단합니다.
 2. 먼저 review 대기 CR(in-progress CR 가운데 `## Result`의 제출 행 hash가 Disposition에 없는 것)을 처리합니다(`agent-session review`로 시작). 이어서 `project-item ls`와 `<base>/agent/state.json`으로 반납 대기 seat, 비어 있는 seat와 배정 가능한 todo CR, window나 CLI가 사라진 Worker를 봅니다. 필요한 조치(`agent-session start`·`stop`, 인수한 CR의 종결)를 합니다.
 3. 결정 대기 항목 중 답을 받고 반영하지 않은 것이 있으면 이어서 처리합니다.
 4. `CronList`로 이 자기 점검이 남아 있는지 봅니다. 없거나 등록한 지 6일이 넘었으면 같은 식으로 다시 `CronCreate`합니다.

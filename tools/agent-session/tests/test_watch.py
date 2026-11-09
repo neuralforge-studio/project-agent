@@ -1,8 +1,7 @@
-"""Watch wakes an instance whose screen has not changed for the threshold, once per stall, and tells the Leader.
+"""Watch wakes an instance whose conversation record is older than the threshold, once per stall, and tells the Leader.
 
-The screens are Claude's: the layout was captured from a live Claude Code 2.1 pane (conversation, spinner line,
-prompt box between two border lines, status line and permission-mode line below it), with the conversation text
-replaced."""
+The judgement reads the newest record of the provider's conversation file; the Worker tests set that time through
+`FakeProvider.last_record`, and the file reading is tested on real JSON-lines files shaped like Claude's transcript."""
 
 import datetime as dt
 import json
@@ -19,41 +18,105 @@ from agent_session_fixture import command_timeout, session_env  # noqa: F401,E40
 from agent_session import cli, process
 from agent_session.errors import SessionError
 from agent_session.lifecycle import Manager
-from agent_session.providers.claude import screen_body
-from agent_session.tmux import Tmux
+from agent_session.providers.claude import ClaudeProvider
+from agent_session.providers.codex import CodexProvider
+from agent_session.providers.common import last_record_time
 from agent_session.watch import Watch
 
 THRESHOLD = 1800
 SLOT = "seat-0"
-BORDER = "─" * 100
-
-
-def screen(activity, usage="5h 14% ↻03:20", agents="↓ 10 agents", typed=""):
-    """A Claude pane: the conversation, the spinner or result line, the prompt box and the two footer lines."""
-    return "\n".join([
-        "● 구현을 마쳤습니다.", "  Read 3 files, ran 5 shell commands", activity, BORDER + " seat0", "❯ " + typed, BORDER,
-        f"  user@example.com · Sonnet 5.5 high · ctx 8% · {usage} · week 12% ↻Mon 16:00",
-        f"  ⏵⏵ bypass permissions on (shift+tab to cycle) · {agents}"])
-
-
-RUNNING = screen("✻ Improvising… (39s · ↓ 1.9k tokens · thought for 2s)")
-RUNNING_LATER = screen("✻ Improvising… (2m 24s · ↓ 8.2k tokens · thought for 5s)")
-RESTING = screen("✻ Brewed for 2m 3s")
-FOOTER_ONLY = screen("✻ Brewed for 2m 3s", usage="5h 15% ↻04:20", agents="← 11 agents")
-
-
-def test_only_the_footer_below_the_prompt_box_is_left_out_of_a_claude_screen():
-    assert screen_body(RESTING) == screen_body(FOOTER_ONLY)
-    assert screen_body(RUNNING) != screen_body(RUNNING_LATER)       # the spinner time runs while a turn runs
-    assert screen_body(RUNNING) != screen_body(RESTING)
-    assert screen_body(RESTING) != screen_body(screen("✻ Brewed for 2m 3s", typed="다음 입력"))
-    assert "5h" not in screen_body(RESTING) and "bypass" not in screen_body(RESTING)
-    assert screen_body("한 줄\n\n  \n") == "한 줄"                    # no border line: the whole screen, trailing blanks aside
 
 
 def iso(seconds):
     return dt.datetime.fromtimestamp(seconds, dt.timezone.utc).isoformat()
 
+
+def stamp(seconds):
+    """A transcript's timestamp text: UTC with a trailing Z and milliseconds."""
+    return dt.datetime.fromtimestamp(seconds, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def record(kind, seconds=None, **fields):
+    value = {"type": kind, **fields}
+    if seconds is not None:
+        value["timestamp"] = stamp(seconds)
+    return json.dumps(value, ensure_ascii=False)
+
+
+# The judgement's reading of a conversation file (spec 7, watch)
+
+def test_last_record_time_is_the_newest_complete_record_with_a_time(tmp_path):
+    path = tmp_path / "t.jsonl"
+    path.write_text("\n".join([record("user", 1000), record("assistant", 2000),
+                               record("session-owner"), record("atis-latch")]) + "\n")   # bookkeeping lines carry no time
+    assert last_record_time(path) == pytest.approx(2000, abs=0.001)
+
+
+def test_a_last_line_that_is_still_being_written_is_skipped(tmp_path):
+    path = tmp_path / "t.jsonl"
+    path.write_text(record("user", 1000) + "\n" + record("assistant", 2000) + "\n" + record("assistant", 3000)[:40])
+    assert last_record_time(path) == pytest.approx(2000, abs=0.001)
+
+
+def test_a_file_without_a_record_with_a_time_has_none(tmp_path):
+    path = tmp_path / "t.jsonl"
+    path.write_text(record("mode") + "\n" + "not json\n")
+    assert last_record_time(path) is None
+    path.write_text("")
+    assert last_record_time(path) is None
+
+
+def test_only_the_tail_of_a_long_file_is_read_and_a_cut_first_line_is_ignored(tmp_path):
+    path = tmp_path / "t.jsonl"
+    old = record("user", 1000, text="x" * 50)
+    path.write_text("\n".join([old] * 100 + [record("assistant", 5000), record("assistant", 6000)]) + "\n")
+    assert last_record_time(path, tail=200) == pytest.approx(6000, abs=0.001)
+    assert last_record_time(path, tail=80) == pytest.approx(6000, abs=0.001)   # cuts into the line before the last
+    path.write_text(record("user", 1000, text="y" * 500) + "\n")
+    assert last_record_time(path, tail=100) is None                            # one cut line is not a record
+
+
+def transcripts(tmp_path, monkeypatch, lines=None):
+    root = tmp_path / "claude" / "projects" / "-some-project"
+    root.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    if lines is not None:
+        (root / "s1.jsonl").write_text("\n".join(lines) + "\n")
+    return root / "s1.jsonl"
+
+
+def test_claude_reads_the_last_record_of_its_own_transcript(tmp_path, monkeypatch):
+    now = time.time()
+    path = transcripts(tmp_path, monkeypatch, lines=[record("user", now - 7200), record("assistant", now - 5400),
+                                                     record("last-prompt")])
+    old = ClaudeProvider().last_record("s1")                   # an old last record
+    assert old["reason"] is None and old["at"] == pytest.approx(now - 5400, abs=0.01)
+    path.write_text(record("user", now - 7200) + "\n" + record("assistant", now - 60) + "\n")
+    assert ClaudeProvider().last_record("s1")["at"] == pytest.approx(now - 60, abs=0.01)    # a recent record
+    path.write_text(record("assistant", now - 90) + "\n" + record("assistant", now)[:30])
+    assert ClaudeProvider().last_record("s1")["at"] == pytest.approx(now - 90, abs=0.01)    # the last line is being written
+
+
+def test_a_missing_or_timeless_transcript_is_no_judgement_with_a_reason(tmp_path, monkeypatch):
+    transcripts(tmp_path, monkeypatch, lines=[record("mode")])
+    assert ClaudeProvider().last_record("s1") == {"at": None, "reason": "no_record_with_time"}
+    assert ClaudeProvider().last_record("other") == {"at": None, "reason": "transcript_not_found"}
+    assert ClaudeProvider().last_record(None) == {"at": None, "reason": "transcript_not_found"}
+
+
+def test_codex_reads_the_last_record_of_its_thread_file(tmp_path, monkeypatch):
+    now = time.time()
+    day = tmp_path / "codex" / "sessions" / "2026" / "11" / "10"
+    day.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    (day / "rollout-2026-11-10T01-02-03-thread-1.jsonl").write_text(
+        record("session_meta", now - 7200) + "\n" + record("event_msg", now - 4000) + "\n")
+    assert CodexProvider().last_record("thread-1")["at"] == pytest.approx(now - 4000, abs=0.01)
+    assert CodexProvider().last_record("thread-2") == {"at": None, "reason": "transcript_not_found"}
+    assert CodexProvider().last_record("../x") == {"at": None, "reason": "transcript_not_found"}
+
+
+# The judgement and what watch does about it
 
 def started(env):
     """Leader and one Worker on a CR in progress."""
@@ -75,31 +138,27 @@ def look(env, now, minutes=THRESHOLD // 60, slot=SLOT):
 
 
 @pytest.fixture
-def pane(monkeypatch):
-    """The text every pane shows; set `pane.text` to change the screen."""
-    class Pane:
-        text = RESTING
-    holder = Pane()
-    monkeypatch.setattr(Tmux, "capture_pane", lambda self, pane_id: holder.text)
+def last(monkeypatch):
+    """The newest conversation record of every instance: set `last.at` (epoch seconds) or `last.reason`."""
+    from agent_session_fake_provider import FakeProvider
+
+    class Last:
+        at = None
+        reason = None
+    holder = Last()
+    monkeypatch.setattr(FakeProvider, "last_record",
+                        lambda self, session_id: {"at": holder.at, "reason": holder.reason if holder.at is None else None})
     monkeypatch.setattr(process, "tree", lambda pid: [])
     return holder
 
 
-def stalled(env, pane, slot, minutes=THRESHOLD // 60 + 1):
-    """Record that the slot's pane has shown its current text for `minutes` already."""
-    meta = env.tmux.get_current("fixture", slot)
-    digest = env.manager()._fingerprint(meta)
-    env.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "watch": {
-        "screen": {"hash": digest, "since": time.time() - minutes * 60}}})
-
-
-def test_a_worker_that_waits_for_the_leader_is_woken_and_told_to_remind_the_leader(session_env, pane, monkeypatch):
+def test_a_worker_that_waits_for_the_leader_is_woken_and_told_to_remind_the_leader(session_env, last, monkeypatch):
     env = session_env
     leader, cr, worker, now = started(env)
     with monkeypatch.context() as actor:                  # it reported and the Leader has not answered
         actor.setenv("CODEX_THREAD_ID", worker["session"]["session_id"])
         env.manager().send(job="leader", message="제출합니다.")
-    assert look(env, now)["status"] == "active"           # the first look only records the screen
+    last.at = now
     assert look(env, now + THRESHOLD - 60)["status"] == "active"
     assert messages(env) == []
     first = look(env, now + THRESHOLD)
@@ -107,8 +166,8 @@ def test_a_worker_that_waits_for_the_leader_is_woken_and_told_to_remind_the_lead
     worker_text, leader_text = messages(env, SLOT), messages(env, "leader")
     assert len(worker_text) == 1 and len(leader_text) == 1
     text = worker_text[0]["text"]
-    assert cr in text and "Leader에게 CR ID와 제출 commit을 짧게 다시 알리십시오" in text
-    assert "자식 process가 없습니다" in text and "마지막 보고(Leader에게 send) 기록 없음" not in text
+    assert cr in text and "Leader에게 CR ID와 제출 commit을 짧게 다시 알리십시오" in text and "대화 기록 마지막" in text
+    assert "자식 process가 없습니다" in text
     assert "seat 0" in leader_text[0]["text"] and "Disposition에 없는 CR" in leader_text[0]["text"]
     # The same stall later: the Worker is not woken again, the Leader is reminded after each threshold.
     again = look(env, now + 2 * THRESHOLD + 60)
@@ -116,88 +175,91 @@ def test_a_worker_that_waits_for_the_leader_is_woken_and_told_to_remind_the_lead
     assert len(messages(env, SLOT)) == 1 and len(messages(env, "leader")) == 2
 
 
-def test_a_screen_that_changed_after_the_nudge_is_a_new_state_and_wakes_again_when_it_stalls(session_env, pane):
+def test_a_record_after_the_nudge_is_a_new_state_and_wakes_again_when_it_stalls(session_env, last):
     env = session_env
     _, _, _, now = started(env)
-    look(env, now)
+    last.at = now
     assert look(env, now + THRESHOLD)["status"] == "resting"
-    pane.text = screen("✻ Brewed for 3m 1s")                # the Worker answered the nudge and rested again
+    last.at = now + THRESHOLD + 30                          # the Worker answered the nudge and rested again
     assert look(env, now + THRESHOLD + 60)["status"] == "active"
     assert look(env, now + 2 * THRESHOLD)["status"] == "active"
-    assert look(env, now + 2 * THRESHOLD + 120)["status"] == "resting"
+    assert look(env, now + 2 * THRESHOLD + 60)["status"] == "resting"
     assert len(messages(env, SLOT)) == 2
 
 
-def test_a_footer_that_changes_alone_does_not_hide_a_stall(session_env, pane):
+def test_a_conversation_that_keeps_appending_records_is_working_and_is_left_alone(session_env, last):
     env = session_env
     _, _, _, now = started(env)
-    look(env, now)
-    pane.text = FOOTER_ONLY
-    assert look(env, now + THRESHOLD)["status"] == "resting"
-    assert len(messages(env, SLOT)) == 1
-
-
-def test_a_screen_that_keeps_changing_is_working_and_is_left_alone(session_env, pane):
-    env = session_env
-    _, _, _, now = started(env)
-    for step, text in enumerate((RUNNING, RUNNING_LATER, screen("✻ Improvising… (5m 1s · ↓ 20k tokens)"),
-                                 screen("✻ Improvising… (9m 1s · ↓ 31k tokens)"))):
-        pane.text = text
-        assert look(env, now + step * 20 * 60)["status"] == "active"
+    for step in range(4):
+        at = now + step * 20 * 60
+        last.at = at - 60                                   # every look finds a record a minute old
+        assert look(env, at)["status"] == "active"
     assert messages(env) == []
 
 
-def test_a_cr_that_left_in_progress_is_not_watched(session_env, pane):
+def test_a_conversation_without_a_readable_record_is_not_a_stall_and_says_why(session_env, last):
+    env = session_env
+    _, _, _, now = started(env)
+    last.reason = "transcript_not_found"
+    result = look(env, now + 10 * THRESHOLD)
+    assert result["status"] == "skipped" and result["reason"] == "transcript_not_found"
+    assert messages(env) == []
+
+
+def test_a_cr_that_left_in_progress_is_not_watched(session_env, last):
     env = session_env
     _, cr, _, now = started(env)
     env.finish(cr)
+    last.at = now - 10 * THRESHOLD
     result = look(env, now)
     assert result["status"] == "skipped" and result["reason"] == "cr_not_in_progress"
     assert messages(env) == []
 
 
-def test_a_stalled_worker_with_a_background_shell_names_it_in_the_message(session_env, pane, monkeypatch):
+def test_a_stalled_worker_with_a_background_shell_names_it_in_the_message(session_env, last, monkeypatch):
     from agent_session_fake_provider import FakeProvider
     env = session_env
     _, _, _, now = started(env)
     shell = {"idle": False, "active_turn": True, "runtime_status": "shell",
              "background": [{"id": "bz1", "type": "shell", "command": "until ! pgrep -f x; do sleep 3; done"}]}
     monkeypatch.setattr(FakeProvider, "observe", lambda self, *a, **k: shell)
-    look(env, now)
-    assert look(env, now + THRESHOLD)["status"] == "resting"
+    last.at = now - THRESHOLD
+    assert look(env, now)["status"] == "resting"
     assert "until ! pgrep -f x; do sleep 3; done" in messages(env, SLOT)[0]["text"]
 
 
-def test_a_child_process_is_named_in_the_message_but_does_not_stop_the_nudge(session_env, pane, monkeypatch):
+def test_a_child_process_is_named_in_the_message_but_does_not_stop_the_nudge(session_env, last, monkeypatch):
     env = session_env
     _, _, _, now = started(env)
     monkeypatch.setattr(process, "started", lambda pid: 0.0)
     monkeypatch.setattr(process, "tree", lambda pid: [
         {"pid": 4242, "birth": "b4242", "started": 1000.0, "cpu": 90.0, "args": "make -j8 test"}])
-    look(env, now)
-    assert look(env, now + THRESHOLD)["status"] == "resting"       # a silent screen is a stall whatever runs
+    last.at = now - THRESHOLD
+    assert look(env, now)["status"] == "resting"           # a quiet conversation is a stall whatever runs
     assert "pid 4242" in messages(env, SLOT)[0]["text"] and "make -j8 test" in messages(env, SLOT)[0]["text"]
 
 
-def test_a_stalled_leader_with_a_cr_in_progress_is_woken_once_per_stall(session_env, pane):
+def test_a_stalled_leader_with_a_cr_in_progress_is_woken_once_per_stall(session_env, last):
     env = session_env
     _, cr, _, now = started(env)
     leader = lambda at: look(env, at, slot="leader")
-    assert leader(now)["status"] == "active"
+    last.at = now
+    assert leader(now + THRESHOLD - 60)["status"] == "active"
     assert leader(now + THRESHOLD)["status"] == "resting"
     [sent] = messages(env, "leader")
     assert cr in sent["text"] and "seat 0" in sent["text"] and "review 대기 CR" in sent["text"]
     assert leader(now + 2 * THRESHOLD)["status"] == "resting"
     assert len(messages(env, "leader")) == 1
-    pane.text = screen("✻ Brewed for 4m 4s")                # the Leader worked, then rested again
-    leader(now + 2 * THRESHOLD + 60)
+    last.at = now + 2 * THRESHOLD + 30                      # the Leader worked, then rested again
+    assert leader(now + 2 * THRESHOLD + 60)["status"] == "active"
     assert leader(now + 3 * THRESHOLD + 60)["status"] == "resting"
     assert len(messages(env, "leader")) == 2
 
 
-def test_a_leader_with_no_cr_in_progress_has_nothing_to_have_forgotten(session_env, pane):
+def test_a_leader_with_no_cr_in_progress_has_nothing_to_have_forgotten(session_env, last):
     env = session_env
     env.manager().start("leader")
+    last.at = time.time() - 10 * THRESHOLD
     result = look(env, time.time(), slot="leader")
     assert result["status"] == "skipped" and result["reason"] == "no_cr_in_progress"
     assert messages(env) == []
@@ -227,10 +289,10 @@ def run_command(env, *arguments):
     return cli.main(["--config", str(env.config), "--socket-name", env.socket_name, "watch", *arguments])
 
 
-def test_watch_command_is_the_operators_and_reports_each_target(session_env, pane, monkeypatch, capsys):
+def test_watch_command_is_the_operators_and_reports_each_target(session_env, last, monkeypatch, capsys):
     env = session_env
     leader, cr, worker, _ = started(env)
-    stalled(env, pane, SLOT)
+    last.at = time.time() - 2 * THRESHOLD
     capsys.readouterr()
     with monkeypatch.context() as actor:
         actor.setenv("CODEX_THREAD_ID", worker["session"]["session_id"])
@@ -241,11 +303,12 @@ def test_watch_command_is_the_operators_and_reports_each_target(session_env, pan
     data = json.loads(capsys.readouterr().out)["data"]
     assert data["threshold_minutes"] == 30
     leader_target, target = data["projects"][0]["targets"]          # the operator judges the Leader too
-    assert (leader_target["slot"], leader_target["status"]) == ("leader", "active")
+    assert (leader_target["slot"], leader_target["status"]) == ("leader", "resting")
     assert (target["slot"], target["job_id"], target["status"]) == (SLOT, cr, "resting")
+    assert (len(messages(env, SLOT)), len(messages(env, "leader"))) == (1, 2)    # the Worker's stall, and the Leader's own
     # A second run at once sends nothing more.
     assert run_command(env, "--project", "fixture") == 0
-    assert len(messages(env, SLOT)) == 1 and len(messages(env, "leader")) == 1
+    assert (len(messages(env, SLOT)), len(messages(env, "leader"))) == (1, 2)
     assert run_command(env, "--project", "unknown") == 2
 
 
@@ -270,11 +333,10 @@ def test_a_failed_target_does_not_hide_the_others(session_env, monkeypatch):
     assert all(item["status"] == "error" and item["error"]["code"] == "x" for item in targets)
 
 
-def test_the_leader_watches_its_own_project_and_gets_the_evidence_instead_of_a_message(session_env, pane, monkeypatch, capsys):
+def test_the_leader_watches_its_own_project_and_gets_the_evidence_instead_of_a_message(session_env, last, monkeypatch, capsys):
     env = session_env
     leader, cr, worker, _ = started(env)
-    stalled(env, pane, SLOT)
-    stalled(env, pane, "leader")
+    last.at = time.time() - 2 * THRESHOLD
     capsys.readouterr()
     with monkeypatch.context() as actor:
         actor.setenv("CODEX_THREAD_ID", leader["session"]["session_id"])

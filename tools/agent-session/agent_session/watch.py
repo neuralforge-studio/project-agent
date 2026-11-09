@@ -1,21 +1,20 @@
-"""Wake an instance whose conversation screen has not changed, and tell the Leader.
+"""Wake an instance whose conversation has not moved, and tell the Leader.
 
 `WatchMixin` is the one-target judgement of a project's `Manager`. `Watch` is the command: it selects
 projects from the registry and runs the judgement for every Worker seat and the Leader once. The operator
 runs it by hand; the Leader runs it for its own project from its own session cron (spec 7, watch).
 
-A stall is judged by the pane text alone, whatever the cause: the pane's screen without the part that
-changes by itself (`provider.screen_body`) has the same hash for `--minutes`. A turn that runs changes the
-screen; an instance that waits for a child process, for the Leader, or for nothing does not. Watch then
-sends the Worker one message with the evidence (CR, last turn end, last report, background tasks, child
-processes with their commands and age) so the Worker checks and decides for itself, and tells the Leader.
-A stalled Leader gets one message that names the CRs in progress. It never signals a process or changes
-the state, the CR or the Git work.
+A stall is judged by the conversation record alone, whatever the cause: the newest record of the
+provider's conversation file (`provider.last_record`) is older than `--minutes`. A turn that runs keeps
+appending records; an instance that waits for a child process, for the Leader, or for nothing does not.
+Nothing from an earlier look is compared. Watch then sends the Worker one message with the evidence (CR,
+last turn end, last report, background tasks, child processes with their commands and age) so the Worker
+checks and decides for itself, and tells the Leader. A stalled Leader gets one message that names the CRs
+in progress. It never signals a process or changes the state, the CR or the Git work.
 
-The judgement reads the pane (`capture-pane`) and, for the evidence only, facts the tools already keep: the
-CR state, the provider's turn status, the last Stop hook, the send records on the windows and the CLI's
-child processes. The screen hash, since when it holds, and what watch sent are recorded in the window
-option `watch`.
+The judgement reads that record time and, for the evidence only, facts the tools already keep: the CR
+state, the provider's turn status, the last Stop hook, the send records on the windows and the CLI's child
+processes. What watch sent is recorded in the window option `watch` so that one stall wakes an instance once.
 
 Dependency direction as in `suspend`: `lifecycle` imports this module and `Manager` inherits
 `WatchMixin`; this module never imports `lifecycle`. `Watch` gets the `Manager` class from the code that
@@ -23,7 +22,6 @@ assembles it (`cli._default_watch`).
 """
 
 import datetime as dt
-import hashlib
 import time
 
 from . import jobs, process
@@ -31,24 +29,24 @@ from .errors import SessionError
 from .state import locked
 from .suspend import Fleet
 
-DEFAULT_MINUTES = 30      # how long a screen may stay the same before watch acts
+DEFAULT_MINUTES = 30      # how old the newest conversation record may be before watch acts
 RESIDENT_GRACE = 120      # seconds after the CLI starts in which its helper processes (MCP servers) start
 COMMAND_CHARS = 160       # command line length in a message
 LISTED = 8                # most background tasks, child processes or CRs named in a message
 LEADER = "leader"
 
 WORKER_NOTICE = (
-    "[agent-session watch] 자동 점검 메시지입니다. {job} CR이 in-progress인데 이 세션의 화면이 {minutes}분 넘게 "
-    "바뀌지 않았습니다. 아래 근거를 보고 작업이 실제로 진행 중인지 확인하십시오. "
+    "[agent-session watch] 자동 점검 메시지입니다. {job} CR이 in-progress인데 이 세션의 대화 기록이 {minutes}분 넘게 "
+    "갱신되지 않았습니다. 아래 근거를 보고 작업이 실제로 진행 중인지 확인하십시오. "
     "제출해서 Leader 회신을 기다리는 중이면 `agent-session send --job leader`로 Leader에게 CR ID와 제출 commit을 "
     "짧게 다시 알리십시오. 멈춘 대기(예: 자기 shell과도 맞아 끝나지 않는 `pgrep -f` loop)이면 원인을 풀고 이어서 "
     "진행하고, 막혔다면 이유를 Leader에게 보고하십시오. 같은 정체 상태에서는 이 메시지를 다시 보내지 않습니다.\n{evidence}")
 WORKER_LEADER_NOTICE = (
-    "[agent-session watch] seat {seat}의 {job} Worker 화면이 {minutes}분째 바뀌지 않았습니다(CR in-progress). "
+    "[agent-session watch] seat {seat}의 {job} Worker의 대화 기록이 {minutes}분째 갱신되지 않았습니다(CR in-progress). "
     "{delivery} 강제로 끊지 않았습니다. 제출 뒤 review를 기다리는 중일 수 있으니 `## Result`의 제출 hash가 "
     "Disposition에 없는 CR이면 review하고, 아니면 Worker 상태를 확인해 주십시오.\n{evidence}")
 LEADER_NOTICE = (
-    "[agent-session watch] 자동 점검 메시지입니다. Leader 화면이 {minutes}분 넘게 바뀌지 않았는데 in-progress CR이 "
+    "[agent-session watch] 자동 점검 메시지입니다. Leader의 대화 기록이 {minutes}분 넘게 갱신되지 않았는데 in-progress CR이 "
     "있습니다. `project-item ls`로 review 대기 CR(`## Result`의 제출 hash가 Disposition에 없는 것)을 먼저 처리하고, "
     "그 밖에 Worker 보고·결정 항목·빈 seat를 확인하십시오. 같은 정체 상태에서는 이 메시지를 다시 보내지 않습니다.\n{evidence}")
 
@@ -107,34 +105,26 @@ class WatchMixin:
         pane = self.tmux.pane_info(meta["pane_id"])
         if pane["pane_dead"] or not process.cli_alive(meta, pane):
             return {**outcome, "reason": "not_running"}
-        digest = self._fingerprint(meta)
-        record = {key: value for key, value in (meta.get("watch") or {}).items() if key in ("screen", "resting")}
-        if (record.get("screen") or {}).get("hash") != digest:
-            # A new screen is a new state: its stall is counted from now and may wake the instance again.
-            record = {"screen": {"hash": digest, "since": now}}
+        last = self.provider.last_record(meta.get("session_id"))
+        at = last["at"]
+        if at is None:
+            return {**outcome, "reason": last["reason"]}                 # no record to judge by: not a stall
+        record = {"resting": (meta.get("watch") or {}).get("resting") or {}}
+        nudged = _parse(record["resting"].get("nudged_at"))
+        if nudged is not None and at > nudged:
+            record["resting"] = {}                                      # the conversation moved since: a new state
+        if now - at < threshold:
             outcome.update(status="active")
+        elif leader:
+            outcome.update(self._judge_leader_stall(working, record, at, now, threshold))
         else:
-            since = record["screen"]["since"]
-            if now - since < threshold:
-                outcome.update(status="active")
-            elif leader:
-                outcome.update(self._judge_leader_stall(working, record, since, now, threshold))
-            else:
-                outcome.update(self._judge_stall(meta, pane, record, since, now, threshold, job_id, slot,
-                                                 tell_leader))
+            outcome.update(self._judge_stall(meta, pane, record, at, now, threshold, job_id, slot, tell_leader))
         if record != (meta.get("watch") or {}):
             try:
                 self.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "watch": record})
             except SessionError as error:
                 outcome["actions"].append({"record": "failed", "error": error.as_dict()})
         return outcome
-
-    def _fingerprint(self, meta):
-        """What the stall judgement compares: a hash that stays the same while the conversation does not
-        move. This is the one place that decides the source of the comparison (today the pane text without
-        the part that changes by itself); the rest of the judgement only compares what it returns."""
-        screen = self.provider.screen_body(self.tmux.capture_pane(meta["pane_id"]))
-        return hashlib.sha256(screen.encode("utf-8")).hexdigest()
 
     def _in_progress(self, state):
         """The (seat number, CR) pairs whose Worker has a session and whose CR is in progress."""
@@ -150,7 +140,7 @@ class WatchMixin:
                 and item.get("session_id") == meta.get("session_id")]
         return max((value for value in seen if value is not None), default=None)
 
-    def _judge_stall(self, meta, pane, record, since, now, threshold, job_id, slot, tell_leader=True):
+    def _judge_stall(self, meta, pane, record, at, now, threshold, job_id, slot, tell_leader=True):
         try:
             context = self._provider_context(meta, pane)
             observed = self.provider.observe(self._session(meta), context, context["meta"], timeout=self.remaining())
@@ -160,8 +150,8 @@ class WatchMixin:
         sent, received = meta.get("last_sent") or {}, meta.get("last_received") or {}
         sent_at, received_at = _parse(sent.get("at")), _parse(received.get("at"))
         resting = record.get("resting") or {}
-        minutes = _minutes(now - since)
-        evidence = self._evidence(job_id, self._hook_time(meta), received_at, sent_at, observed, children, now)
+        minutes = _minutes(now - at)
+        evidence = self._evidence(job_id, self._hook_time(meta), received_at, sent_at, at, observed, children, now)
         actions = []
         told = False
         if not resting.get("nudged_at"):
@@ -179,13 +169,13 @@ class WatchMixin:
             seat=slot[len("seat-"):], job=job_id, minutes=minutes, delivery=delivery, evidence=evidence))
         return {"status": "resting", "reason": None, "actions": actions}
 
-    def _judge_leader_stall(self, working, record, since, now, threshold):
+    def _judge_leader_stall(self, working, record, at, now, threshold):
         """Wake a stalled Leader once per stall with the CRs in progress."""
         resting = record.get("resting") or {}
         actions = []
         if not resting.get("nudged_at"):
             evidence = "근거: in-progress CR " + ", ".join(f"{job}(seat {key})" for key, job in working[:LISTED])
-            if self._deliver(actions, LEADER, LEADER_NOTICE.format(minutes=_minutes(now - since), evidence=evidence)):
+            if self._deliver(actions, LEADER, LEADER_NOTICE.format(minutes=_minutes(now - at), evidence=evidence)):
                 resting["nudged_at"] = _iso(now)
         record["resting"] = resting
         return {"status": "resting", "reason": None, "actions": actions}
@@ -203,11 +193,11 @@ class WatchMixin:
         return [item for item in tree if began is None or item["started"] > began + RESIDENT_GRACE]
 
     @staticmethod
-    def _evidence(job_id, ended, received_at, sent_at, observed, children, now):
+    def _evidence(job_id, ended, received_at, sent_at, at, observed, children, now):
         def when(value):
             return _iso(value) if value else "기록 없음"
         lines = [f"근거: CR {job_id} in-progress / 마지막 turn 종료 {when(ended)} / 마지막 입력 {when(received_at)} / "
-                 f"마지막 보고(Leader에게 send) {when(sent_at)}"]
+                 f"마지막 보고(Leader에게 send) {when(sent_at)} / 대화 기록 마지막 {when(at)}"]
         background = observed.get("background") or []
         for item in background[:LISTED]:
             item = item if isinstance(item, dict) else {"command": str(item)}

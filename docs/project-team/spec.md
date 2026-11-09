@@ -1286,13 +1286,13 @@ agent-session watch --all
 agent-session watch --project NAME --minutes 30
 ```
 
-관리 pane의 화면이 `--minutes` 동안 바뀌지 않은 instance를 깨우고 Leader에게 알립니다. 운영자가 수동으로 점검할 때와 Claude Leader가 자기 점검(아래)에서 실행하는 명령입니다. 호출자 판정은 아무것도 바꾸기 전에 합니다. 운영자는 어느 project든 점검할 수 있습니다(shutdown·resume과 같은 판정). 그 project의 현재 Leader는 자기 project 하나만 점검할 수 있고(`--project`로 자기 project를 지정, 또는 등록이 그 하나뿐일 때의 `--all`), Worker는 role_denied, 다른 project의 Leader·등록 밖의 agent는 caller_unbound이며 여럿을 고르는 `--all`은 Leader에게 열려 있지 않습니다. 한 번 실행하면 각 project의 Worker seat와 Leader를 한 번씩 보고 끝납니다. 반복은 명령이 하지 않습니다.
+대화 기록이 `--minutes` 동안 갱신되지 않은 instance를 깨우고 Leader에게 알립니다. 운영자가 수동으로 점검할 때와 Claude Leader가 자기 점검(아래)에서 실행하는 명령입니다. 호출자 판정은 아무것도 바꾸기 전에 합니다. 운영자는 어느 project든 점검할 수 있습니다(shutdown·resume과 같은 판정). 그 project의 현재 Leader는 자기 project 하나만 점검할 수 있고(`--project`로 자기 project를 지정, 또는 등록이 그 하나뿐일 때의 `--all`), Worker는 role_denied, 다른 project의 Leader·등록 밖의 agent는 caller_unbound이며 여럿을 고르는 `--all`은 Leader에게 열려 있지 않습니다. 한 번 실행하면 각 project의 Worker seat와 Leader를 한 번씩 보고 끝납니다. 반복은 명령이 하지 않습니다.
 
 | 옵션 | 필수·기본값 | 처리 |
 | --- | --- | --- |
 | --project NAME | --all과 택일 | 그 project만 |
 | --all | --project와 택일 | 등록 파일의 모든 project |
-| --minutes N | 선택. 30 | 화면이 같아도 되는 시간. 이 시간이 지나야 움직입니다 |
+| --minutes N | 선택. 30 | 가장 새 대화 기록이 오래돼도 되는 시간. 이 시간이 지나야 움직입니다 |
 | --timeout SECONDS | 선택. 120 | 한 project의 전체 대기 제한 |
 
 **자기 점검(실행 방식)**: 반복 실행은 각 Claude instance가 자기 TUI의 session cron(`CronCreate`)으로 합니다. 중앙 감시 process와 system crontab은 두지 않습니다. session cron은 그 instance가 쉬고 있을 때만 실행되고 instance가 끝나면 사라지므로, 점검은 "turn이 끝난 채 멈춘" 상태에만 깨어나고 수명이 instance와 같습니다.
@@ -1303,16 +1303,18 @@ agent-session watch --project NAME --minutes 30
 - 한계: session cron은 instance가 turn 중이면 실행되지 않고 주기의 최대 절반(최대 30분)까지 늦으며 7일 뒤 만료합니다. 점검이 만료 전에 자기 등록을 갱신합니다. instance 자체가 쉬지 못하게 막힌 경우(긴 turn)는 이 점검이 보지 못합니다.
 - Leader가 호출한 `watch`는 정체한 Worker를 깨우는 판정은 같지만 Leader에게 메시지를 보내지 않고 Leader 자신은 판정하지 않습니다(호출하고 있다는 것이 정체가 아니라는 뜻입니다). 대신 `resting` target 결과에 `evidence`(운영자 호출이면 Leader 메시지에 담기는 근거)를 담고, Leader 알림 기록(`notified_at`)은 남기지 않습니다.
 
-**정체**: 다음이 모두 맞는 instance입니다. 원인(자식 process를 기다림, 제출 뒤 Leader 회신을 기다림, 아무것도 안 함)은 묻지 않습니다. 정체한 instance는 깨워서 스스로 판단하게 합니다.
+**정체**: 다음이 모두 맞는 instance입니다. 원인(자식 process를 기다림, 제출 뒤 Leader 회신을 기다림, 아무것도 안 함)은 묻지 않습니다. 정체한 instance는 깨워서 스스로 판단하게 합니다. 판정은 사용자 결정 D-20261110-01(대화 기록으로 판정)을 따릅니다.
 
 1. 로컬 seat의 현재 run이 살아 있습니다. 원격 seat는 이 판정이 대상이 아니라 `skipped`(`remote_seat`)입니다. Worker는 배정한 CR이 in-progress입니다. Leader는 in-progress CR이 하나라도 있어야 판정합니다(없으면 `skipped`, `no_cr_in_progress`: 잊을 일이 없음).
-2. 관리 pane의 화면 지문이 `--minutes` 동안 같습니다. 지문은 `capture-pane`으로 읽은 보이는 화면에서 provider가 스스로 바뀌는 부분을 뺀 text(`provider.screen_body`)의 sha256입니다. 지문은 `WatchMixin._fingerprint` 한 곳이 만들고, 판정의 나머지는 그 값만 비교합니다. 지문이 바뀐 점검은 새 상태이므로 그 시각부터 다시 셉니다. 한 점검은 지문을 기록할 뿐이어서 정체는 같은 지문을 두 번 이상 본 점검 사이의 시간으로 셉니다(처음 본 점검은 `active`).
+2. 그 instance의 대화 기록에서 시각이 있는 가장 새 기록이 `--minutes`보다 오래됐습니다. 이전 점검의 결과를 저장해 비교하지 않고 매 점검이 새로 읽습니다. 실행 중인 turn은 기록을 계속 덧붙이므로 정체가 아닙니다.
 
-빼는 부분(Claude): Claude 화면은 대화, turn이 도는 동안 시간이 바뀌는 spinner 줄(`✻ Improvising… (2m 24s · ↓ 8.2k tokens)`), 위아래 border 줄(`─` 10개 이상으로 시작) 사이의 입력 상자, 그 아래의 status 줄(사용량 %·갱신 시각·ctx %)과 권한 mode 줄(`⏵⏵ bypass permissions on …`, 실행 중 agent 수)입니다. status·mode 줄은 turn과 무관하게(시계와 다른 세션의 사용량으로) 바뀌므로 마지막 border 줄부터 아래를 모두 뺍니다. border 줄이 없으면 화면 전체를 쓰고 줄 끝 공백과 끝의 빈 줄은 무시합니다. 대화·spinner 줄·입력 상자의 글자는 비교에 들어갑니다. turn이 진행 중이면 spinner 시간이 바뀌어 `active`이고, 입력을 받거나 쓰는 중이어도 바뀝니다. 근거는 2026-11-10 Claude Code 2.1.319 실제 pane capture(진행 중, 쉬는 중, status 줄만 바뀐 경우)이며 `tests/test_watch.py`의 화면이 그 모양을 보존합니다.
+대화 기록의 읽기는 provider의 `last_record(session_id)`가 소유합니다(`{"at": epoch 초 또는 None, "reason": ...}`). 기록 파일은 끝에 덧붙이기만 하므로 파일 끝 `TRANSCRIPT_TAIL`(64KB)만 읽어, 완전한 JSON 한 줄 가운데 `timestamp`가 있는 가장 마지막 기록의 시각을 씁니다(`providers/common.py`의 `last_record_time`). 잘린 첫 줄과 쓰는 중인 마지막 줄은 읽지 않고 그 앞의 완전한 줄을 씁니다. 시각이 없는 줄은 건너뜁니다. 실제 Claude Code 2.1.319 transcript에는 `session-owner`·`atis-latch`·`mode`·`permission-mode`·`custom-title`·`last-prompt`·`api-request-blob`처럼 시각이 없고 대화와 무관하게 덧붙는 bookkeeping 줄이 파일 끝에 오는 일이 흔하므로(확인한 한 대화의 줄 434개 가운데 232개), 마지막 줄이 아니라 시각이 있는 마지막 줄을 씁니다. 시각이 있는 줄(`user`·`assistant`·`attachment`·`api-request` 등)의 `timestamp`는 UTC ISO 8601(`...Z`)입니다.
 
-빼는 부분(Codex): 확인한 Codex pane capture가 아직 없어 아무것도 빼지 않고 줄 끝 공백과 끝의 빈 줄만 무시합니다. 화면 아래 줄이 시계로 바뀌는 Codex는 쉬어도 `active`로 남아 정체를 놓칠 수 있습니다(일하는 instance를 깨우는 쪽으로는 틀리지 않습니다). capture로 규칙을 정하면 `CodexProvider.screen_body`만 고칩니다(지금 등록된 project는 모두 Claude).
+- Claude: `<config dir>/projects/*/<대화 ID>.jsonl`(`transcript_files`가 소유. 호출한 process의 `CLAUDE_CONFIG_DIR`, 없으면 `~/.claude`). 여러 개면 가장 최근에 바뀐 파일.
+- Codex: `$CODEX_HOME/sessions/<년>/<월>/<일>/rollout-<시작 시각>-<thread ID>.jsonl`(`CODEX_HOME`이 없으면 `~/.codex`)의 줄 `timestamp`. 이 환경에는 Codex session 파일이 없어 실제 파일로 확인하지 못했고 Codex의 문서화된 배치를 따른 것입니다. 첫 Codex project가 생기면 실제 파일로 확인합니다.
+- 판정할 기록이 없으면(파일을 찾지 못함 `transcript_not_found`, 읽지 못함 `transcript_unreadable`, 시각 있는 완전한 줄이 없음 `no_record_with_time`) 정체로 보지 않고 그 target을 `skipped`로 하고 `reason`에 그 이유를 남깁니다. watch를 호출한 process의 `CLAUDE_CONFIG_DIR`이 CLI가 쓰는 것과 다르면 이 경우가 됩니다.
 
-한계: 화면이 계속 바뀌는 동안은 원인과 무관하게 일하는 것으로 봅니다. 끝나지 않는 foreground 대기는 spinner 시간이 계속 바뀌어 이 판정이 보지 못하며(foreground 명령은 tool 시간 제한을 넘으면 background로 넘어가고 turn이 끝나면 화면이 멈춥니다) 자식 process의 CPU는 판정에 쓰지 않습니다.
+한계: 한 turn 안에서 기록 없이 30분 넘게 이어지는 일(예: 하위 agent가 오래 도는 동안)은 정체로 판정해 깨웁니다. 깨우는 쪽으로만 틀리고 점검 메시지는 읽기만 하면 됩니다. 자식 process의 CPU는 판정에 쓰지 않습니다.
 
 **하는 일**: 메시지 전송과 기록뿐입니다. process에 신호를 보내지 않고 state·CR·Git 작업을 바꾸지 않습니다. 정체한 Worker에는 다음을 보냅니다.
 
@@ -1321,9 +1323,9 @@ agent-session watch --project NAME --minutes 30
 - 정체한 Leader에는 점검 메시지를 한 번 보냅니다. in-progress CR 목록을 담고 review 대기 CR(제출 행의 hash가 Disposition에 없는 것)을 먼저 처리하라고 씁니다. Worker가 Leader에게 다시 알린 메시지도 Leader를 깨웁니다.
 - 발신자는 operator입니다. 메시지 첫 줄에 로컬 operator 입력임이 적히고 본문은 `[agent-session watch]`로 시작합니다. 사용자 승인이 아닙니다.
 
-**반복 방지**: window option `watch`(`screen.hash`·`screen.since`·`resting.nudged_at`·`resting.notified_at`)에 지문과 보낸 기록을 둡니다. 같은 지문이 이어지는 동안(같은 정체 상태)은 instance에게 다시 보내지 않습니다. Worker 정체를 Leader에게는 마지막 알림 뒤 `--minutes`가 지날 때마다 다시 알립니다. 점검 메시지는 입력이므로 받은 instance의 화면이 바뀌어 새 상태가 되고, 그 뒤 다시 정체하면 다시 깨웁니다. 전달이 accepted가 아니면 기록하지 않아 다음 점검이 다시 시도합니다(Leader가 없거나 Worker가 준비 중인 경우 등). 이전 판정의 옛 기록 key는 읽을 때 버립니다. 기록은 run의 window에 있으므로 새 run은 처음부터 봅니다. 같은 project의 watch는 `agent/watch.lock`으로 동시에 하나만 돕니다(둘째는 `control_busy`를 그 project의 `error`로 보고하고 아무것도 보내지 않습니다).
+**반복 방지**: window option `watch`(`resting.nudged_at`·`resting.notified_at`)에 보낸 기록만 둡니다. 판정에는 쓰지 않고 한 정체에 한 번만 보내려는 용도입니다. 보낸 시각(`nudged_at`) 뒤에 대화 기록이 더 생기면 새 상태이므로 그 기록을 지웁니다. 같은 정체가 이어지는 동안은 instance에게 다시 보내지 않습니다. Worker 정체를 Leader에게는 마지막 알림 뒤 `--minutes`가 지날 때마다 다시 알립니다. 점검 메시지는 입력이므로 받은 instance의 대화 기록에 남아 새 상태가 되고, 그 뒤 다시 정체하면 다시 깨웁니다. 전달이 accepted가 아니면 기록하지 않아 다음 점검이 다시 시도합니다(Leader가 없거나 Worker가 준비 중인 경우 등). 이전 판정의 옛 기록 key는 읽을 때 버립니다. 기록은 run의 window에 있으므로 새 run은 처음부터 봅니다. 같은 project의 watch는 `agent/watch.lock`으로 동시에 하나만 돕니다(둘째는 `control_busy`를 그 project의 `error`로 보고하고 아무것도 보내지 않습니다).
 
-결과는 `{threshold_minutes, projects: [{project, targets: [{slot, job_id, status, reason, actions}], error?}]}`입니다. `slot`은 `leader`(운영자 호출만)와 `seat-N`이고 Leader의 `job_id`는 null입니다. status는 `skipped`·`active`(화면이 새로 바뀌었거나 바뀐 지 `--minutes`가 안 됨)·`resting`(정체)·`error`입니다. Leader가 호출한 결과의 `resting` target은 `evidence`를 더합니다. 한 target의 오류는 다른 target을 막지 않고 그 target의 `error`로 보고합니다. 점검 대상이 없어도 exit 0입니다. 자식 process의 CPU 시간은 Linux에서만 읽습니다. 다른 OS에서는 자식 process를 읽지 못한 것으로 보고 메시지에 그렇게 적습니다.
+결과는 `{threshold_minutes, projects: [{project, targets: [{slot, job_id, status, reason, actions}], error?}]}`입니다. `slot`은 `leader`(운영자 호출만)와 `seat-N`이고 Leader의 `job_id`는 null입니다. status는 `skipped`·`active`(가장 새 기록이 `--minutes` 안)·`resting`(정체)·`error`입니다. Leader가 호출한 결과의 `resting` target은 `evidence`를 더합니다. 한 target의 오류는 다른 target을 막지 않고 그 target의 `error`로 보고합니다. 점검 대상이 없어도 exit 0입니다. 자식 process의 CPU 시간은 Linux에서만 읽습니다. 다른 OS에서는 자식 process를 읽지 못한 것으로 보고 메시지에 그렇게 적습니다.
 
 ## 8. CR과 실행 입력
 

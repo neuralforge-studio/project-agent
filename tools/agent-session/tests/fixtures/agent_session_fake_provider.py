@@ -47,9 +47,8 @@ class FakeProvider:
         from agent_session.providers.claude import startup_dialog
         return startup_dialog(screen)
 
-    def screen_body(self, screen):
-        from agent_session.providers.claude import screen_body
-        return screen_body(screen)
+    def last_record(self, session_id):
+        return {"at": None, "reason": "transcript_not_found"}
 
     def verify_binding(self, session, context, meta, timeout=30):
         from agent_session.errors import SessionError
