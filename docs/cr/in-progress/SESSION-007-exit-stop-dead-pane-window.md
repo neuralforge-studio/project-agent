@@ -19,6 +19,7 @@
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). 사용자가 보고한 동작 결함이고 위임 범위입니다. 근본 원인은 run의 마무리가 `stop`이라는 별도 명령에만 묶여 있어, CLI가 스스로 끝난 경우에는 마무리할 주체가 없다는 점입니다(SESSION-001의 게시, SESSION-004의 반납과 같은 모양의 결함).
 - 2026-11-09 Leader: 제출 31af38e 검토. pane-died에서 stop과 같은 마무리(`_settle`), 종료 근거 `ended.json`, 경합 규칙, Leader `/exit`·Worker SIGKILL·사용자 pane 경우의 실제 tmux test, 760 passed를 확인했습니다. Worker 판단 1(CR in-progress면 window를 반납 대기 근거로 유지, CR 이동 때 정리)은 받아들입니다: Leader의 자기 점검(SESSION-006)이 반납 대기를 보고 CR을 옮기므로 무기한 남지 않고, 근거를 window 밖으로 옮기는 비용(약 30곳)에 비해 이득이 작습니다. 수정 요청: (1) 새 server 전체 hook `pane-died[agent-session]`을 설치 계약 5.3절 표와 `uninstall`의 되돌림 명령에 넣을 것, (2) 이름 붙은 hook index는 tmux 3.8부터이므로(TMUX-002) 더 낮은 tmux에서의 start 동작을 정할 것.
+- 2026-11-09 Leader: 제출 cf0295a6d01972d367539a84b4516e7a7f8b3812를 인수합니다. Leader review: 수정 delta(설치 계약 5.3·3.1·3.2에 pane-died[agent-session]와 되돌림, uninstall 출력과 이름 대조 test, start·restart·resume의 시작 전 tmux 버전 확인과 tmux_too_old 거절, 최소 버전 원본은 project-agent.conf 한 줄)를 확인했습니다. install/tests 261 passed, 바꾼 모듈 test 통과, 경계 9. 이전 검토(31af38e의 마무리 구조·ended.json·경합 규칙)와 판단 1 수용을 재사용합니다.
 
 ## Implementation
 읽을 문서: [동작 명세](../../project-team/spec.md) 3절(종료한 window 정리, 실행 근거)·5절(hook)·7절(stop), SESSION-003·SESSION-004 Result, [README 검증 표](../../../README.md#검증).
@@ -39,7 +40,7 @@ README 검증 표의 `tools/agent-session/**` 행(tmux option·hook을 바꾸면
 3. stop·restart 실행 중에 CLI가 끝나도 마무리가 한 번만 일어남. shutdown으로 끝난 run은 정리되지 않고 resume이 이어받음.
 
 ## Result
-- 제출 commit: 31af38e1890154f57a6b98fc0f406b50b1344ce4
+- 제출 commit: cf0295a6d01972d367539a84b4516e7a7f8b3812
 
 구현 (`cr/SESSION-007`, origin/main(SESSION-006 포함) merge 완료):
 - 마무리 시작: tmux server의 `pane-died`. start·restart·resume·Worker 배정이 CLI를 띄우기 직전에 server 전체 hook 요소 `pane-died[agent-session]`을 씁니다(`Tmux.install_exit_hook`). 관리 pane일 때만 `python -m agent_session.internal finish-ended <socket> <window> <pane>`을 실행합니다. 사용자 설정의 `pane-died` hook(Board의 `pane-died[project-agent]` 포함)은 그대로 실행됩니다. window scope hook은 server hook을 대체함을 tmux 3.8에서 확인해 쓰지 않았습니다. 이 hook이 server 전체를 쓰는 것이 새 계약이므로 명세 3절과 실행 경로 계약(README 3항)에 적었습니다.
@@ -70,3 +71,16 @@ README 검증 표의 `tools/agent-session/**` 행(tmux option·hook을 바꾸면
 - 검증 3의 shutdown은 실제 shutdown을 돌린 test가 아니라 stopping이 있으면 마무리하지 않는 규칙으로 확인했습니다(shutdown은 stopping을 씀, 기존 test_suspend 통과).
 - start가 `ended.json` 근거로 종료를 확인하는 경우를 따로 test하지 않았습니다(`_observe` 공용 경로이고 stop·restart·window 정리 test로 확인).
 - 실제 Claude·Codex CLI로는 실행하지 않았습니다(fixture CLI).
+
+### 수정 제출 (Leader review 31af38e 반영)
+- 제출 commit은 위 행(`cf0295a`: 수정 `041d856` + origin/main의 CR 문서 commit만 merge, 코드 입력 변화 없음). 이전 제출은 31af38e입니다.
+1. 설치 계약: 5.3절 표에 `agent-session`의 hook(`pane-died[agent-session]`: 시점·되돌림·근거)을 추가하고, 3.1절 4항에 `set-hook -gwu 'pane-died[agent-session]'`이 agent-session이 넣는 hook의 되돌림임을 적었습니다. 설치기 `uninstall`은 이 명령을 출력합니다(`commands.py` `AGENT_SESSION_HOOK`; 이름이 `tmux.py` `EXIT_HOOK`과 같은지 `install/tests/test_tmux.py`가 비교). tmux 3.8에서 `-g`로 쓴 이 hook을 `-gwu`로 지워짐을 확인했고, uninstall test가 실제 server에서 이를 실행해 확인합니다.
+2. 최소 버전: 계약 3.2절에 agent-session도 같은 최소 버전을 요구한다고 적었습니다. 값의 원본은 `project-agent.conf`의 `@project_agent_tmux_min` 한 줄입니다. `Tmux.minimum_version()`이 같은 파일을 읽고(`integrations/tmux/`가 없는 tree, 즉 원격 bundle은 검사하지 않음), `Tmux.require_version()`이 실행 중인 server의 `#{version}`(server가 없으면 PATH의 첫 `tmux -V`)과 비교합니다. `start`·`restart`·`resume`(relaunch)이 시작 전에 호출하고, 낮으면 JSON 오류 `tmux_too_old`(exit 5, message와 details에 현재 버전·최소 버전·`/primehome/tools/Inhouse/tmux/latest/bin`)로 거절해 아무것도 만들지 않습니다. `stop`은 hook이 필요 없어 그대로 동작합니다. 그 밖에 tmux가 hook 쓰기를 거절하면 그 오류(`tmux_command_failed`)로 start가 실패합니다(이전의 삼킴을 뺐습니다). 경로에 따옴표·공백이 있어 hook command를 만들 수 없을 때만 hook 없이 진행하고 `stop`이 마무리합니다(spec 3절에 적음).
+3. spec 3절에 위 내용을 적었습니다. 원격 guidance 목록 test(`test_remote.py`)가 spec의 새 link를 거절해 설치 계약은 link 없이 경로로 적었습니다.
+
+수정 검증(바꾼 부분만):
+- `python -m pytest -q -n 8 install/tests`: 261 passed, 2 skipped(이 변경과 무관한 기존 skip).
+- `python -m pytest -q -n 8 tools/agent-session/tests/test_self_ended.py test_tmux.py test_start_seat.py test_suspend.py test_lifecycle.py test_remote.py`: 315 passed, 2 failed(`test_remote.py` guidance 2건, spec의 install-contract link가 원인). link를 지우고 `test_remote.py -k guidance` 3 passed로 재확인했습니다. test_remote 나머지는 첫 실행에서 통과했고 이후 바뀐 것은 spec 문장뿐입니다.
+- `tools/test_distribution_boundary.py`: 9 passed.
+- 새 test: tmux 버전 판정(3.8·3.10·next-3.9 통과, 3.6a·2.7·master·빈 값 거절, stub `tmux`), 최소 버전이 계약 3.2절·conf와 같음, 낮은 tmux에서 start·restart가 거절되고 state·window 변화 없이 stop은 동작함.
+- 검증하지 않은 것: 3.7 계열 tmux(이 host에 없음, 계약 3.2절과 같이 미지원).
