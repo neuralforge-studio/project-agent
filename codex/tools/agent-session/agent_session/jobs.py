@@ -11,7 +11,12 @@ _PROJECT_ITEM = str(Path(__file__).resolve().parents[2] / "project-item")
 
 
 def item_api():
-    """The public interface of project-item, imported from the sibling tool directory."""
+    """The public interface of project-item, imported from the sibling tool directory.
+
+    Keep this import inside the function. project_item.registry imports agent_session.api when it
+    loads, so a module-level project-item import in agent-session would make an import cycle.
+    tests/test_import_cycle.py (test_first_import_succeeds_in_a_new_interpreter) fails if it does.
+    """
     if _PROJECT_ITEM not in sys.path:
         sys.path.insert(0, _PROJECT_ITEM)
     from project_item import api
