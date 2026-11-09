@@ -48,8 +48,12 @@ class FakeFleet:
     (["shutdown", "--project", "agent"], {"command": "shutdown", "project": "agent", "everything": False, "force": False}),
     (["shutdown", "--all", "--force", "--timeout", "5"],
      {"command": "shutdown", "project": None, "everything": True, "force": True}),
-    (["resume", "--project", "socsim", "--timeout", "90"], {"command": "resume", "project": "socsim", "everything": False}),
-    (["resume", "--all"], {"command": "resume", "project": None, "everything": True}),
+    (["resume", "--project", "socsim", "--timeout", "90"],
+     {"command": "resume", "project": "socsim", "everything": False, "lost": False}),
+    (["resume", "--all"], {"command": "resume", "project": None, "everything": True, "lost": False}),
+    (["resume", "--all", "--lost"], {"command": "resume", "project": None, "everything": True, "lost": True}),
+    (["resume", "--project", "socsim", "--lost"],
+     {"command": "resume", "project": "socsim", "everything": False, "lost": True}),
 ])
 def test_shutdown_and_resume_select_projects_by_name_not_by_directory(argv, expected, capsys):
     def no_manager(**options):
@@ -67,7 +71,7 @@ def test_shutdown_and_resume_select_projects_by_name_not_by_directory(argv, expe
 
 @pytest.mark.parametrize("argv", [
     ["shutdown"], ["resume"], ["shutdown", "--all", "--project", "agent"], ["resume", "--all", "--project", "agent"],
-    ["resume", "--all", "--force"], ["shutdown", "--project", ""], ["shutdown", "--all", "--timeout", "0"],
+    ["resume", "--all", "--force"], ["shutdown", "--all", "--lost"], ["resume", "--lost"], ["shutdown", "--project", ""], ["shutdown", "--all", "--timeout", "0"],
     ["shutdown", "--all", "--job", "leader"], ["resume", "--seat", "0"],
 ])
 def test_shutdown_and_resume_input_errors_touch_nothing(argv, capsys):

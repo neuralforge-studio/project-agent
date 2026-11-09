@@ -88,6 +88,7 @@ Leader가 운영자에게 요청할 일:
 
 - 서버를 내리기 전에 `agent-session shutdown`을 요청합니다. stop으로 Worker를 하나씩 반납하지 않습니다.
 - 서버가 뜬 뒤에 `agent-session resume`을 요청합니다. tmux-resurrect 복원보다 먼저 실행해야 합니다.
+- 정전·crash로 shutdown 없이 서버가 내려갔다가 뜬 뒤에는 `agent-session resume --lost`를 요청합니다. 재부팅을 확인한 slot만 같은 대화로 재개하고 나머지는 거절 이유와 함께 보고합니다.
 - seat의 start·restart가 `execution_unknown`이면 배정을 바꾸지 않고 [수동 복구](../../../docs/project-team/spec.md#종료-근거가-부족한-실행의-수동-복구)를 요청합니다.
 - resume이 실패한 Worker는 `agent-session start --job <CR>`로 같은 seat에서 새 대화를 시작합니다. shutdown 기록이 있으면 근거가 없어도 시작할 수 있습니다.
 

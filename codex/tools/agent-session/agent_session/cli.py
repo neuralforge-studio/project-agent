@@ -92,6 +92,11 @@ def build_parser():
         command.add_argument("--timeout", type=_seconds, default=600, metavar="SECONDS")
         if name == "shutdown":
             command.add_argument("--force", action="store_true")
+        else:
+            command.add_argument("--lost", action="store_true",
+                                 help="Also resume a slot that has no shutdown record when a reboot ended it "
+                                      "(boot after the conversation record's last update, no process names the "
+                                      "conversation, no execution pointer). A slot that fails a check is rejected.")
 
     return parser
 
@@ -158,7 +163,7 @@ def main(argv=None, manager_factory=None, fleet_factory=None):
                 if operation == "shutdown":
                     result = fleet.shutdown(project=arguments.project, everything=arguments.all, force=arguments.force)
                 else:
-                    result = fleet.resume(project=arguments.project, everything=arguments.all)
+                    result = fleet.resume(project=arguments.project, everything=arguments.all, lost=arguments.lost)
             else:
                 manager = (manager_factory or _default_manager)(
                     cwd=None, config_path=arguments.config, socket_name=arguments.socket_name,

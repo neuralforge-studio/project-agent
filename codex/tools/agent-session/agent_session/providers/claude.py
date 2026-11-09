@@ -89,6 +89,16 @@ def startup_dialog(screen):
     return next((kind for kind, pattern in STARTUP_DIALOGS if pattern.search(screen)), None)
 
 
+def transcript_files(cwds, conversation_id):
+    """The existing conversation records of one conversation, for the directories it may have run in.
+
+    Claude keeps `<config dir>/projects/<cwd with every non-alphanumeric character as "-">/<id>.jsonl`.
+    A path of 200 characters or more is stored under a shortened name, which this does not find."""
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser() / "projects"
+    names = {re.sub(r"[^A-Za-z0-9]", "-", str(path)) for cwd in cwds for path in (Path(cwd), Path(cwd).resolve())}
+    return sorted(path for path in (root / name / f"{conversation_id}.jsonl" for name in names) if path.is_file())
+
+
 def _config_file():
     root = os.environ.get("CLAUDE_CONFIG_DIR")
     return (Path(root).expanduser() if root else Path.home()) / ".claude.json"
