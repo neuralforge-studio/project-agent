@@ -157,6 +157,24 @@ def test_the_wrap_up_leaves_a_run_to_the_command_that_controls_it(session_env, m
     assert env.manager().finish_ended(worker["run_id"], "seat-0", worker["pane_id"])["reason"] == "control_active"
 
 
+def test_the_wrap_up_of_a_stopped_run_does_not_take_the_slots_control_lock(session_env, monkeypatch):
+    """TEST-006: stop kills the pane, so the server's hook still runs the wrap-up of the run that stop released.
+    That run is no longer current; saying so must not hold the lock a following `start` tries without waiting."""
+    import agent_session.lifecycle as lifecycle
+
+    env = session_env
+    first_cr = env.cr()
+    first = env.manager().start(first_cr)
+    env.finish(first_cr, state="done", outcome="waived", note="no change needed")
+    assert env.manager().control("stop", job=first_cr)["released"] is True
+    monkeypatch.setattr(lifecycle, "FINISH_LOCK_SECONDS", 0.2)
+    with control_lock(env.project, "seat-0", 5):             # a start holds the slot's lock while it checks it
+        late = env.manager().finish_ended(first["run_id"], "seat-0", first["pane_id"])
+    assert late == {"finished": False, "reason": "not_current"}
+    second = env.manager().start(env.cr(number=2))
+    assert second["seat"] == 0
+
+
 def test_a_run_that_is_no_longer_current_or_not_published_is_not_wrapped_up(session_env):
     env = session_env
     worker = env.manager().start(env.cr())
