@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: a50c23a3e251def5c0aeca54f641f0ed69f5eeb6 2026-11-09T19:57:07+09:00
+- Outcome: fixed
 
 ## Symptom
 설치본은 `tools/python.env`에 설치 interpreter의 경로만 기록합니다. 사내 Python(`/primehome/tools/Inhouse/Python3/latest/bin/python3`)은 자기 `lib`이 `LD_LIBRARY_PATH`에 없으면 시스템 libpython으로 떠서 `sys.prefix=/usr`가 되고, 사내 site-packages(`textual` 등)가 보이지 않습니다. 사내 환경 설정이 없는 계정, cron, 그런 환경에서 시작한 tmux server에서는 Board가 시작하지 않습니다. 안내문 1절의 "사내 Python에는 있습니다"도 이 조건에서는 사실이 아닙니다.
@@ -20,6 +21,7 @@
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). RELEASE-003 시범 설치에서 재현된 동작 결함이므로 위임 범위입니다. 근본 원인은 설치기가 interpreter의 경로만 기록하고, 그 interpreter가 자기 자신으로 뜨는 데 필요한 환경(library 경로)은 기록하지 않는다는 점입니다. 첫 release(v0.1.0)는 이 CR과 RELEASE-003의 F1 재확인 뒤에 냅니다.
 - 2026-11-09 Leader: 제출 4be6c8cd9b500f7e7ed63756a72593f961b77f90를 인수합니다. Leader review: 설치기가 빈 환경에서 interpreter의 sys.prefix를 시험해 같은 interpreter로 뜨게 하는 library 경로를 python.env(PROJECT_AGENT_LD_LIBRARY_PATH)에 기록하고, 없으면 python_environment로 거절, launcher가 그 경로를 앞에 붙이며, check가 빈 환경에서 sys.prefix를 대조함을 확인했습니다. 수정 전 재현(env -i에서 sys.prefix=/usr, textual 없음)과 수정 뒤(사내 prefix, textual 8.2.8 import), README 표대로 네 번째 명령 91·install/tests 260 passed. 알려진 한계: 설치기를 사내 환경 없이 실행하면 그때의 interpreter(/usr prefix)를 기록함(안내문에 사내 환경에서 실행하라고 적음). Worker의 git stash 사용은 전역 규칙 위반(영향 없음).
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 f767423(Merge cr/INSTALL-006, 제출 4be6c8c). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 6.1절·7절, [안내문](../../install.md) 1절, `tools/python-launcher.sh`, [README 검증 표](../../../README.md#검증).

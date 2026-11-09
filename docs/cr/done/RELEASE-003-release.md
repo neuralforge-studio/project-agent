@@ -5,6 +5,7 @@
 - Severity: S3
 - Mode: read-only
 - Base: e41a82631c6e0cb277989c3c668c6f56bbdb57fc 2026-11-09T19:45:16+09:00
+- Outcome: waived
 
 ## Symptom
 새 계정에서 설치해 계약 밖 변경이 없는지 확인한 기록이 없습니다. 격리 HOME 인수 test(INSTALL-001)는 실제 계정의 shell·tmux·provider 환경을 모두 흉내 내지 못합니다.
@@ -23,6 +24,7 @@
 - 2026-11-09 Leader: 선행에 TMUX-002를 더합니다. 시범 환경(`env -i`의 시스템 PATH)은 `/usr/bin/tmux` 2.7을 만나므로, 최소 버전 판정과 안내가 들어간 뒤 시범 설치해야 실제 새 직원의 경험을 확인할 수 있습니다. 시범 설치에서 PATH 첫 tmux가 2.7인 경우와 사내 3.8을 앞에 둔 경우를 모두 기록하십시오.
 - 2026-11-09 Leader: 선행이 모두 통합되었습니다(마지막 TMUX-002 5b73d6a). 원본은 지금 `origin/main`입니다. 시범은 안내문(`docs/install.md`)을 그대로 따르고, 시스템 PATH(첫 tmux가 `/usr/bin/tmux` 2.7)인 경우와 사내 tmux 3.8을 앞에 둔 경우를 모두 기록합니다. 사내 tmux는 `LD_LIBRARY_PATH`가 필요할 수 있습니다(TMUX-002 Result). 안내문이나 설치기의 문제를 찾으면 고치지 말고 Leader에게 보고합니다. 이 workstation의 실제 설치본(`~/.local/lib/project-agent`, agent DIST-005가 설치)은 건드리지 않습니다.
 - 2026-11-09 Leader: in-progress -> open. 시범 설치 결과 검토: 계약 2·3·7절 밖의 변경 없음, 실제 HOME·기본 tmux server 불변(같은 uid 한계 기록됨). F1(LD_LIBRARY_PATH 없는 환경에서 사내 Python이 sys.prefix=/usr로 떠 textual이 안 보임)은 Leader가 재현해 결함으로 판정하고 INSTALL-006으로 열었습니다. F2(check·uninstall이 기본 tmux server에 읽기 질의)는 계약 7.2절대로의 읽기라 결함이 아닙니다. INSTALL-006 통합 뒤 변형 A의 F1 경로만 다시 확인하고 닫습니다.
+- 2026-11-09 Leader: open -> done, Outcome waived. F1 재확인: INSTALL-006 Result 검증 2가 변형 A의 F1 경로 그대로(격리 HOME, env -i, 사내 Python으로 설치)에서 launcher를 거친 interpreter가 sys.prefix=/primehome/tools/Inhouse/Python3/latest로 뜨고 textual 8.2.8을 import함을 보였습니다(통합 f767423). 시범 설치의 나머지 결과(계약 2·3·7절 밖 변경 없음, 실제 HOME·기본 tmux server 불변)는 그대로 유효합니다. 이 CR에서 고칠 남은 문제가 없으므로 waived로 닫습니다. 다시 볼 조건: 다른 계정의 로그인 환경(csh, module)에서 설치가 계약과 다르게 동작할 때.
 
 ## Implementation
 - Mode는 read-only입니다. 제품 코드와 문서를 고치지 않고 commit·push하지 않습니다. 결과는 `## Result`에 씁니다. 안내문이나 설치기의 문제를 찾으면 고치지 않고 Leader에게 보고합니다(Leader가 CR을 엽니다).
