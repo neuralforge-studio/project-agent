@@ -65,3 +65,11 @@ def test_lifecycle_and_suspend_do_not_import_each_other():
     # Fleet gets the Manager from the assembling code (cli) instead of importing it.
     assert "suspend" in _imports("lifecycle")
     assert "lifecycle" not in _imports("suspend")
+
+
+@pytest.mark.parametrize("module", ["launch_artifacts", "windows", "handoff"])
+def test_the_run_modules_do_not_import_the_manager_layer(module):
+    # lifecycle assembles them; one that imported lifecycle (or suspend, which needs the Manager) would
+    # depend on the layer that calls it.
+    assert module in _imports("lifecycle")
+    assert not {"lifecycle", "suspend"} & _imports(module)
