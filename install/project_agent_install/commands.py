@@ -244,7 +244,43 @@ def _switch(env, installed, name, previous):
     return new
 
 
-def plan_upgrade(env, source, python):
+def _formats_of(env, origin):
+    """The format versions of the code a run was started from: a release declares them, a copy that is not a
+    release (the frozen copy) is version 1 (release.md 3)."""
+    kind, name = origin
+    return releases.FROZEN_FORMATS if kind == "other" else releases.read_formats(env.releases / name)
+
+
+def _require_compatible(env, root, target_root, target_name):
+    """Refuse when a run that is up uses code whose format versions differ from the target release's (contract
+    7.1 item 5). Nothing is read when no run is up, so the target's declaration is needed only then."""
+    slots = runs.run_slots(env, root)
+    used = runs.origins_in_use(env, slots)
+    if not used:
+        return
+    target = releases.read_formats(target_root)
+    states = {"%s/%s" % (item["project"], item["slot"]): item["state"] for item in runs.live(slots)}
+    refused = []
+    for origin, labels in sorted(used.items()):
+        found = _formats_of(env, origin)
+        if found != target:
+            where = "release " + origin[1] if origin[0] == "release" else "a copy that is not a release"
+            differing = ", ".join("%s %d (target %d)" % (key, found[key], target[key])
+                                  for key in releases.FORMAT_KEYS if found[key] != target[key])
+            for label in labels:
+                project, slot = label.split("/", 1)
+                refused.append({"project": project, "slot": slot, "state": states[label],
+                                "note": "runs %s: %s" % (where, differing)})
+    if refused:
+        raise InstallerError("formats_differ", "The target release %s uses other format versions than the runs "
+                             "that are up, which would write state, tmux options and CR files in two formats at "
+                             "once. Nothing was changed. Restart the runs listed (`agent-session restart --job "
+                             "leader` or `--job <CR ID>`) so that they use `current`, then run the command "
+                             "again; a run that already uses `current` must be ended instead (`agent-session "
+                             "stop`)." % target_name, {"runs": refused})
+
+
+def plan_upgrade(env, source, python, root):
     installed = _require_record(env)
     _require_current(env, installed)
     places = paths.record_places(env, installed)
@@ -252,6 +288,7 @@ def plan_upgrade(env, source, python):
     if source.name == installed["current"]:
         plan.notes.append("Release %s is already current. Nothing to change." % source.name)
         return plan
+    _require_compatible(env, root, source.root, source.name)
     release_dir = env.releases / source.name
     new = _switch(env, installed, source.name, installed["current"])
     python_env = releases.python_env(python)
@@ -277,12 +314,13 @@ def plan_upgrade(env, source, python):
     return plan
 
 
-def plan_rollback(env):
+def plan_rollback(env, root):
     installed = _require_record(env)
     _require_current(env, installed)
     previous = installed.get("previous")
     if not previous or not os.path.isdir(env.releases / previous):
         raise InstallerError("no_previous", "There is no previous release to roll back to.")
+    _require_compatible(env, root, env.releases / previous, previous)
     new = _switch(env, installed, previous, installed["current"])
     places = paths.record_places(env, installed)
     plan = Plan("rollback", places=places, journal_path=journal.path_for(env))
@@ -291,6 +329,47 @@ def plan_rollback(env):
     _changed_notes(env, installed, plan)
     plan.notes.append("Runs that are up keep the release they started with. Reopen Project Board to use %s."
                       % previous)
+    return plan
+
+
+# ---------------------------------------------------------------- prune
+
+def plan_prune(env, root):
+    """Remove the releases that are neither `current`, `previous`, nor used by a run that is up (contract 7.1
+    item 3). Each release goes with its record entry, one after the other, so that a run cut off leaves at most
+    one release half removed and the next `prune` finishes it."""
+    installed = _require_record(env)
+    _require_current(env, installed)
+    in_use = runs.releases_in_use(env, runs.run_slots(env, root))
+    places = paths.record_places(env, installed)
+    plan = Plan("prune", places=places, journal_path=journal.path_for(env))
+    for name in installed["releases"]:
+        directory = env.releases / name
+        reason = ("current" if name == installed["current"] else "previous" if name == installed.get("previous")
+                  else "used by " + ", ".join(in_use[name]) if name in in_use else None)
+        entry = records.find_owned(installed, env.display(directory))
+        if reason:
+            plan.notes.append("Kept release %s (%s)." % (name, reason))
+        elif os.path.lexists(directory) and (entry is None or entry.get("digest") is None):
+            plan.notes.append("Kept release %s: the install record has no listing to check it against." % name)
+        elif os.path.lexists(directory) and (os.path.islink(directory) or not os.path.isdir(directory)
+                                             or actions.tree_digest(directory) != entry["digest"]):
+            plan.notes.append("Kept release %s: it is not as the installer made it (changed by you)." % name)
+        else:
+            if os.path.lexists(directory):
+                plan.steps.append(actions.remove_tree(places, "release:" + name, entry["digest"]))
+            else:
+                plan.notes.append("Release %s was already gone; it is dropped from the install record." % name)
+            plan.steps.append(actions.forget_release(places, name))
+    if not plan.steps:
+        plan.notes.append("No release to remove.")
+        return plan
+    plan.notes.append("The install record drops each removed release.")
+    socket = os.environ.get("AGENT_SESSION_SOCKET") or None
+    if runs.server_option("@project_board_enabled", socket) == "1":
+        plan.notes.append("Project Board is on. A Board that started before this may call files of a removed release "
+                          "(it answers decisions through `agent-session` in the release it started from); reopen "
+                          "Board after pruning.")
     return plan
 
 

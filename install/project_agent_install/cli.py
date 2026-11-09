@@ -18,6 +18,7 @@ COMMANDS = {
     "install": "Install this checkout as a new release with its links and the tmux include block.",
     "upgrade": "Install this checkout as a new release and point `current` at it.",
     "rollback": "Point `current` at the previous release.",
+    "prune": "Remove the releases that are not current, previous or used by a run that is up.",
     "uninstall": "Remove what the installer made (refused while managed runs are alive).",
     "check": "Verify the installation (read-only).",
 }
@@ -61,7 +62,8 @@ def _emit(env, arguments, plan=None, applied=False, failures=(), notices=(), err
         for item in error.details.get("conflicts", []):
             print("  conflict %s: %s" % (item["path"], item["reason"]), file=sys.stderr)
         for item in error.details.get("runs", []):
-            print("  run %s %s (%s)" % (item["project"], item["slot"], item["state"]), file=sys.stderr)
+            print("  run %s %s (%s)%s" % (item["project"], item["slot"], item["state"],
+                                          ": " + item["note"] if item.get("note") else ""), file=sys.stderr)
         for key in ("files", "paths"):
             for item in error.details.get(key, []):
                 print("  %s" % item, file=sys.stderr)
@@ -83,7 +85,7 @@ def _emit(env, arguments, plan=None, applied=False, failures=(), notices=(), err
 
 def _pending(env, arguments):
     """An interrupted run is dealt with before anything else. Returns (note, notes about what was left alone);
-    the note is "finished" when an interrupted uninstall was completed (that is then the whole command)."""
+    the note is "finished" when an interrupted uninstall or prune was completed (that is then the whole command)."""
     if arguments.command != "check" and not arguments.dry_run:
         journal.clean_temporary(env)
     path = journal.find(env)
@@ -94,9 +96,9 @@ def _pending(env, arguments):
         raise InstallerError("run_interrupted", "A previous %s was interrupted (%s). Run the command without "
                              "--dry-run to recover first." % (pending.command, env.display(path)))
     if pending.mode == "redo":
-        if arguments.command != "uninstall":
-            raise InstallerError("uninstall_interrupted", "A previous uninstall was interrupted. Run `uninstall` "
-                                 "to finish it before anything else.")
+        if arguments.command != pending.command:
+            raise InstallerError("%s_interrupted" % pending.command, "A previous %s was interrupted. Run `%s` "
+                                 "to finish it before anything else." % (pending.command, pending.command))
         return "finished", journal.resume(env, pending)
     failures, notes = journal.recover(env, pending)
     if failures:
@@ -112,8 +114,8 @@ def main(argv=None):
     try:
         recovered, left = (None, []) if arguments.command == "check" else _pending(env, arguments)
         if recovered == "finished":
-            _emit(env, arguments, commands.Plan("uninstall"),
-                  notices=["The interrupted uninstall was finished."] + left)
+            _emit(env, arguments, commands.Plan(arguments.command),
+                  notices=["The interrupted %s was finished." % arguments.command] + left)
             return 0
         if arguments.command == "check":
             failures, notices = commands.run_check(env)
@@ -123,10 +125,12 @@ def main(argv=None):
         if arguments.command in ("install", "upgrade"):
             source = releases.load_source(arguments.source or root)
             python = releases.installer_python()
-            plan = (commands.plan_install if arguments.command == "install" else commands.plan_upgrade)(
-                env, source, python)
+            plan = (commands.plan_install(env, source, python) if arguments.command == "install"
+                    else commands.plan_upgrade(env, source, python, root))
         elif arguments.command == "rollback":
-            plan = commands.plan_rollback(env)
+            plan = commands.plan_rollback(env, root)
+        elif arguments.command == "prune":
+            plan = commands.plan_prune(env, root)
         else:
             plan = commands.plan_uninstall(env, root)
         if not arguments.dry_run:

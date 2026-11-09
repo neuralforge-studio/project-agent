@@ -416,6 +416,25 @@ def _op_rm_tree(ctx, spec):
         _leave(ctx, path)
 
 
+def _op_forget(ctx, spec):
+    """Drop a release from the install record once its directory is gone. A release that is still there (its
+    removal left it, because it was no longer what the installer made) stays in the record."""
+    from . import record as records                 # record.py imports this module
+    places = ctx.places
+    name = places.release_name(spec["id"])
+    if inspect(places.tree(spec["id"]))[0] != "absent" or os.path.lexists(places.release_temp(name)):
+        return
+    path = places.file("record")
+    unlink(temp_of(path))
+    if inspect(path)[0] != "file":
+        return
+    installed = records.read(places.env)
+    if name not in installed["releases"]:
+        return
+    replace_atomic(path, records.encode(records.without_release(places.env, installed, name)),
+                   stat.S_IMODE(os.lstat(path).st_mode))
+
+
 def _op_rm_dir(ctx, spec):
     path = ctx.places.dir(spec["id"])
     if inspect(path)[0] == "dir":
@@ -456,7 +475,7 @@ def _op_drop_journal(ctx, spec):
 
 OPERATIONS = {"dir": _op_dir, "file": _op_file, "link": _op_link, "swap": _op_swap, "record": _op_record,
               "release": _op_release, "tmux": _op_tmux, "rm_link": _op_link, "rm_file": _op_rm_file,
-              "rm_tree": _op_rm_tree, "rm_dir": _op_rm_dir, "cut": _op_cut, "drop_journal": _op_drop_journal}
+              "rm_tree": _op_rm_tree, "forget": _op_forget, "rm_dir": _op_rm_dir, "cut": _op_cut, "drop_journal": _op_drop_journal}
 
 
 def apply_spec(ctx, spec):
@@ -582,6 +601,13 @@ def remove_file(places, ident, expected_sha=None):
 
 def remove_tree(places, ident, digest):
     return _removal("remove", places.tree(ident), "tree", "", {"op": "rm_tree", "id": ident, "digest": digest})
+
+
+def forget_release(places, name):
+    """Drop a removed release from the install record. The plan does not list it (the record is bookkeeping)."""
+    spec = {"op": "forget", "id": "release:" + name}
+    return Step("modify", places.file("record"), "file", "forget release " + name,
+                lambda ctx: apply_spec(ctx, spec), redo=spec, internal=True)
 
 
 def remove_dir(places, ident):

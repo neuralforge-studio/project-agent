@@ -217,7 +217,7 @@ SPEC_KEYS = {
     "dir": {"id"}, "file": {"id", "sha"}, "link": {"id", "target"}, "swap": {"id", "previous", "new"},
     "record": {"previous", "before_sha", "after_sha", "mtime_ns"}, "release": {"id", "digest"},
     "tmux": {"id", "before_bytes", "before_sha", "after_sha", "mtime_ns"},
-    "rm_link": {"id", "target"}, "rm_file": {"id", "sha"}, "rm_tree": {"id", "digest"}, "rm_dir": {"id"},
+    "rm_link": {"id", "target"}, "rm_file": {"id", "sha"}, "rm_tree": {"id", "digest"}, "forget": {"id"}, "rm_dir": {"id"},
     "cut": {"id", "before_sha", "after_sha", "delete"}, "drop_journal": set(),
 }
 OPTIONAL_HEX = {("rm_file", "sha"), ("record", "before_sha")}      # these two may be null
@@ -262,7 +262,7 @@ def validate_spec(places, spec):
             places.current_target(spec["new"])
         elif spec["new"] != places.link_target(ident) or not isinstance(spec["previous"], str):
             places.bad("A link target", spec["new"])
-    elif op in ("release", "rm_tree"):
+    elif op in ("release", "rm_tree", "forget"):
         places.release_name(ident)
     elif op in ("tmux", "cut"):
         if not ident.startswith("tmux:"):

@@ -153,16 +153,17 @@ def recover(env, journal):
 
 
 def resume(env, journal):
-    """Finish an interrupted uninstall: replay its removals (each tolerates what is already gone). Returns the
-    notes about what was left alone."""
+    """Finish an interrupted uninstall or prune: replay its removals (each tolerates what is already gone).
+    Returns the notes about what was left alone."""
     ctx = actions.Context(places_of(env, journal.homes), journal.path, strict=False)
     with uninterruptible():
         for spec in journal.specs:
             try:
                 actions.apply_spec(ctx, spec)
             except (OSError, ValueError, KeyError) as error:
-                raise InstallerError("command_failed", "Finishing the interrupted uninstall failed at %s: %s. The "
-                                     "journal is kept; run `uninstall` again." % (spec.get("id", spec["op"]), error),
+                raise InstallerError("command_failed", "Finishing the interrupted %s failed at %s: %s. The "
+                                     "journal is kept; run `%s` again." % (journal.command, spec.get("id", spec["op"]),
+                                                                          error, journal.command),
                                      {}, exit_code=4) from error
         actions.unlink(journal.path)
     return ctx.notes
@@ -204,8 +205,8 @@ def execute(env, plan):
             outcome = ("The changes made so far were undone." if not failures else
                        "The changes could not all be undone (%s); the next command retries." % "; ".join(failures))
         else:
-            outcome = ("Nothing was undone: removals are not undone. The install record is kept; run `uninstall` "
-                       "again to finish.")
+            outcome = ("Nothing was undone: removals are not undone. The install record is kept; run `%s` "
+                       "again to finish." % plan.command)
         if not isinstance(error, (Exception, Interrupted)):
             raise
         raise InstallerError("interrupted" if isinstance(error, Interrupted) else "command_failed",

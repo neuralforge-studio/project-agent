@@ -45,6 +45,15 @@ def read(env):
     return record
 
 
+def without_release(env, record, name):
+    """A copy of the record that no longer lists release `name`: not in `releases`, no owned directory."""
+    new = json.loads(json.dumps(record))
+    new["releases"] = [release for release in new["releases"] if release != name]
+    directory = env.display(env.releases / name)
+    new["owned"] = [entry for entry in new["owned"] if entry["path"] != directory]
+    return new
+
+
 def owned(path, kind, **fields):
     return {"path": path, "kind": kind, **fields}
 

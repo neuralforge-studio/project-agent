@@ -49,7 +49,7 @@
 5. **실패와 중단은 정해진 상태로 돌아갑니다.** 설치기는 첫 변경 전에 진행 기록(journal) `.project-agent-install-journal.json`을 씁니다. 위치는 lib 경로(`~/.local/lib/project-agent`)와 그 조상(`~/.local/lib`, `~/.local`, HOME) 중 실행 전에 있는 가장 가까운 디렉터리입니다. 설치 기록은 마지막에 확정합니다.
    - 실패하거나 SIGINT·SIGTERM·SIGHUP을 받으면 `install`·`upgrade`·`rollback`은 이미 한 변경을 되돌려 실행 전 상태로 돌리고(종료 코드 4) journal을 지웁니다.
    - SIGKILL이나 전원 차단 뒤에는 journal이 남습니다. 다음 명령(`check`는 실패로 알리기만 함)은 요청받은 일보다 먼저 그 되돌림을 끝내고 이어서 자기 일을 합니다. "lib는 있는데 설치 기록이 없어" 막히는 상태가 생기지 않습니다. `--dry-run`은 journal이 있으면 아무것도 바꾸지 않고 거절합니다.
-   - `uninstall`은 지운 것을 되돌리지 않습니다. 중단되면 journal이 남고 다른 명령은 거절하며 다음 `uninstall`만 지우기를 마칩니다. 삭제 오류는 숨기지 않고 실패(종료 코드 4)로 보고하며 설치 기록은 다른 삭제가 모두 끝난 뒤에 지웁니다. symlink는 tree로 지우지 않습니다.
+   - `uninstall`과 `prune`은 지운 것을 되돌리지 않습니다. 중단되면 journal이 남고 다른 명령은 거절하며 같은 명령(`uninstall`은 `uninstall`, `prune`은 `prune`)만 지우기를 마칩니다. 삭제 오류는 숨기지 않고 실패(종료 코드 4)로 보고하며 설치 기록은 다른 삭제가 모두 끝난 뒤에 지웁니다. symlink는 tree로 지우지 않습니다.
    - journal을 쓰다가 실패하면(디렉터리 fsync 실패 포함) journal을 지우고 "아무것도 바꾸지 않았다"고만 말합니다.
 
    복구·제거는 세 원칙을 따릅니다. 이 원칙이 설치기 구현과 test의 원본입니다.
@@ -259,6 +259,7 @@ release 이름 `<version>-<hash>`: `<version>`은 원본 root의 `VERSION` 첫 �
 | `install` | 2절의 모든 경로, 3절의 tmux 블록, 설치 기록. 이미 설치되어 있고 같은 release면 아무것도 바꾸지 않습니다. | 4절 |
 | `upgrade` | 새 `releases/<version>-<hash>/`, `current` 교체, 설치 기록의 `previous`·`current` | shim, skill link, `tmux.conf`, tmux 블록, 등록 파일, 이전 release |
 | `rollback` | `current`를 설치 기록의 `previous` release로 원자적으로 교체. 교체 전의 release를 새 `previous`로 적습니다 | 위와 같음. release를 지우지 않습니다. |
+| `prune` | `current`·`previous`·떠 있는 run이 쓰는 release가 아닌 release 디렉터리와 그 설치 기록 항목(7.1절 3항) | `current`, 그 밖의 모든 경로 |
 | `uninstall` | 설치 기록에 있는 소유만 지웁니다(release 전체, `current`, `tmux.conf`, 설치 기록, `backup/`, shim, skill link). tmux 블록은 3절대로 지웁니다. 설치기가 만든 빈 디렉터리를 지웁니다. | 등록 파일, `<base>/agent/`, `~/.cache`의 잠금·cache, 5.1의 신뢰 기록. 지우지 않은 것은 경로를 출력합니다. |
 | `check` | 읽기만 합니다. | 모든 것 |
 
@@ -278,8 +279,37 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 
 1. `upgrade`와 `rollback`은 떠 있는 run에 영향을 주지 않습니다. 그 run은 시작된 release를 계속 씁니다. 새 run부터 `current`가 가리키는 release를 씁니다.
 2. 설치기는 사용 중인 release를 지우지 않습니다. 사용 중이란, 등록된 project의 `<base>/agent/runs/*/`의 script에 그 release 경로가 있고 그 run이 끝나지 않았다는 뜻입니다.
-3. `upgrade`는 이전 release를 지우지 않습니다. 오래된 release를 정리하는 명령은 INSTALL-004가 정합니다. 실행 중인 run이 쓰는 release를 찾는 함수는 설치기의 `runs.releases_in_use`입니다.
-4. Board pane은 release에 고정되지 않습니다. 이미 실행 중인 Board process가 지워진 release의 파일을 나중에 읽는지는 **(미확인)**입니다. `upgrade` 출력은 Board를 다시 열도록 안내합니다.
+3. `upgrade`는 이전 release를 지우지 않습니다. 오래된 release는 `prune`이 지웁니다(7.1.2절). 떠 있는 run이 쓰는 release를 찾는 함수는 설치기의 `runs.releases_in_use`이고, 그 기준은 7.1.1절과 같습니다.
+4. Board pane은 release에 고정되지 않습니다. 이미 실행 중인 Board process는 시작한 release의 파일을 계속 씁니다. 확인한 사실: Board가 결정 답변을 보낼 때마다 그 release 안의 `tools/agent-session/bin/agent-session`을 실행합니다([answer.py:13, 39-42](../../tools/project-board/project_board/answer.py), 경로는 [model.py:13](../../tools/project-board/project_board/model.py)의 `TOOLS`). 지워진 release에서 시작한 Board는 답변을 보내지 못하고 `send_unavailable`을 냅니다. 읽기 전용 목록은 시작할 때 import한 module로 그리므로 영향이 없는지는 **(미확인)**입니다. 그래서 `upgrade`·`prune` 출력은 Board를 다시 열도록 안내하고, `prune`은 Board가 켜져 있으면(`@project_board_enabled`가 `1`) 그 사실을 알립니다.
+
+### 7.1.1 떠 있는 run과 형식 버전
+
+배포와 갱신은 run이 동작하는 중에 하므로, 옛 release와 새 release가 같은 state·tmux option·CR 파일을 함께 씁니다. 형식 버전([버전 규칙 3절](release.md#3-형식-버전과-호환-범위))이 다른 release를 한 run과 함께 두지 않기 위해 다음 규칙을 씁니다.
+
+1. 판정 대상: `upgrade`와 `rollback`입니다(`--dry-run` 포함). 대상 release는 `upgrade`에서 `--source`의 `tools/formats.json`, `rollback`에서 `previous` release의 `tools/formats.json`입니다. 같은 release로의 `upgrade`(할 일 없음)는 판정하지 않습니다. `install`은 run이 없는 첫 설치라서 판정하지 않습니다.
+2. 떠 있는 run: 등록된 모든 project의 slot 중 `agent_session.api.liveness`가 `alive`·`unknown`인 것입니다(7.2절과 같은 기준, `suspended` 기록만 있는 slot은 run이 없으므로 제외). 등록 파일이 있는데 읽을 수 없으면 판정할 수 없으므로 거절합니다(7.2절과 같음). run이 쓰는 코드는 `<base>/agent/runs/<run_id>/`의 `launch.sh`·`controller.sh`·`settings.json`에 적힌 경로로 알아냅니다.
+3. run의 형식 버전:
+   - release 경로(`~/.local/lib/project-agent/releases/<이름>/…`)에서 시작한 run은 그 release의 `tools/formats.json`입니다.
+   - **release가 아닌 경로에서 시작한 run**(agent 저장소의 동결 사본 `…/codex/tools/agent-session`을 포함해 script가 `/tools/agent-session`만 가리키는 run)은 세 형식 모두 버전 1입니다([버전 규칙 3절](release.md#3-형식-버전과-호환-범위)의 동결 사본 규칙). 첫 release는 세 값이 1이므로 동결 사본에서 시작한 run은 첫 release로의 `upgrade`를 막지 않습니다.
+   - tmux에 run이 없는 `unknown` slot처럼 run의 script를 찾을 수 없으면, 그 project의 모든 run 디렉터리가 가리키는 코드를 그 slot이 쓴다고 봅니다. 구분할 수 없으면 쓰는 것으로 봅니다.
+4. 거절: 대상 release와 떠 있는 run 중 하나라도 세 값(`agent_session`, `tmux_options`, `item_files`)이 하나라도 다르면 `upgrade`·`rollback`은 아무것도 바꾸지 않고 거절합니다(코드 `formats_differ`, 종료 코드 3). 출력은 그 run의 project·slot·상태와, 어느 release(또는 release가 아닌 사본)에서 어느 값이 다른지, 그리고 아래 안내입니다. 대상 또는 run의 release에 `tools/formats.json`이 없거나 세 정수가 아니면 판정할 수 없으므로 거절합니다(`formats_unreadable`). 떠 있는 run이 없으면 판정하지 않습니다.
+5. 안내: 목록의 run을 `agent-session restart --job leader`(Worker는 `--job <CR ID>`)로 다시 시작하면 run이 `current`의 release를 쓰므로, `current`와 대상의 형식이 같을 때 거절이 풀립니다. 이미 `current`의 release를 쓰는 run은 restart해도 그대로이므로 `agent-session stop`으로 끝낸 뒤 다시 실행합니다. 갱신한 뒤에 run을 다시 시작해 새 release를 씁니다.
+
+### 7.1.2 `prune`
+
+`prune`은 쓰지 않는 release를 지웁니다. 설치 기록에 적힌 release 중 다음이 아닌 것을 지웁니다.
+
+- 설치 기록의 `current`, `previous`
+- 떠 있는 run이 쓰는 release (7.1.1절의 2·3항과 같은 기준: 7.1절 2항의 "사용 중")
+
+규칙:
+
+1. 지우는 것은 release 디렉터리와 그 설치 기록 항목(`releases`와 소유 목록)입니다. 설치 기록에 없는 디렉터리와 다른 경로는 건드리지 않습니다.
+2. release는 설치 기록의 목록 지문(`digest`)이 지금 디렉터리와 같을 때만 지웁니다(원칙 B). 다르면(사용자가 파일을 넣거나 고침) 남기고 알립니다. 지문이 없으면 지우지 않습니다. 디렉터리가 이미 없으면 설치 기록에서만 뺍니다.
+3. `--dry-run`은 지울 release 목록과 남기는 release와 그 이유를 출력하며 아무것도 바꾸지 않습니다. 출력한 변경 목록은 실제 실행의 목록과 같습니다.
+4. release마다 "디렉터리 삭제 → 그 release를 설치 기록에서 삭제" 순서로 하나씩 합니다. journal은 삭제(redo)로 기록하고(규칙 5), 설치 기록에서 빼는 일은 release 식별자만 담습니다(원칙 A). 중단되면 같은 `prune`이 이어서 끝내고, 그 전에 다른 명령은 `prune_interrupted`로 거절됩니다. 삭제는 release를 `releases/.tmp-<이름>`으로 먼저 옮긴 뒤 지우므로(`uninstall`과 같음) 중단된 삭제가 지문과 어긋난 release를 남기지 않습니다.
+5. 지울 release가 없으면 "No release to remove"를 알리고 아무것도 바꾸지 않습니다. 강제 옵션은 없습니다.
+6. Board가 켜져 있으면 7.1절 4항의 사실을 알립니다.
 
 ### 7.2 `uninstall`의 거절
 
@@ -334,8 +364,13 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 | T21 | 격리 tmux server. 읽기 전에 `@project_agent_board_key`를 `X`로 설정 | 설치 뒤 `tmux.conf`를 읽음 | 파일 변경은 T1과 같음 | `prefix X`가 Board toggle이고 `prefix B`는 binding되지 않음 |
 | T22 | `~/.codex/skills/project-team`이 runtime이 만든 link(`skills.json`에 대상이 일치하게 기록됨). 같은 이름이지만 `skills.json`에 없는 link도 따로 준비 | `install` | 앞의 경우: 2절의 경로, 그 link의 대상 교체, 설치 기록. 뒤의 경우: 없음(거절) | `skills.json`의 내용과 `mtime_ns`가 같음. 설치 기록에 넘겨받음이 적힘 |
 | T23 | `CLAUDE_CONFIG_DIR`·`CODEX_HOME`을 격리 HOME 안의 다른 디렉터리로 설정 | `install`, 그 뒤 두 변수를 지우고 `uninstall` | skill link는 변수가 가리키는 디렉터리의 `skills/`에만 생김. 기본 경로(`~/.claude`, `~/.codex`)에는 아무것도 없음 | 설치 기록에 실제 경로가 있음. `uninstall`이 기록한 경로의 link를 지움 |
+| T24 | 설치된 상태. 떠 있는 run(`alive` 또는 tmux에 run이 없는 `unknown`)이 release에서 시작됨. 형식 값 하나(`agent_session`, `tmux_options`, `item_files` 각각)가 다른 release를 준비 | `upgrade`(`--dry-run` 포함) | 없음 | snapshot 전체가 같음. 종료 코드 3(`formats_differ`). 출력에 project·slot·상태·다른 값·restart 안내가 있음. 떠 있는 run이 없거나 형식이 같으면 T6과 같이 진행함. 대상에 `tools/formats.json`이 없으면 `formats_unreadable`로 거절함 |
+| T24b | 형식 값이 다른 release로 갱신하고, 그 release에서 run이 시작됨 | `rollback` | 없음 | 위와 같이 거절함. run을 끝낸 뒤에는 T8과 같이 진행함. 형식이 같으면 run이 떠 있어도 진행함 |
+| T25 | release가 아닌 경로(이 저장소의 checkout, 동결 사본 대용)에서 시작한 run이 떠 있음 | 첫 release의 `install`, 형식이 같은 release로 `upgrade`, 형식이 다른 release로 `upgrade` | 앞의 둘은 T1·T6과 같음. 셋째는 없음 | 셋째만 거절하고 출력에 "a copy that is not a release"와 다른 값이 있음 |
+| T26 | 설치·갱신을 두 번 한 상태(release 셋). 떠 있는 run이 첫 release에서 시작됨 / 없음 / `unknown` / 첫 release 디렉터리에 사용자의 파일 | `prune`(`--dry-run` 포함) | run이 떠 있거나 `unknown`이거나 사용자의 파일이 있으면 없음(이유를 알림). 아니면 첫 release의 삭제와 설치 기록 | `current`·`previous`는 남음(`rollback` 뒤에는 새 `previous`도 남음). dry-run 목록과 실제 삭제 목록이 같음. `check`가 통과함. Board가 켜져 있으면 알림 |
+| T27 | 위의 `prune`을 SIGKILL로 끊음(첫 step의 앞·뒤) | `check`, `upgrade`, `prune --dry-run`, `prune` | `prune`이 마침 | `check`는 실패, `upgrade`는 `prune_interrupted`, `--dry-run`은 거절. 마친 뒤 journal·임시 디렉터리가 없음 |
 
-기대 변경 목록의 "정확히"는 T1~T18과 T20~T23에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding은 TMUX-001이 구현했습니다([test](../../integrations/tmux/test_project_agent_conf.py)).
+기대 변경 목록의 "정확히"는 T1~T18과 T20~T27에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding은 TMUX-001이 구현했습니다([test](../../integrations/tmux/test_project_agent_conf.py)).
 
 ## 9. 이 계약과 어긋나는 현재 동작
 
