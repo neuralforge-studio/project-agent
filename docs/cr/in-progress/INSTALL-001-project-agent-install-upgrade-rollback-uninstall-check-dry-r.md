@@ -27,6 +27,7 @@ project-agent를 다른 직원에게 배포하려면 설치기가 있어야 합�
 - 2026-11-09 Leader: 범위를 나눕니다(Leader 판정). 사용자 지시(2026-11-09 대화): "seat 3자리인데, 4자리 만들어서, 병렬로 진행 가능 한 것은 병렬로 진행해. 남은 CR은 전부 등록해서 얼마나 남았는지 알 수 있게 해줘." 이 CR은 핵심 설치기(release, 2절 진입점, 3절 tmux 블록, 7절 명령, 8절 T1~T23)만 맡습니다. 떼어 낸 일: release 진입점의 interpreter 선택은 INSTALL-002, 외부 package는 INSTALL-003(D-20261109-01), 형식 버전 거절과 release 정리 명령은 INSTALL-004, 옛 checkout link 넘겨받기는 INSTALL-005, 버전 값과 형식 버전의 선언은 RELEASE-001입니다. INSTALL-002·RELEASE-001과 병렬로 진행하므로 그 사이의 interface는 아래 Implementation이 정합니다.
 - 2026-11-09 Leader: 사용자 결정 D-20261109-01 waive를 반영합니다. 외부 package를 release에 넣지 않으므로 Implementation 2단계의 package 항목을 고쳤습니다. 사용자 답변 원문: "D-20261109-01 Waive / Refactoring 이후에, rust로 변경가능한 것들은 변경할 것임. 너무 느림."
 - 2026-11-09 Leader: 제출 31e7412 수정 요청. Leader가 제출 snapshot에서 `install/tests` 103 passed·1 skipped를 다시 확인했습니다. 실제 기본 tmux server에는 Worker 사건의 흔적이 없습니다(`fx` session 없음, `@project_agent_*` option·`[project-agent]` hook 0개, 사용자 `prefix B` 그대로). 독립 검토(sub-agent)가 찾은 결함을 Leader가 코드에서 확인했습니다: (1) 설치 기록의 항목을 검증하지 않고 지움(`layout.py:63-64` `expand`, `commands.py:309-327`), (2) tmux 블록 제거가 사용자 파일을 O_TRUNC 뒤 한 번 write(`actions.py:198-201`), (3) 블록 추가의 되돌림이 write 뒤에 등록되고 backup이 계획 시점 bytes(`actions.py:169-180`), (4) `force_rmtree`의 `ignore_errors=True`(`actions.py:114-118`), (5) 중단(signal·임시 파일 실패) 뒤 설치 기록 없는 잔여물로 install·uninstall이 모두 막힘. 그 밖에 main과 `install-contract.md` 충돌(INSTALL-002가 6.1·5.3·9절을 고침). 상세는 feedback 파일과 같습니다.
+- 2026-11-09 Leader: 수정 제출 3462c8a 수정 요청. 1차 지적 7건의 반영과 수정 전 실패 test(44건 중 43건 실패 확인), `install/tests` 160 passed를 확인했습니다. 두 번째 독립 검토(sub-agent)가 새 안전 장치에서 결함을 찾았고 Leader가 코드에서 확인했습니다: journal의 `drop_journal`이 모든 경로를 허용(`paths.py:141`), `rmtree`의 `temp`·`relink`의 `previous` 미검증(`actions.py:232-250`), `write_file`의 되돌림이 내용 확인 없이 지움(`actions.py:285`, 계획 뒤 생긴 사용자 파일 삭제 가능), SIGKILL 뒤 남는 임시 파일로 다시 잠김, `_cut_block`의 중간 종료로 tmux 파일 손상, `_untruncate`의 prefix 판정 오류, resume의 `Changed`가 traceback으로 끝나 uninstall이 막힘. 공통 원인은 journal이 경로·동작을 자유롭게 담는 두 번째 명령 언어라 동작마다 신뢰 규칙이 따로 필요하다는 점입니다. 원칙 하나(아래 feedback)로 닫도록 요청합니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 전체(원본), [제품 지도](../../project-team/README.md)의 실행 경로 계약, [README의 검증](../../../README.md#검증). 이 CR의 Contract와 설치 계약이 범위의 원본입니다. 계약과 다르게 구현해야 하면 계약을 먼저 고치고 이유를 적습니다.
@@ -61,7 +62,7 @@ project-agent를 다른 직원에게 배포하려면 설치기가 있어야 합�
 5. 고친 계약 절과 문서의 Markdown 상대 link가 실제 파일을 가리킵니다.
 
 ## Result
-- 제출 commit: 31e741203383cb51f9a2757a67137df7a389f1ed
+- 제출 commit: 3462c8a41070aaf16e6f8bb871517d86c21f4e36
 
 구현 (`cr/INSTALL-001`, origin에 push, origin/main 477516b를 merge한 뒤):
 - `install/project-agent-install`과 `install/project_agent_install/`(표준 library만): `install`·`upgrade`·`rollback`·`uninstall`·`check`, 공통 `--dry-run`, `--json`, `--source`. 각 명령은 계획(Step 목록)을 만들고 `--dry-run`은 그 계획을 출력하며 실제 실행은 같은 계획을 적용합니다. 실패하면 적용한 Step을 되돌립니다(종료 코드 4). 거절은 3, `check` 실패는 1.
@@ -80,3 +81,16 @@ project-agent를 다른 직원에게 배포하려면 설치기가 있어야 합�
 사건 하나(알림): 개발 중 설치 후의 `agent-session start`를 시험하다가 `--socket-path`를 주지 않아 사용자의 실제 기본 tmux server에 시험용 session `fx`(window 1개, 시험용 fake CLI)가 생겼습니다. 제가 만든 것임을 session의 owner option으로 확인하고 그 session만 kill했습니다. 다른 session은 건드리지 않았습니다. 이후 test 하네스는 모든 명령에 private socket을 명시하고 `TMUX_TMPDIR`도 격리해 실제 server에 닿을 수 없게 했습니다.
 
 인수 전 Leader 독립 검토에서 볼 곳: `actions.py`(쓰기·삭제 Step과 되돌림), `commands.py`의 `plan_uninstall`(지우는 대상 결정과 빈 디렉터리 계산), `tmuxconf.py`·`actions.remove_block`(tmux 파일 byte 보장).
+
+### 수정 제출 (Leader 검토 31e7412 피드백 반영)
+수정 제출 commit 3462c8a (origin/main 477516b 이후의 main을 merge한 7b16b92 포함). 각 항목은 수정 전 설치기(31e7412)로 새 test를 먼저 돌려 실패를 확인했습니다(`PROJECT_AGENT_INSTALLER`로 옛 설치기를 가리킴: CLI 수준 44건 중 43건 실패. 통과한 1건은 6번 test로, 그 test는 checkout 자신의 설치기를 쓰므로 옛 설치기와 비교하지 못했습니다).
+
+1. 설치 기록 신뢰: `paths.validate_record`가 `record.read()`에서 모든 항목을 대조합니다(dir은 `releases/<name>`·`backup/`, file은 `tmux.conf`·`install.json`, symlink는 `current`·shim·skill link 자리와 계산한 target, `..` 금지, `created_dirs`는 설치기 경로의 조상만이고 HOME 이상은 금지, `tmux.file`은 후보 중 하나, backup은 `backup/` 바로 아래). 어긋나면 `record_invalid`로 거절. test 10가지 변형 × uninstall·upgrade·rollback·check·install → 거절과 snapshot 같음.
+2. tmux 블록 제거: 열린 fd에서 bytes를 계획 때와 대조(다르면 `Changed`로 거절, 첫 변경 전이면 journal도 지움), 블록이 끝이면 `ftruncate` 한 번, 아니면 pwrite loop 뒤 `ftruncate`, 실패하면 바꾸기 전 bytes와 시각 복원. 짧은 write·write 실패·ftruncate 실패·계획 뒤 변경 test.
+3. tmux 블록 추가: 되돌림 명세를 journal에 먼저 쓰고, 연 fd에서 bytes를 대조하며, write는 loop, backup은 실행 시점 bytes가 계획과 같을 때만 만듭니다. 짧은 write·실패 주입·계획 뒤 변경 test(T2의 세 원본, backup byte 일치).
+4. 삭제 오류: `force_rmtree`는 오류를 모아 `OSError`로 올리고 symlink는 거절합니다. uninstall은 tmux 블록 → 소유 항목 → (journal을 담지 않는) 만든 디렉터리 → 설치 기록 → journal → (journal을 담은) 디렉터리 순입니다. 삭제 실패는 종료 코드 4와 "Nothing was undone" 안내이며 기록이 남고 다시 실행하면 끝납니다(`.local/bin`·`releases`를 읽기 전용으로 만든 test).
+5. 중단: 첫 변경 전에 journal(`.project-agent-install-journal.json`)을 씁니다(lib 또는 lib 조상 중 실행 전에 있는 가장 가까운 디렉터리). 실패·SIGINT·SIGTERM·SIGHUP은 즉시 되돌리고, SIGKILL 뒤 다음 명령(`check` 제외)이 먼저 되돌림을 끝낸 뒤 자기 일을 합니다. uninstall은 되돌리지 않고 다음 `uninstall`만 마무리하며 다른 명령은 거절합니다. `--dry-run`은 journal이 있으면 거절합니다. journal의 경로도 `paths.check_spec`으로 대조합니다. test: install 13개·upgrade 4개·uninstall 8개 step 경계에서 SIGKILL(`INSTALLER_STOP` 훅과 `actions.checkpoint`), SIGTERM·SIGINT·SIGHUP. 계약 2절 규칙 5와 7절에 적었습니다. `_write_atomic`의 임시 파일은 실패 때 지웁니다.
+6. 설치기와 그것이 import하는 제품 코드는 bytecode를 쓰지 않습니다(`sys.dont_write_bytecode`).
+7. origin/main을 merge했습니다. `python.env`의 위치·형식은 6.1절 한 곳(INSTALL-002의 서술)으로 합치고, 설치기가 쓰는 값(설치기를 실행한 interpreter, 빈 PYTHONPATH)만 그 문단에 한 문장으로 더했습니다. 중복 서술은 지웠습니다.
+
+수정 제출의 검증 (commit 3462c8a): `python -m pytest -q -n 8 install/tests` 160 passed, 1 skipped. merge 직후 commit에서 `integrations/tmux`·launcher·boundary·private_root·release_files 70 passed. 설치기 밖의 코드는 바꾸지 않아 agent-session·project-item·project-board suite는 다시 돌리지 않았습니다(첫 제출의 회귀 결과가 유효). 실제 HOME에는 이 작업에서도 설치기를 실행하지 않았습니다(test는 모두 격리 HOME). 문서 relative link 3개 파일 확인.
