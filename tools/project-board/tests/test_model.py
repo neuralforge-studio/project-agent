@@ -226,3 +226,30 @@ def test_liveness_is_collected_per_project_and_a_missing_state_has_none(board, m
     monkeypatch.setattr(model.api, "liveness", liveness)
     assert model.liveness(board.config) == {"alpha": {"leader": {"session_id": LEADER_ID, "state": "stopped"}}, "beta": {}}
     assert len(calls) == 2
+
+
+def test_a_seat_whose_stopped_worker_waits_for_release_shows_release_pending(board, monkeypatch):
+    base = board.project("alpha", seats=2)
+    board.cr(base, "in-progress", "TOOL-001", "Finished")
+    board.cr(base, "in-progress", "TOOL-002", "Running")
+    board.state(base, {"leader": leader(),
+                       "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)},
+                       "1": {"job_id": "TOOL-002", "git_hash": None, "session": session(1)}})
+    hold = {"seat": 0, "since": "2026-11-05T10:00:00Z", "reasons": ["the CR is still in-progress"]}
+    monkeypatch.setattr(model.api, "pending_releases", lambda cwd, config_path=None: {"TOOL-001": hold})
+    seats = model.snapshot(board.config, now=NOW)["projects"][0]["seats"]
+    assert [(s["job_id"], s["status"]) for s in seats] == [("TOOL-001", "release_pending"), ("TOOL-002", "working")]
+    assert seats[0]["release_pending"] == hold and seats[1]["release_pending"] is None
+
+
+def test_an_unreadable_release_record_does_not_hide_the_seats(board, monkeypatch):
+    base = board.project("alpha", seats=1)
+    board.cr(base, "in-progress", "TOOL-001")
+    board.state(base, {"leader": leader(), "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)}})
+
+    def unreadable(cwd, config_path=None):
+        raise model.SessionError("tmux_unknown", "tmux is unreadable")
+
+    monkeypatch.setattr(model.api, "pending_releases", unreadable)
+    project = model.snapshot(board.config, now=NOW)["projects"][0]
+    assert project["errors"] == [] and project["seats"][0]["status"] == "working"

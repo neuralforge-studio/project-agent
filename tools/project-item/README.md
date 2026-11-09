@@ -51,7 +51,7 @@ table names the commands only.
 | Command | What it does |
 | --- | --- |
 | `projects` | projects, item roots and counts per state |
-| `ls` | list items. The default states of each kind are `Kind.listed` in `project_item/kinds.py` |
+| `ls` | list items. The default states of each kind are `Kind.listed` in `project_item/kinds.py`. An in-progress CR whose stopped Worker waits for release is marked `[release pending: ...]` |
 | `new` | open a CR (`new cr`) or a decision (`new decide`) with the next number; a decision also writes the page |
 | `answer` | record the answer of an open decision and move it to `answered/` |
 | `accept` | record the Leader's acceptance of a submitted CR commit in the Disposition |
@@ -81,6 +81,9 @@ has more than one file in any state.
    fails, the text and path return to the original state and the index is not written. If
    they cannot return, `move_partial` names the paths and index entries that are left.
 5. The tool does not commit. The session in charge commits under the project rules.
+6. A CR that leaves `in-progress/` in a team project also finishes the release of its seat when the
+   Worker was stopped earlier (`agent_session.api.finish_release`), after the move and outside the item
+   lock. It prints `released seat N` or why the seat stays assigned. The move stands in both cases.
 
 ## Errors
 

@@ -240,3 +240,57 @@ def test_a_project_without_a_team_moves_and_accepts_as_before(project, capsys, m
     assert main(["move", *config, "TOOL-001", "done", "--outcome", "fixed", "--by", "Leader", "--note", "n"]) == 0
     code = main(["accept", *config, "TOOL-001", "--commit", "a" * 40])
     assert code == 2 and "not_team_project" in capsys.readouterr().err
+
+
+def test_moving_a_cr_out_of_in_progress_finishes_the_release_a_stop_left_pending(team, capsys):
+    team.cr()
+    seen = []
+
+    def finish_release(project, job_id):
+        seen.append((job_id, team.state()))             # the move is already done when the release runs
+        return {"job_id": job_id, "seat": 0, "released": True, "reasons": []}
+
+    team.monkeypatch.setattr(registry, "finish_release", finish_release)
+    team.caller("leader")
+    code, out, err = team.run(capsys, "move", "TOOL-001", "todo")
+    assert code == 0, err
+    assert seen == [("TOOL-001", "todo")] and "released seat 0" in out
+
+
+def test_the_move_names_why_a_pending_seat_stays_assigned(team, capsys):
+    team.cr()
+    team.monkeypatch.setattr(registry, "finish_release", lambda project, job_id: {
+        "job_id": job_id, "seat": 0, "released": False, "reasons": ["seat has uncommitted or untracked files"]})
+    team.caller("leader")
+    code, out, err = team.run(capsys, "move", "TOOL-001", "todo")
+    assert code == 0, err and team.state() == "todo"
+    assert "seat 0 is not released" in out and "seat has uncommitted or untracked files" in out
+
+
+def test_a_failed_release_does_not_undo_the_move(team, capsys):
+    team.cr()
+
+    def fail(project, job_id):
+        raise registry.ItemError("tmux_unknown", "tmux is unreadable")
+
+    team.monkeypatch.setattr(registry, "finish_release", fail)
+    team.caller("leader")
+    code, out, err = team.run(capsys, "move", "TOOL-001", "todo")
+    assert code == 0 and team.state() == "todo" and "seat release failed: tmux_unknown" in err
+
+
+def test_only_a_move_out_of_in_progress_asks_for_a_release(team, capsys):
+    team.cr(state="todo")
+    team.monkeypatch.setattr(registry, "finish_release", lambda *a: pytest.fail("not an in-progress move"))
+    team.caller("leader")
+    assert team.run(capsys, "move", "TOOL-001", "open", "--by", "Leader", "--note", "n")[0] == 0
+
+
+def test_ls_marks_an_in_progress_cr_whose_seat_waits_for_release(team, capsys):
+    team.cr()
+    team.monkeypatch.setattr(registry, "pending_releases", lambda project: {
+        "TOOL-001": {"seat": 2, "since": "2026-11-09T10:00:00Z", "reasons": ["x"]}})
+    code, out, _ = team.run(capsys, "ls", "cr")
+    assert code == 0 and "[release pending: seat 2 stopped]" in out
+    team.monkeypatch.setattr(registry, "pending_releases", lambda project: {})
+    assert "release pending" not in team.run(capsys, "ls", "cr")[1]
