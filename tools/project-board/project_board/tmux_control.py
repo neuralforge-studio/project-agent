@@ -12,9 +12,12 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import socket as unix_socket
 import stat
+import subprocess
+import time
 import uuid
 
 from . import model
@@ -53,11 +56,124 @@ def _control(socket=None) -> Tmux:
     return Tmux(socket_path=str(path)) if path else Tmux()
 
 
+RUNTIME_ROOT = Path("/tmp")
+_RUNTIME_NAME = re.compile(r"project-board-(\d+)-(\d+)")
+_RUNTIME_FILES = re.compile(r"control\.lock|[0-9a-f]{16}\.sock")
+# A server's directory is made after the server started, and nothing writes it after the server
+# ends. `ps` reports a process age in whole seconds, so a process that started less than this long
+# after the directory's last change is still treated as its creator (a live server is never judged
+# dead by rounding; a recycled pid that is that young is left for the next sweep).
+_START_SLACK = 2.0
+
+
+def _elapsed_seconds(text: str) -> float | None:
+    """Parse `ps -o etime=` (`[[dd-]hh:]mm:ss`)."""
+    days, _, clock = text.rpartition("-")
+    try:
+        parts = [int(part) for part in clock.split(":")]
+        if not 2 <= len(parts) <= 3 or (days and len(parts) != 3):
+            return None
+        seconds = 0
+        for part in parts:
+            seconds = seconds * 60 + part
+        return seconds + (int(days) * 86400 if days else 0)
+    except ValueError:
+        return None
+
+
+def _is_tmux_server_of(pid: int, created: float) -> bool:
+    """Whether `pid` is a live tmux process old enough to have created a directory last changed at `created`.
+
+    A directory name carries only a pid, and the OS reuses pids. A live pid therefore proves
+    nothing by itself, so two things must both hold: the process is tmux (`ps` command name, which
+    is `tmux: server` on Linux and the executable path on macOS), and it started no later than the
+    directory's last change. The directory is made by the server's own Board commands, so a process
+    that started after that is a different one that inherited the pid.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return False  # a process of another user is never this user's tmux server
+    except OSError:
+        return True  # cannot tell: leave the directory
+    try:
+        result = subprocess.run(["ps", "-o", "etime=,comm=", "-p", str(pid)],
+                                capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    fields = result.stdout.split(None, 1)
+    if result.returncode != 0 or len(fields) != 2:
+        return result.returncode != 1  # 1: ps found no such process
+    elapsed = _elapsed_seconds(fields[0])
+    if elapsed is None:
+        return True
+    if not os.path.basename(fields[1].strip()).startswith("tmux"):
+        return False
+    return time.time() - elapsed <= created + _START_SLACK
+
+
+def _remove_runtime_directory(directory: Path) -> bool:
+    """Remove a Board runtime directory only if it holds nothing but what the Board makes."""
+    with os.scandir(directory) as entries:
+        found = list(entries)
+    for entry in found:
+        if not _RUNTIME_FILES.fullmatch(entry.name):
+            return False
+        mode = entry.stat(follow_symlinks=False).st_mode
+        if not (stat.S_ISSOCK(mode) if entry.name.endswith(".sock") else stat.S_ISREG(mode)):
+            return False
+    for entry in found:
+        try:
+            os.unlink(entry.path)
+        except FileNotFoundError:
+            pass
+    os.rmdir(directory)
+    return True
+
+
+def reap_runtime_directories(root: Path | None = None) -> list[Path]:
+    """Remove this user's Board runtime directories whose tmux server has ended.
+
+    `/tmp/project-board-<uid>-<server pid>` is owned by that server's lifetime, but `kill-server`
+    and a crash give the server no chance to remove it, so the next Board command in any server
+    does. Only a plain directory (no symlink) of this user with mode 0700, named exactly so, and
+    holding only `control.lock` and `<16 hex>.sock`, is removed. Two sweeps may race: a directory
+    another sweep already removed is skipped. Failures never reach the caller.
+    """
+    root = RUNTIME_ROOT if root is None else root
+    uid = os.getuid()
+    removed = []
+    try:
+        names = [entry.name for entry in os.scandir(root) if entry.name.startswith(f"project-board-{uid}-")]
+    except OSError:
+        return removed
+    for name in names:
+        match = _RUNTIME_NAME.fullmatch(name)
+        if match is None or int(match.group(1)) != uid:
+            continue
+        directory = root / name
+        try:
+            info = directory.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid
+                    or stat.S_IMODE(info.st_mode) != 0o700):
+                continue
+            if _is_tmux_server_of(int(match.group(2)), info.st_mtime):
+                continue
+            if _remove_runtime_directory(directory):
+                removed.append(directory)
+        except OSError:
+            continue  # already removed by a concurrent sweep, or not removable: leave it
+    return removed
+
+
 def _private_dir(control: Tmux) -> Path:
     pid = control.command("display-message", "-p", "#{pid}")
     if not pid.isdigit():
         raise ValueError("tmux did not identify its server process")
-    directory = Path("/tmp") / f"project-board-{os.getuid()}-{pid}"
+    reap_runtime_directories()
+    directory = RUNTIME_ROOT / f"project-board-{os.getuid()}-{pid}"
     try:
         directory.mkdir(mode=0o700)
     except FileExistsError:

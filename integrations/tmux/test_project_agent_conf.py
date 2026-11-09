@@ -1,26 +1,27 @@
 """Read project-agent.conf into isolated tmux servers and check what it leaves in them.
 
-Every server is private (`tmux -L <unique name> -f /dev/null`) and is killed at the end of the
-test, so the user's default server never gets a binding or a hook.
+Every server is private (`tmux -L <unique name> -f /dev/null`) and is ended by `tmux_test_server` at the
+end of the test (or when pytest dies), so the user's default server never gets a binding or a hook.
 """
 
-import itertools
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import time
 
 import pytest
 
 TMUX_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(TMUX_DIR.parents[1] / "tools" / "tests"))  # tmux_test_server, shared by every tool's tests
+import tmux_test_server  # noqa: E402
 FILES = ("project-agent.conf", "project-agent-main.conf", "project_agent_bind.sh", "tmux_project_board.sh", "tmux_decide_status.sh", "tmux_decide_status.py")
 LAUNCHER = TMUX_DIR.parents[1] / "tools" / "python-launcher.sh"
 PRODUCT_PREFIX = "tmux_project_board.sh toggle"
 PRODUCT_MOUSE = "tmux_project_board.sh click"
 MOUSE_DEFAULT = r"select-pane -t = \; send-keys -M"
-COUNTER = itertools.count()
 
 pytestmark = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 
@@ -28,7 +29,7 @@ pytestmark = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is un
 class Server:
     def __init__(self, binary="tmux"):
         self.binary = binary
-        self.name = "pa-conf-%d-%d" % (os.getpid(), next(COUNTER))
+        self.name = tmux_test_server.claim("pa-conf")
         self.run("new-session", "-d", "-s", "home", "sleep", "300")
 
     def run(self, *args, check=True):
@@ -58,10 +59,9 @@ class Server:
         return (self.run("list-keys"), self.hooks(), self.option("@project_agent_board_skipped"))
 
     def kill(self):
-        socket_path = self.run("display-message", "-p", "#{socket_path}", check=False).stdout.strip()
-        subprocess.run([self.binary, "-L", self.name, "kill-server"], capture_output=True, timeout=10)
-        if socket_path:
-            Path(socket_path).unlink(missing_ok=True)
+        if self.binary != "tmux":      # the cleanup of tmux_test_server speaks to the server with PATH's tmux, which an older server refuses
+            subprocess.run([self.binary, "-L", self.name, "kill-server"], capture_output=True, timeout=10)
+        tmux_test_server.release(self.name)
 
 
 @pytest.fixture

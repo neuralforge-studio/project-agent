@@ -1,12 +1,27 @@
 """Fixture builders for the project-board tests (a unique module name; conftest names collide across tools)."""
 import asyncio
 import json
+import os
 import sys
+import uuid
 from pathlib import Path
 
 TOOL = Path(__file__).resolve().parents[1]
 if str(TOOL) not in sys.path:
     sys.path.insert(0, str(TOOL))
+SHARED_TESTS = str(TOOL.parent / "tests")  # tmux_test_server, shared by every tool's tests
+if SHARED_TESTS not in sys.path:
+    sys.path.insert(0, SHARED_TESTS)
+
+def click_socket(request):
+    """A unique path for a Board click socket, removed when the test ends however it ends.
+
+    The path is short and directly under ``/tmp`` so it stays under the ~108 byte socket limit.
+    """
+    path = f"/tmp/project-board-ui-{os.getpid()}-{uuid.uuid4().hex[:8]}.sock"
+    request.addfinalizer(lambda: Path(path).unlink(missing_ok=True))
+    return path
+
 
 LEADER_ID = "11111111-1111-4111-8111-111111111111"
 WORKER_IDS = ("22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333",

@@ -210,7 +210,7 @@ set-option -ag status-right '#{E:@project_agent_decide_status}'
 
 | 위치 | 언제 | 무엇을 하는가 | 근거 |
 | --- | --- | --- | --- |
-| `/tmp/project-board-<uid>-<tmux pid>/` (mode 0700), `control.lock`, `<16자>.sock` | Board를 켤 때 | 잠금 파일과 클릭 전달용 unix socket. Board pane이 끝나면 socket을 지웁니다. 디렉터리는 지우지 않습니다. | [tmux_control.py:56-83, 223](../../tools/project-board/project_board/tmux_control.py), [tui.py:196-223](../../tools/project-board/project_board/tui.py) |
+| `/tmp/project-board-<uid>-<tmux pid>/` (mode 0700), `control.lock`, `<16자>.sock` | Board를 켤 때 | 잠금 파일과 클릭 전달용 unix socket. Board pane이 끝나면 socket을 지웁니다. 디렉터리는 그 pid의 tmux server가 살아 있는 동안만 둡니다. `kill-server`·crash로 끝난 server의 디렉터리는 다음 Board 명령(어느 server의 것이든)이 `_private_dir`에서 지웁니다. 지우는 것은 이름이 형식에 맞고 현재 사용자 소유의 mode 0700 디렉터리(symlink 아님)이며 안에 `control.lock`·`<16자>.sock`만 있는 것입니다. pid가 없거나 tmux가 아니거나, tmux라도 디렉터리의 마지막 변경보다 늦게 시작했으면(pid 재사용) 끝난 server로 봅니다. | [tmux_control.py:84-200, 338](../../tools/project-board/project_board/tmux_control.py), [tui.py:196-223](../../tools/project-board/project_board/tui.py) |
 | `/tmp/as-u-<uid>-<run>.sock` | 원격 seat의 SSH 연결 | bridge socket | [remote_bridge.py:63-64](../../tools/agent-session/agent_session/remote_bridge.py) |
 | `/tmp/as-<uid>-<run>.sock` (원격 host) | 원격 seat run | 원격 tmux socket | [remote_runtime.py:212](../../tools/agent-session/agent_session/remote_runtime.py) |
 | 시스템 임시 디렉터리 `project-board-*` | Board에서 결정 답변을 보낼 때 | 답변 본문 파일. 끝나면 지웁니다. | [answer.py:36-38](../../tools/project-board/project_board/answer.py) |
