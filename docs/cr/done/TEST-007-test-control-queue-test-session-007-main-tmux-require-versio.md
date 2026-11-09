@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: fec73916af748c9bca5b69ff956d0141076e6d33 2026-11-10T00:42:14+09:00
+- Outcome: fixed
 
 ## Symptom
 `tools/agent-session/tests/test_control_queue.py::test_external_control_cannot_overtake_a_pending_self_request`가 main에서 `AttributeError: 'Tmux' object has no attribute 'require_version'`로 실패합니다.
@@ -20,6 +21,7 @@
 - 2026-11-10 Leader: 제출 6bf9005 검토. `FakeTmux`(제품 `Tmux` 파생, 정의 시점의 method 이름·인자 이름 대조, 쓰지 않은 method의 tmux 호출은 `_run`에서 `AssertionError`)와 두 test 파일의 수정, 수정 전 실패 재현, agent-session 전체 784 passed, merge 근거 재사용 판정(merge가 `tools/agent-session/**`를 바꾸지 않음)을 확인했습니다. `require_version`의 `tmux -V` 직접 호출은 `_run` 뒤의 대체 경로라 가짜에서 닿지 않음도 확인했습니다. 수정 요청 한 가지: Implementation 1의 "같은 문제를 가진 다른 가짜"에 `SimpleNamespace`로 만든 Tmux 대역이 남았습니다(`test_remote.py` 8곳, `test_remote_lifecycle.py` 1곳, 예: `tmux=SimpleNamespace(get_current=lambda *args: …)`). 제품 method 이름이 바뀌어도 이 test들은 통과하므로 같은 결함입니다. Result의 "그 밖의 가짜는 Tmux가 아님"은 이 대역을 빠뜨렸습니다. 이 대역들도 같은 두 guard(제품 `Tmux`에 있는 method, 같은 인자 이름)를 거치게 하십시오. 방법은 Worker가 정합니다.
 - 2026-11-10 Leader: 수정 제출 dbdcf93 검토. `FakeTmux.replace`·`fake_tmux`(callable도 제품 method 존재·이름 붙인 인자의 위치별 이름을 대조), `test_remote.py`·`test_remote_lifecycle.py`의 Tmux 대역 11곳 교체, guard test, 785 passed를 확인했습니다. 코드 수정 요청은 없습니다. 검증 보완 한 가지: 제출이 `origin/main` 235877b를 포함하지 않습니다. Result의 "겹치는 파일이 없어"는 기준이 아닙니다. README 규칙은 merge가 명령의 입력을 바꿨는지로 정하며, BOARD-011은 `FakeTmux`가 파생하고 대조하는 `agent_session/tmux.py`(`run_quiet` 추가, `run_controller` 본문)와 `tests/test_tmux.py`를 바꿨습니다. merge하고 그 commit에서 `tools/agent-session/tests` 전체를 다시 실행하십시오.
 - 2026-11-10 Leader: 제출 0530de33fa700cdd570be9f5ebb3521505ad686f를 인수합니다. Leader review: 재제출 0530de3은 dbdcf93 위의 origin/main 235877b merge뿐임을 확인했습니다(제품 diff는 BOARD-011과 같음). merge가 FakeTmux가 대조하는 제품 Tmux를 바꿨으므로 merge commit에서 tools/agent-session/tests 전체 790 passed(실패 0)로 README 표의 tools/agent-session/** 행을 충족합니다. 앞 검토(6bf9005·dbdcf93)의 코드 판정을 재사용합니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 b71dda4(Merge cr/TEST-007, 제출 0530de3). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 1. 가짜 Tmux가 제품 `Tmux`의 interface를 따라가게 고칩니다. 가짜 객체가 제품 class에 있는 method를 빠뜨리면 test가 곧바로 알리는 방법(예: 가짜를 제품 class에서 파생, 또는 interface 대조 test)을 둡니다. 같은 문제를 가진 다른 가짜 객체가 있으면 함께 고칩니다.
