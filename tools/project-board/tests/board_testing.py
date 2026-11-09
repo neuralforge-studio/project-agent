@@ -1,4 +1,5 @@
 """Fixture builders for the project-board tests (a unique module name; conftest names collide across tools)."""
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -91,3 +92,11 @@ def leader(reviewing=None, connected_at="2026-11-04T09:00:00Z"):
     if connected_at:
         value.update(connected_at=connected_at, reviewing=reviewing)
     return value
+
+
+async def wait_until(pilot, condition, timeout=10.0):
+    """Wait for an asynchronous screen update to be observable instead of sleeping a fixed time."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        assert asyncio.get_running_loop().time() < deadline, "timed out waiting for the screen state"
+        await pilot.pause(0.01)
