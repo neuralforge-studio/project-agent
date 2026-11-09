@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: 7e35d2411a827df482e386643624eb7663330833 2026-11-09T19:53:55+09:00
+- Outcome: fixed
 
 ## Symptom
 사용자 보고: "전체적으로 굉장히 큰 문제는 엄청 느림." sidebar 표시, 창 이동 뒤 갱신, popup 열기가 느립니다.
@@ -21,6 +22,7 @@
 - 2026-11-09 Leader: 고친다(Leader 판정, 측정으로 원인 확정 뒤 수정). 사용자가 "굉장히 큰 문제"라고 한 동작 결함이고 위임 범위입니다. 같은 원인일 수 있는 BOARD-003·004는 이 CR의 원인 확정 뒤 판정합니다(같으면 병합). 사용자 지시(2026-11-09 대화): "위와 같이 11개의 개선 요청 사항이 있어."
 - 2026-11-09 Leader: 제출 dcca9e9 검토. 원인 확정(project마다 registry 재로드 72%, 변경 없는 파일 2회 읽기, 창 이동마다 TUI 재기동, hook마다 Python 기동)과 수정·측정(재방문 20~28초→0.1~0.2초, snapshot 4~7초→0.3초, CR popup 9→3초), RUST-001 근거 기록을 확인했습니다. 계약 변경(본 window의 Board pane 유지)은 원칙을 받아들이되 지금 형태로는 인수하지 않습니다: 본 window마다 Textual process가 상주하며 2초마다 읽으므로 이 server의 window 33개(2026-11-09 확인)면 상주 process가 그만큼 늘어 사용자가 지적한 서버 자원 문제를 다시 만듭니다. 수정 요청: (1) 보이지 않는 pane은 갱신(polling)을 멈추고 보이면 바로 갱신, (2) 유지하는 pane 수에 상한(최근 본 순서), 값과 근거(Board process 하나의 RSS·CPU 실측)를 계약과 TUI 계획에 적음, (3) `origin/main` merge(CHANGELOG·spec·agent-session api.py·test_model.py 충돌), CHANGELOG 변경은 빼고(Leader가 씀), (4) BOARD-003·004 판정 근거로 빠른 창 이동 때의 hook process 수와 깜빡임 원인(pane 재생성인지)을 수정 전·후로 적음.
 - 2026-11-10 Leader: 제출 15284553a32a978084138d5793c13886850816d2를 인수합니다. Leader review: 수정 제출 2는 origin/main(SESSION-007) 재 merge만 더했고 install-contract 5.3절·lifecycle.py 충돌을 양쪽 보존으로 풀었습니다(CHANGELOG는 main과 같음). 재실행 install 261, Board/tmux 105, agent-session 해당 파일 224 passed·1 failed. 실패 test_the_seats_next_cr_opens_a_new_window(seat=1)는 BOARD-002가 없는 origin/main에서도 0/6이라 이 CR과 무관한 main의 결함으로 판정하고 TEST-006으로 엽니다. 이전 검토(b9294bd의 요청 1~4, dcca9e9의 원인·측정)를 재사용합니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 61e881e(Merge cr/BOARD-002, 제출 1528455). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다. BOARD-003·004는 병합됨.
 
 ## Implementation
 읽을 문서: [project-board README](../../../tools/project-board/README.md), [TUI 계획](../../project-board-tui-plan.md), [설치 계약 5.3·5.4절](../../project-team/install-contract.md), [README 검증 표](../../../README.md#검증).
