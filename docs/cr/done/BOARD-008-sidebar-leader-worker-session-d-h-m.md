@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Base: f3182143ab5b3c436d1c2f975c28fe784e4eadb9 2026-11-10T00:03:56+09:00
+- Outcome: fixed
 
 ## Symptom
 사용자 요청: "Leader/Worker의 Session 동작 중인 시간에 대한 표시가 필요한 ??d ??h ??m"
@@ -19,6 +20,7 @@
 - 2026-11-09 Leader: 고친다(Leader 판정). 사용자가 표시 형식까지 정한 기능 요청이므로 위임 범위입니다. BOARD-002 뒤에 시작합니다. 사용자 지시(2026-11-09 대화): "위와 같이 11개의 개선 요청 사항이 있어."
 - 2026-11-10 Leader: 선행 BOARD-002가 61e881e로 통합되었습니다(BOARD-003·004 병합). 그 구조를 따르십시오: Board pane은 본 window에 남고(최대 8개, 최근 본 순서), 보이지 않는 pane은 갱신하지 않으며(`project_board_visibility.sh`의 SIGUSR1), 파일은 바뀐 것만 다시 읽습니다(TUI 계획 2·5절). Board CR 다섯 개가 같은 `tui.py`·`tmux_control.py`를 고칠 수 있으므로 제출 전에 `origin/main`을 merge하십시오.
 - 2026-11-10 Leader: 제출 7457bc4d0bda162e5a27a18d2f7a4b989e25e0a1를 인수합니다. Leader review: TUI 계획 3절의 규칙(분 단위 내림, 0인 앞자리 생략, session·connected_at 없으면 표시 안 함), Worker 행의 시간과 펼친 project 첫 줄의 Leader 줄, 분이 바뀔 때만 다시 그림을 확인했습니다. 경계 test와 export_screenshot 렌더 확인, project-board 146 passed. merge는 docs/cr만이라 근거 재사용.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 8315909(Merge cr/BOARD-008, 제출 7457bc4). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [project-board README](../../../tools/project-board/README.md), [TUI 계획](../../project-board-tui-plan.md), [설치 계약 5.3·5.4절](../../project-team/install-contract.md), [README 검증 표](../../../README.md#검증).
