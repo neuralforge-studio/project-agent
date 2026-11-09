@@ -1,6 +1,5 @@
 """Project session commands, Git preparation, and confirmed slot release."""
 
-import json
 import os
 import shlex
 import sys
@@ -8,7 +7,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import api, background, git_ops, jobs, process, workspace
+from . import api, background, git_ops, handoff, jobs, launch_artifacts, process, windows, workspace
 from .config import RemoteSeat, current_project, load_registry
 from .errors import SessionError
 from .providers import get_provider
@@ -18,9 +17,7 @@ from .tmux import Tmux, check_owner
 from .util import write_json
 
 HOST_SECONDS = 8                                   # wait for the provider's background listing
-SWEEP_SECONDS = 30                                 # after this, a cleanup leaves later windows to the next sweep
 DIALOG_SCREEN_SECONDS = 1                          # how often an unregistered start reads its pane for a dialog
-REUSE_REFUSED = ("target_changed", "tmux_owner_mismatch", "target_running", "window_unreusable")
 PARKED_ALIVE = "The parked JOB still has a run; stop it before starting the JOB again."
 
 
@@ -32,13 +29,6 @@ def _bound(previous, session, leader=False):
     if leader:
         fresh["reviewing"] = None
     return fresh
-
-
-def _completed(result_file):
-    try:
-        return json.loads(Path(result_file).read_text(encoding="utf-8"))["data"]["completed"] is True
-    except (OSError, ValueError, KeyError, TypeError):
-        return False
 
 
 def _unregistered_ended(meta, pane):
@@ -114,73 +104,25 @@ class Manager(SuspendMixin):
             "target": slot, "seat": seat, "seat_root": str(root), "cwd": str(cwd),
             "job": job, "job_id": job["job_id"] if job else None,
             "role": "leader" if job is None else "worker", "run_id": run_id or uuid.uuid4().hex,
-            "python": sys.executable, "library_path": str(Path(__file__).resolve().parents[1]),
+            "python": sys.executable, "library_path": str(launch_artifacts.library_path()),
             "timeout": self.remaining(), "allow_daemon_start": True,
         }
         if remote:
             context["remote_seat"] = {"host": root.host, "path": str(root.path), "python": root.python}
         return context
 
-    def _window_name(self, meta):
-        if meta["seat"] is None:
-            return f"{self.project.project_id}-leader"
-        return f"{self.project.project_id}-seat{meta['seat']}-{meta['job_id']}"
-
     def _new_window(self, context, resume=None, ending=None):
         """A run and its window. With `resume`, the run reopens that conversation instead of a new one.
 
-        The slot's retired window is handed to the run when `_reusable` accepts it, so the panes that a
-        person added stay beside the new CLI. `ending` is the run that this restart's own controller just
-        ended; it is the one run whose pending control does not keep its window from the new run.
-        """
+        `ending` is the run that this restart's own controller just ended (see `windows.reusable`)."""
         context = context if context.get("remote_seat") else self.provider.prepare_context(context)
         if resume:
             context.update(session_id=resume, expected_session_id=resume, resume=True)
-        name = self._window_name(context)
-        context["window_name"] = name
-        # The waiting pane starts in the seat root; the launch script enters the CR's Cwd after Git preparation.
-        cwd = context["cwd"]
-        physical_root = str(self.project.base) if context.get("remote_seat") else context["seat_root"]
-        retired = self._reusable(context["target"], ending)
-        reused = None
-        if retired is not None:
-            try:
-                reused = self.tmux.reuse_window(self.project.project_id, name, physical_root, context, retired)
-            except SessionError as error:
-                if error.code not in REUSE_REFUSED:
-                    raise                          # the window may have changed; its state is the caller's to read
-        context = reused or self.tmux.create_window(self.project.project_id, name, physical_root, context)
-        if context["cwd"] != cwd:
-            context = self.tmux.write_meta(context["window_id"], {"cwd": cwd})
-        self.tmux.set_current(self.project.project_id, context["target"], context)
-        if context["seat"] is None:
-            self.tmux.command("select-window", "-t", self.project.project_id + ":" + context["window_id"])
-        return context
+        context["window_name"] = windows.window_name(self.project.project_id, context)
+        return windows.open_window(self.tmux, self.project, context, self._reusable(context["target"], ending))
 
     def _reusable(self, target, ending=None):
-        """The retired window that the slot's next run takes over, or None to open a new window.
-
-        With a current pointer, only its window counts. Without one (after a release), the window of the
-        slot's most recent run counts; recency is the time of the run's launch script. The window must
-        be one `_sweep` would accept as ended, except that a person's panes in it do not matter.
-        """
-        try:
-            meta = self.tmux.get_current(self.project.project_id, target)
-            if meta is None:
-                runs = self.project.runtime_path / "runs"
-                found = []
-                for window_id in self.tmux.managed_windows(self.project.project_id, target):
-                    candidate = self.tmux.read_meta(window_id)
-                    script = runs / str(candidate.get("run_id")) / "launch.sh"
-                    found.append((script.stat().st_mtime if script.is_file() else 0.0, candidate))
-                if not found:
-                    return None
-                meta = max(found, key=lambda item: item[0])[1]
-            own = ending is not None and meta.get("run_id") == ending.get("run_id")
-            return meta if self._retained(meta, controller=own) is None else None
-        except SessionError:
-            return None
-
+        return windows.reusable(self.tmux, self.project, target, self._observe, ending)
     def _target(self, job=None, seat=None, recovery=False):
         """The slot's current run. A run whose conversation moved to the background is refused unless it ended;
         with `recovery`, stop and restart may then replace it, and an unknown end is `execution_unknown`."""
@@ -366,124 +308,17 @@ class Manager(SuspendMixin):
             self.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"], "last_background_clear": evidence})
             meta["last_background_clear"] = evidence
 
-    def _write_prompt(self, context, request=None):
-        code = ("import sys; sys.path.insert(0,sys.argv[1]); "
-                "from agent_session.internal import register_current; "
-                "register_current(run_id=sys.argv[2],config_path=sys.argv[3],"
-                "socket_path=sys.argv[4],endpoint=sys.argv[5])")
-        command = shlex.join([context["python"], "-c", code, context["library_path"],
-                              context["run_id"], context["config_path"], context["socket_path"],
-                              context.get("endpoint") or ""])
-        if context.get("resume"):
-            return request                 # the conversation exists; the resume message is sent after registration
-        role = "Leader" if context["seat"] is None else "Worker"
-        text = "$project-team을 사용하십시오. 현재 프로젝트의 " + role + " 역할입니다.\n"
-        if self.project.provider == "codex":
-            text += ("첫 도구 호출에서 다음 내부 등록을 실행하십시오. 작업 디렉토리는 " + context["cwd"]
-                     + "입니다. 등록 성공 전에는 일반 작업을 시작하지 마십시오.\n\n" + command + "\n\n")
-        else:
-            text += "SessionStart 내부 등록이 실패하면 작업을 시작하지 마십시오.\n\n"
-        if context.get("handoff_file"):
-            path = Path(context["handoff_file"])
-            text += "이전 대화는 보존됐습니다. 다음 인계로 같은 작업을 이어받으십시오.\n" + path.read_text(encoding="utf-8") + "\n"
-        job = context.get("job")
-        if job:
-            base = (job.get("base") or {}).get("base_hash") or "준비 중"
-            text += ("배정 CR: " + job["job_id"] + " (" + job["title"] + ")\n"
-                     + "CR 파일: " + job["path"] + "\n"
-                     + "Seat: " + context["seat_root"] + "\n"
-                     + "작업 디렉토리: " + context["cwd"] + "\n"
-                     + "Mode: " + job["mode"] + "\n"
-                     + "Branch: " + (job.get("branch") or "없음(read-only)") + "\n"
-                     + "Base: " + base + "\n\n"
-                     + "작업 전에 위 CR 파일을 읽고, 그 본문이 link한 지침 문서도 읽으십시오. "
-                     + "범위·구현·검증 기준의 원본은 CR 파일입니다.\n\n")
-        text += request or (
-            "인계 문서와 프로젝트 지침을 읽고 승인된 미완료 작업을 계속하십시오." if context.get("handoff_file") else
-            "프로젝트 지침과 `project-item ls`의 결정 대기·CR을 확인하고 사용자 작업 지시를 기다리십시오. "
-            "사용자에게 묻는 결정은 결정 항목으로 남기고, 위임 범위의 판정은 근거와 함께 CR에 기록하십시오(project-team skill)."
-            if job is None else
-            "CR의 범위에서 작업하고 검증하십시오. 제출 commit과 검증 결과를 CR 파일의 `## Result`에 쓰고 "
-            "`agent-session send --job leader`로 보고하십시오.")
-        if len(text.encode("utf-8")) > 65536:
-            raise SessionError("prompt_too_large", "Initial JOB and handoff exceed 65536 UTF-8 bytes.", 2)
-        return text
-
     def _prepare_launch(self, context, request=None):
-        if context.get("remote_seat"):
-            return {}, {}
-        if self.project.provider == "codex" and context["target"] == "leader":
-            self.provider.trust_base(self.project.base)
-        context["timeout"] = self.remaining()
-        directory = self.project.runtime_path / "runs" / context["run_id"]
-        directory.mkdir(parents=True, exist_ok=True)
-        hooks = self.provider.registration_hooks(context)
-        prepared = self._session_input(context, hooks, self._write_prompt(context, request))
-        prepared.setdefault("env", {}).update({
-            "AGENT_SESSION_CONFIG": context["config_path"],
-            "AGENT_SESSION_SOCKET": context["socket_path"],
-            "AGENT_SESSION_BASE": context["base"],
-        })
-        if context.get("upstream"):
-            prepared["env"].update(AGENT_SESSION_UPLINK=context["upstream"],
-                                   PYTHONPATH=context["library_path"],
-                                   PATH=context["upstream_bin"] + os.pathsep + os.environ.get("PATH", ""))
-        launch = self.provider.launch_spec(context, prepared)
-        return prepared, launch
-
-    def _session_input(self, context, hooks, prompt):
-        """Provider input from the common prompt and the project's launch args for this role."""
-        directory = self.project.runtime_path / "runs" / context["run_id"]
-        path = directory / "prompt.md"
-        path.write_text(prompt, encoding="utf-8")
-        role = "leader" if context["target"] == "leader" else "worker"
-        prepared = {"prompt_file": str(path), "provider_args": list(self.project.args_for(role)),
-                    "env": {}, "unset_env": [], "settings_file": None}
-        if self.project.provider == "claude":
-            settings = {"crossSessionInbound": "accept", "hooks": hooks}
-            settings_path = directory / "settings.json"
-            write_json(settings_path, settings)
-            prepared.update(settings_file=str(settings_path), provider_name=context.get("window_name"))
-        return prepared
+        return launch_artifacts.prepare(self.project, self.provider, context, request, self.remaining)
 
     def _handoff_path(self, meta):
-        return self.project.runtime_path / "handoff" / f"{meta['target']}.md"
+        return handoff.path(self.project, meta)
 
     def _fresh_handoff(self, meta):
-        """The slot's handoff file when it changed after this run's launch, else None."""
-        if meta.get("remote_seat"):
-            from .remote import run_call
-            handoff = run_call(meta, "handoff", timeout=self.remaining())
-            if handoff.get("fresh"):
-                path = self._handoff_path(meta)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(handoff["text"], encoding="utf-8")
-                return str(path)
-            return None
-        path = self._handoff_path(meta)
-        launched = self.project.runtime_path / "runs" / meta["run_id"] / "launch.sh"
-        if path.is_file() and launched.is_file() and path.stat().st_mtime > launched.stat().st_mtime:
-            return str(path)
-        return None
+        return handoff.fresh(self.project, meta, self.remaining())
 
     def _require_handoff(self, meta):
-        handoff = self._fresh_handoff(meta)
-        if handoff is None:
-            raise SessionError("handoff_required", "Write the slot's handoff file during this run before restart.",
-                               3, {"path": str(self._handoff_path(meta)), "run_id": meta["run_id"]})
-        return handoff
-
-    def _discard_placeholder(self, meta):
-        """End the unlaunched waiting pane of a start that failed before its reservation held."""
-        try:
-            self.tmux.request_placeholder_stop(meta["window_id"])
-            current = self.tmux.get_current(self.project.project_id, meta["target"])
-            while not self._observe(current)["stopped"]:
-                time.sleep(min(0.1, self.remaining()))
-            self._retire_name(current)
-        except SessionError:
-            pass                                   # the original failure is the result
-
+        return handoff.require(self.project, meta, self.remaining())
     def _launch(self, context, request=None):
         if context.get("remote_seat"):
             from .remote_lifecycle import launch
@@ -491,94 +326,18 @@ class Manager(SuspendMixin):
         if not Path(context["cwd"]).is_dir():
             raise SessionError("cwd_unavailable", "The CR Cwd does not exist in the prepared seat.", 2,
                                {"cwd": context["cwd"]})
-        directory = self.project.runtime_path / "runs" / context["run_id"]
         prepared, launch = self._prepare_launch(context, request)
         self.tmux.write_meta(context["window_id"], {
-            "provider_name": prepared.get("provider_name"), "launch_file": str(directory / "launch.sh"),
+            "provider_name": prepared.get("provider_name"),
+            "launch_file": str(launch_artifacts.run_directory(self.project, context["run_id"]) / "launch.sh"),
             "stopping": False,
         })
-        code = ("import sys;sys.path.insert(0,sys.argv[1]);from agent_session.internal import mark_process;"
-                "mark_process(sys.argv[2],sys.argv[3],sys.argv[4],int(sys.argv[5]))")
-        marker = shlex.join([context["python"], "-c", code, context["library_path"], context["run_id"],
-                             context["config_path"], context["socket_path"]]) + ' "$$"'
-        clean = [key for key in os.environ if key.startswith("CLAUDE_CODE_MESSAGING_") or key.startswith("AGENT_SESSION_")]
-        clean += ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"] + launch.get("unset_env", [])
-        lines = ["#!/bin/bash", "set -e",
-                 'for name in ${!CLAUDE_CODE_MESSAGING_@} ${!AGENT_SESSION_@}; do unset "$name"; done',
-                 "unset " + " ".join(shlex.quote(key) for key in sorted(set(clean))),
-                 "cd " + shlex.quote(context["cwd"]), marker]
-        for name, value in launch.get("env", {}).items():
-            lines.append("export " + name + "=" + shlex.quote(value))
-        lines.append("exec " + shlex.join(launch["argv"]))
-        script = directory / "launch.sh"
-        script.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        script = launch_artifacts.write_launch_script(self.project, context, launch)
         context = self.tmux.launch(context["window_id"], context["cwd"], script)
         result = self._wait_ready(context)
         return {**result, "cleanup": self._sweep(context["target"])}
-
-    def _pointer_run(self, target):
-        try:
-            current = self.tmux.get_current(self.project.project_id, target)
-        except SessionError as error:
-            if error.code == "execution_evidence_missing":
-                return error.details.get("run_id")
-            raise
-        return current.get("run_id") if current else None
-
-    def _retained(self, meta, owner=None, controller=False):
-        """Why a retired window must stay, or None when its run ended without pending control.
-
-        With `controller`, this process may be the controller that is restarting the run: then the run's
-        own pending control and controller record do not count. Any other pending control does.
-        """
-        if not meta.get("base") or Path(meta["base"]).resolve() != self.project.base or not meta.get("pane_id"):
-            return "foreign_window"
-        pid, birth = meta.get("controller_pid"), meta.get("controller_birth")
-        mine = bool(controller and meta.get("control_pending") and meta.get("control_operation") == "restart"
-                    and pid == os.getpid() and birth == process.birth(os.getpid()))
-        if not mine:
-            if meta.get("control_pending"):
-                return "control_pending"
-            if pid and process.alive(int(pid), birth):
-                # The finishing self-controller may close its own run after it saved the completed result.
-                own = (owner is not None and owner["run_id"] == meta.get("run_id")
-                       and owner["pid"] == int(pid) and owner["birth"] == birth
-                       and _completed(owner["result_file"]))
-                if not own:
-                    return "controller_running"
-        if not self._observe(meta)["stopped"]:
-            return "termination_unconfirmed"
-        return None
-
     def _sweep(self, target, owner=None):
-        """Close the slot's retired windows; the current pointer's run and unsure windows stay.
-
-        The caller holds the slot's control lock, so the current pointer cannot change meanwhile.
-        """
-        closed, kept = [], []
-        deadline = time.monotonic() + SWEEP_SECONDS
-        try:
-            current = self._pointer_run(target)
-            handles = self.tmux.managed_windows(self.project.project_id, target)
-        except SessionError as error:
-            return {"closed": closed, "kept": [{"window_id": None, "reason": error.code}]}
-        for window_id in handles:
-            try:
-                meta = self.tmux.read_meta(window_id)
-                if meta.get("run_id") == current:
-                    continue
-                if time.monotonic() >= deadline:
-                    reason = "cleanup_budget"
-                else:
-                    reason = self._retained(meta, owner)
-                    if reason is None:
-                        self.tmux.close_window(window_id, meta)
-                        closed.append(window_id)
-                        continue
-            except SessionError as error:
-                reason = error.code
-            kept.append({"window_id": window_id, "reason": reason})
-        return {"closed": closed, "kept": kept}
+        return windows.sweep(self.tmux, self.project, target, self._observe, owner)
 
     def sweep_after_result(self, target, owner):
         """The self-controller's last cleanup, serialized with the slot's other commands."""
@@ -589,7 +348,6 @@ class Manager(SuspendMixin):
         except SessionError as error:
             # A busy slot's command sweeps when it finishes; nothing is closed without the lock.
             return {"closed": [], "kept": [{"window_id": None, "reason": error.code}]}
-
     def _wait_ready(self, context):
         screened = 0.0
         while True:
@@ -642,9 +400,7 @@ class Manager(SuspendMixin):
                    if meta.get("remote_seat") else {}), **extra}
 
     def _retire_name(self, meta):
-        self.tmux.command("rename-window", "-t", meta["window_id"],
-                          self._window_name(meta) + "-exited-" + meta["run_id"][:8])
-
+        windows.retire_name(self.tmux, self.project.project_id, meta)
     def _start_existing(self, meta, request=None):
         self._authorize("start", meta["target"])
         if meta.get("control_pending"):
@@ -688,10 +444,10 @@ class Manager(SuspendMixin):
     def _replace_ended(self, meta):
         """A new conversation in the slot of a run whose end is confirmed; the CR, seat, and branch stay."""
         job = jobs.claim(self.project, meta["job_id"]) if meta.get("job_id") else None
-        handoff = self._fresh_handoff(meta)
+        carried = self._fresh_handoff(meta)
         self._retire_name(meta)
         context = self._context(meta["target"], job)
-        context["handoff_file"] = _handoff(handoff)
+        context["handoff_file"] = handoff.existing_file(carried)
         context = self._new_window(context)
         return self._launch(context)
 
@@ -807,7 +563,7 @@ class Manager(SuspendMixin):
                             self.store.update(reserve)
                         except BaseException:
                             if context is not None:
-                                self._discard_placeholder(context)
+                                windows.discard_placeholder(self.tmux, self.project, context, self._observe, self.remaining)
                             jobs.unclaim(self.project, item["job_id"])
                             raise
                         number, guard, selected_guard = index, candidate_guard, True
@@ -988,7 +744,7 @@ class Manager(SuspendMixin):
             meta = self._same(selected)
             if meta.get("control_pending") and expected_run is None:
                 raise SessionError("control_busy", "This run has an accepted control request.", 4)
-            handoff = self._require_handoff(meta) if operation == "restart" else None
+            carried = self._require_handoff(meta) if operation == "restart" else None
             if not meta.get("registered") and meta.get("provider_launch_attempted") is False and operation == "stop":
                 self.tmux.request_placeholder_stop(meta["window_id"])
                 exit_sent = True
@@ -1028,7 +784,7 @@ class Manager(SuspendMixin):
             if operation == "restart":
                 current_job = jobs.lookup(self.project, meta["job_id"], ("in-progress",)) if meta.get("job_id") else None
                 context = self._context(meta["target"], current_job)
-                context["handoff_file"] = _handoff(handoff)
+                context["handoff_file"] = handoff.existing_file(carried)
                 context = self._new_window(context, ending=meta)
                 result = self._launch(context)
                 if result["session"]["session_id"] == meta["session_id"]:
@@ -1088,7 +844,7 @@ class Manager(SuspendMixin):
         return {**result, "cleanup": {"closed": cleanup["closed"], "kept": list(kept) + cleanup["kept"]}}
 
     def _self_control(self, operation, meta, job, seat):
-        directory = self.project.runtime_path / "runs" / meta["run_id"]
+        directory = launch_artifacts.run_directory(self.project, meta["run_id"])
         request_file = directory / "control-request.json"
         result_file = directory / "control-result.json"
         request = {"operation": operation, "job": job, "seat": seat, "run_id": meta["run_id"],
@@ -1107,10 +863,7 @@ class Manager(SuspendMixin):
                 self._require_handoff(current)
             write_json(request_file, request)
             write_json(result_file, {"ok": True, "data": {"accepted": True, "completed": False}, "error": None})
-            code = "import sys;sys.path.insert(0,sys.argv[1]);from agent_session.internal import run_controller;run_controller(sys.argv[2])"
-            command = shlex.join([sys.executable, "-c", code, str(Path(__file__).resolve().parents[1]), str(request_file)])
-            script = directory / "controller.sh"
-            script.write_text("#!/bin/bash\nset -e\nunset CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID TMUX TMUX_PANE\nexec " + command + "\n", encoding="utf-8")
+            script = launch_artifacts.write_controller_script(directory, request_file)
             self.tmux.write_meta(meta["window_id"], {"control_pending": True, "control_operation": operation})
             try:
                 self.tmux.run_controller(script, self.project.base)
@@ -1150,14 +903,3 @@ def _note_exit_wait(error, exit_requested, observed):
                      "cli_alive": observed.get("cli_alive"), "pane_dead": (observed.get("pane") or {}).get("pane_dead"),
                      "group_alive": observed.get("group_alive"), "tracked_alive": observed.get("tracked_alive")})
     error.details = {**error.details, "exit_wait": wait}
-
-
-def _handoff(value):
-    if isinstance(value, dict):
-        value = value.get("handoff_file") or value.get("path")
-    if value is None:
-        return None
-    path = Path(value).resolve()
-    if not path.is_file():
-        raise SessionError("handoff_missing", "The project handoff document is unavailable.")
-    return str(path)

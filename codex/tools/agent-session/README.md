@@ -103,6 +103,10 @@ Provider 실행 전 준비 실패는 원인을 고친 뒤 같은 start로 재시
 원격 Worker가 `send --job leader`를 실행하면 CR snapshot의 Result만 원본에 돌려보냅니다.
 원본 Result와 충돌하면 `remote_result_conflict`로 거절합니다. 원격 파일과 원본을 보존한 뒤 내용을 조정합니다.
 
+## 모듈 구성
+
+`lifecycle.Manager`는 배정과 제어의 순서·잠금·state 기록·실패 처리를 맡는 통합 계층입니다. run의 시작 산출물은 `launch_artifacts`, tmux window의 수명은 `windows`, 인계 파일은 `handoff`가 소유합니다. 모듈별 책임과 의존 방향은 [제품 지도](../../../docs/project-team/README.md#agent-session-내부-구성)가 원본입니다. 생성하는 command가 부르는 `agent_session.internal`의 이름은 [실행 경로 계약](../../../docs/project-team/README.md#실행-경로-계약)이 정합니다.
+
 ## 프로젝트 API와 검사
 
 프로젝트 consumer는 `~/.local/lib/agent-session`을 import 경로로 사용합니다.

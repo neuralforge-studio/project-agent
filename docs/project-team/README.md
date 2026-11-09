@@ -63,12 +63,15 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 
 ### agent-session 내부 구성
 
-관계를 사용하는 쪽의 코드가 원본입니다(2026-11-09 확인). `lifecycle`과 `suspend`는 서로를 import하지 않으며, [test](../../codex/tools/agent-session/tests/test_import_cycle.py)가 두 모듈의 import 문(함수 안 포함)으로 확인합니다.
+관계를 사용하는 쪽의 코드가 원본입니다(2026-11-09 확인). `lifecycle`과 `suspend`는 서로를 import하지 않고, `launch_artifacts`·`windows`·`handoff`는 둘 중 어느 쪽도 import하지 않습니다. [test](../../codex/tools/agent-session/tests/test_import_cycle.py)가 이 모듈들의 import 문(함수 안 포함)으로 확인합니다. 세 모듈의 함수는 [test](../../codex/tools/agent-session/tests/test_run_modules.py)가 `Manager` 없이 직접 호출합니다. 다른 모듈(`suspend`, `remote_runtime`, `remote_lifecycle`)은 계속 `Manager`의 `_new_window`·`_launch`·`_sweep`·`_retire_name`·`_handoff_path`·`_fresh_handoff` 등으로 이 기능을 부르며, 이 method는 위 모듈 함수에 위임합니다.
 
 | 모듈 | 책임 | 의존 방향 |
 | --- | --- | --- |
 | `cli` | 입력 해석, 결과 JSON 표현, 조립. `Manager`와 `Fleet`을 만들고 `Fleet`에 `Manager` class를 `manager_factory`로 넘깁니다(`_default_fleet`). start는 `Manager`를 만들기 전에 `lifecycle.check_start_arguments`를 부릅니다. | `lifecycle`, `suspend`를 지연 import합니다. |
-| `lifecycle` | `Manager`: start·send·stop·restart·review. start 인자 규칙(`--prompt-file`은 Leader, `--seat`는 Worker JOB)의 원본인 모듈 함수 `check_start_arguments`를 소유하고 `Manager.start`가 부릅니다. | `suspend`를 import합니다(`Manager`가 `SuspendMixin`을 상속). |
+| `lifecycle` | 통합 계층 `Manager`: start·send·stop·restart·review. 배정·제어의 순서, 잠금, state 기록, 실패 처리를 맡고 아래 세 모듈을 조립합니다. start 인자 규칙(`--prompt-file`은 Leader, `--seat`는 Worker JOB)의 원본인 모듈 함수 `check_start_arguments`를 소유하고 `Manager.start`가 부릅니다. | `suspend`, `launch_artifacts`, `windows`, `handoff`를 import합니다(`Manager`가 `SuspendMixin`을 상속). |
+| `launch_artifacts` | run의 시작 산출물: prompt 문서, provider 입력(`prompt.md`, Claude `settings.json`), `launch.sh`, `controller.sh`, run 디렉터리 경로. 생성되는 command가 `agent_session.internal`의 이름을 부르는 곳이 여기입니다. 상태를 갖지 않고 아무것도 시작하지 않습니다. | `lifecycle`·`suspend`를 import하지 않습니다. project·provider·run context를 인자로 받습니다. |
+| `windows` | 한 slot의 run을 담는 tmux window: 이름, 반납된 window의 재사용, 생성·current 지정, 이름 바꾸기, 정리(sweep), 시작 실패한 대기 pane의 정리. 종료 판정은 호출자가 넘긴 `observe`로 합니다. slot 제어 잠금은 호출자가 잡습니다. | `lifecycle`·`suspend`를 import하지 않습니다. `launch_artifacts.run_directory`를 씁니다. |
+| `handoff` | slot의 인계 파일: 경로, 이번 run이 쓴 것인지(`launch.sh` 이후 갱신) 판단, restart의 `handoff_required`, 인계 문서 경로 검증. | `lifecycle`·`suspend`를 import하지 않습니다. `launch_artifacts.run_directory`를 씁니다. |
 | `suspend` | `SuspendStore`(shutdown 기록), `SuspendMixin`(한 대상의 shutdown·resume 단계), `Fleet`(운영자 명령). | `lifecycle`을 import하지 않습니다. `SuspendMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
 
 ### `sys.path` 조작 위치

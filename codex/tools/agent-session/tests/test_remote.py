@@ -434,7 +434,7 @@ def test_remote_handoff_uses_native_freshness_before_updating_the_central_copy(t
 
 
 def test_native_controller_includes_the_transferred_handoff_in_the_new_run_prompt(tmp_path, monkeypatch):
-    from agent_session.lifecycle import Manager
+    from agent_session import launch_artifacts
 
     directory = tmp_path / "new-run"
     directory.mkdir()
@@ -455,7 +455,7 @@ def test_native_controller_includes_the_transferred_handoff_in_the_new_run_promp
 
     def launch(current, request):
         captured["handoff_file"] = current["handoff_file"]
-        captured["prompt"] = Manager._write_prompt(manager, current, request)
+        captured["prompt"] = launch_artifacts.prompt_text(manager.project, current, request)
 
     manager._launch = launch
     monkeypatch.setattr(remote_runtime, "_manager", lambda path: (manager, {"seat": "/remote/seat"}))

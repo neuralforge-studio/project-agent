@@ -14,6 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 from agent_session_fixture import command_timeout, git, session_env, stop_test_server
+from agent_session import launch_artifacts, windows as windows_module
 from agent_session.errors import SessionError
 from agent_session.state import locked
 
@@ -716,7 +717,7 @@ def test_leader_prelaunch_retry_preserves_the_request(session_env, monkeypatch):
     request = env.root / "REQUEST.md"
     task = "Refactor the server only after checking the approved server requirements."
     request.write_text(task)
-    fail_once(monkeypatch, lifecycle.Manager, "_session_input")
+    fail_once(monkeypatch, launch_artifacts, "session_input")
     with pytest.raises(SessionError) as error:
         env.manager().start("leader", prompt_file=str(request))
     assert error.value.code == "fixture_failure"
@@ -1118,7 +1119,7 @@ def test_start_does_not_handle_the_run_of_another_base(session_env, tmp_path, mo
             with pytest.raises(SessionError):
                 env.manager().start(cr)
         elif scenario == "waiting-leader":
-            fail_once(monkeypatch, lifecycle.Manager, "_session_input")
+            fail_once(monkeypatch, launch_artifacts, "session_input")
             with pytest.raises(SessionError):
                 env.manager().start("leader")
         else:
@@ -1591,12 +1592,12 @@ def test_cleanup_budget_leaves_the_rest_for_a_later_sweep(session_env, monkeypat
     without_reuse(monkeypatch)
     cr = env.cr()
     first = env.manager().start(cr)
-    monkeypatch.setattr(lifecycle, "SWEEP_SECONDS", 0)
+    monkeypatch.setattr(windows_module, "SWEEP_SECONDS", 0)
     env.handoff("seat-0", "Continue the fixture change.")
     restarted = env.manager().control("restart", job=cr)
     assert restarted["cleanup"] == {"closed": [], "kept": [{"window_id": first["window_id"],
                                                             "reason": "cleanup_budget"}]}
-    monkeypatch.setattr(lifecycle, "SWEEP_SECONDS", 30)
+    monkeypatch.setattr(windows_module, "SWEEP_SECONDS", 30)
     assert env.manager().control("stop", job=cr)["cleanup"] == {"closed": [first["window_id"]], "kept": []}
     assert windows(env) == [restarted["window_id"]]
 
