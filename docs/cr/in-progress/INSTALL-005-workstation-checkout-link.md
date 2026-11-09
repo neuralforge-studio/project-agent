@@ -22,6 +22,7 @@
 - 2026-11-09 Leader: agent DIST-001 6단계에 전달할 사항(RELEASE-001 review에서 확인): 옛 통합 파일(agent `tmux/scripts/project_board.conf`)은 hook을 `[board]` 이름으로 넣고, 새 통합 파일은 `[project-agent]` 이름으로 넣습니다. 새 파일을 읽어도 server에 남은 `[board]` hook은 지워지지 않아 Board sync가 두 번 돕니다. 옛 binding은 명령에 `tmux_project_board.sh`가 있어 새 파일이 제품 것으로 보고 바꿉니다(TMUX-001). 이 CR의 Result 보고 때 Leader가 6단계 절차(`set-hook -gu '<event>[board]'`, window scope는 `-gwu`)로 agent Leader에게 함께 알립니다.
 - 2026-11-09 Leader: 선행 INSTALL-001이 ecc5bce로 통합되었습니다. 설치기 구조를 따르십시오: 경로는 `paths.Places`의 닫힌 식별자에서만 계산(원칙 A), 되돌림·제거는 설치기가 만든 상태일 때만(원칙 B), 사용자 tmux 파일은 원자적 교체(원칙 C), journal format 2(계약 2절 규칙 5). INSTALL-004와 INSTALL-005는 병렬로 진행하므로 같은 설치기 파일을 고칠 수 있습니다. 제출 전에 `origin/main`을 merge하십시오.
 - 2026-11-09 Leader: 제출 f4253c5 수정 요청(한 항목). 넘겨받기 조건·기록(`adopted_from`)·uninstall의 원자적 되돌림·T24~T28과 수정 전 23/24 실패를 확인했습니다. 결함: 정방향 교체 `swap_link`(`actions.py:487-490`)가 계획 때 읽은 link 글자를 undo에만 적고, 실행 때 지금 글자가 그것과 같은지 확인하지 않고 바꿉니다. 계획과 실행 사이(release 만들기)에 사용자가 link를 바꾸면 그 link를 덮어쓰고 옛 글자를 기록합니다(원칙 B). CHANGELOG 항목은 Leader가 통합 때 씁니다(버전 규칙 5절). Result의 6단계 참고 사항(`~/.codex/skills/project-*`가 실제 디렉터리)은 통합 뒤 Leader가 agent Leader에게 알립니다.
+- 2026-11-09 Leader: 제출 b5f74a11b10e184ec1cf0c0cca60913743e2e432를 인수합니다. Leader review: 수정 delta(swap_link가 실행 직전에 link 글자·소유자를 계획 때와 대조하고 다르면 Changed로 실패해 되돌림, CHANGELOG 변경 제거)를 확인했습니다. T29 수정 전 실패, install/tests 221 passed·2 skipped. 이전 검토(f4253c5의 넘겨받기 조건·adopted_from·uninstall 원자적 되돌림·T24~T28)를 재사용합니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 2절 규칙 1·5·6, 7절, 8절 T11·T12, INSTALL-001의 설치기 코드.
@@ -48,7 +49,7 @@
 
 ## Result
 
-- 제출 commit: f4253c5c81e4d9026e1f9b847e35c1214f3268d2
+- 제출 commit: b5f74a11b10e184ec1cf0c0cca60913743e2e432
 
 ### 구현
 - `install --adopt-dev-links CHECKOUT`(install에만). 옵션이 없으면 규칙 1대로 전체 거절(T24).
@@ -56,7 +57,8 @@
 - 교체는 기존 `swap_link`(임시 link 후 rename)이며 undo 스펙이 이전 글자를 갖습니다. 설치 기록 항목에 `adopted_from`.
 - `uninstall` 규칙(계약 2절 규칙 8): 넘겨받은 진입점은 지우지 않고 `adopted_from`으로 원자적으로 되돌립니다. 설치기가 만든 link일 때만(사용자가 바꿨다면 알리고 둠). 되돌림은 release·`current` 삭제보다 먼저 해서 제거 도중 진입점이 끊어지지 않습니다. 규칙 6의 runtime link는 종전대로 지웁니다. 되돌림 step은 journal의 `swap` redo 스펙이라 중단돼도 다음 `uninstall`이 마칩니다(journal format 2 그대로).
 - 부모가 symlink인 skill 경로(규칙 4): 상대 글자는 link가 실제로 놓인 디렉터리 기준으로 풉니다. 이 workstation의 `~/.claude/skills`는 개발 checkout의 `claude/skills`라 그 안의 link 파일이 바뀝니다(출력에 실제 위치 표시).
-- 계약: 2절 규칙 1 예외·규칙 8, 7절 옵션·install·uninstall 행, 8절 T24~T28 추가. README test 범위 T1~T28, CHANGELOG에 INSTALL-005.
+- Leader 피드백 1차 반영(f4253c5 검토): `actions.swap_link`가 실행 때 link의 글자와 소유자가 계획 때와 같은지 확인하고, 다르면 `Changed`로 실패해 되돌립니다(`_op_swap`과 같은 판정, 사용자가 바꾼 link는 덮어쓰지 않음). 모든 `swap_link` 사용(현재 release 교체, runtime link 넘겨받기 포함)에 적용됩니다. 계획 뒤 link를 바꾸는 T29(shim·Claude skill·Codex skill)를 수정 전 실패(종료 코드 0, 사용자 link 덮어씀)로 먼저 두었고 수정 뒤 통과합니다. CHANGELOG 변경은 뺐습니다(Leader가 통합 때 씀).
+- 계약: 2절 규칙 1 예외·규칙 8, 7절 옵션·install·uninstall 행, 8절 T24~T28 추가. README test 범위 T1~T28.
 
 ### 검증 (제출 commit 기준, 격리 HOME에서만 실행)
 | Verification | 결과 |
@@ -76,3 +78,7 @@
 - `~/.claude/skills`는 `agent.base/claude/skills`로 가는 symlink이고 안의 link는 상대 글자(`../../codex/skills/<이름>`)입니다. 옵션을 쓰면 그 checkout 안의 link 파일이 바뀝니다(git 상태 영향 가능).
 - 되돌리기(6단계 5항): `uninstall`이 진입점을 이전 대상으로 되돌리지만 설치 전체를 제거합니다. link만 따로 되돌리는 명령은 없습니다.
 - 이 CR은 이 workstation에서 실제로 실행하지 않았습니다(범위 밖).
+
+### 수정 제출 검증 (b5f74a1)
+- `install/tests`(제출 commit에서 한 번): 221 passed, 2 skipped. 새 `test_adopt.py` 27건은 단독으로 두 번 더 반복해 모두 통과했습니다.
+- 다른 suite(agent-session·project-item·project-board·tmux 등)는 이전 제출의 결과를 재사용합니다. 이 수정은 `install/`과 문서만 바꿉니다.
