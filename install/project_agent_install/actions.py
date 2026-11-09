@@ -490,6 +490,15 @@ def swap_link(places, ident, target, detail=""):
                 undo={"op": "swap", "id": ident, "previous": os.readlink(path), "new": str(target)})
 
 
+def restore_link(places, ident, installed, previous):
+    """Uninstall: point a link the installer took over back at the target it had (one rename, never missing).
+    Only a link that still points where the installer put it is changed (the swap operation)."""
+    path = places.link(ident)
+    spec = {"op": "swap", "id": ident, "previous": previous, "new": installed}
+    return Step("replace", path, "symlink", "-> %s (restore the link as it was before the install)" % previous,
+                lambda ctx: apply_spec(ctx, spec), redo=spec)
+
+
 def replace_record(places, data):
     path = places.file("record")
     state, fingerprint = inspect(path)
