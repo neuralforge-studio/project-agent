@@ -1,5 +1,5 @@
 """INSTALL-004: `upgrade` and `rollback` refuse a release whose format versions differ from a run that is up,
-and `prune` removes the releases nothing uses (install-contract.md 7.1, 7.1.1 and 8.2 T24-T27).
+and `prune` removes the releases nothing uses (install-contract.md 7.1, 7.1.1 and 8.2 T29-T32).
 
 The runs are real `agent-session` runs of the installed release on a private tmux server (harness.Runs); the
 expectations are written from the contract, not read from the install record.
@@ -45,10 +45,10 @@ def upgrade(home, source, runs):
     return home.run("upgrade", source=source, env=socket_env(runs))
 
 
-# ---------------------------------------------------------------- T24: upgrade refuses another format
+# ---------------------------------------------------------------- T29: upgrade refuses another format
 
 @pytest.mark.mutates
-def test_t24_upgrade_to_another_format_is_refused_while_a_run_is_up(home, source, runs):
+def test_t29_upgrade_to_another_format_is_refused_while_a_run_is_up(home, source, runs):
     install(home, source)
     runs.start_leader()
     release(source, "2.0.0", agent_session=2)
@@ -62,7 +62,7 @@ def test_t24_upgrade_to_another_format_is_refused_while_a_run_is_up(home, source
 
 
 @pytest.mark.mutates
-def test_t24_an_unknown_run_counts_as_up(home, source, runs):
+def test_t29_an_unknown_run_counts_as_up(home, source, runs):
     install(home, source)
     runs.start_leader()
     runs.kill_server()                                # no run in tmux any more: the state still names one
@@ -75,7 +75,7 @@ def test_t24_an_unknown_run_counts_as_up(home, source, runs):
 
 
 @pytest.mark.mutates
-def test_t24_another_format_goes_through_without_a_run_that_is_up(home, source, runs):
+def test_t29_another_format_goes_through_without_a_run_that_is_up(home, source, runs):
     install(home, source)
     runs.start_leader()
     runs.stop_leader()
@@ -88,7 +88,7 @@ def test_t24_another_format_goes_through_without_a_run_that_is_up(home, source, 
 
 
 @pytest.mark.mutates
-def test_t24_the_same_formats_go_through_while_a_run_is_up(home, source, runs):
+def test_t29_the_same_formats_go_through_while_a_run_is_up(home, source, runs):
     install(home, source)
     runs.start_leader()
     second = release(source, "1.1.0")
@@ -98,7 +98,7 @@ def test_t24_the_same_formats_go_through_while_a_run_is_up(home, source, runs):
 
 
 @pytest.mark.mutates
-def test_t24_a_target_without_a_format_declaration_cannot_be_judged(home, source, runs):
+def test_t29_a_target_without_a_format_declaration_cannot_be_judged(home, source, runs):
     install(home, source)
     runs.start_leader()
     (source / "tools/formats.json").unlink()
@@ -109,10 +109,10 @@ def test_t24_a_target_without_a_format_declaration_cannot_be_judged(home, source
     assert home.snapshot() == before
 
 
-# ---------------------------------------------------------------- T24: rollback refuses another format
+# ---------------------------------------------------------------- T29b: rollback refuses another format
 
 @pytest.mark.mutates
-def test_t24_rollback_to_another_format_is_refused_while_a_run_is_up(home, source, runs):
+def test_t29_rollback_to_another_format_is_refused_while_a_run_is_up(home, source, runs):
     install(home, source)
     first = release_name(source)
     release(source, "2.0.0", agent_session=2)
@@ -129,7 +129,7 @@ def test_t24_rollback_to_another_format_is_refused_while_a_run_is_up(home, sourc
 
 
 @pytest.mark.mutates
-def test_t24_rollback_to_the_same_formats_goes_through_while_a_run_is_up(home, source, runs):
+def test_t29_rollback_to_the_same_formats_goes_through_while_a_run_is_up(home, source, runs):
     install(home, source)
     first = release_name(source)
     release(source, "1.1.0")
@@ -140,10 +140,10 @@ def test_t24_rollback_to_the_same_formats_goes_through_while_a_run_is_up(home, s
     assert record(home)["current"] == first
 
 
-# ---------------------------------------------------------------- T25: a run that is not from a release
+# ---------------------------------------------------------------- T30: a run that is not from a release
 
 @pytest.mark.mutates
-def test_t25_the_frozen_copy_is_format_1_and_does_not_block_the_first_release(home, source, runs):
+def test_t30_the_frozen_copy_is_format_1_and_does_not_block_the_first_release(home, source, runs):
     runs.start_leader_from(REPO)                      # a checkout of the product, not a release
     install(home, source)                             # `install` and the next `upgrade` go through ...
     second = release(source, "1.1.0")
@@ -153,7 +153,7 @@ def test_t25_the_frozen_copy_is_format_1_and_does_not_block_the_first_release(ho
 
 
 @pytest.mark.mutates
-def test_t25_the_frozen_copy_is_refused_for_a_release_of_another_format(home, source, runs):
+def test_t30_the_frozen_copy_is_refused_for_a_release_of_another_format(home, source, runs):
     runs.start_leader_from(REPO)
     install(home, source)
     release(source, "2.0.0", agent_session=2)
@@ -164,7 +164,7 @@ def test_t25_the_frozen_copy_is_refused_for_a_release_of_another_format(home, so
     assert home.snapshot() == before
 
 
-# ---------------------------------------------------------------- T26: prune
+# ---------------------------------------------------------------- T31: prune
 
 def three_releases(home, source, runs=None):
     """Install A, upgrade to B and C: current C, previous B, A is unused."""
@@ -183,7 +183,7 @@ def prune(home, runs, *args):
 
 
 @pytest.mark.mutates
-def test_t26_prune_removes_what_is_not_current_previous_or_in_use(home, source, runs):
+def test_t31_prune_removes_what_is_not_current_previous_or_in_use(home, source, runs):
     first, second, third = three_releases(home, source, runs)
     assert record(home)["current"] == third and record(home)["previous"] == second
     before = home.snapshot()
@@ -205,7 +205,7 @@ def test_t26_prune_removes_what_is_not_current_previous_or_in_use(home, source, 
 
 
 @pytest.mark.mutates
-def test_t26_prune_keeps_the_release_of_a_run_that_is_up_and_removes_it_once_it_ended(home, source, runs):
+def test_t31_prune_keeps_the_release_of_a_run_that_is_up_and_removes_it_once_it_ended(home, source, runs):
     install(home, source)
     first = release_name(source)
     runs.start_leader()                               # on A
@@ -222,7 +222,7 @@ def test_t26_prune_keeps_the_release_of_a_run_that_is_up_and_removes_it_once_it_
 
 
 @pytest.mark.mutates
-def test_t26_prune_keeps_what_an_unknown_run_may_use(home, source, runs):
+def test_t31_prune_keeps_what_an_unknown_run_may_use(home, source, runs):
     install(home, source)
     first = release_name(source)
     runs.start_leader()
@@ -237,7 +237,7 @@ def test_t26_prune_keeps_what_an_unknown_run_may_use(home, source, runs):
 
 
 @pytest.mark.mutates
-def test_t26_prune_keeps_a_release_that_is_not_as_the_installer_made_it(home, source, runs):
+def test_t31_prune_keeps_a_release_that_is_not_as_the_installer_made_it(home, source, runs):
     first, _, _ = three_releases(home, source, runs)
     home.path(tree(first)).chmod(0o755)
     home.write(tree(first) + "/mine.txt", b"my file\n")
@@ -248,7 +248,7 @@ def test_t26_prune_keeps_a_release_that_is_not_as_the_installer_made_it(home, so
 
 
 @pytest.mark.mutates
-def test_t26_prune_keeps_the_previous_release_after_a_rollback(home, source, runs):
+def test_t31_prune_keeps_the_previous_release_after_a_rollback(home, source, runs):
     first, second, third = three_releases(home, source, runs)
     assert home.run("rollback", env=socket_env(runs)).returncode == 0          # current B, previous C
     result = prune(home, runs)
@@ -258,7 +258,7 @@ def test_t26_prune_keeps_the_previous_release_after_a_rollback(home, source, run
 
 
 @pytest.mark.mutates
-def test_t26_prune_says_when_project_board_is_on(home, source, runs):
+def test_t31_prune_says_when_project_board_is_on(home, source, runs):
     three_releases(home, source, runs)
     runs.tmux("set-option", "-g", "@project_board_enabled", "1")
     result = prune(home, runs, "--dry-run")
@@ -267,16 +267,16 @@ def test_t26_prune_says_when_project_board_is_on(home, source, runs):
     assert "Project Board is on" not in prune(home, runs, "--dry-run").stdout
 
 
-def test_t26_prune_needs_an_installation(home, runs):
+def test_t31_prune_needs_an_installation(home, runs):
     result = prune(home, runs)
     assert result.returncode == 3 and "not_installed" in result.stderr
 
 
-# ---------------------------------------------------------------- T27: a prune cut off
+# ---------------------------------------------------------------- T32: a prune cut off
 
 @pytest.mark.mutates
 @pytest.mark.parametrize("point", [("before", 0), ("after", 0)], ids=lambda point: "%s-%d" % point)
-def test_t27_a_cut_off_prune_is_finished_by_the_next_prune(home, source, runs, point):
+def test_t32_a_cut_off_prune_is_finished_by_the_next_prune(home, source, runs, point):
     first, second, third = three_releases(home, source, runs)
     position, index = point
     killed = home.run("prune", env={**socket_env(runs), **stop_at(home, position, index)})

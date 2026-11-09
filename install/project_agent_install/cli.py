@@ -6,6 +6,7 @@ Exit codes: 0 done (or nothing to do), 1 `check` found a failure, 2 unknown or m
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -35,6 +36,9 @@ def build_parser():
         if name in ("install", "upgrade"):
             command.add_argument("--source", metavar="PATH", help="Git checkout to release (default: the checkout "
                                  "that holds this installer)")
+        if name == "install":
+            command.add_argument("--adopt-dev-links", metavar="CHECKOUT", help="take over the links of the old "
+                                 "development checkout CHECKOUT (shims and skills; see contract section 2, rule 8)")
     return parser
 
 
@@ -125,8 +129,12 @@ def main(argv=None):
         if arguments.command in ("install", "upgrade"):
             source = releases.load_source(arguments.source or root)
             python = releases.installer_python()
-            plan = (commands.plan_install(env, source, python) if arguments.command == "install"
-                    else commands.plan_upgrade(env, source, python, root))
+            if arguments.command == "install":
+                adopt = arguments.adopt_dev_links
+                plan = commands.plan_install(env, source, python,
+                                             os.path.abspath(os.path.expanduser(adopt)) if adopt else None)
+            else:
+                plan = commands.plan_upgrade(env, source, python, root)
         elif arguments.command == "rollback":
             plan = commands.plan_rollback(env, root)
         elif arguments.command == "prune":

@@ -504,9 +504,31 @@ def new_link(places, ident, target):
 
 
 def swap_link(places, ident, target, detail=""):
+    """Point a link the installer owns or takes over at `target`. The link must still be what the plan read (its
+    text and owner): one that changed since is the user's and is not overwritten (principle B); the run then fails
+    and is undone."""
     path = places.link(ident)
-    return Step("replace", path, "symlink", detail or "-> " + str(target), lambda ctx: swap_path(path, target),
-                undo={"op": "swap", "id": ident, "previous": os.readlink(path), "new": str(target)})
+    previous, owner = os.readlink(path), os.lstat(path).st_uid
+
+    def run(ctx):
+        try:
+            same = os.readlink(path) == previous and os.lstat(path).st_uid == owner
+        except OSError:
+            same = False
+        if not same:
+            raise Changed(errno.EBUSY, "%s changed after the plan; it was not replaced" % path)
+        swap_path(path, target)
+    return Step("replace", path, "symlink", detail or "-> " + str(target), run,
+                undo={"op": "swap", "id": ident, "previous": previous, "new": str(target)})
+
+
+def restore_link(places, ident, installed, previous):
+    """Uninstall: point a link the installer took over back at the target it had (one rename, never missing).
+    Only a link that still points where the installer put it is changed (the swap operation)."""
+    path = places.link(ident)
+    spec = {"op": "swap", "id": ident, "previous": previous, "new": installed}
+    return Step("replace", path, "symlink", "-> %s (restore the link as it was before the install)" % previous,
+                lambda ctx: apply_spec(ctx, spec), redo=spec)
 
 
 def replace_record(places, data):

@@ -43,6 +43,7 @@
    - 같은 대상을 가리키지만 설치 기록에 없는 link도 소유가 아니므로 거절합니다.
    - 거절은 충돌 경로를 한 번에 모두 출력합니다.
    - 예외: 원격 runtime이 만든 skill link는 충돌이 아닙니다. 아래 규칙 6이 정합니다.
+   - 예외: `install --adopt-dev-links`를 준 경우, 옛 개발 checkout을 가리키는 사용자 자신의 link는 충돌이 아닙니다. 아래 규칙 8이 정합니다.
 2. 부모 디렉터리가 없으면 설치가 만들고 설치 기록에 `created_dirs`로 남깁니다. 제거는 그 디렉터리가 비어 있을 때만 지웁니다.
 3. provider 홈이 없으면 그 provider의 skill link를 만들지 않고 안내만 출력합니다. 설치가 쓰지 않는 provider의 홈을 만들지 않기 위해서입니다. provider 홈의 경로는 아래 규칙 7이 정합니다.
 4. 부모 디렉터리가 symlink이면 link를 따라가서 만듭니다. link는 가리키는 디렉터리 안에 놓입니다. 설치 기록과 출력에는 `~` 기준 경로를 적고, 실제 위치를 함께 출력합니다. 이 workstation의 `~/.claude/skills`가 그 경우입니다(DIST-001 6단계가 `.gitignore`로 다룹니다).
@@ -68,6 +69,15 @@
    - Codex: `CODEX_HOME`이 설정돼 있으면 그 디렉터리, 없으면 `~/.codex`. skill link는 그 아래 `skills/`에 만듭니다.
    - 설치는 쓴 실제 경로를 설치 기록에 남깁니다. `uninstall`과 `check`는 기록한 경로를 씁니다. 설치 뒤 환경 변수가 바뀌어도 기록한 경로를 씁니다.
    - 위 2절 표의 `~/.claude/skills/…`, `~/.codex/skills/…`는 변수가 없을 때의 기본 경로입니다.
+8. **옛 개발 checkout을 가리키는 진입점 link를 명시 옵션으로 넘겨받습니다.** 이 workstation은 shim 셋과 skill link가 agent 저장소의 개발 checkout을 가리킵니다(DIST-001 6단계 전환). 옵션 `install --adopt-dev-links CHECKOUT`을 줄 때만 규칙 1의 거절 대신 아래를 합니다. `CHECKOUT`은 옛 checkout의 root이며 사용자가 정합니다. 옵션이 없으면 규칙 1대로 전체를 거절합니다.
+   - 넘겨받는 조건은 모두 맞아야 합니다. 하나라도 다르면 그 경로는 충돌이고 전체를 거절합니다(규칙 1).
+     - 그 경로가 symlink이고 소유자가 현재 사용자입니다.
+     - link의 글자(`readlink`)가 알려진 모양으로 끝납니다. 세 CLI는 `<checkout>/codex/tools/<도구>/bin/<도구>`, 두 skill은 `<checkout>/codex/skills/<이름>`입니다. 상대 경로 글자(`../../codex/skills/<이름>`)도 같은 모양입니다.
+     - link가 가리키는 곳이 `CHECKOUT`의 그 알려진 경로와 같은 파일입니다(상대 글자는 link가 실제로 놓인 디렉터리 기준으로 풉니다). 그래서 서로 다른 checkout을 가리키는 link, 모양이 다른 link, 다른 사용자 소유 link는 거절됩니다.
+   - 교체는 임시 link를 만든 뒤 rename하는 한 번의 원자적 교체입니다. 관찰자가 진입점이 없거나 끊어진 것을 보지 못합니다. 설치 기록의 그 항목에 이전 글자를 `adopted_from`으로 적습니다(읽을 때 같은 알려진 모양으로 끝나지 않으면 기록 전체를 거절합니다. 원칙 A).
+   - 부모 디렉터리가 symlink이면(규칙 4) link는 가리키는 디렉터리 안에서 바뀝니다. 이 workstation의 `~/.claude/skills`는 개발 checkout의 `claude/skills`이므로, 그 안의 link 파일이 바뀝니다. 출력은 실제 위치를 함께 알립니다.
+   - `uninstall`은 넘겨받은 진입점을 지우지 않고 `adopted_from`의 글자로 원자적으로 되돌립니다. 지금도 설치기가 만든 link(대상이 기록과 같음)일 때만 되돌리고, 사용자가 바꿨다면 건드리지 않고 알립니다(T12). 되돌림은 release와 `current`를 지우기 전에 합니다. 그래서 제거 도중에도 진입점이 끊어지지 않습니다. 설치 전 상태와 byte 단위로 같아집니다. 규칙 6의 runtime link는 되돌리지 않고 지웁니다(runtime이 다시 만듭니다).
+   - `upgrade`·`rollback`은 이 link를 바꾸지 않습니다(7절). 이 옵션은 `install`에만 있습니다. 이 옵션을 쓰는 실행은 격리 HOME의 test(T24~T28)로 검증하며, 이 workstation에서 실제로 실행하는 일은 agent DIST-001 6단계가 합니다.
 
 ## 3. 설치가 고치는 기존 파일은 하나뿐입니다
 
@@ -248,7 +258,7 @@ set-option -ag status-right '#{E:@project_agent_decide_status}'
 
 ## 7. 명령의 동작
 
-설치기는 `install/project-agent-install <명령>`입니다(개발 checkout과 `current/install/` 양쪽). 표준 library만 씁니다. `install`·`upgrade`는 release로 만들 Git checkout을 `--source PATH`로 받고(기본: 설치기가 있는 checkout), 모든 명령은 `--json`으로 결과를 JSON 하나로 출력합니다. 종료 코드는 0 완료(할 일이 없는 경우 포함), 1 `check` 실패, 2 옵션 오류, 3 아무것도 바꾸기 전의 거절(충돌, 떠 있는 run, 없는 VERSION, 어긋난 설치 기록 등), 4 바꾸는 중 실패·중단입니다(`install`·`upgrade`·`rollback`은 되돌린 뒤, `uninstall`은 되돌리지 않고 다음 `uninstall`을 기다립니다. 규칙 5).
+설치기는 `install/project-agent-install <명령>`입니다(개발 checkout과 `current/install/` 양쪽). 표준 library만 씁니다. `install`·`upgrade`는 release로 만들 Git checkout을 `--source PATH`로 받고(기본: 설치기가 있는 checkout), `install`은 `--adopt-dev-links CHECKOUT`도 받으며(2절 규칙 8), 모든 명령은 `--json`으로 결과를 JSON 하나로 출력합니다. 종료 코드는 0 완료(할 일이 없는 경우 포함), 1 `check` 실패, 2 옵션 오류, 3 아무것도 바꾸기 전의 거절(충돌, 떠 있는 run, 없는 VERSION, 어긋난 설치 기록 등), 4 바꾸는 중 실패·중단입니다(`install`·`upgrade`·`rollback`은 되돌린 뒤, `uninstall`은 되돌리지 않고 다음 `uninstall`을 기다립니다. 규칙 5).
 
 release 이름 `<version>-<hash>`: `<version>`은 원본 root의 `VERSION` 첫 줄(공백 제거, `[0-9A-Za-z][0-9A-Za-z._+~-]*`)이고 파일이 없거나 형식이 틀리면 거절합니다. `<hash>`는 원본 HEAD commit의 앞 12자입니다. release에 들어가는 파일이 commit과 다르면(수정됐거나 추적되지 않은 파일이 있으면) 거절합니다. 내용 해시로 이름을 짓지 않습니다. release에 넣지 않는 경로(test, `__pycache__`, `docs/cr`)의 변경은 거절 사유가 아닙니다. 같은 이름의 release가 이미 있으면 다시 만들지 않고 씁니다.
 
@@ -256,11 +266,11 @@ release 이름 `<version>-<hash>`: `<version>`은 원본 root의 `VERSION` 첫 �
 
 | 명령 | 만들거나 바꾸는 것 | 바꾸지 않는 것 |
 | --- | --- | --- |
-| `install` | 2절의 모든 경로, 3절의 tmux 블록, 설치 기록. 이미 설치되어 있고 같은 release면 아무것도 바꾸지 않습니다. | 4절 |
+| `install` | 2절의 모든 경로, 3절의 tmux 블록, 설치 기록. `--adopt-dev-links`가 있으면 옛 개발 checkout의 link를 새로 만들지 않고 교체합니다. 이미 설치되어 있고 같은 release면 아무것도 바꾸지 않습니다. | 4절 |
 | `upgrade` | 새 `releases/<version>-<hash>/`, `current` 교체, 설치 기록의 `previous`·`current` | shim, skill link, `tmux.conf`, tmux 블록, 등록 파일, 이전 release |
 | `rollback` | `current`를 설치 기록의 `previous` release로 원자적으로 교체. 교체 전의 release를 새 `previous`로 적습니다 | 위와 같음. release를 지우지 않습니다. |
-| `prune` | `current`·`previous`·떠 있는 run이 쓰는 release가 아닌 release 디렉터리와 그 설치 기록 항목(7.1절 3항) | `current`, 그 밖의 모든 경로 |
-| `uninstall` | 설치 기록에 있는 소유만 지웁니다(release 전체, `current`, `tmux.conf`, 설치 기록, `backup/`, shim, skill link). tmux 블록은 3절대로 지웁니다. 설치기가 만든 빈 디렉터리를 지웁니다. | 등록 파일, `<base>/agent/`, `~/.cache`의 잠금·cache, 5.1의 신뢰 기록. 지우지 않은 것은 경로를 출력합니다. |
+| `prune` | `current`·`previous`·떠 있는 run이 쓰는 release가 아닌 release 디렉터리와 그 설치 기록 항목(7.1.2절) | `current`, 그 밖의 모든 경로 |
+| `uninstall` | 설치 기록에 있는 소유만 지웁니다(release 전체, `current`, `tmux.conf`, 설치 기록, `backup/`, shim, skill link). tmux 블록은 3절대로 지웁니다. 넘겨받은 개발 checkout link는 지우지 않고 이전 대상으로 되돌립니다(2절 규칙 8). 설치기가 만든 빈 디렉터리를 지웁니다. | 등록 파일, `<base>/agent/`, `~/.cache`의 잠금·cache, 5.1의 신뢰 기록. 지우지 않은 것은 경로를 출력합니다. |
 | `check` | 읽기만 합니다. | 모든 것 |
 
 `check`는 다음을 확인하고 실패하면 0이 아닌 코드로 끝납니다.
@@ -364,13 +374,18 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 | T21 | 격리 tmux server. 읽기 전에 `@project_agent_board_key`를 `X`로 설정 | 설치 뒤 `tmux.conf`를 읽음 | 파일 변경은 T1과 같음 | `prefix X`가 Board toggle이고 `prefix B`는 binding되지 않음 |
 | T22 | `~/.codex/skills/project-team`이 runtime이 만든 link(`skills.json`에 대상이 일치하게 기록됨). 같은 이름이지만 `skills.json`에 없는 link도 따로 준비 | `install` | 앞의 경우: 2절의 경로, 그 link의 대상 교체, 설치 기록. 뒤의 경우: 없음(거절) | `skills.json`의 내용과 `mtime_ns`가 같음. 설치 기록에 넘겨받음이 적힘 |
 | T23 | `CLAUDE_CONFIG_DIR`·`CODEX_HOME`을 격리 HOME 안의 다른 디렉터리로 설정 | `install`, 그 뒤 두 변수를 지우고 `uninstall` | skill link는 변수가 가리키는 디렉터리의 `skills/`에만 생김. 기본 경로(`~/.claude`, `~/.codex`)에는 아무것도 없음 | 설치 기록에 실제 경로가 있음. `uninstall`이 기록한 경로의 link를 지움 |
-| T24 | 설치된 상태. 떠 있는 run(`alive` 또는 tmux에 run이 없는 `unknown`)이 release에서 시작됨. 형식 값 하나(`agent_session`, `tmux_options`, `item_files` 각각)가 다른 release를 준비 | `upgrade`(`--dry-run` 포함) | 없음 | snapshot 전체가 같음. 종료 코드 3(`formats_differ`). 출력에 project·slot·상태·다른 값·restart 안내가 있음. 떠 있는 run이 없거나 형식이 같으면 T6과 같이 진행함. 대상에 `tools/formats.json`이 없으면 `formats_unreadable`로 거절함 |
-| T24b | 형식 값이 다른 release로 갱신하고, 그 release에서 run이 시작됨 | `rollback` | 없음 | 위와 같이 거절함. run을 끝낸 뒤에는 T8과 같이 진행함. 형식이 같으면 run이 떠 있어도 진행함 |
-| T25 | release가 아닌 경로(이 저장소의 checkout, 동결 사본 대용)에서 시작한 run이 떠 있음 | 첫 release의 `install`, 형식이 같은 release로 `upgrade`, 형식이 다른 release로 `upgrade` | 앞의 둘은 T1·T6과 같음. 셋째는 없음 | 셋째만 거절하고 출력에 "a copy that is not a release"와 다른 값이 있음 |
-| T26 | 설치·갱신을 두 번 한 상태(release 셋). 떠 있는 run이 첫 release에서 시작됨 / 없음 / `unknown` / 첫 release 디렉터리에 사용자의 파일 | `prune`(`--dry-run` 포함) | run이 떠 있거나 `unknown`이거나 사용자의 파일이 있으면 없음(이유를 알림). 아니면 첫 release의 삭제와 설치 기록 | `current`·`previous`는 남음(`rollback` 뒤에는 새 `previous`도 남음). dry-run 목록과 실제 삭제 목록이 같음. `check`가 통과함. Board가 켜져 있으면 알림 |
-| T27 | 위의 `prune`을 SIGKILL로 끊음(첫 step의 앞·뒤) | `check`, `upgrade`, `prune --dry-run`, `prune` | `prune`이 마침 | `check`는 실패, `upgrade`는 `prune_interrupted`, `--dry-run`은 거절. 마친 뒤 journal·임시 디렉터리가 없음 |
+| T24 | 이 workstation의 모양: 세 shim과 Codex skill link 둘은 옛 개발 checkout을 가리키는 절대 link, `~/.claude/skills`는 그 checkout의 `claude/skills`로 가는 symlink이고 안의 skill link 둘은 상대 link | 옵션 없이 `install` | 없음 | snapshot 전체(HOME과 checkout)가 같음. 출력이 일곱 경로를 모두 나열함. 종료 코드 3 |
+| T25 | T24의 상태 | `install --adopt-dev-links <checkout>`, 이어서 `uninstall` | 2절의 경로(넘겨받은 일곱 link는 새로 만들지 않고 교체). Claude link는 checkout 안의 파일이 바뀜 | 설치 기록의 `adopted_from`이 이전 글자(상대 글자 포함)와 byte 단위로 같음. `check` 통과. `uninstall` 뒤 snapshot이 설치 전과 같음. 사용자가 그 사이에 바꾼 link는 `uninstall`이 건드리지 않음. 알려진 모양이 아닌 `adopted_from`이 든 기록은 거절됨. `--dry-run`의 목록이 실제 실행과 같음 |
+| T26 | T24의 상태에서 하나만 어긋나게 함: 모양이 다른 대상, 다른 checkout을 가리킴, 파일·디렉터리가 있음, 다른 사용자 소유, 옵션이 가리키는 checkout이 다름 | `install --adopt-dev-links <checkout>` | 없음 | snapshot 전체가 같음(나머지 link도 교체되지 않음). 어긋난 경로를 모두 나열함. 종료 코드 3 |
+| T27 | T24의 상태. 부모 `~/.claude/skills`가 symlink | T25와 같음 | T25와 같음 | `~/.claude/skills`가 그대로 symlink이고 checkout의 다른 skill은 같음. 되돌린 뒤 상대 글자가 그대로임 |
+| T28 | T24의 상태 | `install --adopt-dev-links`와 `uninstall` 동안 일곱 진입점을 계속 `stat`하는 관찰자 | T25와 같음 | 관찰자가 없거나 끊어진 진입점을 한 번도 보지 못함(되돌림이 release 삭제보다 먼저임) |
+| T29 | 설치된 상태. 떠 있는 run(`alive` 또는 tmux에 run이 없는 `unknown`)이 release에서 시작됨. 형식 값 하나(`agent_session`, `tmux_options`, `item_files` 각각)가 다른 release를 준비 | `upgrade`(`--dry-run` 포함) | 없음 | snapshot 전체가 같음. 종료 코드 3(`formats_differ`). 출력에 project·slot·상태·다른 값·restart 안내가 있음. 떠 있는 run이 없거나 형식이 같으면 T6과 같이 진행함. 대상에 `tools/formats.json`이 없으면 `formats_unreadable`로 거절함 |
+| T29b | 형식 값이 다른 release로 갱신하고, 그 release에서 run이 시작됨 | `rollback` | 없음 | 위와 같이 거절함. run을 끝낸 뒤에는 T8과 같이 진행함. 형식이 같으면 run이 떠 있어도 진행함 |
+| T30 | release가 아닌 경로(이 저장소의 checkout, 동결 사본 대용)에서 시작한 run이 떠 있음 | 첫 release의 `install`, 형식이 같은 release로 `upgrade`, 형식이 다른 release로 `upgrade` | 앞의 둘은 T1·T6과 같음. 셋째는 없음 | 셋째만 거절하고 출력에 "a copy that is not a release"와 다른 값이 있음 |
+| T31 | 설치·갱신을 두 번 한 상태(release 셋). 떠 있는 run이 첫 release에서 시작됨 / 없음 / `unknown` / 첫 release 디렉터리에 사용자의 파일 | `prune`(`--dry-run` 포함) | run이 떠 있거나 `unknown`이거나 사용자의 파일이 있으면 없음(이유를 알림). 아니면 첫 release의 삭제와 설치 기록 | `current`·`previous`는 남음(`rollback` 뒤에는 새 `previous`도 남음). dry-run 목록과 실제 삭제 목록이 같음. `check`가 통과함. Board가 켜져 있으면 알림 |
+| T32 | 위의 `prune`을 SIGKILL로 끊음(첫 step의 앞·뒤) | `check`, `upgrade`, `prune --dry-run`, `prune` | `prune`이 마침 | `check`는 실패, `upgrade`는 `prune_interrupted`, `--dry-run`은 거절. 마친 뒤 journal·임시 디렉터리가 없음 |
 
-기대 변경 목록의 "정확히"는 T1~T18과 T20~T27에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding은 TMUX-001이 구현했습니다([test](../../integrations/tmux/test_project_agent_conf.py)).
+기대 변경 목록의 "정확히"는 T1~T18과 T20~T32에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding은 TMUX-001이 구현했습니다([test](../../integrations/tmux/test_project_agent_conf.py)).
 
 ## 9. 이 계약과 어긋나는 현재 동작
 

@@ -23,6 +23,7 @@
 
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). 운영 결함이며 재현 근거가 있으므로 위임 범위입니다(운영자 요청도 Leader 판정으로 진행하라고 함). 요구 D(지금 남은 누수 정리)는 Leader가 위 Evidence 마지막 항목대로 했습니다. TEST-003(b3681f2)이 같은 fixture를 고친 뒤이므로 그 위에서 시작합니다.
+- 2026-11-09 Leader: 범위 추가(같은 원인). INSTALL-001(ecc5bce)로 들어온 설치기 test도 `~/tmp/pi-*`(`install/tests/conftest.py`의 session fixture `pi-src-*`, `harness.Home()`)를 만들고 fixture finalizer에서만 지웁니다. pytest가 비정상 종료하면 `pt-*`와 같이 남습니다(2026-11-09 18시 기준 25개, 대부분 실행 중인 INSTALL-004 test). Implementation 3의 보존 규칙과 Verification 2의 전후 실측에 `install/tests`(README의 설치기 test 명령)와 `pi-*`를 포함합니다. 설치기 test가 띄우는 private tmux server도 1의 helper를 씁니다.
 
 ## Implementation
 읽을 문서: [README의 검증](../../../README.md#검증), `tools/conftest.py`, `tools/agent-session/tests/fixtures/agent_session_fixture.py`, `tools/project-board/tests/test_tmux_control.py`, `tools/agent-session/tests/test_internal.py`.
