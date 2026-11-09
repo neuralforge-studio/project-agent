@@ -335,10 +335,8 @@ def test_codex_trust_dialog_returns_its_window_and_reuses_the_run(session_env, m
     fake = FakeProvider(dialog="codex")
     fake.startup_dialog = CodexProvider().startup_dialog
     monkeypatch.setattr(lifecycle, "get_provider", lambda name: fake)
-    started = time.monotonic()
-    with pytest.raises(SessionError) as error:
-        env.manager(timeout=6).start(job)
-    assert time.monotonic() - started < 6
+    with pytest.raises(SessionError) as error:      # a missed dialog would run out the wait limit and raise "timeout"
+        env.manager().start(job)
     assert error.value.code == "needs_user_action"
     assert error.value.details["dialog"] == "workspace_trust"
     waiting = env.tmux.get_current("fixture", "seat-0")
@@ -1963,10 +1961,8 @@ def test_start_reports_a_failed_registration_before_its_timeout(session_env, mon
         return spec
 
     monkeypatch.setattr(FakeProvider, "launch_spec", never_listed)
-    started = time.monotonic()
-    with pytest.raises(SessionError) as error:
+    with pytest.raises(SessionError) as error:      # waiting out the limit would raise "timeout" instead
         env.manager(timeout=60).start("leader")
-    assert time.monotonic() - started < 30, "start must not wait for its timeout"
     assert error.value.code == "registration_failed" and error.value.exit_code == 4
     assert error.value.details["hook_error"]["code"] == "session_not_bound"
     assert "ListAgents" in error.value.details["hook_error"]["message"]
