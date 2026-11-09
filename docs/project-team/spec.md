@@ -557,8 +557,8 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 
 외부 운영 명령은 네 개로 유지합니다.
 다른 도구(project-item·project-board)는 설치한 `agent_session.api` 모듈 하나만 import합니다.
-공개 이름의 원본은 [api.py](../../codex/tools/agent-session/agent_session/api.py)의 `__all__`이고, 이 표가 그 계약을 기록합니다.
-[경계 test](../../codex/tools/agent-session/tests/test_api_boundary.py)가 다른 도구의 import와 이 표의 이름을 대조합니다.
+공개 이름의 원본은 [api.py](../../tools/agent-session/agent_session/api.py)의 `__all__`이고, 이 표가 그 계약을 기록합니다.
+[경계 test](../../tools/agent-session/tests/test_api_boundary.py)가 다른 도구의 import와 이 표의 이름을 대조합니다.
 
 | 이름 | 입력·결과 |
 | --- | --- |
@@ -866,7 +866,7 @@ Session이 없거나 중지한 실행이면 보내지 않습니다.
 수신 주소를 새로 확인해야 하면 같은 대화인지 검증하고 공통 저장 함수를 사용합니다.
 Leader·Worker의 발신은 동료 메시지임을 표시하며 사용자 승인으로 해석하지 않습니다.
 Operator 발신은 첫 줄에 로컬 operator 입력임을 표시합니다. Operator는 관리 session도 식별된 agent도 아닌 발신 process의 분류이며 사람 인증이 아닙니다.
-결정 항목의 답으로 받은 operator 발신의 승인 효력은 [결정 항목 절차](../../codex/skills/project-item/references/decide.md)가 정합니다.
+결정 항목의 답으로 받은 operator 발신의 승인 효력은 [결정 항목 절차](../../skills/project-item/references/decide.md)가 정합니다.
 Accepted·held는 읽음·동의·JOB 완료가 아닙니다.
 전달 여부가 불명확하면 자동 재전송하지 않습니다.
 일반 메시지에 tmux 키 입력과 화면 scraping을 사용하지 않습니다.
@@ -1235,8 +1235,8 @@ Worker restart는 `reviewing`을 바꾸지 않습니다.
 
 ### CR이 JOB을 겸합니다
 
-CR 형식·상태·전이는 project-item skill과 `codex/skills/project-item/references/cr.md`가 소유합니다.
-공통 도구는 같은 저장소의 `codex/tools/project-item`으로 CR을 조회·이동합니다.
+CR 형식·상태·전이는 project-item skill과 `skills/project-item/references/cr.md`가 소유합니다.
+공통 도구는 같은 저장소의 `tools/project-item`으로 CR을 조회·이동합니다.
 
 | JOB 값 | CR 원본 |
 | --- | --- |
@@ -1247,11 +1247,11 @@ CR 형식·상태·전이는 project-item skill과 `codex/skills/project-item/re
 | branch | Write이면 `cr/<ID>`. Read-only이면 없음 |
 | 시작 기준 | `- Base: <commit> <ISO 시각>`과 state의 git_hash |
 
-CR을 고치는 주체(Leader·Worker)와 하는 일은 [cr.md의 JOB으로 쓸 때](../../codex/skills/project-item/references/cr.md#job으로-쓸-때)가 소유합니다.
+CR을 고치는 주체(Leader·Worker)와 하는 일은 [cr.md의 JOB으로 쓸 때](../../skills/project-item/references/cr.md#job으로-쓸-때)가 소유합니다.
 agent-session은 start에서 todo→in-progress 이동과 `- Base:` 기록을 합니다.
 
 역할 지침·읽을 문서는 CR 본문에 link와 문장으로 적습니다. Submodule 초기화는 start의 Git 준비가 합니다. 공통 형식은 이를 해석하지 않습니다.
-`project-item move`의 허용 전이와 호출자 권한(`agent_session_only`·`role_denied`·`review_missing`)은 [project-item skill의 상태와 전이](../../codex/skills/project-item/SKILL.md#상태와-전이)가 소유합니다.
+`project-item move`의 허용 전이와 호출자 권한(`agent_session_only`·`role_denied`·`review_missing`)은 [project-item skill의 상태와 전이](../../skills/project-item/SKILL.md#상태와-전이)가 소유합니다.
 이 명세는 호출자 판정만 소유합니다. `project-item`은 이 명세의 호출자 규칙(`agent_session.api.caller`)을 그대로 씁니다.
 
 ### 실행 입력

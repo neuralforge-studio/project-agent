@@ -34,7 +34,7 @@
 | `~/.local/bin/agent-session`, `project-item`, `project-board` | shim | `current` 아래 각 도구의 진입점으로 가는 symlink 또는 script. 반드시 `current`를 거칩니다. 형태는 4단계가 정합니다. |
 | `~/.claude/skills/project-team`, `~/.claude/skills/project-item` | symlink | `current` 아래 skill 디렉터리로 가는 link |
 | `~/.codex/skills/project-team`, `~/.codex/skills/project-item` | symlink | 같은 skill 디렉터리로 가는 link |
-| `~/.config/project-agent/project.json` | 파일 | 등록 파일 초안. 6절의 조건에서만 만듭니다. 내용은 빈 등록(`{}`)입니다. `load_registry`가 빈 object를 project 0개로 읽습니다([config.py:152-153](../../codex/tools/agent-session/agent_session/config.py)). |
+| `~/.config/project-agent/project.json` | 파일 | 등록 파일 초안. 6절의 조건에서만 만듭니다. 내용은 빈 등록(`{}`)입니다. `load_registry`가 빈 object를 project 0개로 읽습니다([config.py:152-153](../../tools/agent-session/agent_session/config.py)). |
 
 경로 규칙은 다음과 같습니다.
 
@@ -48,12 +48,12 @@
 4. 부모 디렉터리가 symlink이면 link를 따라가서 만듭니다. link는 가리키는 디렉터리 안에 놓입니다. 설치 기록과 출력에는 `~` 기준 경로를 적고, 실제 위치를 함께 출력합니다. 이 workstation의 `~/.claude/skills`가 그 경우입니다(DIST-001 6단계가 `.gitignore`로 다룹니다).
 5. 설치가 중간에 실패하면, 이미 만든 것을 지워 설치 전 상태로 돌립니다. 설치 기록은 마지막에 확정합니다.
 
-6. **원격 runtime의 skill link를 넘겨받습니다.** 원격 runtime은 `~/.codex/skills/project-team`·`project-item` link를 만들고 소유를 `~/.cache/agent-session/skills.json`에 적습니다([remote_runtime.py:46-94](../../codex/tools/agent-session/agent_session/remote_runtime.py)). 같은 제품이 만든 link이므로 설치는 이를 충돌로 보지 않습니다.
-   - 넘겨받는 조건은 runtime이 소유를 판단하는 조건과 같습니다. 이름이 `skills.json`에 있고, link의 소유자가 현재 사용자이고, link의 대상이 기록한 대상과 같습니다([remote_runtime.py:72-76](../../codex/tools/agent-session/agent_session/remote_runtime.py)). 하나라도 다르면 충돌입니다.
+6. **원격 runtime의 skill link를 넘겨받습니다.** 원격 runtime은 `~/.codex/skills/project-team`·`project-item` link를 만들고 소유를 `~/.cache/agent-session/skills.json`에 적습니다([remote_runtime.py:46-94](../../tools/agent-session/agent_session/remote_runtime.py)). 같은 제품이 만든 link이므로 설치는 이를 충돌로 보지 않습니다.
+   - 넘겨받는 조건은 runtime이 소유를 판단하는 조건과 같습니다. 이름이 `skills.json`에 있고, link의 소유자가 현재 사용자이고, link의 대상이 기록한 대상과 같습니다([remote_runtime.py:72-76](../../tools/agent-session/agent_session/remote_runtime.py)). 하나라도 다르면 충돌입니다.
    - 설치는 그 link를 설치본의 skill 디렉터리를 가리키도록 바꾸고, 설치 기록에 설치기 소유로 적습니다. 설치 기록에는 넘겨받았음을 함께 적습니다.
    - 설치는 `skills.json`을 고치지 않습니다. runtime이 소유하는 기록이기 때문입니다.
    - 설치본이 있으면(`~/.local/lib/project-agent/install.json`이 있으면) runtime은 skill link를 만들지 않고 고치지 않습니다. 이 동작은 코드 변경입니다. 처리 단계는 9절에 적습니다.
-7. **provider 홈은 환경 변수를 따릅니다.** 제품 코드가 따르는 규칙과 같습니다([claude.py:104](../../codex/tools/agent-session/agent_session/providers/claude.py), [codex.py:68](../../codex/tools/agent-session/agent_session/providers/codex.py)).
+7. **provider 홈은 환경 변수를 따릅니다.** 제품 코드가 따르는 규칙과 같습니다([claude.py:104](../../tools/agent-session/agent_session/providers/claude.py), [codex.py:68](../../tools/agent-session/agent_session/providers/codex.py)).
    - Claude: `CLAUDE_CONFIG_DIR`가 설정돼 있으면 그 디렉터리, 없으면 `~/.claude`. skill link는 그 아래 `skills/`에 만듭니다.
    - Codex: `CODEX_HOME`이 설정돼 있으면 그 디렉터리, 없으면 `~/.codex`. skill link는 그 아래 `skills/`에 만듭니다.
    - 설치는 쓴 실제 경로를 설치 기록에 남깁니다. `uninstall`과 `check`는 기록한 경로를 씁니다. 설치 뒤 환경 변수가 바뀌어도 기록한 경로를 씁니다.
@@ -108,14 +108,14 @@ tmux 통합 파일은 읽힐 때 tmux server에 binding과 hook을 넣습니다(
 
 설치가 아니라 제품이 실행 중에 쓰는 위치입니다. 2026-11-09에 코드에서 확인한 사실만 적습니다. 확인하지 못한 것은 **(미확인)**으로 남깁니다.
 
-찾은 방법(재현용): 쓰기 호출 검색과 경로 검색을 `codex/tools/{agent-session,project-item,project-board}`와 `tmux/scripts`에서 했습니다.
+찾은 방법(재현용): 쓰기 호출 검색과 경로 검색을 `tools/{agent-session,project-item,project-board}`와 `integrations/tmux`에서 했습니다.
 
 ```sh
 grep -rnE 'write_text|write_bytes|\.open\(|\bopen\(|os\.replace|os\.rename|\.rename\(|shutil\.|mkdir|makedirs|symlink|unlink|rmtree|os\.remove|\.touch\(|chmod|mkstemp|NamedTemporary|TemporaryDirectory|tempfile|fcntl|os\.link|copy2|copyfile|copytree|os\.write|O_CREAT' \
-    codex/tools/agent-session codex/tools/project-item codex/tools/project-board --include='*.py' | grep -v /tests/
-grep -rnE 'Path\.home|expanduser|XDG|"HOME"|~/|\.cache|/tmp' codex/tools tmux/scripts --include='*.py' --include='*.sh' | grep -v /tests/
+    tools/agent-session tools/project-item tools/project-board --include='*.py' | grep -v /tests/
+grep -rnE 'Path\.home|expanduser|XDG|"HOME"|~/|\.cache|/tmp' tools integrations/tmux --include='*.py' --include='*.sh' | grep -v /tests/
 grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|kill-window|respawn-pane|send-keys|run-shell|display-message|split-window)"' \
-    codex/tools --include='*.py' | grep -v /tests/
+    tools --include='*.py' | grep -v /tests/
 ```
 
 **범위** 열: "등록"은 등록 파일이 가리키는 경로(base, seat, `path_cr`, `path_decide`)에 한정된다는 뜻입니다. "HOME"은 등록과 무관하게 사용자 HOME 안의 고정 위치입니다. "tmux"는 tmux server의 상태입니다. "tmp"는 HOME 밖의 `/tmp`입니다.
@@ -124,14 +124,14 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 
 | 위치 | 언제 | 무엇을 쓰는가 | 범위 | 근거 |
 | --- | --- | --- | --- | --- |
-| `~/.claude.json` (`CLAUDE_CONFIG_DIR`가 있으면 그 디렉터리의 `.claude.json`) | Claude project에서 `start`가 새 seat를 clone했을 때만 | `projects.<seat 절대 경로>.hasTrustDialogAccepted = true` 한 항목. 파일이 없으면 쓰지 않습니다. 이미 true면 쓰지 않습니다. 잠금 디렉터리 `.claude.json.lock`과 임시 파일 `.claude.json.agent-session-<pid>`를 만들고 끝나면 지웁니다. 파일이 symlink면 가리키는 파일을 고칩니다(`resolve()`). | 등록(seat 경로). 새로 clone한 로컬 seat만. Claude Leader의 base에는 쓰지 않습니다. | [claude.py:143-190](../../codex/tools/agent-session/agent_session/providers/claude.py), 호출 [lifecycle.py:535-536](../../codex/tools/agent-session/agent_session/lifecycle.py) → [claude.py:244-246](../../codex/tools/agent-session/agent_session/providers/claude.py) |
-| `~/.codex/config.toml` (`CODEX_HOME`가 있으면 그 디렉터리) | Codex project에서 (a) Leader를 시작할 때마다, (b) `start`가 새 로컬 seat를 clone했을 때, (c) 원격 host에서 seat를 clone했을 때 | `[projects."<절대 경로>"]`에 `trust_level = "trusted"`. 이미 trusted면 쓰지 않습니다. **디렉터리 `~/.codex/`와 `config.toml`이 없으면 만듭니다.** 잠금 디렉터리 `config.toml.agent-session.lock`과 임시 파일을 만들고 끝나면 지웁니다. symlink면 가리키는 파일을 고칩니다. | 등록(base 또는 seat 경로) | [codex.py:35-113](../../codex/tools/agent-session/agent_session/providers/codex.py), 호출 [launch_artifacts.py:101-102](../../codex/tools/agent-session/agent_session/launch_artifacts.py), [lifecycle.py:535-536](../../codex/tools/agent-session/agent_session/lifecycle.py), [remote_runtime.py:299-300](../../codex/tools/agent-session/agent_session/remote_runtime.py) |
-| `~/.cache/project-item/locks/<hash>.lock` | `project-item`의 `new`·`move`·`record`·`render` 등 item root를 쓰는 모든 명령 | 잠금 파일(내용 없음). 만든 뒤에 지우지 않습니다. `<hash>`는 item root 경로의 해시입니다. | 등록(`path_cr`, `path_decide`)에서 계산한 이름 | [store.py:19-31](../../codex/tools/project-item/project_item/store.py) |
-| `~/.cache/tmux-decide-status.json`, `.lock`, `.<pid>.tmp` (`XDG_CACHE_HOME`가 있으면 그 아래) | tmux status가 `tmux_decide_status.py`를 부를 때. 사용자가 status 설정에 이 script를 넣은 경우만 | 열린 결정 ID 목록과 잠금. 새 결정이 생기면 모든 tmux client에 `display-message`와, Leader window의 pane tty에 BEL(0x07)을 씁니다. | 등록(project마다 `path_decide`를 읽음) | [tmux_decide_status.py:49-51, 69-74, 168-170](../../tmux/scripts/tmux_decide_status.py), 알림 [같은 파일 136-146](../../tmux/scripts/tmux_decide_status.py) |
-| (원격 host의 HOME) `~/.cache/agent-session/runs/<run>/`, `~/.cache/agent-session/runtime/<hash>/`와 `.lock`, `~/.cache/agent-session/skills.json`·`skills.lock` | Codex SSH Worker seat를 쓰는 원격 host에서만 | run 기록, 받은 실행본 압축 해제, skill 소유 기록. 이 host에서는 일어나지 않습니다. | 원격 host의 HOME | [remote_runtime.py:17-20, 46-94, 171-214](../../codex/tools/agent-session/agent_session/remote_runtime.py), [remote.py:15-29](../../codex/tools/agent-session/agent_session/remote.py) |
-| (원격 host의 HOME) `~/.codex/skills/project-team`, `~/.codex/skills/project-item` | 같은 원격 host에서 run을 시작할 때. 그 host에 `~/.local/lib/project-agent/install.json`이 있으면 쓰지 않습니다(DIST-003). | 위 실행본의 `guidance/codex/skills/<이름>`을 가리키는 symlink. 이름이 이미 있고 이 runtime이 만든 것이 아니면 건드리지 않습니다. `~/.codex/skills/`가 없으면 만듭니다. | 원격 host의 HOME. **2절의 설치 대상과 같은 이름입니다(2절 규칙 6).** | [remote_runtime.py:46-94](../../codex/tools/agent-session/agent_session/remote_runtime.py) |
+| `~/.claude.json` (`CLAUDE_CONFIG_DIR`가 있으면 그 디렉터리의 `.claude.json`) | Claude project에서 `start`가 새 seat를 clone했을 때만 | `projects.<seat 절대 경로>.hasTrustDialogAccepted = true` 한 항목. 파일이 없으면 쓰지 않습니다. 이미 true면 쓰지 않습니다. 잠금 디렉터리 `.claude.json.lock`과 임시 파일 `.claude.json.agent-session-<pid>`를 만들고 끝나면 지웁니다. 파일이 symlink면 가리키는 파일을 고칩니다(`resolve()`). | 등록(seat 경로). 새로 clone한 로컬 seat만. Claude Leader의 base에는 쓰지 않습니다. | [claude.py:143-190](../../tools/agent-session/agent_session/providers/claude.py), 호출 [lifecycle.py:535-536](../../tools/agent-session/agent_session/lifecycle.py) → [claude.py:244-246](../../tools/agent-session/agent_session/providers/claude.py) |
+| `~/.codex/config.toml` (`CODEX_HOME`가 있으면 그 디렉터리) | Codex project에서 (a) Leader를 시작할 때마다, (b) `start`가 새 로컬 seat를 clone했을 때, (c) 원격 host에서 seat를 clone했을 때 | `[projects."<절대 경로>"]`에 `trust_level = "trusted"`. 이미 trusted면 쓰지 않습니다. **디렉터리 `~/.codex/`와 `config.toml`이 없으면 만듭니다.** 잠금 디렉터리 `config.toml.agent-session.lock`과 임시 파일을 만들고 끝나면 지웁니다. symlink면 가리키는 파일을 고칩니다. | 등록(base 또는 seat 경로) | [codex.py:35-113](../../tools/agent-session/agent_session/providers/codex.py), 호출 [launch_artifacts.py:101-102](../../tools/agent-session/agent_session/launch_artifacts.py), [lifecycle.py:535-536](../../tools/agent-session/agent_session/lifecycle.py), [remote_runtime.py:299-300](../../tools/agent-session/agent_session/remote_runtime.py) |
+| `~/.cache/project-item/locks/<hash>.lock` | `project-item`의 `new`·`move`·`record`·`render` 등 item root를 쓰는 모든 명령 | 잠금 파일(내용 없음). 만든 뒤에 지우지 않습니다. `<hash>`는 item root 경로의 해시입니다. | 등록(`path_cr`, `path_decide`)에서 계산한 이름 | [store.py:19-31](../../tools/project-item/project_item/store.py) |
+| `~/.cache/tmux-decide-status.json`, `.lock`, `.<pid>.tmp` (`XDG_CACHE_HOME`가 있으면 그 아래) | tmux status가 `tmux_decide_status.py`를 부를 때. 사용자가 status 설정에 이 script를 넣은 경우만 | 열린 결정 ID 목록과 잠금. 새 결정이 생기면 모든 tmux client에 `display-message`와, Leader window의 pane tty에 BEL(0x07)을 씁니다. | 등록(project마다 `path_decide`를 읽음) | [tmux_decide_status.py:49-51, 69-74, 168-170](../../integrations/tmux/tmux_decide_status.py), 알림 [같은 파일 136-146](../../integrations/tmux/tmux_decide_status.py) |
+| (원격 host의 HOME) `~/.cache/agent-session/runs/<run>/`, `~/.cache/agent-session/runtime/<hash>/`와 `.lock`, `~/.cache/agent-session/skills.json`·`skills.lock` | Codex SSH Worker seat를 쓰는 원격 host에서만 | run 기록, 받은 실행본 압축 해제, skill 소유 기록. 이 host에서는 일어나지 않습니다. | 원격 host의 HOME | [remote_runtime.py:17-20, 46-94, 171-214](../../tools/agent-session/agent_session/remote_runtime.py), [remote.py:15-29](../../tools/agent-session/agent_session/remote.py) |
+| (원격 host의 HOME) `~/.codex/skills/project-team`, `~/.codex/skills/project-item` | 같은 원격 host에서 run을 시작할 때. 그 host에 `~/.local/lib/project-agent/install.json`이 있으면 쓰지 않습니다(DIST-003). | 위 실행본의 `guidance/skills/<이름>`을 가리키는 symlink. 이름이 이미 있고 이 runtime이 만든 것이 아니면 건드리지 않습니다. `~/.codex/skills/`가 없으면 만듭니다. | 원격 host의 HOME. **2절의 설치 대상과 같은 이름입니다(2절 규칙 6).** | [remote_runtime.py:46-94](../../tools/agent-session/agent_session/remote_runtime.py) |
 
-읽기만 하는 HOME 위치(쓰지 않음): `~/.claude/projects/`([claude.py:104](../../codex/tools/agent-session/agent_session/providers/claude.py)), `~/.claude/settings.json`([claude.py:279](../../codex/tools/agent-session/agent_session/providers/claude.py)), `~/.claude/sessions/`([registry.py:79-97](../../codex/tools/project-item/project_item/registry.py)), `~/.codex/<profile>.config.toml`([codex.py:327-328](../../codex/tools/agent-session/agent_session/providers/codex.py)), 등록 파일.
+읽기만 하는 HOME 위치(쓰지 않음): `~/.claude/projects/`([claude.py:104](../../tools/agent-session/agent_session/providers/claude.py)), `~/.claude/settings.json`([claude.py:279](../../tools/agent-session/agent_session/providers/claude.py)), `~/.claude/sessions/`([registry.py:79-97](../../tools/project-item/project_item/registry.py)), `~/.codex/<profile>.config.toml`([codex.py:327-328](../../tools/agent-session/agent_session/providers/codex.py)), 등록 파일.
 
 ### 5.2 등록 project 안
 
@@ -139,16 +139,16 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 
 | 위치 | 언제 | 무엇을 쓰는가 | 범위 | 근거 |
 | --- | --- | --- | --- | --- |
-| `<base>/agent/state.json`, `state.lock` | 모든 배정·제어 명령 | slot별 배정 state(원자적 교체) | 등록(base) | [state.py:176-231](../../codex/tools/agent-session/agent_session/state.py) |
-| `<base>/agent/suspend.json`, `suspend.lock` | `shutdown`·`resume` | shutdown 기록 | 등록(base) | [suspend.py:65-66, 92-95](../../codex/tools/agent-session/agent_session/suspend.py) |
-| `<base>/agent/allocation.lock`, `agent/control/<slot>.lock` | `start`·`stop`·`restart`·`send` | 잠금 파일 | 등록(base) | [lifecycle.py:73, 345, 494, 524](../../codex/tools/agent-session/agent_session/lifecycle.py) |
-| `<base>/agent/runs/<run_id>/` | run을 시작할 때, stop·restart를 예약할 때 | `prompt.md`, Claude의 `settings.json`(hook 선언), `launch.sh`, `controller.sh`, `control-request.json`, `control-result.json`. 원격 seat는 `bridge.json`도 씁니다. 모든 명령에 **release의 절대 경로**와 python 경로가 들어갑니다. | 등록(base) | [launch_artifacts.py:80-89, 104, 137-152](../../codex/tools/agent-session/agent_session/launch_artifacts.py), [lifecycle.py:864-866](../../codex/tools/agent-session/agent_session/lifecycle.py), [internal.py:234-265](../../codex/tools/agent-session/agent_session/internal.py), [remote_bridge.py:53-74](../../codex/tools/agent-session/agent_session/remote_bridge.py) |
-| `<base>/agent/diagnostics/<시각>-<명령>-<pid>.log` | 명령이 내부 오류로 끝났을 때 | traceback | 등록(base) | [cli.py:126-137](../../codex/tools/agent-session/agent_session/cli.py) |
-| `<base>/agent/handoff/<slot>.md` | 원격 seat의 restart 검증 때 중앙 사본을 씁니다. 로컬 slot의 파일은 대화가 씁니다(제품 코드가 아닙니다). | 인계 문서 | 등록(base) | [handoff.py:15-28](../../codex/tools/agent-session/agent_session/handoff.py) |
-| `path_decide/decide.html` (`render --out`이 있으면 그 경로) | `project-item`이 결정을 바꿀 때마다 | 결정 목록 page(원자적 교체) | 등록(`path_decide`) | [render.py:246-258](../../codex/tools/project-item/project_item/render.py), [cli.py:46-47](../../codex/tools/project-item/project_item/cli.py) |
-| `path_cr`·`path_decide`의 item 파일 | `new`·`move`·`record`·`accept`·`answer`, `start`의 배정(`todo`→`in-progress`), Base header 기록, 원격 Worker의 Result 보고 | item 파일 생성(`O_EXCL`), 본문 수정, 상태 디렉터리 사이 이동(git이 추적하면 `git mv`) | 등록(`path_cr`, `path_decide`) | [store.py:131-134, 196, 291-303](../../codex/tools/project-item/project_item/store.py), [assign.py:48-67](../../codex/tools/project-item/project_item/assign.py), [remote_bridge.py:46](../../codex/tools/agent-session/agent_session/remote_bridge.py), 답변 [answer.py:108](../../codex/tools/project-board/project_board/answer.py) |
-| base·seat의 git 작업 트리 | `start`가 Worker를 배정할 때 | `git switch main`, `fetch origin`, `merge --ff-only`, `switch -c cr/<ID>`, `submodule update --init --recursive`. 작업 트리와 ref를 바꿉니다. | 등록(base, seat) | [git_ops.py:98-100, 118, 142-172](../../codex/tools/agent-session/agent_session/git_ops.py) |
-| 새 seat 디렉터리 | seat 경로가 없을 때 `start`가 | 새 디렉터리 하나를 만들고 base의 origin을 clone합니다. clone이 실패하면 그 디렉터리만 지웁니다. | 등록(seat 경로) | [workspace.py:15-49](../../codex/tools/agent-session/agent_session/workspace.py) |
+| `<base>/agent/state.json`, `state.lock` | 모든 배정·제어 명령 | slot별 배정 state(원자적 교체) | 등록(base) | [state.py:176-231](../../tools/agent-session/agent_session/state.py) |
+| `<base>/agent/suspend.json`, `suspend.lock` | `shutdown`·`resume` | shutdown 기록 | 등록(base) | [suspend.py:65-66, 92-95](../../tools/agent-session/agent_session/suspend.py) |
+| `<base>/agent/allocation.lock`, `agent/control/<slot>.lock` | `start`·`stop`·`restart`·`send` | 잠금 파일 | 등록(base) | [lifecycle.py:73, 345, 494, 524](../../tools/agent-session/agent_session/lifecycle.py) |
+| `<base>/agent/runs/<run_id>/` | run을 시작할 때, stop·restart를 예약할 때 | `prompt.md`, Claude의 `settings.json`(hook 선언), `launch.sh`, `controller.sh`, `control-request.json`, `control-result.json`. 원격 seat는 `bridge.json`도 씁니다. 모든 명령에 **release의 절대 경로**와 python 경로가 들어갑니다. | 등록(base) | [launch_artifacts.py:80-89, 104, 137-152](../../tools/agent-session/agent_session/launch_artifacts.py), [lifecycle.py:864-866](../../tools/agent-session/agent_session/lifecycle.py), [internal.py:234-265](../../tools/agent-session/agent_session/internal.py), [remote_bridge.py:53-74](../../tools/agent-session/agent_session/remote_bridge.py) |
+| `<base>/agent/diagnostics/<시각>-<명령>-<pid>.log` | 명령이 내부 오류로 끝났을 때 | traceback | 등록(base) | [cli.py:126-137](../../tools/agent-session/agent_session/cli.py) |
+| `<base>/agent/handoff/<slot>.md` | 원격 seat의 restart 검증 때 중앙 사본을 씁니다. 로컬 slot의 파일은 대화가 씁니다(제품 코드가 아닙니다). | 인계 문서 | 등록(base) | [handoff.py:15-28](../../tools/agent-session/agent_session/handoff.py) |
+| `path_decide/decide.html` (`render --out`이 있으면 그 경로) | `project-item`이 결정을 바꿀 때마다 | 결정 목록 page(원자적 교체) | 등록(`path_decide`) | [render.py:246-258](../../tools/project-item/project_item/render.py), [cli.py:46-47](../../tools/project-item/project_item/cli.py) |
+| `path_cr`·`path_decide`의 item 파일 | `new`·`move`·`record`·`accept`·`answer`, `start`의 배정(`todo`→`in-progress`), Base header 기록, 원격 Worker의 Result 보고 | item 파일 생성(`O_EXCL`), 본문 수정, 상태 디렉터리 사이 이동(git이 추적하면 `git mv`) | 등록(`path_cr`, `path_decide`) | [store.py:131-134, 196, 291-303](../../tools/project-item/project_item/store.py), [assign.py:48-67](../../tools/project-item/project_item/assign.py), [remote_bridge.py:46](../../tools/agent-session/agent_session/remote_bridge.py), 답변 [answer.py:108](../../tools/project-board/project_board/answer.py) |
+| base·seat의 git 작업 트리 | `start`가 Worker를 배정할 때 | `git switch main`, `fetch origin`, `merge --ff-only`, `switch -c cr/<ID>`, `submodule update --init --recursive`. 작업 트리와 ref를 바꿉니다. | 등록(base, seat) | [git_ops.py:98-100, 118, 142-172](../../tools/agent-session/agent_session/git_ops.py) |
+| 새 seat 디렉터리 | seat 경로가 없을 때 `start`가 | 새 디렉터리 하나를 만들고 base의 origin을 clone합니다. clone이 실패하면 그 디렉터리만 지웁니다. | 등록(seat 경로) | [workspace.py:15-49](../../tools/agent-session/agent_session/workspace.py) |
 
 ### 5.3 tmux server
 
@@ -156,29 +156,29 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 
 | 대상 | 언제 | 무엇을 하는가 | 근거 |
 | --- | --- | --- | --- |
-| session | project의 첫 run을 만들 때 | `new-session -d -s <project>`와 session option `@agent_session_owner`. 이미 있는 session은 owner가 같을 때만 씁니다. | [tmux.py:200-220](../../codex/tools/agent-session/agent_session/tmux.py) |
-| window·pane | run마다 | `new-window`, `rename-window`, `select-window`, `respawn-pane`, `kill-window`, `send-keys`(`/exit`, `Enter`) | [tmux.py:209, 266, 447, 525, 542, 563-569](../../codex/tools/agent-session/agent_session/tmux.py), [windows.py:37, 64](../../codex/tools/agent-session/agent_session/windows.py) |
-| window option | run마다 | `remain-on-exit on`과 `@agent_session_*`(run 식별, 현재 run 포인터) | [tmux.py:220, 274-277, 345, 361, 412](../../codex/tools/agent-session/agent_session/tmux.py) |
-| 알림 | shutdown 등 | 모든 client에 `display-message`, pane tty에 BEL | [tmux.py:458, 470-474](../../codex/tools/agent-session/agent_session/tmux.py) |
-| `run-shell -b` | stop·restart 예약, Board popup | controller script 실행, `display-popup` | [tmux.py:619](../../codex/tools/agent-session/agent_session/tmux.py), [tmux_control.py:366](../../codex/tools/project-board/project_board/tmux_control.py) |
-| Board option | Board를 켜고 끌 때, 크기를 바꿀 때 | server option `@project_board_enabled`, `@project_board_config`, `@project_board_width`, `@project_board_expanded`, window option `@project_board_pane`, `@project_board_restore`, pane option `@project_board_managed`, `@project_board_click_socket` | [tmux_control.py:146, 182-208, 233-237, 289-352](../../codex/tools/project-board/project_board/tmux_control.py) |
-| Board pane | Board가 켜져 있을 때, client가 보는 window마다 | `split-window`로 사이드바 pane을 추가합니다. | [tmux_control.py:218-250](../../codex/tools/project-board/project_board/tmux_control.py) |
-| 통합 파일이 넣는 binding·hook (`source-file`로 읽힐 때. 규칙은 3.1절) | tmux 설정을 읽을 때 | `bind-key B`, root table의 `MouseDown1Pane`, `[board]` 이름의 hook 9개(`client-attached`, `client-detached`, `client-session-changed`, `session-window-changed`, `window-created`, `window-closed`, `after-resize-pane`, `pane-died`) | [project_board.conf:3-32](../../tmux/scripts/project_board.conf) |
+| session | project의 첫 run을 만들 때 | `new-session -d -s <project>`와 session option `@agent_session_owner`. 이미 있는 session은 owner가 같을 때만 씁니다. | [tmux.py:200-220](../../tools/agent-session/agent_session/tmux.py) |
+| window·pane | run마다 | `new-window`, `rename-window`, `select-window`, `respawn-pane`, `kill-window`, `send-keys`(`/exit`, `Enter`) | [tmux.py:209, 266, 447, 525, 542, 563-569](../../tools/agent-session/agent_session/tmux.py), [windows.py:37, 64](../../tools/agent-session/agent_session/windows.py) |
+| window option | run마다 | `remain-on-exit on`과 `@agent_session_*`(run 식별, 현재 run 포인터) | [tmux.py:220, 274-277, 345, 361, 412](../../tools/agent-session/agent_session/tmux.py) |
+| 알림 | shutdown 등 | 모든 client에 `display-message`, pane tty에 BEL | [tmux.py:458, 470-474](../../tools/agent-session/agent_session/tmux.py) |
+| `run-shell -b` | stop·restart 예약, Board popup | controller script 실행, `display-popup` | [tmux.py:619](../../tools/agent-session/agent_session/tmux.py), [tmux_control.py:366](../../tools/project-board/project_board/tmux_control.py) |
+| Board option | Board를 켜고 끌 때, 크기를 바꿀 때 | server option `@project_board_enabled`, `@project_board_config`, `@project_board_width`, `@project_board_expanded`, window option `@project_board_pane`, `@project_board_restore`, pane option `@project_board_managed`, `@project_board_click_socket` | [tmux_control.py:146, 182-208, 233-237, 289-352](../../tools/project-board/project_board/tmux_control.py) |
+| Board pane | Board가 켜져 있을 때, client가 보는 window마다 | `split-window`로 사이드바 pane을 추가합니다. | [tmux_control.py:218-250](../../tools/project-board/project_board/tmux_control.py) |
+| 통합 파일이 넣는 binding·hook (`source-file`로 읽힐 때. 규칙은 3.1절) | tmux 설정을 읽을 때 | `bind-key B`, root table의 `MouseDown1Pane`, `[board]` 이름의 hook 9개(`client-attached`, `client-detached`, `client-session-changed`, `session-window-changed`, `window-created`, `window-closed`, `after-resize-pane`, `pane-died`) | [project_board.conf:3-32](../../integrations/tmux/project_board.conf) |
 
-사용자 status 배치(`status-left`, `status-format[0]`, `MouseDown1Status`)는 통합 파일에 넣지 않습니다. 각자의 tmux 설정이 소유합니다(DIST-001 5단계). 그 내용은 [project_board_home_status.conf](../../tmux/scripts/project_board_home_status.conf)에 있고 `tmux/tmux.conf`가 같은 줄을 씁니다.
+사용자 status 배치(`status-left`, `status-format[0]`, `MouseDown1Status`)는 통합 파일에 넣지 않습니다. 각자의 tmux 설정이 소유합니다(DIST-001 5단계). 그 내용은 `project_board_home_status.conf`(agent 저장소의 파일이며 이 저장소에는 아직 없습니다. TMUX-001이 정합니다)에 있고 `tmux/tmux.conf`가 같은 줄을 씁니다.
 
 ### 5.4 HOME 밖
 
 | 위치 | 언제 | 무엇을 하는가 | 근거 |
 | --- | --- | --- | --- |
-| `/tmp/project-board-<uid>-<tmux pid>/` (mode 0700), `control.lock`, `<16자>.sock` | Board를 켤 때 | 잠금 파일과 클릭 전달용 unix socket. Board pane이 끝나면 socket을 지웁니다. 디렉터리는 지우지 않습니다. | [tmux_control.py:56-83, 223](../../codex/tools/project-board/project_board/tmux_control.py), [tui.py:196-223](../../codex/tools/project-board/project_board/tui.py) |
-| `/tmp/as-u-<uid>-<run>.sock` | 원격 seat의 SSH 연결 | bridge socket | [remote_bridge.py:63-64](../../codex/tools/agent-session/agent_session/remote_bridge.py) |
-| `/tmp/as-<uid>-<run>.sock` (원격 host) | 원격 seat run | 원격 tmux socket | [remote_runtime.py:212](../../codex/tools/agent-session/agent_session/remote_runtime.py) |
-| 시스템 임시 디렉터리 `project-board-*` | Board에서 결정 답변을 보낼 때 | 답변 본문 파일. 끝나면 지웁니다. | [answer.py:36-38](../../codex/tools/project-board/project_board/answer.py) |
+| `/tmp/project-board-<uid>-<tmux pid>/` (mode 0700), `control.lock`, `<16자>.sock` | Board를 켤 때 | 잠금 파일과 클릭 전달용 unix socket. Board pane이 끝나면 socket을 지웁니다. 디렉터리는 지우지 않습니다. | [tmux_control.py:56-83, 223](../../tools/project-board/project_board/tmux_control.py), [tui.py:196-223](../../tools/project-board/project_board/tui.py) |
+| `/tmp/as-u-<uid>-<run>.sock` | 원격 seat의 SSH 연결 | bridge socket | [remote_bridge.py:63-64](../../tools/agent-session/agent_session/remote_bridge.py) |
+| `/tmp/as-<uid>-<run>.sock` (원격 host) | 원격 seat run | 원격 tmux socket | [remote_runtime.py:212](../../tools/agent-session/agent_session/remote_runtime.py) |
+| 시스템 임시 디렉터리 `project-board-*` | Board에서 결정 답변을 보낼 때 | 답변 본문 파일. 끝나면 지웁니다. | [answer.py:36-38](../../tools/project-board/project_board/answer.py) |
 
 ### 5.5 provider 쪽 부수 효과
 
-- `start`가 Codex Leader·Worker를 시작할 때 Codex daemon이 꺼져 있으면 `codex app-server daemon start`를 실행합니다([codex.py:281-283](../../codex/tools/agent-session/agent_session/providers/codex.py), [lifecycle.py:108](../../codex/tools/agent-session/agent_session/lifecycle.py)). daemon이 Codex 쪽에 무엇을 쓰는지는 **(미확인)**입니다.
+- `start`가 Codex Leader·Worker를 시작할 때 Codex daemon이 꺼져 있으면 `codex app-server daemon start`를 실행합니다([codex.py:281-283](../../tools/agent-session/agent_session/providers/codex.py), [lifecycle.py:108](../../tools/agent-session/agent_session/lifecycle.py)). daemon이 Codex 쪽에 무엇을 쓰는지는 **(미확인)**입니다.
 - 관리 대화가 `~/.claude`·`~/.codex` 아래에 쓰는 transcript와 설정은 provider가 소유합니다. 제품 코드의 쓰기가 아니므로 이 목록에 넣지 않습니다.
 
 ### 5.6 이 목록의 한계
@@ -192,7 +192,7 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 
 등록 파일의 형식은 [명세 2절](spec.md#2-등록과-프로젝트-선택)이 소유합니다. 이 절은 위치만 정합니다.
 
-2단계(DIST-003) 전의 선택 규칙([config.py:62-85](../../codex/tools/agent-session/agent_session/config.py)). 아래 계약이 이 규칙을 대체했습니다:
+2단계(DIST-003) 전의 선택 규칙([config.py:62-85](../../tools/agent-session/agent_session/config.py)). 아래 계약이 이 규칙을 대체했습니다:
 
 1. `--config`가 있으면 그 파일만 씁니다. `AGENT_SESSION_CONFIG`는 `current_project`가 같은 방식으로 씁니다.
 2. 없으면 `~/.codex/project.json`과 `~/.claude/project.json` 중 있는 파일을 씁니다. 둘 다 있고 서로 다른 파일이면 `registry_ambiguous`로 거절합니다. 병합하지 않습니다.
@@ -203,13 +203,13 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 2. 후보 셋: `~/.config/project-agent/project.json`, `~/.codex/project.json`, `~/.claude/project.json`. 있는 파일이 하나(또는 같은 파일의 여러 경로)면 그 파일을 씁니다. 서로 다른 파일이 둘 이상이면 지금처럼 `registry_ambiguous`로 거절합니다.
 3. 셋 다 없으면 `registry_not_found`입니다. 오류 문구에 세 위치를 모두 적습니다.
 
-설치의 등록 파일 초안은 후보 셋 중 어느 위치에도 파일이 없을 때만 만듭니다. 이 workstation은 기존 파일이 있으므로 초안을 만들지 않습니다. 후보 셋의 선택은 DIST-003이 `registry_path`에 넣었고, 오류 문구와 `--help`의 위치 안내도 같이 바꿨습니다([config.py `REGISTRY_LOCATIONS`](../../codex/tools/agent-session/agent_session/config.py), [project-item cli.py](../../codex/tools/project-item/project_item/cli.py), [registry.py](../../codex/tools/project-item/project_item/registry.py)). 설치기의 초안 조건은 4단계가 구현합니다.
+설치의 등록 파일 초안은 후보 셋 중 어느 위치에도 파일이 없을 때만 만듭니다. 이 workstation은 기존 파일이 있으므로 초안을 만들지 않습니다. 후보 셋의 선택은 DIST-003이 `registry_path`에 넣었고, 오류 문구와 `--help`의 위치 안내도 같이 바꿨습니다([config.py `REGISTRY_LOCATIONS`](../../tools/agent-session/agent_session/config.py), [project-item cli.py](../../tools/project-item/project_item/cli.py), [registry.py](../../tools/project-item/project_item/registry.py)). 설치기의 초안 조건은 4단계가 구현합니다.
 
 초안은 설치 뒤 사용자의 파일입니다. `upgrade`·`rollback`은 읽거나 고치지 않습니다. `uninstall`은 지우지 않습니다(7.2절).
 
 ### 6.1 Python 선택
 
-세 CLI(`agent-session`, `project-item`, `project-board`)의 `bin/` 진입점은 같은 규칙을 씁니다. 규칙의 원본은 공용 launcher [`codex/tools/python-launcher.sh`](../../codex/tools/python-launcher.sh) 하나입니다. 진입점은 이 파일을 `source`하며, 도구 디렉터리(`codex/tools/<도구>/`)의 부모에 있어야 합니다. release는 이 상대 배치를 유지합니다.
+세 CLI(`agent-session`, `project-item`, `project-board`)의 `bin/` 진입점은 같은 규칙을 씁니다. 규칙의 원본은 공용 launcher [`tools/python-launcher.sh`](../../tools/python-launcher.sh) 하나입니다. 진입점은 이 파일을 `source`하며, 도구 디렉터리(`tools/<도구>/`)의 부모에 있어야 합니다. release는 이 상대 배치를 유지합니다.
 
 설치기의 shim은 아래 환경 변수를 정하고 진입점을 실행합니다.
 
@@ -241,11 +241,11 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 - tmux 블록이 기록된 파일에 있습니다. symlink 때문에 건너뛴 경우는 실패가 아니라 안내입니다.
 - `~/.local/bin`이 PATH에 있습니다. 없으면 안내입니다(실패가 아닙니다).
 - 건너뛴 tmux binding이 있으면 "binding 건너뜀"으로 알립니다(3.1절). 실패가 아닙니다.
-- 사용자가 소유 경로를 다른 것으로 바꿨으면 그 경로를 알립니다. `upgrade`와 `uninstall`은 그런 경로를 바꾸거나 지우지 않고 알립니다. 원격 runtime의 skill link가 같은 규칙을 씁니다([remote_runtime.py:74-90](../../codex/tools/agent-session/agent_session/remote_runtime.py)) .
+- 사용자가 소유 경로를 다른 것으로 바꿨으면 그 경로를 알립니다. `upgrade`와 `uninstall`은 그런 경로를 바꾸거나 지우지 않고 알립니다. 원격 runtime의 skill link가 같은 규칙을 씁니다([remote_runtime.py:74-90](../../tools/agent-session/agent_session/remote_runtime.py)) .
 
 ### 7.1 떠 있는 run
 
-release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `launch.sh`, `controller.sh`, Claude의 `settings.json`에 release의 **해석된 절대 경로**(symlink를 푼 경로)와 python 경로가 들어갑니다([launch_artifacts.py:23, 35, 123, 146](../../codex/tools/agent-session/agent_session/launch_artifacts.py), [lifecycle.py:107](../../codex/tools/agent-session/agent_session/lifecycle.py)).
+release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `launch.sh`, `controller.sh`, Claude의 `settings.json`에 release의 **해석된 절대 경로**(symlink를 푼 경로)와 python 경로가 들어갑니다([launch_artifacts.py:23, 35, 123, 146](../../tools/agent-session/agent_session/launch_artifacts.py), [lifecycle.py:107](../../tools/agent-session/agent_session/lifecycle.py)).
 
 1. `upgrade`와 `rollback`은 떠 있는 run에 영향을 주지 않습니다. 그 run은 시작된 release를 계속 씁니다. 새 run부터 `current`가 가리키는 release를 씁니다.
 2. 설치기는 사용 중인 release를 지우지 않습니다. 사용 중이란, 등록된 project의 `<base>/agent/runs/*/`의 script에 그 release 경로가 있고 그 run이 끝나지 않았다는 뜻입니다.
@@ -257,10 +257,10 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 관리 run이 살아 있으면 `uninstall`을 거절합니다. 거절하면 아무것도 바꾸지 않고, 살아 있는 run의 project와 slot을 출력합니다.
 
 - 판정 대상은 등록 파일의 모든 project입니다. 등록 파일을 읽을 수 없으면 판정할 수 없으므로 거절합니다.
-- 각 slot은 [`agent_session.api.liveness`](../../codex/tools/agent-session/agent_session/api.py)로 분류합니다. `alive`와 `unknown`을 거절 근거로 봅니다. `stopped`만 통과합니다.
-- shutdown 기록(`<base>/agent/suspend.json`)에 남은 slot이 있으면 거절하고 그 slot을 출력합니다. 다시 재개할 대화가 남아 있는 채로 제품을 지우지 않기 위해서입니다([suspend.py:65-66](../../codex/tools/agent-session/agent_session/suspend.py)). `liveness`가 `stopped`여도 같습니다.
+- 각 slot은 [`agent_session.api.liveness`](../../tools/agent-session/agent_session/api.py)로 분류합니다. `alive`와 `unknown`을 거절 근거로 봅니다. `stopped`만 통과합니다.
+- shutdown 기록(`<base>/agent/suspend.json`)에 남은 slot이 있으면 거절하고 그 slot을 출력합니다. 다시 재개할 대화가 남아 있는 채로 제품을 지우지 않기 위해서입니다([suspend.py:65-66](../../tools/agent-session/agent_session/suspend.py)). `liveness`가 `stopped`여도 같습니다.
 - 강제 옵션(`--force`)은 두지 않습니다. 이유: 강제로 지우면 살아 있는 run의 hook과 controller가 지워진 코드를 부릅니다. 그러면 그 run에 `send`·`stop`·`restart`를 보낼 수 없습니다. 해소 방법은 run을 먼저 끝내는 것입니다(`agent-session stop`, `shutdown`).
-- `liveness`의 `unknown`은 server 재시작 뒤 남은 state에도 나옵니다([api.py:73-80](../../codex/tools/agent-session/agent_session/api.py)). 이 경우도 거절합니다. 해소 방법은 `agent-session stop`으로 slot을 끝내거나 `resume`으로 재개한 뒤 끝내는 것입니다.
+- `liveness`의 `unknown`은 server 재시작 뒤 남은 state에도 나옵니다([api.py:73-80](../../tools/agent-session/agent_session/api.py)). 이 경우도 거절합니다. 해소 방법은 `agent-session stop`으로 slot을 끝내거나 `resume`으로 재개한 뒤 끝내는 것입니다.
 
 사용자 등록 파일(6절)은 `uninstall`이 지우지 않습니다. 설치기가 만든 초안도 같습니다. 지우려면 사용자가 직접 지웁니다. 이 때문에 제거 뒤에는 등록 파일과 그 부모 디렉터리가 남습니다.
 
@@ -317,7 +317,7 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 | 등록 파일 위치 | 해결됨(DIST-003): 6절의 세 후보를 찾음 | 6절의 세 후보 | 2단계 |
 | CLI python 선택 | 해결됨(DIST-003): 6.1절의 공용 launcher가 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`를 받음 | 설치 때 고른 interpreter. `project-board`는 `PYTHONNOUSERSITE=1`이므로 release 안의 package를 `PYTHONPATH`로 넣어야 함 | 2단계 |
 | 원격 runtime의 skill link | runtime의 건너뛰기는 해결됨(DIST-003): `install.json`이 있으면 `_install_skills`가 link를 만들지 않고 고치지 않음. 설치의 넘겨받기는 남음 | 설치본이 있으면 만들지 않고 고치지 않음(2절 규칙 6) | 4단계(설치의 넘겨받기) |
-| tmux 통합 파일의 경로 | `~/.tmux/scripts/tmux_project_board.sh`를 고정 경로로 부름([project_board.conf:3-32](../../tmux/scripts/project_board.conf)) | `current` 아래 경로 | 5단계 |
+| tmux 통합 파일의 경로 | `~/.tmux/scripts/tmux_project_board.sh`를 고정 경로로 부름([project_board.conf:3-32](../../integrations/tmux/project_board.conf)) | `current` 아래 경로 | 5단계 |
 | tmux 통합 파일의 binding | `prefix B`와 root `MouseDown1Pane`을 무조건 binding함 | 3.1절 | 5단계 |
 | `tmux_decide_status.py`의 project-item 찾기 | 저장소 상대 경로([README의 실행 경로 계약 6항](README.md)) | 설치본에서도 찾음 | 5단계 |
 

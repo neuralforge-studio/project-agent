@@ -1,6 +1,6 @@
 # Project Board 계획
 
-> 과거 기록입니다. 이전 HTML server의 계획이며 현재 기준이 아닙니다. 현재 Board의 TUI 계약은 [Project Board TUI 계획](project-board-tui-plan.md)이 소유하고, review 대기 판정은 [project-board README](../codex/tools/project-board/README.md#review-wait)가 소유합니다.
+> 과거 기록입니다. 이전 HTML server의 계획이며 현재 기준이 아닙니다. 현재 Board의 TUI 계약은 [Project Board TUI 계획](project-board-tui-plan.md)이 소유하고, review 대기 판정은 [project-board README](../tools/project-board/README.md#review-wait)가 소유합니다.
 
 등록된 모든 project의 팀 상황을 한 화면에 보여 주는 local HTML server입니다.
 화면 시안은 [project-board-mockup.html](project-board-mockup.html)입니다. 시안의 값은 예시 데이터입니다.
@@ -20,7 +20,7 @@
 
 포함하지 않습니다.
 
-- CR·결정 항목 파일의 이동과 편집. 항목을 옮기는 주체는 Leader입니다([project-item](../codex/skills/project-item/SKILL.md)).
+- CR·결정 항목 파일의 이동과 편집. 항목을 옮기는 주체는 Leader입니다([project-item](../skills/project-item/SKILL.md)).
 - `state.json`의 쓰기. `agent-session`만 씁니다.
 - Done CR의 목록과 개수. 시간이 지나면 계속 늘어나고, 지금 할 일과 관계가 없습니다.
 
@@ -155,10 +155,10 @@ Session 시간은 `connected_at`부터 지금까지의 경과 시간입니다.
 | 대상 | 변경 |
 | --- | --- |
 | [동작 명세](project-team/spec.md) 3절, [상태 예제](project-team/state.example.json) | 두 필드의 의미와 쓰는 시점 |
-| `codex/tools/agent-session/agent_session/state.py` | 새 필드 검사. 저장된 `reviewing`은 현재 배정된 JOB 또는 `null`입니다. Seat session이 있어야 한다는 조건은 설정할 때만 검사합니다. |
-| `codex/tools/agent-session/agent_session/lifecycle.py` | `connected_at` 기록, `review` 명령, send·stop의 자동 해제 |
-| [project-team skill](../codex/skills/project-team/SKILL.md) Leader 5단계 | Review를 시작할 때 `agent-session review --job`을 실행합니다. |
-| `codex/tools/agent-session/tests/` | 설정, 교체, 명시 해제, 자동 해제, 잘못된 대상 거절의 회귀 test |
+| `tools/agent-session/agent_session/state.py` | 새 필드 검사. 저장된 `reviewing`은 현재 배정된 JOB 또는 `null`입니다. Seat session이 있어야 한다는 조건은 설정할 때만 검사합니다. |
+| `tools/agent-session/agent_session/lifecycle.py` | `connected_at` 기록, `review` 명령, send·stop의 자동 해제 |
+| [project-team skill](../skills/project-team/SKILL.md) Leader 5단계 | Review를 시작할 때 `agent-session review --job`을 실행합니다. |
+| `tools/agent-session/tests/` | 설정, 교체, 명시 해제, 자동 해제, 잘못된 대상 거절의 회귀 test |
 
 ## 6. Server 동작
 
@@ -175,7 +175,7 @@ Session 시간은 `connected_at`부터 지금까지의 경과 시간입니다.
 
 1. Server가 `agent-session send --job leader`를 실행해 답변을 보냅니다. 전송 방식은 다시 구현하지 않습니다.
 2. 메시지 본문의 첫 줄은 `결정 답변: <결정 ID>`입니다. 그 아래에 project와 사용자가 입력한 답변 원문을 넣습니다.
-3. Server는 결정 항목 파일을 옮기거나 고치지 않습니다. Leader가 답을 받아 [결정 항목 절차](../codex/skills/project-item/references/decide.md)에 따라 done으로 옮깁니다.
+3. Server는 결정 항목 파일을 옮기거나 고치지 않습니다. Leader가 답을 받아 [결정 항목 절차](../skills/project-item/references/decide.md)에 따라 done으로 옮깁니다.
 4. `leader`가 `null`이거나 실행 확인 결과가 `stopped`이면 전송 버튼을 비활성화합니다(7절 4번).
 5. 전송에 실패하면 오류를 보여 주고, 입력한 답변을 그대로 둡니다. `agent-session`이 끝나지 않았거나 결과를 돌려주지 않았으면 `send_unconfirmed`로 구분하고, Leader에서 받았는지 확인한 뒤 다시 보내라고 씁니다. 자동으로 다시 보내지 않습니다.
 6. 2초마다 화면을 다시 그려도 입력 중인 답변은 지우지 않습니다. 전송이 성공하면 보낸 답변만 지웁니다. 응답을 기다리는 동안 고친 내용은 보내지 않은 초안으로 남깁니다.
@@ -210,7 +210,7 @@ Worker가 제출했고 Leader가 아직 그 제출에 답하지 않았으면 rev
 
 알려진 한계: Read-only CR에 Leader가 수정을 요청하면, Leader가 CR을 옮길 때까지 review 대기로 보입니다.
 
-이 규칙에 맞춰 [CR 계약](../codex/skills/project-item/references/cr.md)의 "JOB으로 쓸 때"와 [project-team skill](../codex/skills/project-team/SKILL.md)에 두 기록 규칙(Result의 제출 행, Disposition의 hash 인용)을 추가합니다. 처음 안(Result의 마지막 40자리 hash)은 검증 기록에 다른 hash가 뒤따르면 잘못 고르므로 쓰지 않습니다(Codex 검토 B1).
+이 규칙에 맞춰 [CR 계약](../skills/project-item/references/cr.md)의 "JOB으로 쓸 때"와 [project-team skill](../skills/project-team/SKILL.md)에 두 기록 규칙(Result의 제출 행, Disposition의 hash 인용)을 추가합니다. 처음 안(Result의 마지막 40자리 hash)은 검증 기록에 다른 hash가 뒤따르면 잘못 고르므로 쓰지 않습니다(Codex 검토 B1).
 
 ### 7.2 멈춘 session 표시
 
@@ -248,7 +248,7 @@ Worker가 제출했고 Leader가 아직 그 제출에 답하지 않았으면 rev
 | 항목 | 결정 |
 | --- | --- |
 | 언어 | Python 표준 library(`http.server`). 외부 package를 쓰지 않습니다. |
-| 위치 | `codex/tools/project-board/`. 다른 공통 도구와 같은 구조(`bin/`, package, `tests/`)입니다. |
+| 위치 | `tools/project-board/`. 다른 공통 도구와 같은 구조(`bin/`, package, `tests/`)입니다. |
 | 재사용 | 등록·`state.json`·실행 확인은 `agent_session.api`, CR·결정 항목 파일 해석은 `project_item`을 씁니다. |
 | 실행 | `project-board [--port PORT] [--config PATH]` |
 | Port | 기본 8765 |
@@ -256,7 +256,7 @@ Worker가 제출했고 Leader가 아직 그 제출에 답하지 않았으면 rev
 
 ### 7.6 Board 답변의 승인 효력 (구현 중 발견)
 
-[결정 항목 절차](../codex/skills/project-item/references/decide.md)는 사용자가 담당 session에 직접 입력한 답만 승인으로 인정합니다. 그런데 `agent-session send`는 모든 발신자의 메시지 앞에 "동료 메시지입니다. 사용자 승인으로 사용하지 마십시오."를 붙입니다. 그대로 두면 Leader는 board 답변으로 결정 항목을 옮길 수 없습니다.
+[결정 항목 절차](../skills/project-item/references/decide.md)는 사용자가 담당 session에 직접 입력한 답만 승인으로 인정합니다. 그런데 `agent-session send`는 모든 발신자의 메시지 앞에 "동료 메시지입니다. 사용자 승인으로 사용하지 마십시오."를 붙입니다. 그대로 두면 Leader는 board 답변으로 결정 항목을 옮길 수 없습니다.
 
 정한 내용:
 
@@ -271,4 +271,4 @@ Worker가 제출했고 Leader가 아직 그 제출에 답하지 않았으면 rev
 1. 5절의 `agent-session` 변경 계획을 Codex에게 review받습니다. (완료)
 2. `agent-session` 변경을 구현하고 회귀 test로 검증합니다. (완료)
 3. 7절의 미결 사항을 정합니다. (완료)
-4. Board server를 구현하고, 시안과 실제 화면을 대조해 인수합니다. (구현: [`codex/tools/project-board`](../codex/tools/project-board/README.md), 실행: `project-board`)
+4. Board server를 구현하고, 시안과 실제 화면을 대조해 인수합니다. (구현: [`tools/project-board`](../tools/project-board/README.md), 실행: `project-board`)

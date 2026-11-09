@@ -22,7 +22,7 @@ TUI는 답변 접수에만 `project_item`의 Decision 기록 경로를 사용합
 | 반영 진행 | Decision의 `Related`가 가리키는 `path_cr` 상태 | `반영 중`과 `완료`를 계산 |
 | Leader 알림 | `agent-session send --job leader` | 저장한 사용자 답을 알리고 결과를 표시 |
 
-기존 [`project_board.model`](../codex/tools/project-board/project_board/model.py)의 `snapshot()`과 `liveness()`를 재사용합니다. TUI는 개수나 상태의 별도 원본을 만들지 않습니다. Sidebar의 켜짐 상태, 폭, 선택 위치를 tmux UI 상태로 유지합니다. 좌석 펼침 상태의 원본은 tmux server option 하나입니다. Board pane은 project별 상태를 공유하며 새 pane도 이를 읽습니다.
+기존 [`project_board.model`](../tools/project-board/project_board/model.py)의 `snapshot()`과 `liveness()`를 재사용합니다. TUI는 개수나 상태의 별도 원본을 만들지 않습니다. Sidebar의 켜짐 상태, 폭, 선택 위치를 tmux UI 상태로 유지합니다. 좌석 펼침 상태의 원본은 tmux server option 하나입니다. Board pane은 project별 상태를 공유하며 새 pane도 이를 읽습니다.
 
 ### 갱신과 실행 단위
 
@@ -84,7 +84,7 @@ CR·결정 popup의 너비가 70 column 미만이면 `목록` 버튼으로 목�
 오류가 나도 popup은 열린 상태를 유지합니다.
 원본 경로는 등록한 CR root의 해당 상태에서 열거한 항목으로 제한합니다.
 
-`review_wait`의 판정 규칙은 [project-board README](../codex/tools/project-board/README.md#review-wait)가 소유합니다. 제출 행의 문법은 [CR 계약](../codex/skills/project-item/references/cr.md)이 소유합니다. 이 표시는 `R` 표시와 별개입니다.
+`review_wait`의 판정 규칙은 [project-board README](../tools/project-board/README.md#review-wait)가 소유합니다. 제출 행의 문법은 [CR 계약](../skills/project-item/references/cr.md)이 소유합니다. 이 표시는 `R` 표시와 별개입니다.
 
 ## 4. 결정 popup
 
@@ -111,9 +111,9 @@ CR·결정 popup의 너비가 70 column 미만이면 `목록` 버튼으로 목�
 
 결정 목록, 접기/펼치기, 본문 스크롤, 답변 입력란, 전송 버튼을 마우스로 조작할 수 있게 합니다. 키보드 조작도 제공합니다.
 
-[`project_board.model`](../codex/tools/project-board/project_board/model.py)은 [`project_item.render.sections()`](../codex/tools/project-item/project_item/render.py)의 Markdown 원문을 `{name, body}`로 제공합니다. `Evidence`를 포함한 전체 본문을 TUI가 읽습니다. 답변 검증·문구·전송 결과 처리는 [`project_board.answer`](../codex/tools/project-board/project_board/answer.py)가 소유합니다. 결정 파일을 `done`으로 옮기는 일은 계속 Leader가 맡습니다.
+[`project_board.model`](../tools/project-board/project_board/model.py)은 [`project_item.render.sections()`](../tools/project-item/project_item/render.py)의 Markdown 원문을 `{name, body}`로 제공합니다. `Evidence`를 포함한 전체 본문을 TUI가 읽습니다. 답변 검증·문구·전송 결과 처리는 [`project_board.answer`](../tools/project-board/project_board/answer.py)가 소유합니다. 결정 파일을 `done`으로 옮기는 일은 계속 Leader가 맡습니다.
 
-TUI는 Textual 8.2.8의 [Markdown](https://textual.textualize.io/widgets/markdown/)과 [DataTable](https://textual.textualize.io/widgets/data_table/)을 사용합니다. 버전 원본은 [`requirements.txt`](../codex/tools/project-board/requirements.txt)입니다. macOS의 `~/python/.venv`에는 설치했습니다. WSL과 Workstation에서 실행할 때는 해당 환경의 패키지 가용성을 확인합니다. Workstation에 패키지가 없으면 사용자에게 설치를 요청합니다.
+TUI는 Textual 8.2.8의 [Markdown](https://textual.textualize.io/widgets/markdown/)과 [DataTable](https://textual.textualize.io/widgets/data_table/)을 사용합니다. 버전 원본은 [`requirements.txt`](../tools/project-board/requirements.txt)입니다. macOS의 `~/python/.venv`에는 설치했습니다. WSL과 Workstation에서 실행할 때는 해당 환경의 패키지 가용성을 확인합니다. Workstation에 패키지가 없으면 사용자에게 설치를 요청합니다.
 
 ## 5. tmux 표시 범위와 동작
 
