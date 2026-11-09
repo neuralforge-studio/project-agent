@@ -19,6 +19,7 @@ import uuid
 import pytest
 
 import board_testing  # noqa: F401  (adds the Board tool to sys.path)
+import tmux_test_server
 from project_board import tmux_control
 from board_testing import Board, session
 from agent_session.tmux import Tmux
@@ -57,6 +58,21 @@ def _attached(name, session):
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_ending_a_test_server_removes_the_runtime_directory_the_board_made_for_it():
+    """tmux_test_server removes `/tmp/project-board-<uid>-<server pid>`; the product owns that name."""
+    name = tmux_test_server.claim("board-test")
+    directory = None
+    try:
+        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "home", "sleep", "60")
+        directory = tmux_control._private_dir(Tmux(socket_name=name))
+        assert directory.is_dir()
+    finally:
+        tmux_test_server.release(name)
+    assert directory is not None and not directory.exists()
+    assert not tmux_test_server.socket_path(name).exists()
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_remote_seat_switch_uses_its_local_display_window_for_only_clicking_client(tmp_path):
     board = Board(tmp_path)
     base = board.project("remote-project", seats=1)
@@ -65,7 +81,7 @@ def test_remote_seat_switch_uses_its_local_display_window_for_only_clicking_clie
     board.config.write_text(json.dumps(board.registry), encoding="utf-8")
     board.state(base, {"leader": None,
                        "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)}})
-    name = "board-test-" + uuid.uuid4().hex[:12]
+    name = tmux_test_server.claim("board-test")
     clients = []
     try:
         _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "home", "sleep", "60")
@@ -96,13 +112,13 @@ def test_remote_seat_switch_uses_its_local_display_window_for_only_clicking_clie
                 process.kill()
                 process.wait(timeout=2)
             os.close(master)
-        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+        tmux_test_server.release(name)
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None,
                     reason="tmux is unavailable")
 def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(monkeypatch):
-    name = "board-test-" + uuid.uuid4().hex[:12]
+    name = tmux_test_server.claim("board-test")
     clients = []
     try:
         _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "one", "sleep", "60")
@@ -201,12 +217,12 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
                 process.kill()
                 process.wait(timeout=2)
             os.close(master)
-        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+        tmux_test_server.release(name)
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_sidebar_restores_split_layout_and_focus_after_selecting_board(monkeypatch):
-    name = "board-test-" + uuid.uuid4().hex[:12]
+    name = tmux_test_server.claim("board-test")
     clients = []
     try:
         _tmux(name, "-f", "/dev/null", "new-session", "-d", "-x", "101", "-y", "31",
@@ -244,12 +260,12 @@ def test_sidebar_restores_split_layout_and_focus_after_selecting_board(monkeypat
                 process.kill()
                 process.wait(timeout=2)
             os.close(master)
-        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+        tmux_test_server.release(name)
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_sidebar_keeps_resized_width_across_window_changes(monkeypatch):
-    name = "board-test-" + uuid.uuid4().hex[:12]
+    name = tmux_test_server.claim("board-test")
     clients = []
     try:
         _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "one", "sleep", "60")
@@ -289,12 +305,12 @@ def test_sidebar_keeps_resized_width_across_window_changes(monkeypatch):
                 process.kill()
                 process.wait(timeout=2)
             os.close(master)
-        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+        tmux_test_server.release(name)
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_sidebar_keeps_requested_width_after_a_narrow_window(monkeypatch):
-    name = "board-test-" + uuid.uuid4().hex[:12]
+    name = tmux_test_server.claim("board-test")
     clients = []
     try:
         _tmux(name, "-f", "/dev/null", "new-session", "-d", "-x", "80", "-y", "24",
@@ -335,12 +351,12 @@ def test_sidebar_keeps_requested_width_after_a_narrow_window(monkeypatch):
                 process.kill()
                 process.wait(timeout=2)
             os.close(master)
-        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+        tmux_test_server.release(name)
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_sidebar_keeps_requested_width_after_a_split_window(monkeypatch):
-    name = "board-test-" + uuid.uuid4().hex[:12]
+    name = tmux_test_server.claim("board-test")
     clients = []
     try:
         _tmux(name, "-f", "/dev/null", "new-session", "-d", "-x", "80", "-y", "24",
@@ -385,12 +401,12 @@ def test_sidebar_keeps_requested_width_after_a_split_window(monkeypatch):
                 process.kill()
                 process.wait(timeout=2)
             os.close(master)
-        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+        tmux_test_server.release(name)
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_resize_hook_records_only_board_pane_width():
-    name = "board-test-" + uuid.uuid4().hex[:12]
+    name = tmux_test_server.claim("board-test")
     try:
         _tmux(name, "-f", "/dev/null", "new-session", "-d", "-x", "100", "-y", "30",
               "sleep", "60")
@@ -407,12 +423,12 @@ def test_resize_hook_records_only_board_pane_width():
         _tmux(name, "resize-pane", "-t", other, "-x", "60")
         assert _tmux(name, "show-options", "-gqv", "@project_board_width") == "33"
     finally:
-        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+        tmux_test_server.release(name)
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_managed_pane_death_removes_board_and_restore_state(monkeypatch):
-    name = "board-test-" + uuid.uuid4().hex[:12]
+    name = tmux_test_server.claim("board-test")
     clients = []
     try:
         _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "one", "sleep", "60")
@@ -448,11 +464,12 @@ def test_managed_pane_death_removes_board_and_restore_state(monkeypatch):
                 process.kill()
                 process.wait(timeout=2)
             os.close(master)
-        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+        tmux_test_server.release(name)
 
 
-def test_click_socket_receives_the_exact_client_and_rejects_stale_window(monkeypatch):
+def test_click_socket_receives_the_exact_client_and_rejects_stale_window(monkeypatch, request):
     short_dir = tempfile.TemporaryDirectory(prefix="board-click-", dir="/tmp")
+    request.addfinalizer(short_dir.cleanup)
     click_path = Path(short_dir.name) / "click.sock"
     received = []
     ready = threading.Event()
@@ -495,7 +512,6 @@ def test_click_socket_receives_the_exact_client_and_rejects_stale_window(monkeyp
     control.current = "@2"
     stale = tmux_control.route_click("/dev/ttys1", "%4", 2, 3)
     assert stale["error"]["code"] == "click_stale"
-    short_dir.cleanup()
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
@@ -505,7 +521,7 @@ def test_project_click_switches_only_selected_client_to_session_current_window(t
     board.project("two")
     board.project("two-extra")
     board.project("missing")
-    name = "board-test-" + uuid.uuid4().hex[:12]
+    name = tmux_test_server.claim("board-test")
     clients = []
     try:
         _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "one", "sleep", "60")
@@ -540,4 +556,4 @@ def test_project_click_switches_only_selected_client_to_session_current_window(t
                 process.kill()
                 process.wait(timeout=2)
             os.close(master)
-        subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, timeout=5)
+        tmux_test_server.release(name)

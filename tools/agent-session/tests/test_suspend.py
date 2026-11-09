@@ -21,6 +21,7 @@ from agent_session.state import StateStore
 from agent_session.errors import SessionError
 from agent_session.suspend import Fleet, SuspendMixin, SuspendStore
 from agent_session.tmux import Tmux
+import tmux_test_server  # noqa: E402
 
 
 def claude_project(env, monkeypatch, others=()):
@@ -59,8 +60,9 @@ def records(env):
 
 
 def kill_server(env):
-    subprocess.run(["tmux", "-L", env.socket_name, "kill-server"], capture_output=True, timeout=10)
-    Path(Tmux(socket_name=env.socket_name).effective_socket()).unlink(missing_ok=True)
+    """Lose the server mid-test; the next command starts a new one, which the watchdog must cover again."""
+    tmux_test_server.release(env.socket_name)
+    tmux_test_server.watch(env.socket_name)
 
 
 def busy(env, slot, base=None):

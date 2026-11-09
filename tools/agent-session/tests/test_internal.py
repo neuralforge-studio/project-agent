@@ -20,7 +20,7 @@ from agent_session.config import resolve_project
 from agent_session.errors import SessionError
 from agent_session.state import StateStore, locked
 from agent_session.tmux import Tmux
-from agent_session_fixture import stop_test_server
+import tmux_test_server  # noqa: E402
 
 
 @pytest.fixture
@@ -37,7 +37,7 @@ def native_slot(tmp_path, monkeypatch):
     config.write_text(json.dumps({str(base): {"project": "fixture", "provider": "codex", "seats": [str(seat)]}}))
     project = resolve_project(base, config)
     store = StateStore(project)
-    socket_name = "agent-internal-test-" + uuid.uuid4().hex[:12]
+    socket_name = tmux_test_server.claim("agent-internal-test")
     subprocess.run(["tmux", "-L", socket_name, "-f", os.devnull, "new-session", "-d", "-s", "harness",
                     "sleep", "86400"], check=True, capture_output=True)
     control = Tmux(socket_name=socket_name)
@@ -60,7 +60,7 @@ def native_slot(tmp_path, monkeypatch):
     previous = publish("old-run", str(uuid.uuid4()))
     yield {"project": project, "store": store, "tmux": control, "previous": previous,
            "config": config, "base": base, "seat": seat, "endpoint": endpoint, "publish": publish}
-    stop_test_server(socket_name)
+    tmux_test_server.release(socket_name)
 
 
 def test_late_registration_cannot_replace_a_new_run_after_native_check(native_slot, monkeypatch):

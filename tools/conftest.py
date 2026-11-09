@@ -4,12 +4,20 @@ pytest's default root (``$TMPDIR/pytest-of-<user>``) is shared by every project 
 user, and each run prunes the numbered directories of the others. An explicit ``--basetemp`` is
 kept as given. Otherwise the run gets a short private directory directly under ``TMPDIR`` (short
 so Unix socket paths stay under the ~108 byte limit), removed after a passing run.
+
+A run that does not pass keeps its directory for debugging. The next run removes the directories
+of ended runs beyond the newest five, and never one whose run is still going; ``tests/private_root.py``
+owns that rule and its reasons.
 """
 
+from pathlib import Path
 import shutil
-import tempfile
+import sys
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "tests"))
+import private_root  # noqa: E402
 
 PRIVATE_ROOT = pytest.StashKey[str]()
 
@@ -17,8 +25,9 @@ PRIVATE_ROOT = pytest.StashKey[str]()
 def pytest_configure(config):
     if config.option.basetemp is not None or hasattr(config, "workerinput"):
         return
-    root = tempfile.mkdtemp(prefix="pt-")
-    config.option.basetemp = root
+    private_root.prune()
+    root = private_root.create()
+    config.option.basetemp = private_root.basetemp(root)
     config.stash[PRIVATE_ROOT] = root
 
 

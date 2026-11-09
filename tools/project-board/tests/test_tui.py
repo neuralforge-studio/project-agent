@@ -5,11 +5,10 @@ import json
 import os
 import re
 import threading
-import uuid
 
 import pytest
 
-from board_testing import Board, leader, session, wait_until
+from board_testing import Board, click_socket, leader, session, wait_until
 from project_board import model
 from project_board.tui import CRPopupApp, CSVScreen, PopupApp, SidebarApp, _seat_text
 from textual.widgets import Button, DataTable, Markdown, Static, TextArea
@@ -433,10 +432,10 @@ def test_cr_markdown_reader_rejects_unlisted_paths(tmp_path):
         model.read_cr_markdown(project, item, "open")
 
 
-def test_ipc_click_routes_the_originating_client(tmp_path):
+def test_ipc_click_routes_the_originating_client(tmp_path, request):
     board = _make_sidebar_board(tmp_path)
     calls = []
-    socket = f"/tmp/project-board-ui-{os.getpid()}-{uuid.uuid4().hex[:8]}.sock"
+    socket = click_socket(request)
     app = SidebarApp(
         str(board.config), poll=False, click_socket=socket,
         on_project=lambda project, client=None: calls.append((project, client)),
@@ -463,12 +462,12 @@ def test_ipc_click_routes_the_originating_client(tmp_path):
     asyncio.run(check())
 
 
-def test_empty_cr_and_decision_clicks_do_nothing_for_mouse_and_ipc(tmp_path):
+def test_empty_cr_and_decision_clicks_do_nothing_for_mouse_and_ipc(tmp_path, request):
     board = Board(tmp_path)
     base = board.project("Falcon2", seats=1)
     calls = []
     notifications = []
-    socket = f"/tmp/project-board-ui-{os.getpid()}-{uuid.uuid4().hex[:8]}.sock"
+    socket = click_socket(request)
     app = SidebarApp(
         str(board.config), poll=False, click_socket=socket,
         on_cr=lambda project, state, client=None: calls.append((project, state, client)),
@@ -520,7 +519,7 @@ def test_empty_cr_and_decision_clicks_do_nothing_for_mouse_and_ipc(tmp_path):
     asyncio.run(check())
 
 
-def test_pending_seats_wait_without_clicking_and_running_seat_still_opens(tmp_path):
+def test_pending_seats_wait_without_clicking_and_running_seat_still_opens(tmp_path, request):
     board = Board(tmp_path)
     haroo = board.project("haroo", seats=3)
     agent = board.project("agent", seats=1)
@@ -538,7 +537,7 @@ def test_pending_seats_wait_without_clicking_and_running_seat_still_opens(tmp_pa
     })
     calls = []
     notifications = []
-    socket = f"/tmp/project-board-ui-{os.getpid()}-{uuid.uuid4().hex[:8]}.sock"
+    socket = click_socket(request)
     app = SidebarApp(
         str(board.config), poll=False, click_socket=socket,
         on_seat=lambda project, seat, client=None: calls.append((project, seat, client)),

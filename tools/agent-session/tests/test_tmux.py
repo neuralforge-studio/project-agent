@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import sys
 import time
-import uuid
 
 import pytest
 
@@ -17,19 +16,19 @@ from agent_session.errors import SessionError
 from agent_session.lifecycle import Manager
 from agent_session.process import alive, birth
 from agent_session.tmux import Tmux
-from agent_session_fixture import stop_test_server
+import tmux_test_server  # noqa: E402
 
 
 @pytest.fixture
 def tmux():
     if not shutil.which("tmux"):
         pytest.skip("tmux is unavailable")
-    name = "agent-session-test-" + uuid.uuid4().hex[:12]
+    name = tmux_test_server.claim("agent-session-test")
     instance = Tmux(socket_name=name)
     original_argv = instance._argv
     instance._argv = lambda arguments: ["tmux", "-f", os.devnull] + original_argv(arguments)[1:]
     yield instance
-    stop_test_server(name)
+    tmux_test_server.release(name)
 
 
 def new_window(tmux, tmp_path, run="run-one", target="seat-0", job="J-20261103-01"):
