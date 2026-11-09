@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S2
+- Base: afc5dc25ff13e85251ff5e46ebfd3fb33f0653ca 2026-11-09T21:09:33+09:00
 
 ## Symptom
 사용자 보고: "exit을 해도 pane, window가 최종 destory까지 안됨." 어느 exit(관리 대화의 `/exit`, `agent-session stop`, CLI 비정상 종료)인지는 아직 구분하지 않았습니다.
