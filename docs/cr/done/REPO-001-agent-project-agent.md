@@ -5,6 +5,7 @@
 - Severity: S2
 - Requester: agent, /primehome/swain/Utils/agent/agent.base, 2026-11-09
 - Base: ae2f4129292a75244f12c56394c131bb5c5637d7 2026-11-09T14:00:56+09:00
+- Outcome: fixed
 
 ## Symptom
 이 저장소는 agent 저장소에서 제품 경로만 이력과 함께 추출해 만들었습니다(agent DIST-004, 2026-11-09, `main` 5b63953). 그래서 배치가 agent 저장소의 것 그대로입니다(`codex/tools/`, `codex/skills/`, `docs/`, `tmux/scripts/`). 저장소 자체를 설명하는 진입 문서(`AGENTS.md`, `README.md`)와 test 설정도 없습니다. 배포 설치기(설치 계약)가 기대하는 release 배치가 아직 정해지지 않았습니다.
@@ -29,6 +30,7 @@
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). 이 CR은 agent의 승인한 계획 DIST-001 3단계의 남은 부분입니다. DIST-001은 사용자 결정 D-20261109-08 C·-09 C·-10 A로 범위를 정하고 agent `docs/cr/todo/`에 있습니다(승인). 목표 배치는 그 계획 3단계가 정했습니다. 관측 동작을 바꾸지 않는 경로·문서 정리이므로 위임 범위(승인한 작업의 하위 작업, 선례가 있는 경로·문서 정리)입니다. 진행 순서 REPO-001 → TMUX-001·INSTALL-001 → RELEASE-001은 사용자가 2026-11-09 대화에서 지시했습니다. 사용자 원문: "제안 진행 순서대로 진행". 이 저장소의 경로는 이 workstation의 떠 있는 run에 영향을 주지 않습니다. 지금 모든 관리 run과 `~/.local/bin`·skill link는 agent 저장소의 동결 사본을 씁니다(2026-11-09 `readlink ~/.local/bin/agent-session` 확인).
 - 2026-11-09 Leader: 제출 77a4f2d0e95a762c6a6346193eed7326e2f4c9a4를 인수합니다. Leader review: 경로 계산만 바뀐 코드 diff, README·AGENTS, Result의 suite·link·이력 근거를 확인했습니다. 제출 commit snapshot에서 test_remote·test_remote_skills·경계 test·tmux·launcher·doc_contract·tmux_control 132개를 다시 실행해 통과했습니다. Worker 확인 요청(install-contract.md:168의 project_board_home_status.conf): TMUX-001 Contract가 사용자 status layout을 제품 밖으로 정했으므로 이 저장소로 가져오지 않습니다. 문구 정정과 제품 지도 tmux 행의 같은 파일 이름 제거는 TMUX-001 Implementation에 넣습니다.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 1e06cac(Merge cr/REPO-001, 제출 77a4f2d). origin/main 반영 확인.
 
 ## Implementation
 읽을 문서: [제품 지도](../../project-team/README.md), [설치 계약](../../project-team/install-contract.md) 2절·6.1절, [동작 명세](../../project-team/spec.md). 이 CR의 Contract가 범위의 원본입니다.
