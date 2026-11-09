@@ -176,6 +176,7 @@ class Tmux:
 
     def close_window(self, window_id, meta):
         self.closed.append(window_id)
+        return "pane" if meta.get("person") else "window"
 
 
 def test_window_names_follow_the_project_slot_and_job_and_a_retired_name_adds_the_run():
@@ -211,6 +212,14 @@ def test_sweep_closes_ended_retired_windows_and_leaves_the_current_and_unsure_on
     result = windows.sweep(tmux, base, "seat-0", lambda meta: {"stopped": meta["run_id"] != "live"})
     assert result == {"closed": ["@1"], "kept": [{"window_id": "@2", "reason": "termination_unconfirmed"}]}
     assert tmux.closed == ["@1"]
+
+
+def test_sweep_lists_a_window_that_kept_a_persons_pane_apart_from_the_closed_ones(tmp_path):
+    shared = {"window_id": "@1", "run_id": "old", "base": str(tmp_path), "pane_id": "%1", "person": True}
+    alone = {"window_id": "@2", "run_id": "older", "base": str(tmp_path), "pane_id": "%2"}
+    tmux = Tmux(None, [shared, alone])
+    result = windows.sweep(tmux, project(tmp_path), "seat-0", lambda meta: {"stopped": True})
+    assert result == {"closed": ["@2"], "kept": [], "pane_closed": ["@1"]}
 
 
 def test_sweep_leaves_the_rest_to_the_next_sweep_after_its_budget(tmp_path, monkeypatch):

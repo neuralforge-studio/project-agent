@@ -1790,10 +1790,11 @@ def test_sweep_keeps_pending_controlled_shared_or_unconfirmed_windows(session_en
 
     manager.provider.observe = partly_unknown
     swept = manager._sweep("seat-0")
-    assert swept["closed"] == [ended["window_id"]]
+    assert swept["closed"] == [ended["window_id"]] and swept["pane_closed"] == [shared["window_id"]]
     assert {item["window_id"]: item["reason"] for item in swept["kept"]} == {
         pending["window_id"]: "control_pending", controlled["window_id"]: "controller_running",
-        shared["window_id"]: "window_shared", unconfirmed["window_id"]: "termination_unconfirmed"}
+        unconfirmed["window_id"]: "termination_unconfirmed"}
+    assert shared["pane_id"] not in panes(env, shared["window_id"])
     result_file = env.base / "agent/runs" / controlled["run_id"] / "control-result.json"
     owner = {"run_id": controlled["run_id"], **me, "result_file": str(result_file)}
     for payload, other in (({"accepted": True, "completed": False}, {}), ({"completed": True}, {"pid": 1}),
@@ -2186,26 +2187,44 @@ def test_self_restart_reuses_the_window_and_leaves_no_pending_control(session_en
     assert env.tmux.get_current("fixture", "leader")["run_id"] == data["run_id"]
 
 
-def test_stop_keeps_a_window_with_a_person_pane_until_the_next_start_takes_it(session_env):
+def test_stop_closes_the_managed_pane_and_leaves_a_persons_pane_in_an_unmanaged_window(session_env):
     env = session_env
     leader = env.manager().start("leader")
     user = add_pane(env, leader["window_id"])
     stopped = env.manager().control("stop", job="leader")
     assert stopped["released"] is True
-    assert stopped["cleanup"]["closed"] == [] and stopped["cleanup"]["kept"][0]["reason"] == "window_shared"
-    assert window_names(env) == [leader["window_id"] + " fixture-leader-exited-" + leader["run_id"][:8]]
+    assert stopped["cleanup"] == {"closed": [], "kept": [], "pane_closed": [leader["window_id"]]}
+    assert panes(env, leader["window_id"]) == [user]
+    assert env.tmux.managed_windows("fixture", "leader") == []
+    assert env.tmux.get_current("fixture", "leader") is None
+    # A later start opens its own window; the person's window is not taken over or closed again.
     again = env.manager().start("leader")
-    assert again["window_id"] == leader["window_id"] and again["run_id"] != leader["run_id"]
-    assert panes(env, leader["window_id"]) == [leader["pane_id"], user]
-    assert window_names(env) == [leader["window_id"] + " fixture-leader"]
-    assert env.tmux.get_current("fixture", "leader")["run_id"] == again["run_id"]
-    # Without a person's pane the window still closes at stop, as before.
+    assert again["window_id"] != leader["window_id"] and "cleanup" in again
+    assert again["cleanup"]["closed"] == [] and "pane_closed" not in again["cleanup"]
+    assert panes(env, leader["window_id"]) == [user]
+    # Without a person's pane the window closes at stop.
     env.tmux.command("kill-pane", "-t", user)
     closed = env.manager().control("stop", job="leader")
-    assert closed["cleanup"]["closed"] == [leader["window_id"]] and windows(env) == []
+    assert closed["cleanup"]["closed"] == [again["window_id"]] and windows(env) == []
 
 
-def test_the_seats_next_cr_takes_the_window_of_the_released_one(session_env):
+def test_a_held_release_keeps_the_window_with_a_persons_pane_until_the_cr_moves(session_env):
+    env = session_env
+    cr = env.cr()
+    worker = env.manager().start(cr)
+    user = add_pane(env, worker["window_id"])
+    held = env.manager().control("stop", job=cr)
+    assert held["released"] is False and held["cleanup"] == {"closed": [], "kept": []}
+    assert panes(env, worker["window_id"]) == [worker["pane_id"], user]
+    env.finish(cr)
+    finished = env.manager().finish_release(cr)
+    assert finished["released"] is True and finished["cleanup"] == {
+        "closed": [], "kept": [], "pane_closed": [worker["window_id"]]}
+    assert panes(env, worker["window_id"]) == [user]
+    assert env.tmux.managed_windows("fixture", "seat-0") == []
+
+
+def test_the_seats_next_cr_opens_a_new_window_after_the_released_ones_pane_was_closed(session_env):
     env = session_env
     first_cr = env.cr()
     first = env.manager().start(first_cr)
@@ -2213,26 +2232,26 @@ def test_the_seats_next_cr_takes_the_window_of_the_released_one(session_env):
     env.finish(first_cr, state="done", outcome="waived", note="no change needed")
     stopped = env.manager().control("stop", job=first_cr)
     assert stopped["released"] is True and env.store.read()["0"] == EMPTY
-    assert window_names(env) == [first["window_id"] + " fixture-seat0-" + first_cr + "-exited-" + first["run_id"][:8]]
+    assert panes(env, first["window_id"]) == [user]
     second_cr = env.cr(number=2)
     second = env.manager().start(second_cr)
-    assert second["seat"] == 0 and second["window_id"] == first["window_id"]
-    assert panes(env, first["window_id"]) == [first["pane_id"], user]
-    assert window_names(env) == [first["window_id"] + " fixture-seat0-" + second_cr]
-    meta = env.tmux.read_meta(first["window_id"])
-    assert meta["job_id"] == second_cr and meta["run_id"] == second["run_id"]
+    assert second["seat"] == 0 and second["window_id"] != first["window_id"]
+    assert panes(env, first["window_id"]) == [user]
     assert env.tmux.get_current("fixture", "seat-0")["run_id"] == second["run_id"]
 
 
 @pytest.mark.parametrize("why", ["pending", "controller", "restored", "unconfirmed", "live"])
 def test_a_window_that_is_not_surely_ended_is_left_and_a_new_one_opens(session_env, monkeypatch, why):
+    import agent_session.lifecycle as lifecycle
     from agent_session_fake_provider import FakeProvider
     from agent_session.process import birth
 
     env = session_env
     leader = env.manager().start("leader")
     user = add_pane(env, leader["window_id"])
-    env.manager().control("stop", job="leader")
+    with monkeypatch.context() as quiet:             # stop's own sweep would already take a person's window apart
+        quiet.setattr(lifecycle.Manager, "_sweep", lambda self, target, owner=None: {"closed": [], "kept": []})
+        env.manager().control("stop", job="leader")
     meta = env.tmux.read_meta(leader["window_id"])
     if why == "pending":
         env.tmux.write_meta(leader["window_id"], {"control_pending": True})

@@ -371,9 +371,14 @@ Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않
 정리는 현재 실행 포인터의 run을 제외한 같은 base·target의 관리 window 가운데 다음을 모두 만족하는 것만 닫습니다.
 
 - 관리 정보의 base·target·run_id·window_id·pane_id와 server PID·시작 시각·생성 정보가 일치합니다. 관리 정보가 없거나 복원한 window는 채택하지 않습니다.
-- Window의 pane이 관리 pane 하나뿐이고 그 pane이 종료했습니다. 사용자가 pane을 추가한 window는 보존합니다.
+- Window의 관리 pane이 종료했습니다. 사용자가 pane을 추가했는지는 닫는 방식만 정합니다(아래).
 - 그 run의 실제 종료를 stop과 같은 기준으로 확인했습니다. 확인하지 못하면 보존합니다.
 - control_pending이 false이고 살아 있는 controller가 없습니다. 자기 controller의 예외는 7절 자기 종료·자기 재시작에 따릅니다.
+
+닫는 방식은 window의 pane이 관리 pane 하나뿐인지에 따릅니다.
+
+- 관리 pane뿐이면 window를 닫습니다.
+- 사용자가 추가한 pane이 있으면 사용자 pane을 건드리지 않고 관리 pane만 닫습니다. 같은 tmux 명령 sequence로 관리 정보와 `remain-on-exit`을 지워, 그 window를 사용자의 평범한 window로 돌려줍니다. 사용자 pane이 끝나면 tmux가 window를 닫습니다. 이 window는 더 이상 관리 window가 아니므로 이어받거나 다시 정리하지 않고, 이름은 바꾸지 않습니다. 결과의 `cleanup.pane_closed`에 그 window를 적습니다(없으면 이 key를 쓰지 않습니다).
 
 정리는 그 target의 대상 제어 잠금 안에서 현재 실행 포인터를 읽고 후보 검사와 닫기를 마칩니다.
 자기 controller의 마지막 정리는 이 잠금을 기다리지 않고 시도합니다. 잠금이 사용 중이면 닫지 않고, 잠금을 가진 명령의 정리가 대신합니다.
@@ -389,12 +394,11 @@ Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않
 
 새 run(start·restart·resume·Worker 배정)은 새 window를 만들기 전에 같은 project·target의 종료한 window를 이어받을 수 있는지 대상 제어 잠금 안에서 봅니다.
 대상 window는 현재 실행 포인터가 있으면 그 window 하나입니다. 포인터가 없으면(반납 뒤) 같은 target의 관리 window 가운데 가장 최근 run의 것 하나입니다. 최근 판단은 `agent/runs/<run_id>/launch.sh`의 시각입니다.
-이어받으려면 위 정리 조건에서 "pane이 관리 pane 하나뿐" 조건만 뺀 나머지를 모두 만족해야 합니다.
+이어받으려면 위 정리 조건을 모두 만족해야 합니다. 사용자 pane의 유무는 보지 않습니다.
 
 - 관리 정보의 base·target·run_id·window_id·pane_id와 server PID·시작 시각·생성 정보가 일치합니다. 복원한 window는 채택하지 않습니다.
 - 관리 pane이 그 window에 있고 종료했습니다.
 - 그 run의 실제 종료를 stop과 같은 기준으로 확인했습니다. control_pending이 false이고 살아 있는 controller가 없습니다.
-- 사용자가 추가한 pane이 있는지는 보지 않습니다. 사용자 pane이 없는 window도 같은 방식으로 이어받습니다.
 
 자기 restart는 예외입니다. 분리 controller가 `restart`를 수행하는 중이면, 끝낸 그 run의 control_pending과 그 controller(기록한 PID·생성 시각이 지금 process와 같음)는 이어받는 조건을 막지 않습니다. 다른 controller나 다른 pending은 막습니다.
 
@@ -408,7 +412,7 @@ Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않
 2와 3 사이에 실패하면 대기 process를 종료해 window를 이전 run의 종료 근거로 되돌립니다. 3의 sequence는 한 번에 적용되므로 window는 이전 run의 종료 근거이거나 새 run의 실행 전 대기 pane입니다. 둘 다 다음 start·stop이 처리하는 상태입니다.
 이어받지 못하면 지금처럼 새 window를 만들고 옛 window는 정리가 판단합니다. 종료 확인·반납 보류·수동 복구의 근거를 지우지 않기 위해서입니다.
 
-반납(stop) 뒤 사용자 pane이 있는 window는 정리가 닫지 않으므로 다음 start까지 `-exited-` 이름으로 남습니다. 다음 start가 그 window를 이어받고 이름을 되돌립니다. 사용자 pane이 없는 window는 지금처럼 정리가 닫습니다.
+반납(stop) 뒤에는 정리가 관리 pane을 닫으므로(사용자 pane이 있으면 그 window는 사용자의 window로 남습니다) 이어받을 window가 없고, 다음 start는 새 window를 만듭니다. 이어받는 경우는 현재 실행 포인터가 남은 window(반납 보류·restart)와 정리가 남긴 window입니다.
 Tmux server를 다시 띄운 뒤의 resume·start는 이전 window가 없으므로 새 window를 만듭니다.
 
 ### Background로 옮겨진 대화와 등록되지 않은 run의 종료 판정
@@ -457,7 +461,7 @@ Prompt 파일은 선택입니다.
 등록 전 hook이 실패해 `registration_failed`로 끝난 Leader도 같은 경로입니다. CLI가 살아 있으면 다시 실행한 start는 같은 오류를 바로 반환합니다. 새로 시작하지 않습니다. CLI가 끝난 것이 확인되면 새 대화로 시작합니다(3절 "Background로 옮겨진 대화와 등록되지 않은 run의 종료 판정").
 Background로 옮겨진 대화의 Leader는 그 대화와 CLI가 모두 끝난 것이 확인될 때만 새로 시작합니다. 아니면 start는 `conversation_backgrounded` 또는 `execution_unknown`입니다.
 정상 종료가 확인된 이전 Leader는 명시적인 새 시작을 막지 않습니다.
-새 Leader는 이전 Leader의 종료한 window를 이어받을 수 있습니다. 사용자가 그 window에 붙인 pane은 새 Leader 옆에 그대로 남습니다(3절 종료한 window 재사용).
+새 Leader는 이전 Leader의 종료한 window를 이어받을 수 있습니다(반납하지 않은 종료·restart). 사용자가 그 window에 붙인 pane은 새 Leader 옆에 그대로 남습니다(3절 종료한 window 재사용). 반납한 Leader의 window는 정리가 관리 pane을 닫으므로 이어받지 않습니다.
 Leader 시작은 base의 Git 상태를 바꾸지 않습니다.
 
 ### Worker
