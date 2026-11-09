@@ -35,6 +35,9 @@ WINDOW_RESTORE = "@project_board_restore"
 PANE_MARK = "@project_board_managed"
 PANE_SOCKET = "@project_board_click_socket"
 PANE_READY = "@project_board_ready"
+# Written by agent-session on a managed window (spec 3절 "실행 근거와 잠금"); the values are JSON.
+MANAGED_PROJECT = "@agent_session_project_id"
+MANAGED_TARGET = "@agent_session_target"
 WINDOW_SEEN = "@project_board_seen"
 SIDEBAR_WIDTH = 25
 # The most Board panes kept at once. One Board process holds about 50 MB (RSS, measured) and reads
@@ -508,6 +511,34 @@ def mark_ready(socket=None) -> bool:
     if pane:
         control.command("set-option", "-p", "-t", pane, PANE_READY, "1")
     return board_visible(socket)
+
+
+_SLOT = re.compile(r"leader|seat-(0|[1-9][0-9]*)")
+
+
+def active_context(socket=None) -> dict | None:
+    """The managed project and slot of this Board pane's window, or None (BOARD-009).
+
+    The pane shares its window with every client that watches it, so that window is the active
+    window of each client showing this sidebar. `slot` is `"leader"`, a seat number, or None when
+    the target is not a slot. Returns None outside tmux and for a window that is not managed.
+    """
+    pane = os.environ.get("TMUX_PANE")
+    if not pane:
+        return None
+    raw = _control(socket).command("display-message", "-p", "-t", pane,
+                                   f"#{{{MANAGED_PROJECT}}}\t#{{{MANAGED_TARGET}}}")
+    project_raw, _, target_raw = raw.partition("\t")
+    try:
+        project, target = json.loads(project_raw), json.loads(target_raw) if target_raw else None
+    except ValueError:
+        return None
+    if not isinstance(project, str) or not project:
+        return None
+    slot = None
+    if isinstance(target, str) and _SLOT.fullmatch(target):
+        slot = "leader" if target == "leader" else int(target[5:])
+    return {"project_id": project, "slot": slot}
 
 
 def reconcile(config=None, socket=None) -> dict:

@@ -185,6 +185,130 @@ def test_sidebar_shows_no_time_for_old_state_without_connected_at_or_without_a_s
     asyncio.run(check())
 
 
+def _marked(app):
+    """Which rows of the sidebar carry the current-window highlight."""
+    rows = [str(button.label) for button in app.query(".project-active")]
+    rows += [str(widget.id or widget.renderable) for widget in app.query(".slot-active")]
+    return rows
+
+
+def _context_app(board, context):
+    value = {"active": context}
+    reads = []
+
+    def reader():
+        reads.append(1)
+        if isinstance(value["active"], Exception):
+            raise value["active"]
+        return value["active"]
+
+    app = SidebarApp(str(board.config), poll=False, context_reader=reader)
+    return app, value, reads
+
+
+def test_sidebar_highlights_the_project_and_slot_of_the_managed_window_being_shown(tmp_path):
+    board = _make_sidebar_board(tmp_path)
+    app, value, reads = _context_app(board, {"project_id": "Falcon2", "slot": "leader"})
+
+    async def check():
+        async with app.run_test(size=(40, 25)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await pilot.pause()
+            assert _marked(app) == []                       # nothing read yet: nothing marked
+            await app.refresh_context()
+            await pilot.pause()
+            # Folded: the project name and the fold button (no slot row to mark), never ProjectB.
+            assert str(app.query_one("#project-0-name", Button).label) == "▶ Falcon2"
+            assert str(app.query_one("#project-1-name", Button).label) == "ProjectB"
+            assert _marked(app) == ["▶ Falcon2", "project-0-seats"]
+            assert "현재 창: Leader" in str(app.query_one("#project-0-seats", Button).tooltip)
+            await pilot.click("#project-0-seats")
+            await wait_until(pilot, lambda: app.query(".leader"))
+            # Expanded: the Leader row carries the slot mark and the fold button no longer does.
+            assert [w.has_class("slot-active") for w in app.query(".leader")] == [True]
+            assert not app.query_one("#project-0-seats", Button).has_class("slot-active")
+            assert not app.query_one("#project-0-seat-0", Button).has_class("slot-active")
+            # A seat window: only that seat's row is marked, and the Leader row is not.
+            value["active"] = {"project_id": "Falcon2", "slot": 0}
+            await app.refresh_context()
+            await pilot.pause()
+            assert [w.has_class("slot-active") for w in app.query(".leader")] == [False]
+            assert app.query_one("#project-0-seat-0", Button).has_class("slot-active")
+            assert not app.query_one("#project-0-seat-1", Button).has_class("slot-active")
+            svg = app.export_screenshot()
+            assert "▶ Falcon2" in html.unescape(svg).replace("\xa0", " ")
+            # The other project's seat number does not match this project.
+            value["active"] = {"project_id": "ProjectB", "slot": 0}
+            await app.refresh_context()
+            await pilot.pause()
+            assert str(app.query_one("#project-0-name", Button).label) == "Falcon2"
+            assert str(app.query_one("#project-1-name", Button).label) == "▶ ProjectB"
+            assert not app.query_one("#project-0-seat-0", Button).has_class("slot-active")
+            # An unmanaged window, an unregistered project and a slot without a row.
+            value["active"] = None
+            await app.refresh_context()
+            await pilot.pause()
+            assert _marked(app) == []
+            value["active"] = {"project_id": "NoSuchProject", "slot": "leader"}
+            await app.refresh_context()
+            await pilot.pause()
+            assert _marked(app) == []
+            value["active"] = {"project_id": "Falcon2", "slot": 7}
+            await app.refresh_context()
+            await pilot.pause()
+            assert _marked(app) == ["▶ Falcon2"]
+            value["active"] = {"project_id": "Falcon2", "slot": None}
+            await app.refresh_context()
+            await pilot.pause()
+            assert _marked(app) == ["▶ Falcon2"]
+
+    asyncio.run(check())
+
+
+def test_the_highlight_is_kept_when_the_read_fails_and_not_read_while_hidden(tmp_path):
+    board = _make_sidebar_board(tmp_path)
+    app, value, reads = _context_app(board, {"project_id": "Falcon2", "slot": None})
+
+    async def check():
+        async with app.run_test(size=(40, 25)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await app.refresh_context()
+            await pilot.pause()
+            assert _marked(app) == ["▶ Falcon2"]
+            value["active"] = RuntimeError("tmux is busy")
+            await app.refresh_context()
+            await pilot.pause()
+            assert _marked(app) == ["▶ Falcon2"]            # unknown is not "no window"
+            count = len(reads)
+            value["active"] = None
+            app.set_visible(False)
+            await app.refresh_context()
+            assert len(reads) == count                      # hidden: no read
+            app.set_visible(True)                           # shown again: read at once, mark follows
+            await wait_until(pilot, lambda: _marked(app) == [])
+            assert len(reads) == count + 1
+
+    asyncio.run(check())
+
+
+def test_the_highlight_is_redrawn_only_when_it_changes(tmp_path):
+    board = _make_sidebar_board(tmp_path)
+    app, value, reads = _context_app(board, {"project_id": "Falcon2", "slot": "leader"})
+
+    async def check():
+        async with app.run_test(size=(40, 25)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await app.refresh_context()
+            await pilot.pause()
+            name = app.query_one("#project-0-name", Button)
+            value["active"] = {"project_id": "Falcon2", "slot": "leader"}   # equal value, new object
+            await app.refresh_context()
+            await pilot.pause()
+            assert app.query_one("#project-0-name", Button) is name
+
+    asyncio.run(check())
+
+
 def test_empty_seat_shows_index_and_dash():
     assert _seat_text({"index": 1, "job_id": None}) == "  1 -"
 

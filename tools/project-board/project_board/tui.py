@@ -35,6 +35,7 @@ SeatCallback = Callable[..., object]
 ProjectCallback = Callable[..., object]
 ExpandedReader = Callable[[], set[str]]
 ExpandedToggler = Callable[[str], set[str]]
+ContextReader = Callable[[], "dict | None"]
 
 CSV_FENCE = re.compile(r"(?ms)^\s*```csv\s*\n(.*?)^\s*```\s*$")
 
@@ -186,6 +187,8 @@ class SidebarApp(App):
     .seat-stopped { color: #ff8f8f; }
     .seat-unknown { color: #ffcb84; }
     .project-error { height: auto; color: #ff8f8f; }
+    .project-name.project-active, .slot-active { background: #2f6db3; color: #ffffff; text-style: bold; }
+    .counts Button.slot-active { background: #2f6db3; color: #ffffff; }
     """
     def __init__(
         self,
@@ -203,6 +206,7 @@ class SidebarApp(App):
         expanded_toggler: ExpandedToggler | None = None,
         mark_ready: Callable[[], bool] | None = None,
         visibility_reader: Callable[[], bool] | None = None,
+        context_reader: ContextReader | None = None,
     ):
         super().__init__()
         self.config = config
@@ -218,6 +222,9 @@ class SidebarApp(App):
         self.expanded_toggler = expanded_toggler
         self.mark_ready = mark_ready
         self.visibility_reader = visibility_reader
+        self.context_reader = context_reader
+        self._active: dict | None = None      # the managed project and slot of this pane's window
+        self._context_busy = False
         self._visible = True
         self.snapshot_data: dict = {"projects": [], "error": None}
         self.live_data: dict = {}
@@ -247,6 +254,9 @@ class SidebarApp(App):
         self._queue(self.refresh_liveness())
         self.set_interval(2, lambda: self._queue(self.refresh_snapshot()))
         self.set_interval(10, lambda: self._queue(self.refresh_liveness()))
+        if self.context_reader is not None:
+            self._queue(self.refresh_context())
+            self.set_interval(10, lambda: self._queue(self.refresh_context()))
         self._watch_visibility()
 
     def _watch_visibility(self) -> None:
@@ -280,6 +290,7 @@ class SidebarApp(App):
         if shown:                                    # a window shown again is read at once
             self._queue(self.refresh_snapshot())
             self._queue(self.refresh_liveness())
+            self._queue(self.refresh_context())
 
     # A hover tooltip is hidden only by the next mouse move over this pane. When tmux moves focus to
     # another pane, or the mouse leaves with focus unchanged, no such event follows and the tooltip
@@ -422,6 +433,23 @@ class SidebarApp(App):
         finally:
             self._live_busy = False
 
+    async def refresh_context(self) -> None:
+        """Read which managed window this pane is in (BOARD-009). A failed read keeps the last mark."""
+        if self.context_reader is None or self._context_busy or self._stopping or not self._visible:
+            return
+        self._context_busy = True
+        try:
+            active = await asyncio.to_thread(self.context_reader)
+            if not self._stopping and active != self._active:
+                self._active = active
+                await self._render_projects()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        finally:
+            self._context_busy = False
+
     async def apply_snapshot(self, data: dict) -> None:
         self.snapshot_data = data
         if self.expanded_reader is not None:
@@ -439,6 +467,13 @@ class SidebarApp(App):
             return None
         return row.get("state")
 
+    def _is_active(self, project: dict) -> bool:
+        return bool(self._active) and self._active.get("project_id") == project["id"]
+
+    def _active_slot(self, project: dict) -> str | int | None:
+        """The slot of this pane's window in `project`; None for another project or a window without a slot."""
+        return self._active.get("slot") if self._is_active(project) else None
+
     def _view_signature(self) -> tuple:
         projects = []
         for project in self.snapshot_data.get("projects", []):
@@ -448,6 +483,7 @@ class SidebarApp(App):
                           for seat in project.get("seats", []))
             errors = tuple((error.get("source"), error.get("message")) for error in project.get("errors", []))
             projects.append((project["id"], project["id"] in self._expanded_projects,
+                             self._is_active(project), self._active_slot(project),
                              tuple(_count(project, state) for state in model.CR_STATES),
                              _decide_count(project), _decide_stages(project), seats, errors,
                              format_elapsed((project.get("leader") or {}).get("elapsed"))))
@@ -487,7 +523,9 @@ class SidebarApp(App):
                                           zip(("결정 대기", "답변 접수", "반영 중", "완료"), stages))
             self._actions[decision_id] = ("decision", project["id"])
             name_id = f"project-{number}-name"
-            name = Button(project["id"], id=name_id, classes="project-name")
+            active, slot = self._is_active(project), self._active_slot(project)
+            name = Button(("▶ " if active else "") + project["id"], id=name_id,
+                          classes="project-name project-active" if active else "project-name")
             name.styles.line_pad = 0
             name.tooltip = project["id"]
             self._actions[name_id] = ("project", project["id"])
@@ -495,17 +533,21 @@ class SidebarApp(App):
             expanded = project["id"] in self._expanded_projects
             fold = Button("▾" if expanded else "▸", id=fold_id)
             fold.tooltip = "좌석 접기" if expanded else "좌석 펼치기"
+            if slot is not None and not expanded:       # the slot's own row is folded away
+                fold.add_class("slot-active")
+                fold.tooltip += " · 현재 창: " + ("Leader" if slot == "leader" else f"seat {slot}")
             counters.append(fold)
             self._actions[fold_id] = ("seats", project["id"])
             children = [name, decision, Horizontal(*counters, classes="counts")]
             leader_time = format_elapsed((project.get("leader") or {}).get("elapsed")) if expanded else None
             if leader_time:
-                leader_row = Static(f"  Leader {leader_time}", classes="leader")
+                leader_row = Static(f"  Leader {leader_time}",
+                                    classes="leader slot-active" if slot == "leader" else "leader")
                 leader_row.tooltip = "Leader session이 게시된 뒤 지난 시간"
                 children.append(leader_row)
             for seat in (project.get("seats", []) if expanded else []):
                 button_id = f"project-{number}-seat-{seat['index']}"
-                classes = "seat"
+                classes = "seat slot-active" if slot == seat["index"] else "seat"
                 if seat.get("job_id") is None:
                     classes += " seat-empty"
                 elif seat.get("status") == "pending":
@@ -1056,11 +1098,13 @@ def run_sidebar(
     expanded_toggler: ExpandedToggler | None = None,
     mark_ready: Callable[[], bool] | None = None,
     visibility_reader: Callable[[], bool] | None = None,
+    context_reader: ContextReader | None = None,
 ) -> int:
     SidebarApp(config, on_project=on_project, on_decision=on_decision, on_cr=on_cr, on_seat=on_seat,
                click_socket=click_socket or os.environ.get("PROJECT_BOARD_CLICK_SOCKET"),
                expanded_reader=expanded_reader, expanded_toggler=expanded_toggler,
-               mark_ready=mark_ready, visibility_reader=visibility_reader).run()
+               mark_ready=mark_ready, visibility_reader=visibility_reader,
+               context_reader=context_reader).run()
     return 0
 
 

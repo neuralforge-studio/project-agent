@@ -57,7 +57,8 @@ def main(argv=None) -> int:
                         expanded_reader=tmux_control.expanded_projects,
                         expanded_toggler=tmux_control.toggle_expanded_project,
                         mark_ready=tmux_control.mark_ready,
-                        visibility_reader=tmux_control.board_visible)
+                        visibility_reader=tmux_control.board_visible,
+                        context_reader=tmux_control.active_context)
         return 0
     if args.command == "popup":
         from . import tui
