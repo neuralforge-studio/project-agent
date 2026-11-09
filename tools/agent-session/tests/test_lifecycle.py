@@ -381,7 +381,11 @@ def tool_error(env, run_id):
 
 
 CONTROLLER = """
-import sys
+import signal, sys
+# A pytest started in the background has SIGINT ignored, and a child inherits that; Python then installs no
+# KeyboardInterrupt handler, so the test's SIGINT would end nothing. The controller must behave as a
+# foreground command does, whatever started the run.
+signal.signal(signal.SIGINT, signal.default_int_handler)
 sys.path[:0] = [{tool!r}, {fixtures!r}]
 import agent_session.lifecycle as lifecycle
 from agent_session_fake_provider import FakeProvider
