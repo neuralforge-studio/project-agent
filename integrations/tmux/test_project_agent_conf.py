@@ -6,6 +6,7 @@ end of the test (or when pytest dies), so the user's default server never gets a
 
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -16,7 +17,7 @@ import pytest
 TMUX_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TMUX_DIR.parents[1] / "tools" / "tests"))  # tmux_test_server, shared by every tool's tests
 import tmux_test_server  # noqa: E402
-FILES = ("project-agent.conf", "project_agent_bind.sh", "tmux_project_board.sh", "tmux_decide_status.sh", "tmux_decide_status.py")
+FILES = ("project-agent.conf", "project-agent-main.conf", "project_agent_bind.sh", "tmux_project_board.sh", "tmux_decide_status.sh", "tmux_decide_status.py")
 LAUNCHER = TMUX_DIR.parents[1] / "tools" / "python-launcher.sh"
 PRODUCT_PREFIX = "tmux_project_board.sh toggle"
 PRODUCT_MOUSE = "tmux_project_board.sh click"
@@ -26,13 +27,14 @@ pytestmark = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is un
 
 
 class Server:
-    def __init__(self):
+    def __init__(self, binary="tmux"):
+        self.binary = binary
         self.name = tmux_test_server.claim("pa-conf")
         self.run("new-session", "-d", "-s", "home", "sleep", "300")
 
     def run(self, *args, check=True):
         env = {key: value for key, value in os.environ.items() if key != "TMUX"}
-        proc = subprocess.run(["tmux", "-L", self.name, "-f", "/dev/null", *args], env=env,
+        proc = subprocess.run([self.binary, "-L", self.name, "-f", "/dev/null", *args], env=env,
                               capture_output=True, text=True, timeout=20)
         if check and proc.returncode:
             raise AssertionError("tmux %s: %s" % (" ".join(args), proc.stderr))
@@ -50,13 +52,15 @@ class Server:
 
     def hooks(self):
         """Every hook that is set, in session scope (-g) and window scope (-gw)."""
-        lines = self.run("show-hooks", "-g").splitlines() + self.run("show-hooks", "-gw").splitlines()
+        lines = self.run("show-hooks", "-g").splitlines() + self.run("show-hooks", "-gw", check=False).stdout.splitlines()   # tmux 2.x has no -w
         return [line for line in lines if " " in line]
 
     def state(self):
         return (self.run("list-keys"), self.hooks(), self.option("@project_agent_board_skipped"))
 
     def kill(self):
+        if self.binary != "tmux":      # the cleanup of tmux_test_server speaks to the server with PATH's tmux, which an older server refuses
+            subprocess.run([self.binary, "-L", self.name, "kill-server"], capture_output=True, timeout=10)
         tmux_test_server.release(self.name)
 
 
@@ -64,8 +68,8 @@ class Server:
 def server():
     created = []
 
-    def make():
-        created.append(Server())
+    def make(binary="tmux"):
+        created.append(Server(binary))
         return created[-1]
 
     yield make
@@ -236,3 +240,79 @@ def test_decide_status_entry_expands_to_the_decision_script(server, tmp_path):
     finally:
         attach.kill()
         attach.wait()
+
+
+# ---------------------------------------------------------------- the minimum tmux version (contract 3.2)
+
+MINIMUM = re.compile(r"^set-option -g @project_agent_tmux_min '(.+)'$", re.MULTILINE)
+REFUSAL = re.compile(r"project-agent needs tmux (\S+) or newer: put (\S+) first in PATH")
+
+
+def read_collecting_errors(tmux, conf):
+    proc = tmux.run("source-file", str(conf), check=False)
+    return proc.stdout + proc.stderr
+
+
+def with_minimum(tmp_path, version):
+    """A copy of the integration files whose minimum tmux version is `version`."""
+    target = tmp_path / "copy"
+    target.mkdir()
+    for name in FILES:
+        shutil.copy2(TMUX_DIR / name, target / name)
+    conf = target / "project-agent.conf"
+    conf.write_text(MINIMUM.sub("set-option -g @project_agent_tmux_min '%s'" % version, conf.read_text()))
+    return conf
+
+
+def leaves_nothing(tmux, before):
+    assert tmux.state() == before
+    assert tmux.option("@project_agent_tmux_min") == "" and tmux.option("@project_agent_tmux_dir") == ""
+    assert tmux.option("@project_agent_decide_status") == ""
+
+
+def test_a_tmux_older_than_the_minimum_gets_one_line_and_binds_nothing(server, tmp_path):
+    tmux = server()
+    tmux.run("bind-key", "B", "display-message", "user-prefix")
+    before = tmux.state()
+    output = read_collecting_errors(tmux, with_minimum(tmp_path, "99.0"))
+    assert output.strip().count("\n") == 0
+    assert REFUSAL.search(output) is None or REFUSAL.search(output).group(1) == "3.8"   # the line is the file's own text
+    leaves_nothing(tmux, before)
+
+
+def test_a_tmux_that_is_the_minimum_reads_the_integration(server, tmp_path):
+    tmux = server()
+    version = tmux.run("display-message", "-p", "#{version}")
+    tmux.read(with_minimum(tmp_path, version))
+    assert PRODUCT_PREFIX in tmux.key("prefix", "B")
+    assert tmux.option("@project_agent_tmux_min") == ""
+
+
+def test_the_refusal_names_the_minimum_and_the_company_tmux():
+    conf = (TMUX_DIR / "project-agent.conf").read_text()
+    minimum = MINIMUM.search(conf).group(1)
+    found = REFUSAL.search(conf)
+    assert found and found.group(1) == minimum
+    assert found.group(2) == "/primehome/tools/Inhouse/tmux/latest/bin"
+
+
+def old_tmux():
+    """Any tmux of this host that is older than the minimum, to read the real file with."""
+    minimum = MINIMUM.search((TMUX_DIR / "project-agent.conf").read_text()).group(1)
+    for candidate in ("/usr/bin/tmux", "/usr/local/bin/tmux", "/bin/tmux"):
+        if not os.access(candidate, os.X_OK):
+            continue
+        word = subprocess.run([candidate, "-V"], capture_output=True, text=True).stdout.split()[-1]
+        found = re.match(r"(?:next-)?(\d+)\.(\d+)", word)
+        if found and (int(found.group(1)), int(found.group(2))) < tuple(int(part) for part in minimum.split(".")[:2]):
+            return candidate
+    return None
+
+
+@pytest.mark.skipif(old_tmux() is None, reason="this host has no tmux older than the minimum")
+def test_an_installed_old_tmux_reads_the_real_file_without_a_parse_error(server):
+    tmux = server(old_tmux())
+    before = tmux.state()
+    output = read_collecting_errors(tmux, TMUX_DIR / "project-agent.conf")
+    assert REFUSAL.search(output) and output.strip().count("\n") == 0
+    leaves_nothing(tmux, before)

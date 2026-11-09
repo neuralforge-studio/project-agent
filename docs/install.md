@@ -9,7 +9,7 @@
 | 필요한 것 | 확인 |
 | --- | --- |
 | Python 3.10 이상 | `python3 --version` |
-| tmux | `tmux -V`. 3.8에서 검증했습니다. 2.7은 통합 파일의 `{ }` 문법을 읽지 못해 동작하지 않습니다. 그 사이 버전은 검증하지 않았습니다. 사내 tmux는 `/primehome/tools/Inhouse/tmux/latest/bin/tmux`입니다. PATH에서 새 tmux가 앞에 오는지 확인합니다. |
+| tmux | `tmux -V`가 [계약 3.2절](project-team/install-contract.md#32-tmux-최소-버전)의 최소 버전 이상이어야 합니다. 낮으면 `check`가 실패로 알리고, 그 tmux는 설정을 읽을 때 오류 한 줄만 보이며 Board binding·hook을 넣지 않습니다. 사내 tmux는 `/primehome/tools/Inhouse/tmux/latest/bin/tmux`입니다. PATH에서 새 tmux가 앞에 오는지 확인합니다. |
 | git | `git --version` |
 | Claude Code 또는 Codex CLI | 쓰려는 provider의 CLI가 실행됩니다. |
 | Board용 `textual` | 설치에 쓰는 Python에 있어야 합니다. 버전은 [requirements.txt](../tools/project-board/requirements.txt)입니다. 사내 Python에는 있습니다. |
