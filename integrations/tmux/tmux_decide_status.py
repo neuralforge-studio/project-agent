@@ -14,10 +14,17 @@ are read through the project-item code (tools/project-item), so this
 script has no second parser of the registry. The count is never stored as a
 source of truth: the cache below only remembers the last observation.
 
-tmux runs this script every status-interval (1 s). The directories are read at
-most once per CACHE_TTL seconds, by one run at a time (flock). A run that finds
-the lock taken, or a read that fails, prints the last known value. A project
+tmux runs tmux_decide_status.sh every status-interval (1 s). The directories are
+read at most once per CACHE_TTL seconds, by one run at a time (flock). A run that
+finds the lock taken, or a read that fails, prints the last known value. A project
 whose directory cannot be read keeps its last known decisions.
+
+While the cache is valid the .sh prints the status line without starting Python.
+Every run of this script that finds a valid cache stores the status line next to
+the cache (VIEW_NAME): the first line is the epoch second until which the cache
+is valid (the cache mtime plus CACHE_TTL, so CACHE_TTL is kept here only), the
+rest is the text printed. The .sh prints that text while the clock is at or
+before the first line, and runs this script otherwise.
 
 A new decision is announced once, when an open ID appears that the last read
 did not have:
@@ -34,6 +41,7 @@ Only the Python standard library is used besides the project-item code.
 
 import fcntl
 import json
+import math
 import os
 import subprocess
 import sys
@@ -43,12 +51,14 @@ from pathlib import Path
 CACHE_TTL = 15          # seconds between two reads of the decision directories
 ALARM_MS = 10000        # display-message duration
 STATUS_STYLE = "#[fg=white,bg=red,bold]"
+CACHE_NAME = "tmux-decide-status.json"
+VIEW_NAME = "tmux-decide-status.view"   # read by tmux_decide_status.sh in the same directory
 PROJECT_ITEM = Path(__file__).resolve().parents[2] / "tools" / "project-item"
 
 
 def cache_path():
     base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
-    return os.path.join(base, "tmux-decide-status.json")
+    return os.path.join(base, CACHE_NAME)
 
 
 def read_cache(path):
@@ -72,6 +82,26 @@ def write_cache(path, known):
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump({"projects": known}, handle, ensure_ascii=False)
     os.replace(tmp, path)
+
+
+def render(known):
+    count = sum(len(ids) for ids in (known or {}).values())
+    return "%s 결정 %d #[default]" % (STATUS_STYLE, count) if count else ""
+
+
+def write_view(path, text):
+    """Store `text` for the .sh until the cache at `path` expires. Failing to store only costs a Python run."""
+    try:
+        expires = math.floor(os.stat(path).st_mtime + CACHE_TTL)
+        if time.time() > expires:
+            return
+        view = os.path.join(os.path.dirname(path), VIEW_NAME)
+        tmp = "%s.%d.tmp" % (view, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write("%d\n%s" % (expires, text))
+        os.replace(tmp, view)
+    except OSError:
+        pass
 
 
 def load_project_item():
@@ -205,9 +235,10 @@ def load_known():
 
 def main():
     known = load_known()
-    count = sum(len(ids) for ids in (known or {}).values())
-    if count:
-        sys.stdout.write("%s 결정 %d #[default]" % (STATUS_STYLE, count))
+    text = render(known)
+    if known is not None:
+        write_view(cache_path(), text)
+    sys.stdout.write(text)
     return 0
 
 
