@@ -5,6 +5,7 @@
 - Severity: S2
 - Requester: agent, /primehome/swain/Utils/agent/agent.base, 2026-11-09
 - Base: 9458aba01535c1a12ee034ce725048aca5448c10 2026-11-09T14:40:54+09:00
+- Outcome: fixed
 
 ## Symptom
 project-agent를 다른 직원에게 배포하려면 설치기가 있어야 합니다. 설치·갱신·되돌리기·제거 중 그 사람의 다른 설정에 영향이 없어야 합니다. 설치 계약은 정해졌지만 설치기는 아직 없습니다. 지금은 개발 checkout을 symlink로 거는 방식만 있습니다.
@@ -30,6 +31,7 @@ project-agent를 다른 직원에게 배포하려면 설치기가 있어야 합�
 - 2026-11-09 Leader: 수정 제출 3462c8a 수정 요청. 1차 지적 7건의 반영과 수정 전 실패 test(44건 중 43건 실패 확인), `install/tests` 160 passed를 확인했습니다. 두 번째 독립 검토(sub-agent)가 새 안전 장치에서 결함을 찾았고 Leader가 코드에서 확인했습니다: journal의 `drop_journal`이 모든 경로를 허용(`paths.py:141`), `rmtree`의 `temp`·`relink`의 `previous` 미검증(`actions.py:232-250`), `write_file`의 되돌림이 내용 확인 없이 지움(`actions.py:285`, 계획 뒤 생긴 사용자 파일 삭제 가능), SIGKILL 뒤 남는 임시 파일로 다시 잠김, `_cut_block`의 중간 종료로 tmux 파일 손상, `_untruncate`의 prefix 판정 오류, resume의 `Changed`가 traceback으로 끝나 uninstall이 막힘. 공통 원인은 journal이 경로·동작을 자유롭게 담는 두 번째 명령 언어라 동작마다 신뢰 규칙이 따로 필요하다는 점입니다. 원칙 하나(아래 feedback)로 닫도록 요청합니다.
 - 2026-11-09 Leader: 2차 수정 제출 9943b6d 수정 요청(마지막 범위 한정). 원칙 A·B·C의 구조 반영과 수정 전 실패 test 13건, `install/tests` 184 passed를 확인했습니다. 세 번째 독립 검토(sub-agent): 높음 등급 결함 없음, 이전 수정의 퇴행 없음. 남은 중간 등급: uninstall의 release·backup 삭제(`_op_rm_tree`, `actions.py:373-379`)가 상태 확인 없이 지움(원칙 B), tmux 파일 교체가 소유자·group·ACL·xattr·읽기 전용을 보존하거나 거절하지 않음(`actions.py:213-240`), backup 파일 mode가 umask를 따라 원본보다 넓어짐(`actions.py:188`), journal의 base64 미검증과 recover가 `OSError`만 잡아 traceback으로 막힘(`journal.py:148·161`, `paths.py:234-236`). provider 홈이 기록·journal 값을 따르는 점은 피해가 link 대상 일치·빈 디렉터리로 제한되므로 계약의 예외로 적어 받아들입니다. 그 밖에 main의 README와 충돌.
 - 2026-11-09 Leader: 제출 1c45777f0ad54df18ecf2df4835fd1662f99dc23를 인수합니다. Leader review: 3차 지적 5건만 고친 delta를 확인했습니다. _op_rm_tree는 기록한 digest와 같을 때만 예약 임시 이름으로 rename 뒤 지우고(끊기면 다음 실행이 마저 지움), backup은 기록한 파일만 지운 뒤 빈 디렉터리만 rmdir합니다. tmuxconf.rewrite_problem이 hard link·다른 소유자·읽기 전용·ACL/xattr·1 MiB 초과를 판정하고 계획과 실행이 같이 씁니다. 손상 journal은 정해진 오류로 끝납니다. 새 test 8건 중 7건이 수정 전 실패, merge한 1c45777에서 install/tests 194 passed·2 skipped. 세 차례 독립 검토(31e7412·3462c8a·9943b6d)의 높음·중간 지적이 모두 닫혔습니다.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 ecc5bce(Merge cr/INSTALL-001, 제출 1c45777). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 전체(원본), [제품 지도](../../project-team/README.md)의 실행 경로 계약, [README의 검증](../../../README.md#검증). 이 CR의 Contract와 설치 계약이 범위의 원본입니다. 계약과 다르게 구현해야 하면 계약을 먼저 고치고 이유를 적습니다.

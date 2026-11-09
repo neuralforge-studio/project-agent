@@ -20,6 +20,7 @@
 
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). INSTALL-001 Contract 4항과 설치 계약 7.1절 3항이 정한 일을 INSTALL-001에서 떼어 냈습니다(사용자 지시 2026-11-09 "병렬로 진행 가능 한 것은 병렬로 진행해. 남은 CR은 전부 등록해서…"). 승인한 계획(agent DIST-001 4단계)의 하위 작업이므로 위임 범위입니다. INSTALL-001과 RELEASE-001이 통합된 뒤 시작합니다.
+- 2026-11-09 Leader: 선행 INSTALL-001이 ecc5bce로 통합되었습니다. 설치기 구조를 따르십시오: 경로는 `paths.Places`의 닫힌 식별자에서만 계산(원칙 A), 되돌림·제거는 설치기가 만든 상태일 때만(원칙 B), 사용자 tmux 파일은 원자적 교체(원칙 C), journal format 2(계약 2절 규칙 5). INSTALL-004와 INSTALL-005는 병렬로 진행하므로 같은 설치기 파일을 고칠 수 있습니다. 제출 전에 `origin/main`을 merge하십시오.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 7절·7.1절·7.2절·8절, INSTALL-001의 설치기 코드와 test 하네스, RELEASE-001이 정한 형식 버전의 선언.
