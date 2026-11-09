@@ -98,7 +98,7 @@ source-file -q ~/.local/lib/project-agent/tmux.conf
 | 둘 다 없음 | 블록만 담은 `~/.tmux.conf`를 만듭니다. 설치 기록에 `created: true`로 남깁니다. `~/.config/tmux/`는 만들지 않습니다. |
 | 블록이 이미 있음 | 파일을 바꾸지 않습니다. 그 블록을 설치기가 넣지 않았다면, 제거도 그 블록을 지우지 않습니다. |
 | 블록을 넣음 | 고치기 전에 원본을 `backup/`에 원본과 같은 권한으로 둡니다. 파일 이름은 `<UTC 시각>-<원본 파일 이름>`입니다. |
-| 대상이 symlink이거나, 파일이 hard link가 여럿(`st_nlink > 1`)이거나, 소유자가 현재 사용자가 아니거나, 쓰기 권한이 없거나(읽기 전용), ACL·확장 속성이 있거나, 1 MiB를 넘음 | 파일도 link 대상도 고치지 않습니다(rename으로 바꾸면 다른 이름의 같은 파일과 갈라지거나 소유자·ACL·읽기 전용 표시를 잃기 때문입니다). 그 사실과 사용자가 넣을 줄을 출력합니다. 나머지 설치는 계속합니다. 종료 코드는 0입니다. `check`는 이 상태를 "수동 연결 필요"로 알립니다(실패가 아닙니다) . |
+| 대상이 symlink이거나, 파일이 hard link가 여럿(`st_nlink > 1`)이거나, 소유자가 현재 사용자가 아니거나, 쓰기 권한이 없거나(읽기 전용), ACL·확장 속성이 있거나, 1 MiB를 넘음 | 파일도 link 대상도 고치지 않습니다(rename으로 바꾸면 다른 이름의 같은 파일과 갈라지거나 소유자·ACL·읽기 전용 표시를 잃기 때문입니다). 그 사실과 사용자가 넣을 줄을 출력합니다. 나머지 설치는 계속합니다. 종료 코드는 0입니다. `check`는 이 상태에서 기록된 파일을 link를 따라 읽기 전용으로 열어, 주석이 아닌 줄에 넣을 줄이 없거나 파일을 읽을 수 없을 때만 "수동 연결 필요"로 알립니다(실패가 아닙니다). 줄이 이미 있으면 알리지 않습니다. |
 | 실행 중인 tmux server | 다시 읽히지 않습니다. 설치는 다시 읽는 명령 `tmux source-file ~/.local/lib/project-agent/tmux.conf`만 출력합니다. 사용자의 전체 설정을 다시 읽는 명령은 권하지 않습니다. |
 | `upgrade`·`rollback` | 블록을 다시 고치지 않습니다. `current`만 바뀌기 때문입니다. |
 | `uninstall` | 설치기가 넣은 표시된 블록(앞의 줄바꿈 포함)만 지웁니다. `created: true`이고 지운 뒤 내용이 없으면 파일도 지웁니다. |
@@ -384,7 +384,7 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 | T1 | 깨끗한 HOME. tmux 설정 없음. 등록 파일 없음 | `install` | 2절의 모든 경로, `~/.tmux.conf`(블록만), 등록 파일 초안과 `~/.config/project-agent/`, 필요한 부모 디렉터리 | `~/.tmux.conf`의 내용이 3절의 블록과 같음. `check`가 통과함. 설치 기록의 소유가 위 목록과 같음 |
 | T2 | `~/.tmux.conf`가 있음(끝 줄바꿈 있음, 없음, 빈 파일 세 경우) | `install` | 2절의 경로(등록 초안 제외), `~/.tmux.conf`, `backup/<…>-.tmux.conf` | 블록 밖의 내용이 같음. `backup/`의 파일이 설치 전 원본과 byte 단위로 같음 |
 | T3 | `~/.tmux.conf` 없음, `~/.config/tmux/tmux.conf`가 있음 | `install` | 2절의 경로, `~/.config/tmux/tmux.conf`, `backup/<…>` | `~/.tmux.conf`가 새로 생기지 않음. 둘 다 있는 경우는 `~/.tmux.conf`만 바뀜 |
-| T4 | tmux 설정이 symlink(a: `~/.tmux.conf`가 다른 저장소 파일로 가는 link, b: `~/.config/tmux/tmux.conf`가 link) | `install` | 2절의 경로. tmux 파일과 link 대상은 변경 없음 | 종료 코드 0. 출력에 사실과 넣을 줄이 있음. `check`가 "수동 연결 필요"를 알림 |
+| T4 | tmux 설정이 symlink(a: `~/.tmux.conf`가 다른 저장소 파일로 가는 link, b: `~/.config/tmux/tmux.conf`가 link) | `install` | 2절의 경로. tmux 파일과 link 대상은 변경 없음 | 종료 코드 0. 출력에 사실과 넣을 줄이 있음. `check`가 "수동 연결 필요"를 알림. 사용자가 link 대상에 그 줄을 넣은 뒤(주석 처리한 줄은 넣은 것이 아님)에는 알리지 않음 |
 | T5 | 블록이 이미 있음(설치기 소유가 아님) | `install` | 2절의 경로. tmux 파일은 변경 없음 | `uninstall`이 그 블록을 지우지 않음(T9b) |
 | T6 | 설치된 상태 | `upgrade` | 새 release 디렉터리, `current`, 설치 기록 | shim, skill link, `tmux.conf`, tmux 설정 파일, 등록 파일의 내용과 `mtime_ns`가 같음. 이전 release의 모든 파일이 byte 단위로 같음 |
 | T7 | 설치된 상태. 옛 release를 쓰는 떠 있는 run(`launch.sh`가 옛 release 경로를 가짐) | `upgrade` | T6과 같음 | 옛 release가 남아 있음. 갱신 뒤에도 그 run의 `launch.sh`·controller 명령이 실행됨. 새로 시작한 run의 `launch.sh`는 새 release 경로를 가짐 |

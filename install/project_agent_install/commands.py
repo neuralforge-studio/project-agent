@@ -556,7 +556,7 @@ def run_check(env):
         path = env.expand(tmux["file"])
         if path.is_symlink() or not path.is_file() or tmuxconf.BLOCK not in path.read_bytes():
             failures.append("The project-agent block is missing from %s." % tmux["file"])
-    elif tmux.get("state") == "manual":
+    elif tmux.get("state") == "manual" and not tmuxconf.has_source(env.expand(tmux["file"])):
         notices.append("Manual connection needed (수동 연결 필요): %s was not changed. Add this line to it: %s"
                        % (tmux["file"], tmuxconf.SOURCE))
     entries = [os.path.realpath(entry) for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]

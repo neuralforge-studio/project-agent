@@ -63,7 +63,7 @@ $PY ~/.local/lib/project-agent/current/install/project-agent-install check
 
 전체 목록과 규칙은 [계약 2절](project-team/install-contract.md#2-설치가-만드는-것)입니다. Claude·Codex 설정 파일, `CLAUDE.md`, `AGENTS.md`, shell 설정, project 저장소는 건드리지 않습니다([계약 4절](project-team/install-contract.md#4-설치가-절대-건드리지-않는-것)).
 
-설치가 tmux 파일을 고치지 않는 경우가 있습니다. 대상이 symlink이거나, hard link가 여럿이거나, 소유자가 다르거나, 읽기 전용이거나, ACL·확장 속성이 있거나, 1 MiB를 넘는 경우입니다([계약 3절](project-team/install-contract.md#3-설치가-고치는-기존-파일은-하나뿐입니다)). 이때 설치는 계속하고 종료 코드는 0이며, 출력이 넣을 줄을 알려 줍니다. `check`는 "수동 연결 필요"로 알립니다. 사용자가 tmux 설정에 직접 넣을 줄은 다음과 같습니다.
+설치가 tmux 파일을 고치지 않는 경우가 있습니다. 대상이 symlink이거나, hard link가 여럿이거나, 소유자가 다르거나, 읽기 전용이거나, ACL·확장 속성이 있거나, 1 MiB를 넘는 경우입니다([계약 3절](project-team/install-contract.md#3-설치가-고치는-기존-파일은-하나뿐입니다)). 이때 설치는 계속하고 종료 코드는 0이며, 출력이 넣을 줄을 알려 줍니다. `check`는 그 파일에 이 줄이 아직 없을 때 "수동 연결 필요"로 알립니다. 줄을 넣은 뒤에는 알리지 않습니다. 사용자가 tmux 설정에 직접 넣을 줄은 다음과 같습니다.
 
 ```tmux
 source-file -q ~/.local/lib/project-agent/tmux.conf
