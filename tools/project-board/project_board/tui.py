@@ -230,6 +230,14 @@ class SidebarApp(App):
             self._queue(self.refresh_snapshot())
             self._queue(self.refresh_liveness())
 
+    def on_app_blur(self, event) -> None:
+        # A hover tooltip is hidden only by the next mouse move over this pane. When tmux moves focus
+        # to another pane (or the client), no such event follows, so the tooltip would stay (BOARD-005).
+        screen = self.screen
+        if screen._tooltip_timer is not None:      # a tooltip still waiting for its delay
+            screen._tooltip_timer.stop()
+        screen._clear_tooltip()
+
     def on_unmount(self) -> None:
         self._stopping = True
         if self.mark_ready is not None:

@@ -1134,3 +1134,36 @@ def test_switching_decisions_keeps_each_unsent_draft(tmp_path):
             assert app.decide_id == "D-20261107-01" and editor.text == "첫 답변 초안"
 
     asyncio.run(check())
+
+
+def test_hover_tooltip_does_not_outlive_pane_focus(tmp_path):
+    """BOARD-005: a tooltip shown or about to show when tmux moves focus away must not stay."""
+    from textual import events
+    from textual.widgets._tooltip import Tooltip
+
+    board = Board(tmp_path)
+    board.cr(board.project("Falcon2", seats=1), "open", "CPU-001")
+    app = SidebarApp(str(board.config), poll=False)
+
+    async def check():
+        async with app.run_test(size=(25, 25), tooltips=True) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            tooltip = app.screen.get_child_by_type(Tooltip)
+            await pilot.hover("#project-0-name")
+            await wait_until(pilot, lambda: tooltip.display)
+            app.post_message(events.AppBlur())
+            await wait_until(pilot, lambda: not tooltip.display)
+            await pilot.pause(app.TOOLTIP_DELAY + 0.2)
+            assert not tooltip.display
+            # Focus lost before the delay ends: the pending tooltip must not appear afterwards.
+            await pilot.hover("#project-0-seats")
+            app.post_message(events.AppBlur())
+            await pilot.pause(app.TOOLTIP_DELAY + 0.3)
+            assert not tooltip.display
+            # Focus back and a new hover shows the tooltip again.
+            app.post_message(events.AppFocus())
+            await pilot.hover("#project-0-name")
+            await wait_until(pilot, lambda: tooltip.display)
+
+    asyncio.run(check())
