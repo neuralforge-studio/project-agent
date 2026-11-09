@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Base: 4c4168325298d1ae1515696acbc16417de5d152e 2026-11-09T17:40:07+09:00
+- Outcome: fixed
 
 ## Symptom
 이 workstation은 `~/.local/bin`의 세 CLI와 skill link가 agent 저장소의 개발 checkout을 가리킵니다. 설치 계약 2절 규칙 1은 설치기 소유가 아닌 같은 이름을 충돌로 보고 전체를 거절합니다. 그래서 이 workstation에서는 설치가 진행되지 않고, agent DIST-001 6단계(무중단 전환)를 할 수 없습니다.
@@ -23,6 +24,7 @@
 - 2026-11-09 Leader: 선행 INSTALL-001이 ecc5bce로 통합되었습니다. 설치기 구조를 따르십시오: 경로는 `paths.Places`의 닫힌 식별자에서만 계산(원칙 A), 되돌림·제거는 설치기가 만든 상태일 때만(원칙 B), 사용자 tmux 파일은 원자적 교체(원칙 C), journal format 2(계약 2절 규칙 5). INSTALL-004와 INSTALL-005는 병렬로 진행하므로 같은 설치기 파일을 고칠 수 있습니다. 제출 전에 `origin/main`을 merge하십시오.
 - 2026-11-09 Leader: 제출 f4253c5 수정 요청(한 항목). 넘겨받기 조건·기록(`adopted_from`)·uninstall의 원자적 되돌림·T24~T28과 수정 전 23/24 실패를 확인했습니다. 결함: 정방향 교체 `swap_link`(`actions.py:487-490`)가 계획 때 읽은 link 글자를 undo에만 적고, 실행 때 지금 글자가 그것과 같은지 확인하지 않고 바꿉니다. 계획과 실행 사이(release 만들기)에 사용자가 link를 바꾸면 그 link를 덮어쓰고 옛 글자를 기록합니다(원칙 B). CHANGELOG 항목은 Leader가 통합 때 씁니다(버전 규칙 5절). Result의 6단계 참고 사항(`~/.codex/skills/project-*`가 실제 디렉터리)은 통합 뒤 Leader가 agent Leader에게 알립니다.
 - 2026-11-09 Leader: 제출 b5f74a11b10e184ec1cf0c0cca60913743e2e432를 인수합니다. Leader review: 수정 delta(swap_link가 실행 직전에 link 글자·소유자를 계획 때와 대조하고 다르면 Changed로 실패해 되돌림, CHANGELOG 변경 제거)를 확인했습니다. T29 수정 전 실패, install/tests 221 passed·2 skipped. 이전 검토(f4253c5의 넘겨받기 조건·adopted_from·uninstall 원자적 되돌림·T24~T28)를 재사용합니다.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 e49f466(Merge cr/INSTALL-005, 제출 b5f74a1). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 2절 규칙 1·5·6, 7절, 8절 T11·T12, INSTALL-001의 설치기 코드.
