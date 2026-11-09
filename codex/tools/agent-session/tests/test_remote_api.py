@@ -5,7 +5,7 @@ from pathlib import PurePosixPath
 
 import pytest
 
-from agent_session import api, process, remote
+from agent_session import api, config, process, remote, tmux
 from agent_session.config import Project, RemoteSeat
 from agent_session.errors import SessionError
 from agent_session.state import StateStore
@@ -46,8 +46,8 @@ def remote_slot(tmp_path, monkeypatch):
         pytest.fail("remote PID values must not be inspected on the local host")
 
     control = Display()
-    monkeypatch.setattr(api, "_project", lambda *args: project)
-    monkeypatch.setattr(api, "_tmux", lambda *args: control)
+    monkeypatch.setattr(config, "current_project", lambda *args: project)
+    monkeypatch.setattr(tmux, "control", lambda *args: control)
     monkeypatch.setattr(process, "alive", local_process)
     monkeypatch.setattr(process, "group_alive", local_process)
     return project, store, meta, control

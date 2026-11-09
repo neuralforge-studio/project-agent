@@ -10,11 +10,13 @@ import stat
 import subprocess
 import time
 
+from .config import RemoteSeat
 from .errors import SessionError
 from . import process
 
 
 _PREFIX = "@agent_session_"
+PANE_ID_OPTION = _PREFIX + "pane_id"    # window option naming the managed pane; project_board.conf repeats it
 _IDENTITY = ("base", "target", "job_id", "run_id", "project_id", "window_id", "pane_id",
              "server_pid", "server_started", "server_birth", "socket_path")
 
@@ -632,3 +634,29 @@ class Tmux:
         if len(found) > 1:
             raise SessionError("tmux_owner_mismatch", "The provider session matches more than one managed window.")
         return found[0] if found else None
+
+
+def control(socket=None):
+    """The Tmux control for a socket path or Tmux keywords; AGENT_SESSION_SOCKET when none is given."""
+    socket = socket or os.environ.get("AGENT_SESSION_SOCKET")
+    if isinstance(socket, dict):
+        return Tmux(**socket)
+    return Tmux(socket_path=str(socket)) if socket else Tmux()
+
+
+def check_owner(project, slot, session, meta):
+    """Accept a tmux run only as this base's run of the slot and as the conversation the state names.
+
+    Session is the state's conversation for the slot; None leaves the conversation uncompared.
+    """
+    if Path(meta.get("base", "")).resolve() != project.base:
+        raise SessionError("owner_mismatch", "The tmux window belongs to another project.")
+    if meta.get("target") != slot or (session and meta.get("session_id") != session["session_id"]):
+        raise SessionError("owner_mismatch", "The native conversation does not match this slot.")
+    if slot.startswith("seat-"):
+        seat = project.seats[int(slot[5:])]
+        expected = {"host": seat.host, "path": str(seat.path), "python": seat.python} if isinstance(seat, RemoteSeat) else None
+        if meta.get("remote_seat") != expected:
+            raise SessionError("owner_mismatch", "The execution host differs from the registered seat.")
+        if expected and session and "endpoint" in session and session["endpoint"] != meta.get("endpoint"):
+            raise SessionError("owner_mismatch", "The remote provider endpoint differs from the published binding.")

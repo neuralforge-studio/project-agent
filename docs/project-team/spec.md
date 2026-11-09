@@ -531,15 +531,28 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 ### 프로젝트 consumer용 Python API
 
 외부 운영 명령은 네 개로 유지합니다.
-기존 프로젝트의 검증·JOB writer·CR 코드는 설치한 `agent_session.api`를 사용합니다.
+다른 도구(project-item·project-board)는 설치한 `agent_session.api` 모듈 하나만 import합니다.
+공개 이름의 원본은 [api.py](../../codex/tools/agent-session/agent_session/api.py)의 `__all__`이고, 이 표가 그 계약을 기록합니다.
+[경계 test](../../codex/tools/agent-session/tests/test_api_boundary.py)가 다른 도구의 import와 이 표의 이름을 대조합니다.
 
-| 함수 | 입력·결과 |
+| 이름 | 입력·결과 |
 | --- | --- |
-| read_state(cwd, config_path=None) | 현재 디렉토리로 프로젝트를 선택하고 state 원본 snapshot을 반환. 파일 생성·갱신 없음 |
+| read_state(cwd=None, config_path=None) | 현재 디렉토리로 프로젝트를 선택하고 state 원본 snapshot을 반환. 파일 생성·갱신 없음 |
 | check_binding(cwd, target, expected_session_id=None, config_path=None, socket=None) | Target은 leader 또는 현재 JOB ID. 현재 배정·실제 실행·선택적 예상 session_id를 대조하여 seat·작업 경로·run_id·session과 종료 관찰 결과 반환 |
 | liveness(cwd=None, config_path=None, socket=None) | Session이 있는 slot(`leader`, seat 번호)마다 판정한 `session_id`와 `state`(`alive`·`stopped`·`unknown`) 반환. tmux 실행 근거와 CLI process만 조회하고 provider를 호출하지 않음 |
+| caller(project, tmux=None, store=None) | 이 명령을 실행하는 쪽을 `(slot, session_id)`로 반환. slot은 `leader`·`seat-N`·`operator`(관리 실행 밖 CLI, session_id는 None)·`unmanaged-agent`(이 project의 구성원이 아닌 agent). 환경의 대화 ID를 state의 binding과 대조하고, 없으면 관리 실행의 tmux pane으로 판정. project 도구의 유일한 caller 규칙 |
+| require_live(project, slot, identity, tmux=None) | Leader·Worker caller의 slot이 아직 그 대화의 살아 있는 관리 CLI를 가졌는지 확인. 아니면 `caller_not_running` 오류. 반환값 없음 |
+| load_registry(config_path=None) | 등록 파일의 모든 project 튜플을 반환([2절](#2-등록과-프로젝트-선택)) |
+| resolve_project(cwd=None, config_path=None) | 현재 디렉토리를 포함하는 가장 깊은 등록 base·seat의 project를 반환. 없거나 모호하면 `SessionError` |
+| RemoteSeat | 원격 Worker seat의 등록 항목 형식. `Project.seats`의 원소가 이 형식이면 원격 seat |
+| SessionError | 공통 오류. `code`·`message`·`exit_code`·`details` |
+| Tmux | tmux control 클래스. 소비자는 socket 경로를 주어 만들고 option 조회·pane 조작에 씀 |
+| PANE_ID_OPTION | 관리 window의 pane을 가리키는 tmux window option 이름(`@agent_session_pane_id`). 정의는 `agent_session/tmux.py`. tmux 설정 파일은 import할 수 없어 같은 문자열을 주석과 함께 씀 |
 
-세 함수는 읽기 전용입니다.
+`PANE_ID_OPTION`·`RemoteSeat`·`SessionError`·`Tmux`는 이름과 형식을 제공하는 값이고, 나머지는 함수입니다.
+agent-session 내부 모듈은 서로의 밑줄 이름을 import하지 않습니다. 함께 쓰는 helper는 소유 모듈의 공개 이름입니다.
+
+`read_state`·`check_binding`·`liveness`·`caller`·`require_live`는 읽기 전용입니다.
 호출자는 선택한 등록 파일과 socket을 전달할 수 있습니다.
 전달하지 않은 등록 경로는 CLI와 같은 표준 경로 규칙을 적용합니다.
 상태 손상·미등록·현재 소유자 불일치·관찰 불가를 구분해 공통 오류로 반환합니다.

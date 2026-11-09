@@ -19,8 +19,7 @@ import uuid
 
 from . import model
 from agent_session import api
-from agent_session.errors import SessionError
-from agent_session.tmux import Tmux
+from agent_session.api import PANE_ID_OPTION, SessionError, Tmux
 
 
 ENABLED = "@project_board_enabled"
@@ -160,7 +159,7 @@ def _panes(control: Tmux, window: str) -> dict[str, bool]:
 
 
 def _managed_pane_dead(control: Tmux, window: str, panes: dict[str, bool]) -> bool:
-    raw = _options(control, "-w", "-t", window, "@agent_session_pane_id")
+    raw = _options(control, "-w", "-t", window, PANE_ID_OPTION)
     if not raw:
         return False
     try:

@@ -6,17 +6,18 @@ import os
 import time
 from pathlib import Path
 
-from .api import _project, _tmux
+from .config import current_project
 from .errors import SessionError
 from .state import StateStore
+from .tmux import control as tmux_control
 
 
 _HOOK_FIELDS = ("session_id", "hook_event_name", "cwd", "source", "reason", "background_tasks", "session_crons")
 
 
 def _run(run_id, config_path, socket_path, cwd=None):
-    project = _project(cwd, config_path)
-    control = _tmux(socket_path)
+    project = current_project(cwd, config_path)
+    control = tmux_control(socket_path)
     matches = []
     for slot in ("leader", *(f"seat-{n}" for n in range(len(project.seats)))):
         try:
@@ -166,7 +167,7 @@ def run_controller(request_file):
     request = json.loads(Path(request_file).read_text(encoding="utf-8"))
     result_file = Path(request["result_file"])
     end = time.monotonic() + request["timeout"]
-    control = _tmux(request["socket_path"])
+    control = tmux_control(request["socket_path"])
     own_window = request["window_id"]
     cleanup = None
     try:

@@ -71,6 +71,18 @@ def binding_identity(session, provider):
     return (session["session_id"], session["endpoint"])
 
 
+def select_target(state, target):
+    """The (seat number or None, session) a --job target names: "leader" or the seat holding that JOB."""
+    if target == "leader":
+        return None, state["leader"]
+    matches = [int(key) for key, item in state.items()
+               if key != "leader" and item["job_id"] == target]
+    if len(matches) != 1:
+        raise SessionError("job_not_assigned", "JOB has no unique current seat.")
+    seat = matches[0]
+    return seat, state[str(seat)]["session"]
+
+
 def _connected_at(value):
     if not isinstance(value, str) or _CONNECTED_AT.fullmatch(value) is None:
         return False
