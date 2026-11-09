@@ -1,8 +1,8 @@
 """Wake a Worker that rests with its CR in progress, and tell the Leader.
 
-`WatchMixin` is the one-target judgement of a project's `Manager`. `Watch` is the operator command: it
-selects projects from the registry and runs the judgement for every Worker seat once. A cron line runs
-it periodically (spec 7, watch).
+`WatchMixin` is the one-target judgement of a project's `Manager`. `Watch` is the command: it selects
+projects from the registry and runs the judgement for every Worker seat once. The operator runs it by
+hand; the Leader runs it for its own project from its own session cron (spec 7, watch).
 
 A Worker rests when its turn has ended (or only a background shell runs), no input arrived since, and
 it is not waiting for the Leader. Watch then sends the Worker one message with the evidence (CR, last
@@ -70,8 +70,11 @@ class WatchMixin:
     - `remaining()`, `_owned`, `_session`, `_provider_context`, `send`
     """
 
-    def watch_target(self, slot, threshold, now=None):
-        """Judge one Worker seat and act once. Return what was seen and done."""
+    def watch_target(self, slot, threshold, now=None, tell_leader=True):
+        """Judge one Worker seat and act once. Return what was seen and done.
+
+        With `tell_leader` False the caller is the Leader, who gets the evidence in the result instead of
+        a message to itself."""
         now = time.time() if now is None else now
         state = self.store.read()
         job_id = state[slot[len("seat-"):]]["job_id"]
@@ -95,7 +98,8 @@ class WatchMixin:
         record.setdefault("first_seen_at", now)
         # Claude reports "shell" while only a background shell runs: its turn has ended.
         if observed.get("idle") or observed.get("runtime_status") == "shell":
-            outcome.update(self._judge_rest(state, meta, observed, record, threshold, now, job_id, slot))
+            outcome.update(self._judge_rest(state, meta, observed, record, threshold, now, job_id, slot,
+                                                tell_leader))
         else:
             record["busy_seen_at"] = now
             outcome.update(status="busy")
@@ -114,7 +118,7 @@ class WatchMixin:
                 and item.get("session_id") == meta.get("session_id")]
         return max((value for value in seen if value is not None), default=None)
 
-    def _judge_rest(self, state, meta, observed, record, threshold, now, job_id, slot):
+    def _judge_rest(self, state, meta, observed, record, threshold, now, job_id, slot, tell_leader=True):
         children = self._children(meta)
         before = (record.get("children"), record.get("children_at"))     # the last look, before this one replaces it
         working = self._working(children, before, now)
@@ -155,6 +159,9 @@ class WatchMixin:
         delivery = ("Worker에게 점검 메시지를 보냈습니다." if told else
                     "Worker에게는 이미 점검 메시지를 보냈으므로 다시 보내지 않았습니다." if resting.get("nudged_at")
                     else "Worker에게 점검 메시지를 보내지 못했습니다.")
+        if not tell_leader:
+            record["resting"] = resting
+            return {"status": "resting", "reason": None, "actions": actions, "evidence": evidence}
         record["resting"] = self._notify_leader(actions, resting, now, threshold, LEADER_NOTICE.format(
             seat=slot[len("seat-"):], job=job_id, minutes=minutes, delivery=delivery, evidence=evidence))
         return {"status": "resting", "reason": None, "actions": actions}
@@ -229,11 +236,27 @@ class WatchMixin:
 
 
 class Watch(Fleet):
-    """The operator's watch over registered projects."""
+    """The watch over registered projects: the operator's over any, a Leader's over its own project."""
+
+    def _authorize(self, registry, selected, operation):
+        """Return "operator" or "leader", whoever may watch the selection.
+
+        The operator needs no managed or agent caller in any registered project (`Fleet`). A Leader passes
+        only for the one project it leads; a Worker, another project's agent and `--all` over several
+        projects keep the operator's refusal."""
+        try:
+            super()._authorize(registry, selected, operation)
+        except SessionError as error:
+            if error.code not in ("role_denied", "caller_unbound") or len(selected) != 1:
+                raise
+        if len(selected) != 1:
+            return "operator"                  # a Leader of any project made `Fleet` refuse several projects
+        actor, _ = self._manager(selected[0], 30)._authorize(operation, "leader")
+        return actor
 
     def run(self, project=None, everything=False, minutes=DEFAULT_MINUTES):
         registry, selected = self._select(project, everything)
-        self._authorize(registry, selected, "watch")
+        tell_leader = self._authorize(registry, selected, "watch") != "leader"
         threshold = minutes * 60
         results = []
         for item in selected:
@@ -245,7 +268,8 @@ class Watch(Fleet):
                     for key, row in state.items():
                         if key == "leader" or row["job_id"] is None or row["session"] is None:
                             continue
-                        outcome["targets"].append(self._target(manager, f"seat-{key}", row["job_id"], threshold))
+                        outcome["targets"].append(self._target(manager, f"seat-{key}", row["job_id"], threshold,
+                                                                  tell_leader))
             except SessionError as error:
                 # Another watch of this project is running, or its state cannot be read.
                 outcome["error"] = error.as_dict()
@@ -253,9 +277,9 @@ class Watch(Fleet):
         return {"threshold_minutes": minutes, "projects": results}
 
     @staticmethod
-    def _target(manager, slot, job_id, threshold):
+    def _target(manager, slot, job_id, threshold, tell_leader):
         try:
-            return manager.watch_target(slot, threshold)
+            return manager.watch_target(slot, threshold, tell_leader=tell_leader)
         except SessionError as error:
             return {"slot": slot, "job_id": job_id, "status": "error", "error": error.as_dict()}
         except Exception as error:         # a bug in one target must not hide the others

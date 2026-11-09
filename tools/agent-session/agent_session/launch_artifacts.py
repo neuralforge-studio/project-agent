@@ -37,6 +37,21 @@ def _registration_command(context):
                        context.get("endpoint") or ""])
 
 
+def self_check_text(role, resumed=False):
+    """The instruction that makes a Claude instance register its own session cron (spec 7, watch).
+
+    The one place that words it. The cron expression and the check prompt are in the skill's
+    `references/self-check.md`, which owns them; `role` picks its Leader or Worker section. A resumed
+    conversation lost its session cron, so it registers again."""
+    section = "Leader" if role == "Leader" else "Worker"
+    text = ("등록이 끝나면 첫 행동으로 자기 점검을 등록하십시오. project-team skill의 "
+            f"`references/self-check.md`의 {section} 절을 읽고, 그 cron 식과 점검 prompt를 그대로 CronCreate로 "
+            "반복 등록합니다. CronList에 이미 있으면 다시 등록하지 않습니다.")
+    if resumed:
+        text += " 재개한 대화는 session cron이 사라졌으므로 CronList로 확인하고 없으면 등록하십시오."
+    return text + "\n"
+
+
 def prompt_text(project, context, request=None):
     """The initial prompt of a run. A resumed conversation has one already, so it gets only `request`."""
     if context.get("resume"):
@@ -47,7 +62,8 @@ def prompt_text(project, context, request=None):
         text += ("첫 도구 호출에서 다음 내부 등록을 실행하십시오. 작업 디렉토리는 " + context["cwd"]
                  + "입니다. 등록 성공 전에는 일반 작업을 시작하지 마십시오.\n\n" + _registration_command(context) + "\n\n")
     else:
-        text += "SessionStart 내부 등록이 실패하면 작업을 시작하지 마십시오.\n\n"
+        text += ("SessionStart 내부 등록이 실패하면 작업을 시작하지 마십시오.\n"
+                 + self_check_text(role) + "\n")
     if context.get("handoff_file"):
         path = Path(context["handoff_file"])
         text += "이전 대화는 보존됐습니다. 다음 인계로 같은 작업을 이어받으십시오.\n" + path.read_text(encoding="utf-8") + "\n"
