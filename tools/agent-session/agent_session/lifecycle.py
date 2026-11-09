@@ -1,6 +1,7 @@
 """Project session commands, Git preparation, and confirmed slot release."""
 
 from contextlib import contextmanager
+import datetime
 import os
 import shlex
 import sys
@@ -14,6 +15,7 @@ from .errors import SessionError
 from .providers import get_provider
 from .state import StateStore, complete_publication, control_lock, locked, publish_session
 from .suspend import SuspendMixin, SuspendStore
+from .watch import WatchMixin
 from .tmux import Tmux, check_owner
 from .util import write_json
 
@@ -44,7 +46,7 @@ def check_start_arguments(job, prompt_file=None, seat=None):
         raise SessionError("invalid_arguments", "--seat is only valid for a Worker JOB.", 2)
 
 
-class Manager(SuspendMixin):
+class Manager(SuspendMixin, WatchMixin):
     def __init__(self, cwd=None, config_path=None, socket_name=None, socket_path=None, timeout=600):
         self.project = current_project(cwd, config_path)
         self.timeout = timeout
@@ -101,7 +103,7 @@ class Manager(SuspendMixin):
             if operation == "start" and slot == "leader":
                 return actor, identity
             raise SessionError("caller_unbound", "This agent is not a registered member of this project.")
-        if operation in ("shutdown", "resume") and actor != "operator":
+        if operation in ("shutdown", "resume", "watch") and actor != "operator":
             raise SessionError("role_denied", f"Only the operator may {operation} the project sessions.")
         if operation == "send_project" and (actor != "leader" or not identity):
             raise SessionError("role_denied", "Only this project's Leader may send to another project.")
@@ -683,7 +685,7 @@ class Manager(SuspendMixin):
             if (meta.get("stopping") or meta.get("control_pending") or not meta.get("ready")
                     or (not meta.get("remote_seat") and recipient.tmux.pane_info(meta["pane_id"])["pane_dead"])):
                 raise SessionError("target_not_running", "The recipient is not ready for input.")
-            reply_job, sender_run = None, None
+            reply_job, sender_run, sender = None, None, None
             if actor == "leader" or actor.startswith("seat-"):
                 sender = self.tmux.get_current(self.project.project_id, actor)
                 if not sender or sender.get("session_id") != identity:
@@ -723,6 +725,7 @@ class Manager(SuspendMixin):
                 recipient.store.update(update)
                 recipient.tmux.write_meta(meta["window_id"], {"message_to": refreshed.get("message_to")})
             outcome = {**recipient._result(meta), **result}
+            self._note_message(recipient, meta, actor, sender)
             if actor == "leader" and meta.get("job_id"):
                 # Feedback returns the JOB to its Worker; a later Leader's review stays.
                 try:
@@ -731,6 +734,21 @@ class Manager(SuspendMixin):
                     # The message was accepted; reporting a failure here would invite a duplicate send.
                     outcome["review_clear_error"] = error.as_dict()
             return outcome
+
+    @staticmethod
+    def _note_message(recipient, meta, actor, sender):
+        """Record an accepted message on both windows for `watch`: when the recipient last received one and
+        who sent it, and when the sender last sent one and to whom. The message is already delivered, so a
+        failed record changes nothing and is not an error."""
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        try:
+            recipient.tmux.write_meta(meta["window_id"], {"run_id": meta["run_id"],
+                                                          "last_received": {"from": actor, "at": now}})
+            if sender:
+                recipient.tmux.write_meta(sender["window_id"], {"run_id": sender["run_id"], "last_sent": {
+                    "to": "leader" if meta.get("job_id") is None else meta["job_id"], "at": now}})
+        except SessionError:
+            pass
 
     def _clear_review(self, job_id, leader_session_id=None):
         def clear(value):

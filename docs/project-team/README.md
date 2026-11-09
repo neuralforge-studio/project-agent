@@ -10,12 +10,12 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 
 | 구성 요소 | 하는 일 | 소유 경로 |
 | --- | --- | --- |
-| `agent-session` (CLI) | Leader·Worker의 시작·전송·종료·재시작·review·shutdown·resume. 배정 state와 tmux 실행 근거 | `tools/agent-session/` |
+| `agent-session` (CLI) | Leader·Worker의 시작·전송·종료·재시작·review·shutdown·resume·watch. 배정 state와 tmux 실행 근거 | `tools/agent-session/` |
 | `project-item` (CLI) | CR과 결정 항목의 생성·조회·이동·검사. CR 형식의 실행 코드 | `tools/project-item/` |
 | `project-board` (CLI) | 모든 프로젝트의 CR·결정·seat 상황을 보이는 tmux 화면. 결정 답변 전송 | `tools/project-board/` |
 | `project-team` skill | Leader·Worker·운영자의 역할별 절차 | `skills/project-team/` |
 | `project-item` skill | CR·결정 항목 사용 시점과 상태·전이, 형식 규칙 | `skills/project-item/` |
-| 동작 명세 | 등록, state, start·stop·restart·shutdown·resume, CR과 JOB의 연결 | `docs/project-team/spec.md` |
+| 동작 명세 | 등록, state, start·stop·restart·shutdown·resume·watch, CR과 JOB의 연결 | `docs/project-team/spec.md` |
 | 설치 계약 | 설치·갱신·되돌리기·제거가 만들고 고치고 건드리지 않는 경로, 실행 중 HOME 쓰기 목록, 인수 test 명세. | `docs/project-team/install-contract.md` |
 | 설치기 | 설치 계약대로 설치·갱신·되돌리기·제거·점검(`--dry-run` 포함). 표준 library만 씁니다. 인수 test는 `install/tests` | `install/` |
 | 버전 규칙 | 버전 값(`VERSION`), 형식 버전(`tools/formats.json`)과 호환 범위, git tag 이름, 변경 기록(`CHANGELOG.md`) 작성 | `docs/project-team/release.md` |
@@ -70,12 +70,13 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 
 | 모듈 | 책임 | 의존 방향 |
 | --- | --- | --- |
-| `cli` | 입력 해석, 결과 JSON 표현, 조립. `Manager`와 `Fleet`을 만들고 `Fleet`에 `Manager` class를 `manager_factory`로 넘깁니다(`_default_fleet`). start는 `Manager`를 만들기 전에 `lifecycle.check_start_arguments`를 부릅니다. | `lifecycle`, `suspend`를 지연 import합니다. |
-| `lifecycle` | 통합 계층 `Manager`: start·send·stop·restart·review. 배정·제어의 순서, 잠금, state 기록, 실패 처리를 맡고 아래 세 모듈을 조립합니다. start 인자 규칙(`--prompt-file`은 Leader, `--seat`는 Worker JOB)의 원본인 모듈 함수 `check_start_arguments`를 소유하고 `Manager.start`가 부릅니다. | `suspend`, `launch_artifacts`, `windows`, `handoff`를 import합니다(`Manager`가 `SuspendMixin`을 상속). |
+| `cli` | 입력 해석, 결과 JSON 표현, 조립. `Manager`와 `Fleet`을 만들고 `Fleet`에 `Manager` class를 `manager_factory`로 넘깁니다(`_default_fleet`). `Watch`도 같은 방식입니다(`_default_watch`). start는 `Manager`를 만들기 전에 `lifecycle.check_start_arguments`를 부릅니다. | `lifecycle`, `suspend`, `watch`를 지연 import합니다. |
+| `lifecycle` | 통합 계층 `Manager`: start·send·stop·restart·review. 배정·제어의 순서, 잠금, state 기록, 실패 처리를 맡고 아래 세 모듈을 조립합니다. start 인자 규칙(`--prompt-file`은 Leader, `--seat`는 Worker JOB)의 원본인 모듈 함수 `check_start_arguments`를 소유하고 `Manager.start`가 부릅니다. | `suspend`, `watch`, `launch_artifacts`, `windows`, `handoff`를 import합니다(`Manager`가 `SuspendMixin`·`WatchMixin`을 상속). |
 | `launch_artifacts` | run의 시작 산출물: prompt 문서, provider 입력(`prompt.md`, Claude `settings.json`), `launch.sh`, `controller.sh`, run 디렉터리 경로. 생성되는 command가 `agent_session.internal`의 이름을 부르는 곳이 여기입니다. 상태를 갖지 않고 아무것도 시작하지 않습니다. | `lifecycle`·`suspend`를 import하지 않습니다. project·provider·run context를 인자로 받습니다. |
 | `windows` | 한 slot의 run을 담는 tmux window: 이름, 반납된 window의 재사용, 생성·current 지정, 이름 바꾸기, 정리(sweep), 시작 실패한 대기 pane의 정리. 종료 판정은 호출자가 넘긴 `observe`로 합니다. slot 제어 잠금은 호출자가 잡습니다. | `lifecycle`·`suspend`를 import하지 않습니다. `launch_artifacts.run_directory`를 씁니다. |
 | `handoff` | slot의 인계 파일: 경로, 이번 run이 쓴 것인지(`launch.sh` 이후 갱신) 판단, restart의 `handoff_required`, 인계 문서 경로 검증. | `lifecycle`·`suspend`를 import하지 않습니다. `launch_artifacts.run_directory`를 씁니다. |
 | `suspend` | `SuspendStore`(shutdown 기록), `SuspendMixin`(한 대상의 shutdown·resume 단계), `Fleet`(운영자 명령). | `lifecycle`을 import하지 않습니다. `SuspendMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
+| `watch` | `WatchMixin`(한 Worker seat의 쉼 판정과 점검 전송), `Watch`(운영자 명령. `Fleet`을 확장). | `lifecycle`을 import하지 않습니다(`suspend`와 같은 방향). `WatchMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
 
 ### `sys.path` 조작 위치
 

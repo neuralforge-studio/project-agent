@@ -595,7 +595,8 @@ def test_a_retired_window_goes_to_the_next_run_and_reads_like_a_new_window(tmp_p
         "control_pending": False, "control_operation": None, "message_to": None, "start_error": None,
         "launch_file": None, "provider_name": None, "resume": False, "expected_session_id": None,
         "handoff_file": None, "leader_request": None, "remote_seat": None, "remote_native": None,
-        "upstream": None, "upstream_bin": None, "moved_to_background": None, "release_pending": None}
+        "upstream": None, "upstream_bin": None, "moved_to_background": None,
+        "last_sent": None, "last_received": None, "watch": None, "release_pending": None}
     assert reused["registered"] is reused["ready"] is reused["stopping"] is False
     assert reused["provider_launch_attempted"] is False
 

@@ -1,7 +1,7 @@
 # Agent Session 동작 명세 v1
 
 공개 CLI는 `agent-session` 하나입니다.
-공개 명령은 start·send·stop·restart·review·shutdown·resume입니다.
+공개 명령은 start·send·stop·restart·review·shutdown·resume·watch입니다.
 공통 도구는 프로젝트 코드를 import하거나 실행하지 않습니다.
 프로젝트별 차이는 등록(2절)과 프로젝트 문서·CR 본문으로만 표현합니다.
 
@@ -21,12 +21,13 @@ agent-session review --clear
 agent-session shutdown --all
 agent-session shutdown --project agent --timeout 300 --force
 agent-session resume --all
+agent-session watch --all
 ```
 
 Start는 --job이 필수입니다. Worker의 --seat N은 선택이며 지정한 자리만 검사합니다.
 Leader의 start는 --seat를 받지 않습니다.
 Review는 --job과 --clear 중 정확히 하나가 필수입니다(7절 Review).
-Shutdown과 resume은 --project와 --all 중 정확히 하나가 필수입니다(7절 shutdown·resume).
+Shutdown·resume·watch는 --project와 --all 중 정확히 하나가 필수입니다(7절 shutdown·resume, watch).
 나머지 대상 지정 명령은 --job과 --seat 중 정확히 하나가 필수입니다.
 둘 다 입력하면 같은 대상을 가리켜도 오류입니다.
 Leader는 등록 base에서 시작합니다.
@@ -265,7 +266,7 @@ State는 배정과 연결의 원본이며 실행 process 정보의 원본은 아
 | Tmux 실행 | 실제 socket 경로, server PID·시작 시각, session/window/pane ID |
 | Process 실행 | CLI PID·생성 시각·process group, 추적한 background PID·생성 시각 |
 | Provider 연결 | 실제 session_id, Claude message_to 또는 Codex endpoint |
-| 제어와 관찰 | stopping 여부, 반납 대기(`release_pending`), provider 실행 시도 여부, 등록 완료 여부, 게시 의도(`publishing`), hook 관찰값, controller PID·생성 시각, background로 옮겨짐(`moved_to_background`) |
+| 제어와 관찰 | stopping 여부, 반납 대기(`release_pending`), provider 실행 시도 여부, 등록 완료 여부, 게시 의도(`publishing`), hook 관찰값, controller PID·생성 시각, background로 옮겨짐(`moved_to_background`), 받은·보낸 메시지의 시각(`last_received`·`last_sent`), watch가 보낸 점검의 기록(`watch`) |
 
 JOB 값은 CR을 가리키는 값(8절)만 둡니다. CR 본문은 option에 복제하지 않고 CR 파일에서 읽습니다.
 
@@ -857,6 +858,7 @@ Native provider가 더 작은 한도를 알리면 전송 전에 그 한도를 �
 크기 초과는 message_too_large·exit 2이며 자르기·분할·파일 경로 대체를 하지 않습니다.
 Worker가 Leader에게 보고할 때는 `send --job leader`를 사용합니다.
 Leader가 보낸 send가 accepted되고 그 JOB이 `leader.reviewing`이면 reviewing을 null로 만듭니다(7절 Review 표시).
+Send가 accepted되면 받는 쪽 window의 `last_received`(`{from, at}`: 보낸 slot 또는 `operator`, UTC 시각)를 쓰고, 보낸 쪽이 관리 session이면 그 window의 `last_sent`(`{to, at}`: 받는 `leader` 또는 JOB ID)를 씁니다. 이 기록은 7절 watch가 읽습니다. 메시지는 이미 전달됐으므로 기록이 실패해도 send는 실패하지 않습니다.
 
 ### Project 간 Leader 협업
 
@@ -1246,6 +1248,50 @@ Seat session이 있어야 한다는 조건은 설정할 때만 검사합니다.
 | Leader restart·stop | 새 Leader 게시 또는 반납으로 해제 |
 
 Worker restart는 `reviewing`을 바꾸지 않습니다.
+
+### watch
+
+```sh
+agent-session watch --all
+agent-session watch --project NAME --minutes 30
+```
+
+CR이 in-progress인데 쉬고 있는 Worker를 깨우고 Leader에게 알립니다. 운영자가 주기적으로 실행하는 명령입니다. 관리 session(Leader·Worker)이 호출하면 role_denied이고 등록 밖의 agent가 호출하면 caller_unbound입니다(shutdown·resume과 같은 판정, 아무것도 바꾸기 전에 합니다). 한 번 실행하면 각 project의 Worker seat를 한 번씩 보고 끝납니다. 반복은 명령이 하지 않습니다.
+
+| 옵션 | 필수·기본값 | 처리 |
+| --- | --- | --- |
+| --project NAME | --all과 택일 | 그 project만 |
+| --all | --project와 택일 | 등록 파일의 모든 project |
+| --minutes N | 선택. 30 | Worker가 쉬어도 되는 시간. 이 시간이 지나야 움직입니다 |
+| --timeout SECONDS | 선택. 120 | 한 project의 전체 대기 제한 |
+
+**실행 방식: cron을 고릅니다.** 운영자의 crontab에 한 줄을 둡니다(tmux socket이 기본 위치가 아니면 `--socket-name`·`--socket-path`를 앞에 붙입니다).
+
+```
+*/10 * * * * $HOME/.local/bin/agent-session watch --all
+```
+
+Board의 갱신 loop는 고르지 않습니다. Board는 사람이 열어 보는 화면이라 닫히면 감지가 멈추고, 여러 곳에서 열리면 같은 판정이 겹칩니다. 또 화면 도구가 Worker에게 메시지를 보내는 부수효과를 갖게 됩니다. cron은 Board와 무관하게 돌고 한 줄이면 설치됩니다. 실행 간격(10분)은 `--minutes`보다 짧아야 합니다. 쉬기 시작한 뒤 `--minutes`에 최대 간격만큼을 더한 때 움직입니다.
+
+**쉬고 있음**: 다음이 모두 맞는 Worker입니다.
+
+1. 배정한 CR이 in-progress이고 로컬 seat의 현재 run이 살아 있습니다. 원격 seat는 이 판정이 대상이 아니라 `skipped`(`remote_seat`)입니다.
+2. turn이 끝났습니다. provider 관찰의 idle이거나, Claude가 background shell만 도는 상태로 보고합니다(`shell`).
+3. 아무 입력도 없이 `--minutes`가 지났습니다. 시작점은 마지막 turn 종료(그 대화의 `Stop`·`StopFailure` hook 시각), 마지막으로 받은 메시지(`last_received`), watch가 마지막으로 turn 안에서 본 시각 가운데 가장 늦은 때입니다. 셋 다 없으면(Stop hook이 없는 Codex) watch가 그 run을 처음 본 시각입니다. 사용자 interrupt에는 Stop hook이 없을 수 있어 세 번째 값이 있습니다.
+4. Leader의 회신을 기다리지 않습니다. Worker의 마지막 `send`가 Leader에게 간 것이고 그 뒤 받은 메시지가 없으면, 또는 Leader가 그 JOB을 `reviewing`으로 표시했으면 제출·보고 뒤 피드백 대기이므로 쉬고 있음이 아닙니다(`awaiting_leader`).
+5. 자식 process가 CPU를 쓰며 일하지 않습니다. CLI의 자식 process(시작 직후 120초 안에 뜨는 MCP server 같은 helper 제외)의 CPU 시간(이미 끝난 자식의 시간 포함)이 직전 점검 뒤 한 core의 2% 이상 늘었으면 긴 test·build가 진행 중이므로 건드리지 않습니다(`working`). 자식이 있는데 직전 점검 기록이 없으면 비교할 수 없어 그 점검은 건너뜁니다(`observing`). 자식이 없거나 CPU를 쓰지 않으면 이 조건을 만족합니다.
+
+turn이 진행 중이면 아무것도 하지 않습니다(`busy`). foreground 명령은 tool 시간 제한을 넘으면 background로 넘어가고 Worker는 turn을 끝냅니다. 그래서 `pgrep -f`를 담은 끝나지 않는 대기도 위의 쉬고 있음으로 모입니다.
+
+**하는 일**: 메시지 전송과 기록뿐입니다. process에 신호를 보내지 않고 state·CR·Git 작업을 바꾸지 않습니다. 쉬고 있는 Worker에는 다음을 보냅니다.
+
+- Worker에게 점검 메시지를 `send`로 한 번 보냅니다. Worker가 스스로 확인하고 판단하도록 CR 진행 상황을 확인해 이어서 하라고 쓰고, 근거를 담습니다: CR ID, 마지막 turn 종료·마지막 입력·마지막 보고(Leader에게 한 send) 시각, background 작업의 종류·명령, 자식 process의 pid·실행 시간·CPU 누적과 직전 점검 뒤 CPU 사용·명령(160자까지).
+- Leader에게 같은 근거를 담아 알립니다.
+- 발신자는 operator입니다. 메시지 첫 줄에 로컬 operator 입력임이 적히고 본문은 `[agent-session watch]`로 시작합니다. 사용자 승인이 아닙니다.
+
+**반복 방지**: window option `watch`(`first_seen_at`·`busy_seen_at`·`children`·`children_at`·`resting.nudged_at`·`resting.notified_at`)에 보낸 기록을 둡니다. 같은 쉬는 상태가 이어지면 Worker에게는 다시 보내지 않습니다. Leader에게는 마지막 알림 뒤 `--minutes`가 지날 때마다 다시 알립니다. Worker가 점검 뒤 Leader에게 보고하거나 Leader에게서 메시지를 받으면 다음 쉼은 새 상태이므로 Worker에게 다시 보냅니다. 전달이 accepted가 아니면 기록하지 않아 다음 점검이 다시 시도합니다(Leader가 없거나 Worker가 준비 중인 경우 등). 기록은 run의 window에 있으므로 새 run은 처음부터 봅니다. 같은 project의 watch는 `agent/watch.lock`으로 동시에 하나만 돕니다(둘째는 `control_busy`를 그 project의 `error`로 보고하고 아무것도 보내지 않습니다).
+
+결과는 `{threshold_minutes, projects: [{project, targets: [{slot, job_id, status, reason, actions}], error?}]}`입니다. status는 `skipped`·`busy`·`idle`·`awaiting_leader`·`observing`·`working`·`resting`·`error`입니다. 한 seat의 오류는 다른 seat를 막지 않고 그 target의 `error`로 보고합니다. 점검 대상이 없어도 exit 0입니다. 자식 process의 CPU 시간은 Linux에서만 읽습니다. 다른 OS에서는 자식 process를 읽지 못한 것으로 보고 메시지에 그렇게 적으며 CPU 조건은 자식이 없는 것으로 취급합니다.
 
 ## 8. CR과 실행 입력
 
