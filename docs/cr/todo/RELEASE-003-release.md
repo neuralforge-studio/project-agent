@@ -20,6 +20,7 @@
 - 2026-11-09 Leader: 판정 보류(open 유지). 계정 준비 방법을 사용자 결정 D-20261109-02로 묻습니다. 선행 INSTALL-001·002·004·005, RELEASE-001·002가 통합된 뒤 결정에 맞춰 Implementation·Verification을 쓰고 판정합니다. 사용자 지시(2026-11-09 "남은 CR은 전부 등록해서 얼마나 남았는지 알 수 있게 해줘")에 따라 RELEASE-001에서 떼어 냈습니다.
 - 2026-11-09 Leader: 조사한다(read-only, 사용자 결정 D-20261109-02 C). 사용자 답변 원문(Project Board): "C". 시범 설치는 이 계정에서 빈 디렉터리를 HOME으로 지정한 login shell로 합니다. 같은 uid라서 기본 tmux socket·provider 인증·`/tmp`가 실제 새 계정과 다르며, 이 한계는 Result에 적습니다. 선행 CR이 모두 통합된 뒤 시작합니다.
 - 2026-11-09 Leader: 선행에 TMUX-002를 더합니다. 시범 환경(`env -i`의 시스템 PATH)은 `/usr/bin/tmux` 2.7을 만나므로, 최소 버전 판정과 안내가 들어간 뒤 시범 설치해야 실제 새 직원의 경험을 확인할 수 있습니다. 시범 설치에서 PATH 첫 tmux가 2.7인 경우와 사내 3.8을 앞에 둔 경우를 모두 기록하십시오.
+- 2026-11-09 Leader: 선행이 모두 통합되었습니다(마지막 TMUX-002 5b73d6a). 원본은 지금 `origin/main`입니다. 시범은 안내문(`docs/install.md`)을 그대로 따르고, 시스템 PATH(첫 tmux가 `/usr/bin/tmux` 2.7)인 경우와 사내 tmux 3.8을 앞에 둔 경우를 모두 기록합니다. 사내 tmux는 `LD_LIBRARY_PATH`가 필요할 수 있습니다(TMUX-002 Result). 안내문이나 설치기의 문제를 찾으면 고치지 말고 Leader에게 보고합니다. 이 workstation의 실제 설치본(`~/.local/lib/project-agent`, agent DIST-005가 설치)은 건드리지 않습니다.
 
 ## Implementation
 - Mode는 read-only입니다. 제품 코드와 문서를 고치지 않고 commit·push하지 않습니다. 결과는 `## Result`에 씁니다. 안내문이나 설치기의 문제를 찾으면 고치지 않고 Leader에게 보고합니다(Leader가 CR을 엽니다).

@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: 742d60b97631c837788b218a138ed6b21b70b832 2026-11-09T19:09:15+09:00
+- Outcome: fixed
 
 ## Symptom
 통합 파일 `integrations/tmux/project-agent.conf`는 tmux 3.x 문법(`{ }` 명령 블록, 이름 붙은 hook index, `#{d:current_file}`, `run-shell -C` 등)을 씁니다. 이 workstation의 `/usr/bin/tmux`는 2.7이고, 사내 tmux 3.8(`/primehome/tools/Inhouse/tmux/latest/bin/tmux`)은 PATH에 사내 경로가 먼저 올 때만 쓰입니다. 개인 설정이 없는 새 직원은 2.7을 쓸 수 있습니다. 그러면 설치는 성공하지만 tmux 설정을 읽을 때 통합 파일이 오류를 내고, Board binding·hook이 들어가지 않습니다. 설치 계약에 tmux 최소 버전이 없고 설치기 `check`도 이를 알리지 않습니다.
@@ -20,6 +21,7 @@
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). RELEASE-002 Worker가 결정을 요청했으나, 지원하는 tmux에서 동작하지 않는데 알리지도 않는 것은 결함이므로 위임 범위입니다(사용자 지시 2026-11-09: 동작 결함은 Leader가 최적의 방법을 정함). RELEASE-003(빈 HOME 시범 설치)은 시스템 PATH의 tmux 2.7을 만나므로 이 CR 뒤에 합니다.
 - 2026-11-09 Leader: 제출 adcd37e1c8e3c35a09cabbef96cd3b94ea03c830를 인수합니다. Leader review: Worker 확인 요청(외부 망 차단으로 CHANGES 없음)에 대한 판정: 이 host의 2.7·3.6a·3.8 실행 결과로 만든 근거 표를 받아들입니다. 가장 높은 요구는 이름 붙은 hook index이며 3.6a 실패·3.8 동작을 직접 확인했으므로, 검증된 가장 낮은 동작 버전 3.8을 최소로 둔 것은 사실에 맞는 보수적 판정입니다(3.7은 확인되면 값만 바꿈). 판정은 release 안의 파일에서 2.7도 읽는 문법으로 하고 고정 파일은 그대로라 upgrade로 적용됩니다. 2.7·3.6a는 한 줄 안내만, check는 PATH 첫 tmux가 낮으면 실패와 해소 방법. 수정 전 재현, README 표대로 네 번째 명령 83·test_tmux_control 15·install/tests 253 passed(merge 뒤).
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 5b73d6a(Merge cr/TMUX-002, 제출 adcd37e). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 3절·3.1절·5.3절·7절, `integrations/tmux/project-agent.conf`, [안내문](../../install.md) 1절, tmux의 `CHANGES`(사내 tmux 설치본 또는 tmux 저장소).
