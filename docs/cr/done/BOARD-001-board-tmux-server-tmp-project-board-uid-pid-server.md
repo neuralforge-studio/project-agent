@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Base: 5b5816d7ca39e37cb36b5ff45292ac8e81f2f863 2026-11-09T19:26:13+09:00
+- Outcome: fixed
 
 ## Symptom
 Board는 tmux server마다 잠금 파일과 클릭 socket을 둘 private 디렉터리 `/tmp/project-board-<uid>-<server pid>`를 만듭니다. server가 끝나도 이 디렉터리를 지우는 곳이 없습니다. 사용자 환경에서는 tmux server를 새로 띄울 때마다 하나씩 남고, test에서는 server 수만큼 수백 개가 남았습니다(TEST-004 실측: project-board suite 1회에 6개 증가).
@@ -19,6 +20,7 @@ Board는 tmux server마다 잠금 파일과 클릭 socket을 둘 private 디렉�
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). 재현 근거가 있는 제품 결함이므로 위임 범위입니다. 근본 원인은 디렉터리의 수명이 server에 묶여 있는데 server가 끝날 때 정리할 주체가 없다는 점입니다. `kill-server`·crash에는 server 쪽에서 code를 실행할 기회가 없으므로, 디렉터리를 만드는 쪽이 server가 끝난 디렉터리를 정리하는 규칙으로 고칩니다.
 - 2026-11-09 Leader: 제출 5be5f6d5b317b46a954bebe765171dbbb15021b8를 인수합니다. Leader review: reap_runtime_directories의 대상 한정(이름 형식·디렉터리·내 소유·0700·내용이 control.lock과 16자 .sock뿐, 하나라도 다르면 전체 남김)과 끝난 server 판정(ESRCH·EPERM, tmux 아님, 디렉터리 mtime+2초보다 늦게 시작=pid 재사용; 애매하면 남김)을 확인했습니다. 수정 전 재현과 새 test 4개(남길 것 10종, 동시 정리 포함), project-board suite 119 passed·경계 test 9 passed. README 표대로 해당 suite만 실행.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 b7922a7(Merge cr/BOARD-001, 제출 5be5f6d). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 5.4절, [project-board README](../../../tools/project-board/README.md), [README 검증 표](../../../README.md#검증).
