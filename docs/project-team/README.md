@@ -2,7 +2,7 @@
 
 이 문서는 project-team 제품의 전체 구성을 설명합니다.
 각 기능의 계약과 실행 방법은 아래 표의 소유 문서가 설명합니다. 이 문서는 그 내용을 다시 쓰지 않고 연결합니다.
-문서 소유 원칙은 [프로그램 설계 및 관리 공통 원칙](../../codex/references/program-architecture.md)의 "정보의 원본과 문서 갱신"입니다.
+문서 소유 원칙은 정보의 원본과 문서 갱신입니다. 사실마다 원본 문서가 하나이고, 다른 문서는 원본을 가리킵니다.
 
 ## 목적과 구성
 
@@ -36,12 +36,12 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 
 | 종류 | 진입점 |
 | --- | --- |
-| CLI | `agent-session`, `project-item`, `project-board`. 각 `bin/` 파일을 `~/.local/bin`에 link합니다. |
+| CLI | `agent-session`, `project-item`, `project-board`. 각 `bin/` 파일을 `~/.local/bin`에 link합니다. 세 파일은 `codex/tools/python-launcher.sh`로 Python을 고릅니다. 설치본은 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`로 interpreter와 package 경로를 넘깁니다([설치 계약 6.1절](install-contract.md#61-python-선택)). |
 | Python API | `agent_session.api`: 목록의 원본은 [api.py](../../codex/tools/agent-session/agent_session/api.py)의 `__all__`이고 이름별 계약은 [명세 5절](spec.md#프로젝트-consumer용-python-api)이 기록합니다. `project_item.api`: 목록의 원본은 [api.py](../../codex/tools/project-item/project_item/api.py)의 `__all__`이고 계층은 [project-item README](../../codex/tools/project-item/README.md#layers-and-public-api)가 설명합니다. |
 | Hook·controller | `agent_session.internal`의 `register_from_hook`(Claude SessionStart hook), `register_current`(Codex 초기 도구), `mark_process`, `run_controller`([명세 5절](spec.md#provider-내부-등록)) |
 | 원격 seat | `python -m agent_session.remote_runtime`, `python -m agent_session.remote_bridge` |
 | tmux option | 관리 window의 `@agent_session_*`([명세 3절](spec.md#실행-근거와-잠금)), Board의 `@project_board_*`(`@project_board_enabled`, `_managed`, `_pane`, `_width`, `_restore`, `_expanded`, `_config`, `_click_socket`) |
-| 환경 변수 | 관리 대화에 `AGENT_SESSION_BASE`, `AGENT_SESSION_CONFIG`, `AGENT_SESSION_SOCKET`, `AGENT_SESSION_UPLINK`을 줍니다. 관리 Claude CLI에는 `CLAUDE_DISABLE_ADOPT=1`도 줍니다. CLI가 끝날 때 대화가 background session으로 넘어가는 것을 막습니다([명세 3절](spec.md#background로-옮겨진-대화와-등록되지-않은-run의-종료-판정)). |
+| 환경 변수 | 설치본 CLI에 `PROJECT_AGENT_PYTHON`, `PROJECT_AGENT_PYTHONPATH`를 줍니다. 관리 대화에 `AGENT_SESSION_BASE`, `AGENT_SESSION_CONFIG`, `AGENT_SESSION_SOCKET`, `AGENT_SESSION_UPLINK`을 줍니다. 관리 Claude CLI에는 `CLAUDE_DISABLE_ADOPT=1`도 줍니다. CLI가 끝날 때 대화가 background session으로 넘어가는 것을 막습니다([명세 3절](spec.md#background로-옮겨진-대화와-등록되지-않은-run의-종료-판정)). |
 | 등록·state | 등록 파일 `project.json`과 `<base>/agent/state.json`([명세 2절](spec.md#2-등록과-프로젝트-선택), [3절](spec.md#3-statejson)) |
 
 ## 의존 관계
@@ -112,13 +112,14 @@ CR ARCH-001이 합의한 목표는 모두 위 현행에 옮겼습니다(2026-11-
 
 ## 도구별 검증 명령
 
-저장소 루트에서 실행합니다. Python은 [AGENTS.md](../../AGENTS.md)가 정한 환경을 씁니다(Workstation은 `/primehome/tools/Inhouse/Python3/latest/bin/python3`, WSL은 `~/python/.venv/bin/python`).
+저장소 루트에서 실행합니다. Python은 이 저장소 checkout의 AGENTS.md가 정한 환경을 씁니다(Workstation은 `/primehome/tools/Inhouse/Python3/latest/bin/python3`, WSL은 `~/python/.venv/bin/python`).
 
 ```sh
 python -m pytest -q -n 8 codex/tools/agent-session/tests
 python -m pytest -q codex/tools/project-item/tests
 python -m pytest -q codex/tools/project-board/tests
 python -m pytest -q tmux/scripts/test_tmux_decide_status.py
+python -m pytest -q codex/tools/test_python_launcher.py codex/tools/test_distribution_boundary.py
 python codex/scripts/gen_skill_metadata.py --check
 python codex/scripts/check_agent_setup.py
 python -m pytest -q codex/scripts/test_check_agent_setup.py

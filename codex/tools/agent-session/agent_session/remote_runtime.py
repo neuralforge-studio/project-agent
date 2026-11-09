@@ -43,8 +43,18 @@ def _legacy_skill(link, name, runtime):
             and (runtime / parts[0] / "ready").is_file())
 
 
+# Written by the project-agent installer (docs/project-team/install-contract.md section 2).
+INSTALL_RECORD = Path(".local/lib/project-agent/install.json")
+
+
 def _install_skills(source):
-    """Refresh only runtime-owned links; a user's replacement relinquishes ownership."""
+    """Refresh only runtime-owned links; a user's replacement relinquishes ownership.
+
+    A host with an installed release owns its skill links through the installer (contract section 2,
+    rule 6), so the runtime then neither creates nor repairs them.
+    """
+    if (Path.home() / INSTALL_RECORD).is_file():
+        return
     names = ("project-team", "project-item")
     if not any((source / "guidance/codex/skills" / name).is_dir() for name in names):
         return

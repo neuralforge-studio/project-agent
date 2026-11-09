@@ -129,7 +129,7 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 | `~/.cache/project-item/locks/<hash>.lock` | `project-item`의 `new`·`move`·`record`·`render` 등 item root를 쓰는 모든 명령 | 잠금 파일(내용 없음). 만든 뒤에 지우지 않습니다. `<hash>`는 item root 경로의 해시입니다. | 등록(`path_cr`, `path_decide`)에서 계산한 이름 | [store.py:19-31](../../codex/tools/project-item/project_item/store.py) |
 | `~/.cache/tmux-decide-status.json`, `.lock`, `.<pid>.tmp` (`XDG_CACHE_HOME`가 있으면 그 아래) | tmux status가 `tmux_decide_status.py`를 부를 때. 사용자가 status 설정에 이 script를 넣은 경우만 | 열린 결정 ID 목록과 잠금. 새 결정이 생기면 모든 tmux client에 `display-message`와, Leader window의 pane tty에 BEL(0x07)을 씁니다. | 등록(project마다 `path_decide`를 읽음) | [tmux_decide_status.py:49-51, 69-74, 168-170](../../tmux/scripts/tmux_decide_status.py), 알림 [같은 파일 136-146](../../tmux/scripts/tmux_decide_status.py) |
 | (원격 host의 HOME) `~/.cache/agent-session/runs/<run>/`, `~/.cache/agent-session/runtime/<hash>/`와 `.lock`, `~/.cache/agent-session/skills.json`·`skills.lock` | Codex SSH Worker seat를 쓰는 원격 host에서만 | run 기록, 받은 실행본 압축 해제, skill 소유 기록. 이 host에서는 일어나지 않습니다. | 원격 host의 HOME | [remote_runtime.py:17-20, 46-94, 171-214](../../codex/tools/agent-session/agent_session/remote_runtime.py), [remote.py:15-29](../../codex/tools/agent-session/agent_session/remote.py) |
-| (원격 host의 HOME) `~/.codex/skills/project-team`, `~/.codex/skills/project-item` | 같은 원격 host에서 run을 시작할 때 | 위 실행본의 `guidance/codex/skills/<이름>`을 가리키는 symlink. 이름이 이미 있고 이 runtime이 만든 것이 아니면 건드리지 않습니다. `~/.codex/skills/`가 없으면 만듭니다. | 원격 host의 HOME. **2절의 설치 대상과 같은 이름입니다(2절 규칙 6).** | [remote_runtime.py:46-94](../../codex/tools/agent-session/agent_session/remote_runtime.py) |
+| (원격 host의 HOME) `~/.codex/skills/project-team`, `~/.codex/skills/project-item` | 같은 원격 host에서 run을 시작할 때. 그 host에 `~/.local/lib/project-agent/install.json`이 있으면 쓰지 않습니다(DIST-003). | 위 실행본의 `guidance/codex/skills/<이름>`을 가리키는 symlink. 이름이 이미 있고 이 runtime이 만든 것이 아니면 건드리지 않습니다. `~/.codex/skills/`가 없으면 만듭니다. | 원격 host의 HOME. **2절의 설치 대상과 같은 이름입니다(2절 규칙 6).** | [remote_runtime.py:46-94](../../codex/tools/agent-session/agent_session/remote_runtime.py) |
 
 읽기만 하는 HOME 위치(쓰지 않음): `~/.claude/projects/`([claude.py:104](../../codex/tools/agent-session/agent_session/providers/claude.py)), `~/.claude/settings.json`([claude.py:279](../../codex/tools/agent-session/agent_session/providers/claude.py)), `~/.claude/sessions/`([registry.py:79-97](../../codex/tools/project-item/project_item/registry.py)), `~/.codex/<profile>.config.toml`([codex.py:327-328](../../codex/tools/agent-session/agent_session/providers/codex.py)), 등록 파일.
 
@@ -192,7 +192,7 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 
 등록 파일의 형식은 [명세 2절](spec.md#2-등록과-프로젝트-선택)이 소유합니다. 이 절은 위치만 정합니다.
 
-현재 코드의 선택 규칙([config.py:62-85](../../codex/tools/agent-session/agent_session/config.py)):
+2단계(DIST-003) 전의 선택 규칙([config.py:62-85](../../codex/tools/agent-session/agent_session/config.py)). 아래 계약이 이 규칙을 대체했습니다:
 
 1. `--config`가 있으면 그 파일만 씁니다. `AGENT_SESSION_CONFIG`는 `current_project`가 같은 방식으로 씁니다.
 2. 없으면 `~/.codex/project.json`과 `~/.claude/project.json` 중 있는 파일을 씁니다. 둘 다 있고 서로 다른 파일이면 `registry_ambiguous`로 거절합니다. 병합하지 않습니다.
@@ -203,9 +203,24 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 2. 후보 셋: `~/.config/project-agent/project.json`, `~/.codex/project.json`, `~/.claude/project.json`. 있는 파일이 하나(또는 같은 파일의 여러 경로)면 그 파일을 씁니다. 서로 다른 파일이 둘 이상이면 지금처럼 `registry_ambiguous`로 거절합니다.
 3. 셋 다 없으면 `registry_not_found`입니다. 오류 문구에 세 위치를 모두 적습니다.
 
-설치의 등록 파일 초안은 후보 셋 중 어느 위치에도 파일이 없을 때만 만듭니다. 이 workstation은 기존 파일이 있으므로 초안을 만들지 않습니다. 이 규칙을 코드에 넣는 일은 코드 변경이므로 DIST-003이 합니다. 오류 문구와 `--help`의 위치 안내도 함께 바꿉니다([config.py:74](../../codex/tools/agent-session/agent_session/config.py), [project-item cli.py:19](../../codex/tools/project-item/project_item/cli.py), [registry.py:3](../../codex/tools/project-item/project_item/registry.py)).
+설치의 등록 파일 초안은 후보 셋 중 어느 위치에도 파일이 없을 때만 만듭니다. 이 workstation은 기존 파일이 있으므로 초안을 만들지 않습니다. 후보 셋의 선택은 DIST-003이 `registry_path`에 넣었고, 오류 문구와 `--help`의 위치 안내도 같이 바꿨습니다([config.py `REGISTRY_LOCATIONS`](../../codex/tools/agent-session/agent_session/config.py), [project-item cli.py](../../codex/tools/project-item/project_item/cli.py), [registry.py](../../codex/tools/project-item/project_item/registry.py)). 설치기의 초안 조건은 4단계가 구현합니다.
 
 초안은 설치 뒤 사용자의 파일입니다. `upgrade`·`rollback`은 읽거나 고치지 않습니다. `uninstall`은 지우지 않습니다(7.2절).
+
+### 6.1 Python 선택
+
+세 CLI(`agent-session`, `project-item`, `project-board`)의 `bin/` 진입점은 같은 규칙을 씁니다. 규칙의 원본은 공용 launcher [`codex/tools/python-launcher.sh`](../../codex/tools/python-launcher.sh) 하나입니다. 진입점은 이 파일을 `source`하며, 도구 디렉터리(`codex/tools/<도구>/`)의 부모에 있어야 합니다. release는 이 상대 배치를 유지합니다.
+
+설치기의 shim은 아래 환경 변수를 정하고 진입점을 실행합니다.
+
+| 변수 | 뜻 | 없을 때 |
+| --- | --- | --- |
+| `PROJECT_AGENT_PYTHON` | 설치 때 고른 interpreter의 절대 경로. 값이 있으면 후보는 이것 하나입니다. 다른 interpreter로 되돌아가지 않습니다. | 개발 checkout 규칙: macOS는 `python3`, WSL은 `~/python/.venv/bin/python`만, 그 밖에는 `/primehome/tools/Inhouse/Python3/latest/bin/python3`, `~/python/.venv/bin/python`, `python3` 순서 |
+| `PROJECT_AGENT_PYTHONPATH` | release 안 외부 package 디렉터리(`textual` 등). `:`로 여럿을 이을 수 있습니다. `project-board`만 `PYTHONPATH`에 더합니다. | 더하지 않음 |
+
+- `project-board`와 `project-item`은 `PYTHONNOUSERSITE=1`로 실행하므로, 사용자 site의 package는 보이지 않습니다. release의 package는 `PROJECT_AGENT_PYTHONPATH`로만 보입니다.
+- `PROJECT_AGENT_PYTHON`이 없거나 실행할 수 없는 파일이면 `agent-session`은 JSON 오류 `python_unavailable`(종료 코드 5)을, 버전이 3.10 미만이면 `python_version`을 출력합니다. `project-item`과 `project-board`는 stderr에 한 줄을 쓰고 종료 코드 5로 끝납니다.
+- 4단계 설치기는 이 두 변수의 값을 shim에 정합니다. 변수의 이름과 의미를 바꾸려면 먼저 이 절을 고칩니다.
 
 ## 7. 명령의 동작
 
@@ -299,9 +314,9 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 
 | 항목 | 현재 | 계약 | 처리 단계 |
 | --- | --- | --- | --- |
-| 등록 파일 위치 | `~/.codex`·`~/.claude`만 찾음([config.py:71](../../codex/tools/agent-session/agent_session/config.py)) | 6절의 세 후보 | 2단계 |
-| CLI python 선택 | 개인 경로 고정([agent-session:6-10](../../codex/tools/agent-session/bin/agent-session), [project-board:5-13](../../codex/tools/project-board/bin/project-board)) | 설치 때 고른 interpreter. `project-board`는 `PYTHONNOUSERSITE=1`이므로 release 안의 package를 `PYTHONPATH`로 넣어야 함 | 2단계 |
-| 원격 runtime의 skill link | 설치본이 있어도 link를 만들고 고침([remote_runtime.py:46-94](../../codex/tools/agent-session/agent_session/remote_runtime.py)) | 설치본이 있으면 만들지 않고 고치지 않음(2절 규칙 6) | 2단계(runtime의 건너뛰기), 4단계(설치의 넘겨받기) |
+| 등록 파일 위치 | 해결됨(DIST-003): 6절의 세 후보를 찾음 | 6절의 세 후보 | 2단계 |
+| CLI python 선택 | 해결됨(DIST-003): 6.1절의 공용 launcher가 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`를 받음 | 설치 때 고른 interpreter. `project-board`는 `PYTHONNOUSERSITE=1`이므로 release 안의 package를 `PYTHONPATH`로 넣어야 함 | 2단계 |
+| 원격 runtime의 skill link | runtime의 건너뛰기는 해결됨(DIST-003): `install.json`이 있으면 `_install_skills`가 link를 만들지 않고 고치지 않음. 설치의 넘겨받기는 남음 | 설치본이 있으면 만들지 않고 고치지 않음(2절 규칙 6) | 4단계(설치의 넘겨받기) |
 | tmux 통합 파일의 경로 | `~/.tmux/scripts/tmux_project_board.sh`를 고정 경로로 부름([project_board.conf:3-32](../../tmux/scripts/project_board.conf)) | `current` 아래 경로 | 5단계 |
 | tmux 통합 파일의 binding | `prefix B`와 root `MouseDown1Pane`을 무조건 binding함 | 3.1절 | 5단계 |
 | `tmux_decide_status.py`의 project-item 찾기 | 저장소 상대 경로([README의 실행 경로 계약 6항](README.md)) | 설치본에서도 찾음 | 5단계 |

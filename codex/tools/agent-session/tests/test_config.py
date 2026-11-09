@@ -59,21 +59,72 @@ def test_symlink_roots_are_not_registered_twice(tmp_path):
     assert error.value.code == "project_ambiguous"
 
 
-def test_standard_paths_require_one_actual_file(tmp_path, monkeypatch):
+PRODUCT = ".config/project-agent/project.json"
+LOCATIONS = (PRODUCT, ".codex/project.json", ".claude/project.json")
+
+
+def _home_registry(tmp_path, location):
+    path = tmp_path / location
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return write_registry(path, {})
+
+
+def test_missing_registry_names_all_three_locations(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    for tool in (".codex", ".claude"):
-        (tmp_path / tool).mkdir()
+    for tool in (".codex", ".claude", ".config/project-agent"):
+        (tmp_path / tool).mkdir(parents=True)
     with pytest.raises(SessionError) as error:
         registry_path()
     assert error.value.code == "registry_not_found"
-    codex = write_registry(tmp_path / ".codex/project.json", {})
-    claude = write_registry(tmp_path / ".claude/project.json", {})
+    for location in ("~/.config/project-agent/project.json", "~/.codex/project.json", "~/.claude/project.json"):
+        assert location in error.value.message
+
+
+@pytest.mark.parametrize("location", LOCATIONS)
+def test_each_standard_location_is_used_alone(tmp_path, monkeypatch, location):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = _home_registry(tmp_path, location)
+    assert registry_path() == path.resolve()
+
+
+@pytest.mark.parametrize("pair", [(0, 1), (0, 2), (1, 2)])
+def test_two_separate_standard_files_are_ambiguous(tmp_path, monkeypatch, pair):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for index in pair:
+        _home_registry(tmp_path, LOCATIONS[index])
     with pytest.raises(SessionError) as error:
         registry_path()
     assert error.value.code == "registry_ambiguous"
-    claude.unlink()
-    claude.symlink_to(codex)
-    assert registry_path() == codex
+    assert len(error.value.details["paths"]) == 2
+
+
+def test_three_separate_files_are_ambiguous(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for location in LOCATIONS:
+        _home_registry(tmp_path, location)
+    with pytest.raises(SessionError) as error:
+        registry_path()
+    assert error.value.code == "registry_ambiguous"
+    assert len(error.value.details["paths"]) == 3
+
+
+def test_several_paths_to_one_file_count_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex = _home_registry(tmp_path, ".codex/project.json")
+    for location in (PRODUCT, ".claude/project.json"):
+        link = tmp_path / location
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(codex)
+    assert registry_path() == codex.resolve()
+
+
+def test_hard_linked_paths_count_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    product = _home_registry(tmp_path, PRODUCT)
+    claude = tmp_path / ".claude/project.json"
+    claude.parent.mkdir()
+    claude.hardlink_to(product)
+    assert registry_path() == product.resolve()
 
 
 @pytest.mark.parametrize("body", [

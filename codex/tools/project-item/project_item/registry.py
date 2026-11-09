@@ -1,6 +1,7 @@
 """Project selection and item roots.
 
-The project registry (~/.codex/project.json) and its parser belong to agent-session
+The project registry (standard locations: ~/.config/project-agent/project.json, ~/.codex/project.json,
+~/.claude/project.json) and its parser belong to agent-session
 (docs/project-team/spec.md section 2). This module imports that parser from the sibling
 tool directory, so that the registry has one parser.
 """

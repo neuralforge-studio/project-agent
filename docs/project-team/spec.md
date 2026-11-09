@@ -76,7 +76,7 @@ Skill은 JOB·검증·review·commit message 작성 절차를 안내합니다.
 
 ## 2. 등록과 프로젝트 선택
 
-등록 파일은 `~/.codex/project.json` 또는 `~/.claude/project.json`입니다.
+등록 파일은 `~/.config/project-agent/project.json`, `~/.codex/project.json`, `~/.claude/project.json` 중 하나입니다. 같은 파일을 가리키는 여러 경로는 하나로 봅니다. 서로 다른 파일이 둘 이상이면 `registry_ambiguous`, 하나도 없으면 `registry_not_found`로 거절하며 오류 문구에 세 위치를 적습니다. 위치의 원본은 `docs/project-team/install-contract.md` 6절입니다.
 [등록 예제](project-registry.example.json)는 base key와 project·provider·seats·항목 경로·launch를 보여 줍니다.
 Project는 유일한 문자열, provider는 claude 또는 codex입니다.
 Seats는 로컬 경로 문자열 배열입니다. Codex project는 아래 SSH seat 객체를 함께 등록할 수 있습니다.

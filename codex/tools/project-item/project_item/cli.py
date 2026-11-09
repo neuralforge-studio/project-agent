@@ -16,7 +16,7 @@ from .errors import ItemError
 
 def _common() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--config", help="project registry (default: ~/.codex/project.json or ~/.claude/project.json)")
+    common.add_argument("--config", help="project registry (default: the one file among ~/.config/project-agent/project.json, ~/.codex/project.json and ~/.claude/project.json)")
     common.add_argument("--project", help="project name (default: the project of the cwd)")
     return common
 
