@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: afc5dc25ff13e85251ff5e46ebfd3fb33f0653ca 2026-11-09T21:09:33+09:00
+- Outcome: fixed
 
 ## Symptom
 사용자 보고: "exit을 해도 pane, window가 최종 destory까지 안됨." 어느 exit(관리 대화의 `/exit`, `agent-session stop`, CLI 비정상 종료)인지는 아직 구분하지 않았습니다.
@@ -18,6 +19,7 @@
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). 재현 가능한 동작 결함이므로 위임 범위입니다. SESSION-004가 stop·반납 경로를 고치므로 그 뒤에 시작합니다. 사용자 지시(2026-11-09 대화): "위와 같이 11개의 개선 요청 사항이 있어."
 - 2026-11-09 Leader: 제출 f833183915067410d11c31a96e5d608e311f50d7를 인수합니다. Leader review: 종료 경로별 재현 표와 원인(반납 뒤에도 사용자 pane이 있으면 window 전체 보존, tmux.close_window의 window_shared)을 확인했습니다. 수정: 관리 pane만 닫고 관리 정보·remain-on-exit을 지워 window를 사용자에게 돌려줌, 명세 3절 규칙 먼저. agent-session 749 passed, 경계 test 9. 재현 표의 '/exit만 한 뒤 window 유지(종료 근거)'는 이 CR 범위(반납 뒤) 밖이며, 사용자 보고(exit 뒤 destroy 안 됨)의 주된 경우로 보여 SESSION-007로 엽니다(Leader의 CR 범위 축소 누락).
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 2cb82bc(Merge cr/SESSION-003, 제출 f833183). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [동작 명세](../../project-team/spec.md) 3·7절, [project-team skill](../../../skills/project-team/SKILL.md), [README 검증 표](../../../README.md#검증).
