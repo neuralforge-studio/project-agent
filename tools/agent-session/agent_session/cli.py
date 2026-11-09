@@ -98,7 +98,21 @@ def build_parser():
                                       "(boot after the conversation record's last update, no process names the "
                                       "conversation, no execution pointer). A slot that fails a check is rejected.")
 
+    watch = commands.add_parser("watch", help="Look once at every in-progress Worker; nudge one that rests and tell the Leader.")
+    selection = watch.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--project", type=_nonempty, metavar="NAME")
+    selection.add_argument("--all", action="store_true")
+    watch.add_argument("--minutes", type=_seconds, default=30, metavar="MINUTES",
+                       help="How long a Worker may rest, or wait in a process that does not run, before watch acts.")
+    watch.add_argument("--timeout", type=_seconds, default=120, metavar="SECONDS")
+
     return parser
+
+
+def _default_watch(**kwargs):
+    from .lifecycle import Manager
+    from .watch import Watch
+    return Watch(Manager, **kwargs)
 
 
 def _default_fleet(**kwargs):
@@ -137,7 +151,7 @@ def _diagnostic(manager, operation):
         return None
 
 
-def main(argv=None, manager_factory=None, fleet_factory=None):
+def main(argv=None, manager_factory=None, fleet_factory=None, watch_factory=None):
     """Run one command. A factory can supply an isolated manager (or, for shutdown and resume, fleet) in tests."""
     parsing = True
     operation = None
@@ -156,7 +170,12 @@ def main(argv=None, manager_factory=None, fleet_factory=None):
             check_start_arguments(arguments.job, arguments.prompt_file, arguments.seat)
         with redirect_stdout(sys.stderr):
             effects_possible = True
-            if operation in ("shutdown", "resume"):
+            if operation == "watch":
+                watcher = (watch_factory or _default_watch)(
+                    config_path=arguments.config, socket_name=arguments.socket_name,
+                    socket_path=arguments.socket_path, timeout=arguments.timeout)
+                result = watcher.run(project=arguments.project, everything=arguments.all, minutes=arguments.minutes)
+            elif operation in ("shutdown", "resume"):
                 fleet = (fleet_factory or _default_fleet)(
                     config_path=arguments.config, socket_name=arguments.socket_name,
                     socket_path=arguments.socket_path, timeout=arguments.timeout)
