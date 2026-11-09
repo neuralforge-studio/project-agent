@@ -86,6 +86,7 @@ class Step:
     do: Callable[[], None]
     undo: dict = None
     redo: dict = None
+    internal: bool = False      # bookkeeping that the plan does not list (the journal itself)
 
 
 # ---------------------------------------------------------------- operations (also what the journal replays)
@@ -187,14 +188,18 @@ def _untruncate(spec):
     block = base64.b64decode(spec["block"])
     size = spec["size"]
     try:
-        fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     except FileNotFoundError:
         return
     try:
         data = read_all(fd)
-        appended = data[size:]
-        if not appended or len(appended) > len(block) or not block.startswith(appended):
-            return          # nothing was appended, or the file moved on: leave the user's bytes alone
+    finally:
+        os.close(fd)
+    appended = data[size:]
+    if not appended or len(appended) > len(block) or not block.startswith(appended):
+        return              # nothing was appended, or the file moved on: leave the user's bytes alone
+    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+    try:
         raw_ftruncate(fd, size)
         os.utime(fd, ns=(spec["atime_ns"], spec["mtime_ns"]))
     finally:
@@ -419,7 +424,7 @@ def remove_block(path, block, delete_if_empty, original):
 def drop_journal(journal_path):
     """The journal goes before the directories that may hold it are removed."""
     return Step("remove", journal_path, "file", "interrupted-run journal", lambda: _unlink(journal_path),
-                redo={"op": "drop_journal", "path": str(journal_path)})
+                redo={"op": "drop_journal", "path": str(journal_path)}, internal=True)
 
 
 @dataclass

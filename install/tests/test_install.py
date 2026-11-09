@@ -188,9 +188,8 @@ def test_t8_a_reader_never_sees_current_missing_or_dangling_while_it_is_swapped(
     reader = threading.Thread(target=watch)
     reader.start()
     try:
-        journal = actions.Journal()
         for index in range(3000):
-            actions.swap_symlink(link, "ab"[index % 2]).run(journal)
+            actions.swap_symlink(link, "ab"[index % 2]).do()
     finally:
         stop.set()
         reader.join()

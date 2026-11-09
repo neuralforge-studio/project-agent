@@ -44,8 +44,9 @@ def _describe(env, step):
 
 def _emit(env, arguments, plan=None, applied=False, failures=(), notices=(), error=None):
     """One result for both formats."""
-    changes = [] if plan is None else [{"action": step.action, "path": env.display(step.path), "kind": step.kind,
-                                        "detail": step.detail} for step in plan.steps]
+    shown = [] if plan is None else [step for step in plan.steps if not step.internal]
+    changes = [{"action": step.action, "path": env.display(step.path), "kind": step.kind, "detail": step.detail}
+               for step in shown]
     notes = list(plan.notes if plan else []) + list(notices)
     ok = error is None and not failures
     if arguments.json:
@@ -68,7 +69,7 @@ def _emit(env, arguments, plan=None, applied=False, failures=(), notices=(), err
     if arguments.command != "check":
         if changes:
             print(("Would change:" if arguments.dry_run else "Changed:"))
-            for step in plan.steps:
+            for step in shown:
                 print("  " + _describe(env, step))
         else:
             print("No change.")
