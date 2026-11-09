@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent_session import process, remote, remote_bridge, remote_lifecycle
+from fake_tmux import fake_tmux
 
 
 def test_prelaunch_retry_reuses_an_already_connected_ssh_display(tmp_path, monkeypatch):
@@ -14,8 +15,8 @@ def test_prelaunch_retry_reuses_an_already_connected_ssh_display(tmp_path, monke
                "cli_pid": 123, "cli_birth": "ssh-birth", "remote_native": {"run_id": "a" * 32},
                "job": {"job_id": "TOOL-001", "path": str(cr)}, "job_id": "TOOL-001"}
     manager = SimpleNamespace(project=SimpleNamespace(base=tmp_path, args_for=lambda role: ()),
-                              tmux=SimpleNamespace(write_meta=lambda *args: None,
-                                                   pane_info=lambda pane: {"pane_dead": False, "pane_pid": 123}),
+                              tmux=fake_tmux(write_meta=lambda *args: None,
+                                                   pane_info=lambda pane_id: {"pane_dead": False, "pane_pid": 123}),
                               remaining=lambda: 30, _wait_ready=lambda meta: {"ready": True, "run_id": meta["run_id"]},
                               _sweep=lambda target: {})
     operations = []
