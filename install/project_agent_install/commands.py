@@ -68,7 +68,7 @@ class Builder:
 
 # ---------------------------------------------------------------- install
 
-def plan_install(env, source, python):
+def plan_install(env, source, python, adopt=None):
     installed = records.read(env)
     if installed:
         if installed["current"] != source.name:
@@ -103,13 +103,18 @@ def plan_install(env, source, python):
     if b.ensure_dir(env.bin):
         for tool in TOOLS:
             path = env.shim(tool)
-            if os.path.lexists(path):
-                b.conflict(path, "already exists")
+            ident = "shim:" + tool
+            target = places.link_target(ident)
+            entry = records.owned(env.display(path), "symlink", target=target)
+            if not os.path.lexists(path):
+                b.add(actions.new_link(places, ident, target))
+            elif not _adopt_dev_link(b, path, ident, target, adopt, entry):
                 continue
-            target = places.link_target("shim:" + tool)
-            b.add(actions.new_link(places, "shim:" + tool, target))
-            owned.append(records.owned(env.display(path), "symlink", target=target))
-    _plan_skill_links(env, b, owned)
+            owned.append(entry)
+    _plan_skill_links(env, b, owned, adopt)
+    if any("adopted_from" in entry for entry in owned):
+        b.note("Links into the development checkout were taken over; `uninstall` points them back at the targets "
+               "recorded in %s." % env.display(env.record))
     _plan_registry_draft(env, b)
     _plan_tmux_block(env, b, new)
     path_entries = [os.path.realpath(entry) for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
@@ -136,7 +141,24 @@ def _adoptable(env, link, name):
         return False
 
 
-def _plan_skill_links(env, b, owned):
+def _adopt_dev_link(b, link, ident, target, checkout, entry):
+    """Contract section 2, rule 8: with `--adopt-dev-links`, a link that is the user's own and points into the
+    known development checkout is swapped for the installer's. The text it had goes into the record. Anything
+    else is a conflict (rule 1). Returns whether the name is taken care of."""
+    places = b.places
+    text = os.readlink(link) if checkout and link.is_symlink() else None
+    if (text is not None and link.lstat().st_uid == os.getuid() and places.dev_shaped(ident, text)
+            and os.path.realpath(os.path.join(os.path.realpath(link.parent), text))
+            == os.path.realpath(places.dev_target(ident, checkout))):
+        b.add(actions.swap_link(places, ident, target, "-> %s (take over the development checkout's link)" % target))
+        entry["adopted_from"] = text
+        return True
+    b.conflict(link, "already exists" if not checkout else "already exists and is not your link into %s in the known "
+               "shape" % b.env.display(places.dev_target(ident, checkout)))
+    return False
+
+
+def _plan_skill_links(env, b, owned, adopt=None):
     places = b.places
     for provider, home in places.homes.items():
         if not os.path.isdir(home):
@@ -157,8 +179,7 @@ def _plan_skill_links(env, b, owned):
             elif _adoptable(env, link, name):
                 b.add(actions.swap_link(places, ident, target, "-> %s (adopt the remote runtime's link)" % target))
                 entry["adopted"] = True
-            else:
-                b.conflict(link, "already exists")
+            elif not _adopt_dev_link(b, link, ident, target, adopt, entry):
                 continue
             owned.append(entry)
 
@@ -310,6 +331,7 @@ def plan_uninstall(env, source_root, socket=None):
     changed = {path for path, _, _ in records.mismatches(env, installed)}
     record_path = env.display(env.record)
     _plan_tmux_removal(env, installed, plan)             # first: a file that changed since the plan stops the run
+    after_tmux, restores = len(plan.steps), []
     for entry in installed["owned"]:                     # before anything else was removed
         if entry["path"] == record_path:
             continue
@@ -323,11 +345,15 @@ def plan_uninstall(env, source_root, socket=None):
             continue                                    # only the recorded backup file goes, then the directory
         if kind == "tree":
             plan.steps.append(actions.remove_tree(places, ident, entry["digest"]))
+        elif kind == "link" and entry.get("adopted_from"):
+            restores.append(actions.restore_link(places, ident, entry["target"], entry["adopted_from"]))
+            continue                                    # the link stays: its directory is not empty because of it
         elif kind == "link":
             plan.steps.append(actions.remove_link(places, ident, entry["target"]))
         else:
             plan.steps.append(actions.remove_file(places, ident, entry.get("sha256")))
         removed.add(path)
+    plan.steps[after_tmux:after_tmux] = restores         # before the release goes: no entry point is left dangling
     tmux = installed["tmux"]
     if any(entry["path"] == env.display(env.backup) for entry in installed["owned"]) and path_exists(env.backup):
         if tmux.get("backup") and path_exists(env.expand(tmux["backup"])):
