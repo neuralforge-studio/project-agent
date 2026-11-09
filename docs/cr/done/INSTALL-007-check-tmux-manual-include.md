@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Base: d55bd3013d4d6ffa0b5cb7e32b04d9eacb01506b 2026-11-10T03:00:15+09:00
+- Outcome: fixed
 
 ## Symptom
 2026-11-10 이 workstation을 0.2.0으로 upgrade한 뒤 `check`가 다음 안내를 냈습니다: `Note: Manual connection needed (수동 연결 필요): ~/.tmux.conf was not changed. Add this line to it: source-file -q ~/.local/lib/project-agent/tmux.conf`. 그러나 `~/.tmux.conf`(→ `Utils/agent/agent.base/tmux/tmux.conf` symlink)의 117행에 그 줄이 이미 있습니다. 직원은 이미 한 연결을 다시 하라는 안내를 받습니다.
@@ -19,6 +20,7 @@
 ## Disposition
 - 2026-11-10 Leader: 고친다(Leader 판정). 재현 근거가 있는 결함입니다(0.2.0 upgrade 직후의 `check`). 동작에는 영향이 없고 안내만 틀립니다.
 - 2026-11-10 Leader: 제출 5bdb14829295ad9058a67bd180722a543372686e를 인수합니다. Leader review: tmuxconf.has_source(줄 판정 규칙 한 곳, symlink를 따라 읽기 전용, 공백을 뗀 줄 전체가 SOURCE와 같을 때만, 읽기 실패는 False)와 check의 manual 분기, 계약 3절 표·T4 행과 설치 안내 문장을 확인했습니다. 수정 전 재현(줄이 있는 두 사례에서 안내), 수정 뒤 6사례와 HOME snapshot 불변, install/tests 267 passed+2 skipped. README 표의 docs 행은 Leader가 제출 commit에서 실행: tools/test_distribution_boundary.py 9 passed, 고친 두 문서의 상대 link 깨짐 없음. 첫 0.2.0 run의 확인(self-check cron을 첫 prompt 지시로 등록, launch.sh가 0.2.0-e87364816d43 release를 씀)도 기록했습니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 2e48eee(Merge cr/INSTALL-007, 제출 5bdb148). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md)(check와 tmux 연결 상태), [설치 안내 2·3·4절](../../install.md), [README 검증](../../../README.md#검증), [project-team Worker 절](../../../skills/project-team/SKILL.md).
