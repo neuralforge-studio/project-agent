@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Base: 9458aba01535c1a12ee034ce725048aca5448c10 2026-11-09T14:40:54+09:00
+- Outcome: fixed
 
 ## Symptom
 이 test가 Base와 수정본 모두에서 실행마다 통과와 실패가 번갈아 나옵니다. 실패는 textual `NoMatches '#answer'`입니다. 매 검증에서 알려진 실패로 따로 확인해야 해서 회귀 판정을 흐립니다.
@@ -19,6 +20,7 @@
 ## Disposition
 - 2026-11-09 Leader: 고친다(Leader 판정). 여러 CR(agent DIST-004, REPO-001, TMUX-001)의 Result에 같은 간헐 실패가 재현 근거와 함께 남아 있습니다. 근거가 있는 결함 수정이므로 위임 범위입니다. 사용자 지시(2026-11-09 "남은 CR은 전부 등록해서 얼마나 남았는지 알 수 있게 해줘")에 따라 열었습니다.
 - 2026-11-09 Leader: 제출 8cc91cfb6d4a19483e551519e8c10b287a5cfe2e를 인수합니다. Leader review: 고정 pause를 화면 상태 대기(wait_until)로 바꾼 test diff를 확인했습니다. 제품 PopupApp._send(tui.py:827-869)에서 await는 832·845행뿐이고 message 갱신(856)과 _sync_answer_controls(869) 사이에는 없으므로, message를 본 시점에 editor 비활성화도 끝나 있어 새 대기 조건에 경합이 없습니다. Result의 부하 재현(수정 전 15/20 실패, 수정 후 0/20)과 project-board suite 114 passed를 근거로 인수합니다.
+- 2026-11-09 Leader: in-progress -> done, Outcome fixed. 통합 8839554(Merge cr/TEST-002, 제출 8cc91cf). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README의 검증](../../../README.md#검증), 해당 도구의 README.
