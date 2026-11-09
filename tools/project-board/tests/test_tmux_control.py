@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
+import shlex
 import shutil
 import signal
 import socket
@@ -783,6 +785,54 @@ def test_project_click_switches_only_selected_client_to_session_current_window(t
         assert after == rows
     finally:
         for process, master, _client in clients:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+            os.close(master)
+        tmux_test_server.release(name)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+@pytest.mark.parametrize("bare", [True, False])
+def test_a_failing_popup_never_covers_the_work_pane_and_the_client_is_told(bare):
+    """BOARD-011: `display-popup -E` ends with the exit status of its command. As a bare `run-shell` job a
+    failure opened view mode in the active pane (`bare`, the check that the test can see it); the Board's own
+    popup records the failure and shows it on the client that opened the popup."""
+    name = tmux_test_server.claim("board-popup")
+    process = master = None
+    try:
+        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "work", "sleep", "60")
+        process, master, client = _attached(name, "work")
+        control = Tmux(socket_name=name)
+        command = ["sh", "-c", "echo noisy; echo noisy >&2; exit 3"]
+        if bare:
+            socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
+            popup = ["tmux", "-S", socket_path, "display-popup", "-E", "-c", client, "-w", "50%", "-h", "50%", *command]
+            control.command("run-shell", "-b", " ".join(map(shlex.quote, popup)))
+        else:
+            assert tmux_control._popup(control, client, command, "fake", "50%") == {"ok": True, "data": {"client": client}, "error": None}
+        deadline = time.monotonic() + 10
+        mode = ""
+        while time.monotonic() < deadline:
+            mode = _tmux(name, "display-message", "-p", "-t", "work", "#{pane_mode}")
+            recorded = _tmux(name, "show-options", "-gqv", "@project_agent_last_error")
+            if mode or recorded:
+                break
+            time.sleep(0.1)
+        time.sleep(1.0)                              # tmux reports a job when it ends
+        mode = _tmux(name, "display-message", "-p", "-t", "work", "#{pane_mode}")
+        recorded = _tmux(name, "show-options", "-gqv", "@project_agent_last_error")
+        if bare:
+            assert mode == "view-mode" and recorded == ""
+        else:
+            assert mode == ""
+            assert _tmux(name, "capture-pane", "-M", "-p", "-t", "work") == ""
+            assert re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d board-popup failed \(exit 3\)", recorded), recorded
+    finally:
+        if process is not None:
             process.terminate()
             try:
                 process.wait(timeout=2)

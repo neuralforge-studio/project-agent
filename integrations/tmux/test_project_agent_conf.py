@@ -4,6 +4,7 @@ Every server is private (`tmux -L <unique name> -f /dev/null`) and is ended by `
 end of the test (or when pytest dies), so the user's default server never gets a binding or a hook.
 """
 
+import ast
 import contextlib
 import fcntl
 import os
@@ -265,6 +266,63 @@ def test_every_run_shell_job_goes_through_the_run_script(server, conf):
     assert shell_hooks and all("project_agent_run.sh hook " in found["job"].replace("\\", "") for found in shell_hooks)
     assert "project_agent_run.sh key " in tmux.key("prefix", "B").replace("\\", "")
     assert "project_agent_run.sh drop " in tmux.key("root", "MouseDown1Pane").replace("\\", "")
+
+
+PRODUCT_ROOT = TMUX_DIR.parents[1]
+
+
+def product_files(root):
+    """The product code under `root`: every file but the tests and the caches."""
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(PRODUCT_ROOT).parts
+        if path.is_file() and "__pycache__" not in relative and "tests" not in relative \
+                and not path.name.startswith(("test_", "conftest")):
+            yield path
+
+
+def run_shell_functions(path):
+    """For each place a Python file writes a `run-shell` (a string with the word; docstrings only describe),
+    the function that holds it, and whether that function builds its job with `quiet_shell`."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    docstrings = {node.body[0].value for node in ast.walk(tree)
+                  if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                  and node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and "run-shell" in node.value \
+                and node not in docstrings:
+            holder = node
+            while holder in parents and not isinstance(holder, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+                holder = parents[holder]
+            names = {n.id for n in ast.walk(holder) if isinstance(n, ast.Name)}
+            yield path, node.lineno, getattr(holder, "name", "<module>"), "quiet_shell" in names
+
+
+def test_every_run_shell_the_product_makes_leaves_nothing_in_the_work_pane():
+    """BOARD-011: the rule of BOARD-010 holds for the whole product, not only the integration files. Every
+    `run-shell` that `tools/**` or `integrations/**` can leave in a user's tmux server is a job of the integration
+    (the test above) or one that the tools build with `agent_session.tmux.quiet_shell` (output discarded, exit 0,
+    the failure recorded in `@project_agent_last_error`, shown to a person's client)."""
+    found = []
+    for root in (PRODUCT_ROOT / "tools", PRODUCT_ROOT / "integrations"):
+        for path in product_files(root):
+            if path.suffix == ".py":
+                found.extend(run_shell_functions(path))
+            elif root.name == "tools":
+                assert "run-shell" not in path.read_text(encoding="utf-8", errors="replace"), \
+                    "%s: a run-shell the rule cannot read" % path.relative_to(PRODUCT_ROOT)
+    assert found, "the scan found no run-shell in the tools: the check cannot see the product"
+    for path, number, function, quiet in found:
+        assert quiet, "%s:%d: %s() writes a run-shell without quiet_shell" % (path.relative_to(PRODUCT_ROOT), number, function)
+
+
+def test_the_error_record_of_the_tools_is_the_option_the_integration_writes():
+    """`quiet_shell` and project_agent_run.sh record a failure in one option, which the contract names."""
+    sys.path.insert(0, str(PRODUCT_ROOT / "tools" / "agent-session"))
+    from agent_session.tmux import LAST_ERROR_OPTION
+
+    assert LAST_ERROR_OPTION in (TMUX_DIR / "project_agent_run.sh").read_text()
+    assert LAST_ERROR_OPTION in (PRODUCT_ROOT / "docs/project-team/install-contract.md").read_text()
 
 
 def test_a_failing_hook_job_leaves_nothing_in_the_active_pane_and_is_recorded(server, tmp_path):
