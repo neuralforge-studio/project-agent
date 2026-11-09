@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Base: 3581f1fc9fad89cb02768dfab072e6de4597d52a 2026-11-10T00:34:22+09:00
+- Outcome: fixed
 
 ## Symptom
 tmux `run-shell`은 실행한 명령의 출력과 0이 아닌 종료 상태를 그때의 활성 pane에 view-mode로 보입니다. BOARD-006은 Board click 경로만 고쳤습니다. 통합 파일의 다른 `run-shell`(prefix Board 키 toggle, status line toggle, 창 이동·client 이벤트 hook의 `sync`·visibility script)도 실패하면 사용자의 작업 pane에 오류가 덮입니다. hook은 창을 옮길 때마다 돌기 때문에 실패가 반복되면 작업 pane을 계속 가립니다.
@@ -18,6 +19,7 @@ tmux `run-shell`은 실행한 명령의 출력과 0이 아닌 종료 상태를 �
 ## Disposition
 - 2026-11-10 Leader: 고친다(Leader 판정). BOARD-006과 같은 원인의 결함이며 근거가 있으므로 위임 범위입니다.
 - 2026-11-10 Leader: 제출 72af2aae47868d76b67fd667b2107e08a90d441b를 인수합니다. Leader review: run-shell shell 작업 14개 목록(사람이 누른 것·자동 hook, -C 제외 근거), project_agent_run.sh(hook은 출력 없이 @project_agent_last_error 한 줄, key는 display-message, drop은 click), 계약 5.3절 규칙 표 한 곳, 모든 run-shell이 규칙을 따르는지 통합 파일 text와 server 양쪽에서 검사하는 test를 확인했습니다. 수정 전 실패 재현, 네 번째 명령 101·test_tmux_control 17·install 261 passed. 범위 밖 관찰(agent-session의 pane-died hook, Board popup의 run-shell)은 BOARD-011로 엽니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 ffce885(Merge cr/BOARD-010, 제출 72af2aa). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [설치 계약](../../project-team/install-contract.md) 3.1·5.3절, `integrations/tmux/project-agent.conf`·`project-agent-main.conf`·`project_agent_bind.sh`, BOARD-006 Result, [README 검증 표](../../../README.md#검증).
