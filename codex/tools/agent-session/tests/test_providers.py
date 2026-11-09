@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -476,3 +477,16 @@ def test_claude_marks_only_an_unlisted_pane_as_retryable(claude):
     with pytest.raises(SessionError) as caught:
         provider.verify_binding({"session_id": IDENTITY}, context, meta)
     assert caught.value.code == "session_not_bound" and not caught.value.details
+
+
+def test_transcript_files_follow_claudes_directory_naming(tmp_path, monkeypatch):
+    from agent_session.providers.claude import transcript_files
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    seat = tmp_path / "agent.seat2"
+    seat.mkdir()
+    folder = tmp_path / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(seat.resolve()))
+    folder.mkdir(parents=True)
+    (folder / f"{IDENTITY}.jsonl").write_text("{}\n")
+    assert transcript_files([seat], IDENTITY) == [folder / f"{IDENTITY}.jsonl"]
+    assert transcript_files([seat], "other") == [] and transcript_files([tmp_path / "elsewhere"], IDENTITY) == []

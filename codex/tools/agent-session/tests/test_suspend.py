@@ -1,7 +1,10 @@
 """Shutdown and resume of Claude sessions, with real tmux and Git and a Claude-shaped fake CLI."""
 
 import json
+import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -12,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 from agent_session_fixture import command_timeout, git, session_env  # noqa: F401  (pytest fixture)
-from agent_session import lifecycle, suspend
+from agent_session import lifecycle, process, suspend
 from agent_session.config import resolve_project
 from agent_session.state import StateStore
 from agent_session.errors import SessionError
@@ -269,7 +272,8 @@ def test_only_the_operator_may_shut_down_or_resume(session_env, monkeypatch, who
     identity = {"leader": leader, "seat-0": worker}.get(who)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", identity["session"]["session_id"] if identity else str(uuid.uuid4()))
     code = "caller_unbound" if who == "stranger" else "role_denied"
-    for call in (lambda: fleet(env).shutdown(everything=True), lambda: fleet(env).resume(everything=True)):
+    for call in (lambda: fleet(env).shutdown(everything=True), lambda: fleet(env).resume(everything=True),
+                 lambda: fleet(env).resume(everything=True, lost=True)):
         with pytest.raises(SessionError) as error:
             call()
         assert error.value.code == code
@@ -488,6 +492,190 @@ def test_resume_with_nothing_recorded_does_nothing(session_env, monkeypatch):
     started(env)
     result = fleet(env).resume(everything=True)
     assert result["projects"][0]["resumed"] == [] and messages(env) == []
+
+
+# resume --lost: a server that went down without shutdown
+
+def lost_server(env, monkeypatch, tmp_path, transcript_age=3600, boot_age=60):
+    """A Leader and a Worker whose server went down without shutdown, as `resume --lost` finds them.
+
+    The tmux server is gone (no pointers). The fixture's boot time is `boot_age` seconds ago, so the
+    conversation records, written `transcript_age` seconds ago, predate it. The run scripts of the fake
+    CLI do not name the conversation as Claude's `--session-id`/`--resume` argv does, so that is added."""
+    claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)
+    config = tmp_path / "claude-config"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    now = time.time()
+    for run, cwd in ((leader, env.base), (worker, env.seats[0])):
+        session_id = run["session"]["session_id"]
+        with (env.base / "agent/runs" / run["run_id"] / "launch.sh").open("a") as script:
+            script.write(f"# claude --session-id {session_id}\n")
+        folder = config / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd.resolve()))
+        folder.mkdir(parents=True, exist_ok=True)
+        record = folder / f"{session_id}.jsonl"
+        record.write_text("{}\n")
+        os.utime(record, (now - transcript_age, now - transcript_age))
+    monkeypatch.setattr(process, "boot_time", lambda: now - boot_age)
+    monkeypatch.setattr(process, "session_holders", lambda session_id: [])
+    kill_server(env)
+    return leader, worker, cr, config
+
+
+def rejected(error):
+    return {item["slot"]: {reason["code"] for reason in item["error"]["details"]["reasons"]}
+            for item in error.value.details["projects"][0]["rejected"]}
+
+
+def test_resume_lost_reopens_the_slots_that_have_no_record_in_the_same_conversations(session_env, monkeypatch, tmp_path):
+    env = session_env
+    leader, worker, cr, _ = lost_server(env, monkeypatch, tmp_path)
+    before = env.store.read()
+    assert records(env) == {}
+    result = fleet(env).resume(project="fixture", lost=True)
+    row = result["projects"][0]
+    assert {item["slot"] for item in row["resumed"]} == {"leader", "seat-0"} and row["rejected"] == []
+    assert env.store.read() == before                        # the same conversations, same assignment
+    for slot, run in (("leader", leader), ("seat-0", worker)):
+        current = env.tmux.get_current("fixture", slot)
+        assert current["session_id"] == run["session"]["session_id"] and current["resume"] is True
+        assert current["registered"] and current["run_id"] != run["run_id"]
+    assert records(env) == {} and env.cr_state(cr)[0] == "in-progress"
+    # The judgement's evidence stays in the result.
+    item = {entry["slot"]: entry for entry in row["resumed"]}["seat-0"]
+    assert item["forced"] is True and item["job_id"] == cr
+    evidence = item["lost"]
+    assert evidence["processes"] == [] and evidence["execution_pointer"] is None
+    assert evidence["transcript"].endswith(worker["session"]["session_id"] + ".jsonl")
+    assert evidence["transcript_updated"] < evidence["boot_time"] <= evidence["checked_at"]
+    sent = {entry["target"]: entry["text"] for entry in messages(env)}
+    assert set(sent) == {"leader", "seat-0"} and all("shutdown 없이" in text for text in sent.values())
+    assert "강제 종료" not in sent["leader"] and "중간에 끊겨" in sent["seat-0"]
+
+
+@pytest.mark.parametrize("case, expected", [
+    ("after_boot", {"updated_after_boot"}),
+    ("process_alive", {"cli_alive"}),
+    ("process_unknown", {"process_unknown"}),
+    ("boot_unknown", {"process_unknown"}),
+    ("no_transcript", {"transcript_missing"}),
+    ("no_run", {"run_unknown"}),
+])
+def test_resume_lost_rejects_a_slot_it_cannot_confirm_and_keeps_the_assignment(session_env, monkeypatch, tmp_path,
+                                                                             case, expected):
+    env = session_env
+    leader, worker, cr, config = lost_server(env, monkeypatch, tmp_path)
+    before = env.store.read()
+    if case == "after_boot":
+        monkeypatch.setattr(process, "boot_time", lambda: time.time() - 7200)      # the records were written after it
+    elif case == "process_alive":
+        monkeypatch.setattr(process, "session_holders", lambda session_id: [4242])
+    elif case == "process_unknown":
+        def unknown(session_id):
+            raise SessionError("process_unknown", "Cannot inspect the process directory.", 4)
+        monkeypatch.setattr(process, "session_holders", unknown)
+    elif case == "boot_unknown":
+        def unknown():
+            raise SessionError("process_unknown", "Cannot read the system boot time.", 4)
+        monkeypatch.setattr(process, "boot_time", unknown)
+    elif case == "no_transcript":
+        shutil.rmtree(config)
+    else:
+        for script in (env.base / "agent/runs").glob("*/launch.sh"):
+            script.write_text(script.read_text().replace(leader["session"]["session_id"], "x")
+                              .replace(worker["session"]["session_id"], "y"))
+    with pytest.raises(SessionError) as error:
+        fleet(env).resume(project="fixture", lost=True)
+    assert error.value.code == "resume_incomplete" and error.value.exit_code == 4
+    assert rejected(error) == {"leader": expected, "seat-0": expected}
+    assert error.value.details["projects"][0]["resumed"] == []
+    assert env.store.read() == before and records(env) == {} and messages(env) == []
+    assert env.tmux.get_current("fixture", "seat-0") is None and env.cr_state(cr)[0] == "in-progress"
+
+
+def test_resume_lost_rejects_a_slot_whose_execution_pointer_remains(session_env, monkeypatch, tmp_path):
+    env = session_env
+    claude_project(env, monkeypatch)
+    leader, worker, cr = started(env)             # the server and the CLIs are running
+    monkeypatch.setattr(process, "boot_time", lambda: time.time() - 60)
+    monkeypatch.setattr(process, "session_holders", lambda session_id: [])
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    before = env.store.read()
+    with pytest.raises(SessionError) as error:
+        fleet(env).resume(project="fixture", lost=True)
+    assert {slot: "execution_present" in codes for slot, codes in rejected(error).items()} == {
+        "leader": True, "seat-0": True}
+    assert env.store.read() == before and records(env) == {}
+    assert env.tmux.get_current("fixture", "seat-0")["run_id"] == worker["run_id"]      # nothing was started
+    assert not env.tmux.pane_info(worker["pane_id"])["pane_dead"]
+
+
+def test_resume_lost_judges_each_slot_on_its_own_evidence(session_env, monkeypatch, tmp_path):
+    env = session_env
+    leader, worker, cr, config = lost_server(env, monkeypatch, tmp_path)
+    leader_record = next((config / "projects").glob("*/" + leader["session"]["session_id"] + ".jsonl"))
+    os.utime(leader_record, (time.time(), time.time()))             # the Leader's record is newer than the boot
+    with pytest.raises(SessionError) as error:
+        fleet(env).resume(project="fixture", lost=True)
+    row = error.value.details["projects"][0]
+    assert [item["slot"] for item in row["resumed"]] == ["seat-0"]
+    assert rejected(error) == {"leader": {"updated_after_boot"}}
+    assert env.tmux.get_current("fixture", "leader") is None
+    assert "재개하지 못한 대상" not in messages(env)[0]["text"]       # only the Worker was resumed
+
+
+def test_resume_lost_does_not_take_a_slot_whose_state_names_another_conversation(session_env, monkeypatch, tmp_path):
+    env = session_env
+    leader, worker, cr, _ = lost_server(env, monkeypatch, tmp_path)
+    env.store.update(lambda value: value["0"]["session"].update(session_id=str(uuid.uuid4())))
+    with pytest.raises(SessionError) as error:
+        fleet(env).resume(project="fixture", lost=True)
+    assert rejected(error) == {"seat-0": {"transcript_missing", "run_unknown"}}     # no record or run names it
+
+
+def test_resume_lost_skips_a_reserved_seat_without_a_conversation(session_env, monkeypatch, tmp_path):
+    env = session_env
+    claude_project(env, monkeypatch)
+    env.store.update(lambda value: value["1"].update(job_id="TOOL-009"))
+    result = fleet(env).resume(project="fixture", lost=True)
+    row = result["projects"][0]
+    assert [item["slot"] for item in row["skipped"]] == ["seat-1"] and row["skipped"][0]["reason"] == "no_conversation"
+    assert row["resumed"] == [] and row["rejected"] == []
+
+
+def test_resume_without_lost_leaves_a_slot_that_has_no_record(session_env, monkeypatch, tmp_path):
+    env = session_env
+    lost_server(env, monkeypatch, tmp_path)
+    result = fleet(env).resume(project="fixture")
+    row = result["projects"][0]
+    assert row["resumed"] == [] and "rejected" not in row and records(env) == {} and messages(env) == []
+    with pytest.raises(SessionError) as error:
+        env.manager().start(env.store.read()["0"]["job_id"])
+    assert error.value.code == "execution_unknown"
+
+
+def test_a_failed_lost_resume_keeps_its_evidence_and_start_takes_over(session_env, monkeypatch, tmp_path):
+    from agent_session_fake_provider import FakeClaudeProvider
+
+    env = session_env
+    leader, worker, cr, _ = lost_server(env, monkeypatch, tmp_path)
+    launch_spec = FakeClaudeProvider.launch_spec
+
+    def exits(self, context, prepared):
+        spec = launch_spec(self, context, prepared)
+        return {**spec, "argv": ["/bin/false"]} if context.get("resume") else spec
+
+    monkeypatch.setattr(FakeClaudeProvider, "launch_spec", exits)
+    with pytest.raises(SessionError) as error:
+        fleet(env, timeout=20).resume(project="fixture", lost=True)
+    assert {item["slot"] for item in error.value.details["projects"][0]["failed"]} == {"leader", "seat-0"}
+    saved = records(env)["seat-0"]
+    assert saved["forced"] is True and saved["session_id"] == worker["session"]["session_id"]
+    assert saved["lost"]["processes"] == [] and "boot_time" in saved["lost"]
+    monkeypatch.setattr(FakeClaudeProvider, "launch_spec", launch_spec)
+    result = env.manager().start(cr)
+    assert result["session"]["session_id"] != worker["session"]["session_id"]
+    assert set(records(env)) == {"leader"}
 
 
 # a new conversation when the old one cannot be resumed

@@ -3,6 +3,7 @@
 import errno
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -146,3 +147,63 @@ def unlaunched_observation(meta, pane):
     stopped = bool(pane["pane_dead"] and not placeholder_alive and not group_alive(int(group)))
     return {"known": True, "terminal": True, "active_turn": False, "pending": [],
             "background": [], "idle": True, "cli_alive": False, "stopped": stopped, "pane": pane}
+
+
+def boot_time():
+    """The system boot time as Unix seconds. Raise process_unknown when it cannot be read.
+
+    Linux reads `btime` of /proc/stat and macOS reads `kern.boottime`. Both are the wall clock at boot, so a
+    clock step after the boot (NTP, a manual change) moves them by the same amount."""
+    try:
+        if sys.platform.startswith("linux"):
+            for line in Path("/proc/stat").read_text().splitlines():
+                if line.startswith("btime "):
+                    return float(line.split()[1])
+        elif sys.platform == "darwin":
+            result = subprocess.run(["sysctl", "-n", "kern.boottime"], capture_output=True, text=True, timeout=10)
+            found = re.search(r"sec\s*=\s*(\d+)", result.stdout) if result.returncode == 0 else None
+            if found:
+                return float(found.group(1))
+    except (OSError, UnicodeError, ValueError, subprocess.TimeoutExpired) as exc:
+        raise SessionError("process_unknown", "Cannot read the system boot time.", 4) from exc
+    raise SessionError("process_unknown", "The system boot time is not available on this platform.", 4)
+
+
+def session_holders(session_id):
+    """PIDs of the processes whose command line names this conversation ID, excluding this process.
+
+    The CLI carries the ID in its arguments (`--session-id` or `--resume`). Any process that mentions it counts,
+    so an unrelated one only makes the answer more cautious. Raise process_unknown when the list is incomplete."""
+    if not session_id:
+        raise SessionError("process_unknown", "A conversation ID is required.", 4)
+    if not sys.platform.startswith("linux"):
+        env = dict(os.environ, LC_ALL="C")
+        try:
+            result = subprocess.run(["ps", "-axww", "-o", "pid=,args="], capture_output=True, text=True,
+                                    timeout=10, env=env)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SessionError("process_unknown", "Cannot obtain the process list.", 4) from exc
+        if result.returncode:
+            raise SessionError("process_unknown", "The process list command failed.", 4)
+        found = []
+        for line in result.stdout.splitlines():
+            pid, _, args = line.strip().partition(" ")
+            if pid.isdigit() and int(pid) != os.getpid() and session_id in args:
+                found.append(int(pid))
+        return sorted(found)
+    try:
+        names = [path.name for path in Path("/proc").iterdir() if path.name.isdecimal()]
+    except OSError as exc:
+        raise SessionError("process_unknown", "Cannot inspect the process directory.", 4) from exc
+    found = []
+    for name in names:
+        try:
+            raw = (Path("/proc") / name / "cmdline").read_bytes()
+        except (FileNotFoundError, ProcessLookupError):
+            continue                       # it ended while the list was read
+        except OSError as exc:
+            raise SessionError("process_unknown", "Cannot read a process command line.", 4,
+                               {"pid": int(name)}) from exc
+        if int(name) != os.getpid() and session_id.encode() in raw:
+            found.append(int(name))
+    return sorted(found)

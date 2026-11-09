@@ -114,3 +114,34 @@ def test_linux_process_read_failure_stays_unknown(monkeypatch, failure):
         process.processes()
     assert error.value.code == "process_unknown"
     assert error.value.exit_code == 4
+
+
+def test_boot_time_is_a_past_instant_before_this_process_started():
+    seconds = process.boot_time()
+    assert 0 < seconds < time.time()
+
+
+def test_session_holders_finds_a_process_that_names_the_conversation_and_not_this_one():
+    conversation = "5d0c3a2e-9d3f-4c1c-8a55-0f6d6f0e7b11"
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "--resume", conversation])
+    try:
+        assert wait_for(lambda: process.session_holders(conversation) == [child.pid]) is True
+        assert process.session_holders("00000000-0000-4000-8000-000000000000") == []
+    finally:
+        child.kill()
+        child.wait()
+    assert process.session_holders(conversation) == []
+
+
+def test_session_holders_reports_an_unreadable_process_list_as_unknown(monkeypatch):
+    real = Path.read_bytes
+
+    def refuse(self):
+        if self.name == "cmdline":
+            raise PermissionError(errno.EACCES, "denied")
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", refuse)
+    with pytest.raises(SessionError) as error:
+        process.session_holders("5d0c3a2e-9d3f-4c1c-8a55-0f6d6f0e7b11")
+    assert error.value.code == "process_unknown"
