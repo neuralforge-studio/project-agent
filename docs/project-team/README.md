@@ -1,0 +1,99 @@
+# Project Team 제품 지도
+
+이 문서는 project-team 제품의 전체 구성을 설명합니다.
+각 기능의 계약과 실행 방법은 아래 표의 소유 문서가 설명합니다. 이 문서는 그 내용을 다시 쓰지 않고 연결합니다.
+문서 소유 원칙은 [프로그램 설계 및 관리 공통 원칙](../../codex/references/program-architecture.md)의 "정보의 원본과 문서 갱신"입니다.
+
+## 목적과 구성
+
+Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 운영합니다. Leader는 CR(변경 요청)을 만들고 판정합니다. Worker는 seat에서 CR을 수행합니다. 사용자는 결정 항목에 답합니다.
+
+| 구성 요소 | 하는 일 | 소유 경로 |
+| --- | --- | --- |
+| `agent-session` (CLI) | Leader·Worker의 시작·전송·종료·재시작·review·shutdown·resume. 배정 state와 tmux 실행 근거 | `codex/tools/agent-session/` |
+| `project-item` (CLI) | CR과 결정 항목의 생성·조회·이동·검사. CR 형식의 실행 코드 | `codex/tools/project-item/` |
+| `project-board` (CLI) | 모든 프로젝트의 CR·결정·seat 상황을 보이는 tmux 화면. 결정 답변 전송 | `codex/tools/project-board/` |
+| `project-team` skill | Leader·Worker·운영자의 역할별 절차 | `codex/skills/project-team/` |
+| `project-item` skill | CR·결정 항목 사용 시점과 상태·전이, 형식 규칙 | `codex/skills/project-item/` |
+| 동작 명세 | 등록, state, start·stop·restart·shutdown·resume, CR과 JOB의 연결 | `docs/project-team/spec.md` |
+| tmux 연결 | Board 열기·닫기 binding, status 표시, 결정 대기 알림 | `tmux/scripts/tmux_project_board.sh`, `project_board.conf`, `project_board_home_status.conf`, `tmux_decide_status.py` |
+| 원격 seat 실행본 | SSH Worker seat에 보내는 Python helper와 guidance 문서 | `codex/tools/agent-session/agent_session/remote.py`의 `source_archive()` |
+
+## 구성 요소별 문서와 검증 위치
+
+| 구성 요소 | 문서(원본) | test |
+| --- | --- | --- |
+| `agent-session` | [명세](spec.md), [README](../../codex/tools/agent-session/README.md) | `codex/tools/agent-session/tests/` |
+| `project-item` | 형식·상태: [SKILL.md](../../codex/skills/project-item/SKILL.md), [cr.md](../../codex/skills/project-item/references/cr.md), [decide.md](../../codex/skills/project-item/references/decide.md). 명령 사용: [README](../../codex/tools/project-item/README.md)와 `--help` | `codex/tools/project-item/tests/` |
+| `project-board` | [README](../../codex/tools/project-board/README.md). 화면 계약: [TUI 계획](../project-board-tui-plan.md) | `codex/tools/project-board/tests/` |
+| `project-team` skill | [SKILL.md](../../codex/skills/project-team/SKILL.md) | 위 세 도구의 test와 skill 검사(아래) |
+| tmux 연결 | 각 script의 머리말과 `project-board` README | `tmux/scripts/test_tmux_decide_status.py` |
+
+명령과 옵션의 원본은 각 CLI의 `--help`입니다. README와 SKILL.md는 옵션을 다시 쓰지 않습니다.
+
+## 공개 진입점
+
+| 종류 | 진입점 |
+| --- | --- |
+| CLI | `agent-session`, `project-item`, `project-board`. 각 `bin/` 파일을 `~/.local/bin`에 link합니다. |
+| Python API | `agent_session.api`의 `read_state`, `check_binding`, `liveness`([명세 5절](spec.md#5-내부-세션-등록과-실행-확인)). `project-item`은 선언한 공개 API가 아직 없습니다(목표 관계 참조). |
+| Hook·controller | `agent_session.internal`의 `register_from_hook`(Claude SessionStart hook), `register_current`(Codex 초기 도구), `mark_process`, `run_controller`([명세 5절](spec.md#provider-내부-등록)) |
+| 원격 seat | `python -m agent_session.remote_runtime`, `python -m agent_session.remote_bridge` |
+| tmux option | 관리 window의 `@agent_session_*`([명세 3절](spec.md#실행-근거와-잠금)), Board의 `@project_board_*`(`@project_board_enabled`, `_managed`, `_pane`, `_width`, `_restore`, `_expanded`, `_config`, `_click_socket`) |
+| 환경 변수 | 관리 대화에 `AGENT_SESSION_BASE`, `AGENT_SESSION_CONFIG`, `AGENT_SESSION_SOCKET`, `AGENT_SESSION_UPLINK`을 줍니다. |
+| 등록·state | 등록 파일 `project.json`과 `<base>/agent/state.json`([명세 2절](spec.md#2-등록과-프로젝트-선택), [3절](spec.md#3-statejson)) |
+
+## 의존 관계
+
+관계를 사용하는 쪽의 코드가 원본입니다. 이 절은 2026-11-09 코드에서 확인한 관계를 요약합니다. 관계를 바꾼 작업은 이 절도 함께 고칩니다.
+
+### 현행
+
+| 사용하는 쪽 | 쓰는 대상 | 위치 |
+| --- | --- | --- |
+| `project_item.registry` | `agent_session.api`, `.config`, `.errors` | `registry.py`가 `sys.path`에 `agent-session`을 넣습니다. |
+| `agent_session.jobs` | `project_item.assign`, `.registry` | `jobs.py`가 `sys.path`에 `project-item`을 넣습니다. |
+| `agent_session.remote_bridge` | `project_item.assign`, `.store` | 함수 안에서 import합니다. |
+| `project_board.model` | `agent_session.api`, `.config`, `.errors`와 `project_item.cr`, `.kinds`, `.render`, `.store` | `model.py`가 두 도구를 `sys.path`에 넣습니다. |
+| `project_board.answer` | `project_item.render`, `.store`, `.registry` | |
+| `project_board.tmux_control` | `agent_session.api`, `.errors`, `.tmux` | |
+| `tmux/scripts/tmux_decide_status.py` | `project_item.decide`, `.registry`, `.store`, `.kinds` | 저장소 상대 경로로 `project-item`을 찾습니다. |
+
+`agent-session`과 `project-item`은 서로를 씁니다(양방향). 비공개 모듈과 함수를 쓰는 관계도 있습니다.
+
+### 목표
+
+CR ARCH-001이 합의한 목표입니다. 아직 적용하지 않았으며, 단계마다 이 절을 현행으로 옮깁니다.
+
+- 각 도구는 공개 인터페이스를 선언합니다(`project_item.api`, 정리한 `agent_session.api`). 다른 도구와 tmux script는 그 인터페이스만 씁니다.
+- 도구 사이의 `sys.path` 조작은 도구마다 한 곳에 모읍니다.
+- `agent-session`과 `project-item`의 양방향 의존은 해소하거나, 남기면 이유를 이 문서에 기록합니다.
+
+## 실행 경로 계약
+
+떠 있는 Leader·Worker·hook·controller가 merge 뒤에도 동작하려면 다음 경로와 이름이 그대로여야 합니다. 이 목록이 원본입니다.
+
+1. 세 `bin/` 경로(`codex/tools/<도구>/bin/<도구>`)와 `codex/tools/agent-session/agent_session.py`.
+2. 도구 디렉터리 이름(`agent-session`, `project-item`, `project-board`).
+3. `agent_session.internal`의 `register_from_hook`, `register_current`, `mark_process`, `run_controller`. Hook command, Codex 등록 command, `launch.sh`, `controller.sh`가 `codex/tools/agent-session`의 절대 경로로 호출합니다.
+4. `python -m agent_session.remote_runtime`과 `python -m agent_session.remote_bridge`.
+5. 원격 zip의 배치. `agent-session/`, `project-item/`, `guidance/<저장소 상대 경로>`입니다. 어떤 guidance 문서를 싣는지는 `remote.py`의 `GUIDANCE_FILES`가 정하고, test가 skill 문서의 link와 맞는지 확인합니다.
+6. tmux script는 저장소 상대 경로로 도구를 부릅니다(`tmux_project_board.sh`는 `../../codex/tools/project-board/bin/project-board`, `tmux_decide_status.py`는 `codex/tools/project-item`).
+
+## 도구별 검증 명령
+
+저장소 루트에서 실행합니다. Python은 [AGENTS.md](../../AGENTS.md)가 정한 환경을 씁니다(Workstation은 `/primehome/tools/Inhouse/Python3/latest/bin/python3`, WSL은 `~/python/.venv/bin/python`).
+
+```sh
+python -m pytest -q -n 8 codex/tools/agent-session/tests
+python -m pytest -q codex/tools/project-item/tests
+python -m pytest -q codex/tools/project-board/tests
+python -m pytest -q tmux/scripts/test_tmux_decide_status.py
+python codex/scripts/gen_skill_metadata.py --check
+python codex/scripts/check_agent_setup.py
+python -m pytest -q codex/scripts/test_check_agent_setup.py
+```
+
+- 형식 규칙(상태·전이·header·절·Outcome)과 코드의 일치는 `codex/tools/project-item/tests/test_doc_contract.py`가 확인합니다.
+- 원격 guidance 목록과 skill link의 일치는 `codex/tools/agent-session/tests/test_remote.py`가 확인합니다.
+- Agent-session test는 load가 높으면 `AGENT_SESSION_TEST_TIMEOUT`(초)을 지정합니다.

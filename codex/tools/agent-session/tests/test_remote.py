@@ -1,11 +1,15 @@
 """SSH transport, native ownership and authoritative CR Result return contracts."""
 
+import base64
+import io
 import json
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import socket
 import uuid
+import zipfile
 from types import SimpleNamespace
 
 import pytest
@@ -716,3 +720,45 @@ def test_unbound_endpoint_change_requires_a_proven_safe_prelaunch_retry(monkeypa
     with pytest.raises(SessionError) as caught:
         remote_runtime.dispatch("/remote/seat", "observe", {"run_id": run_id, "native": original}, Path("/runtime"))
     assert caught.value.code == "owner_mismatch" and caught.value.exit_code == 4
+
+
+REPOSITORY = Path(remote.__file__).resolve().parents[4]
+LINK = re.compile(r"\]\(([^)\s#]+)(?:#[^)\s]*)?\)")
+GUIDANCE_ROOTS = ("codex/skills/", "docs/project-team/")
+
+
+def unlisted_link_targets(files, repository=REPOSITORY):
+    """Link targets inside codex/skills or docs/project-team that the guidance documents name
+    but `files` does not list, as (document, target)."""
+    missing = []
+    for document in files:
+        path = repository / document
+        if path.suffix != ".md" or not path.is_file():
+            continue
+        for target in LINK.findall(path.read_text(encoding="utf-8")):
+            if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:|^[/~]", target):
+                continue                                    # URL, absolute or home path
+            relative = (path.parent / target).resolve().relative_to(repository.resolve()).as_posix()
+            if relative.startswith(GUIDANCE_ROOTS) and relative not in files:
+                missing.append((document, relative))
+    return missing
+
+
+def test_guidance_list_covers_every_linked_skill_and_spec_document():
+    assert unlisted_link_targets(remote.GUIDANCE_FILES) == []
+
+
+def test_guidance_list_reports_a_linked_document_that_is_missing_from_it():
+    """RED: without decide.md, which both skills link, the check names it."""
+    without = tuple(name for name in remote.GUIDANCE_FILES if not name.endswith("references/decide.md"))
+    assert {target for _, target in unlisted_link_targets(without)} == {
+        "codex/skills/project-item/references/decide.md"}
+
+
+def test_source_archive_ships_exactly_the_listed_guidance_files():
+    archive = zipfile.ZipFile(io.BytesIO(base64.b64decode(remote.source_archive())))
+    shipped = sorted(name[len("guidance/"):] for name in archive.namelist() if name.startswith("guidance/"))
+    assert shipped == sorted(remote.GUIDANCE_FILES)
+    for name in remote.GUIDANCE_FILES:
+        assert (REPOSITORY / name).is_file(), f"{name} is listed but missing from the repository"
+        assert archive.read("guidance/" + name) == (REPOSITORY / name).read_bytes()

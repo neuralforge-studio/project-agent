@@ -2,7 +2,7 @@
 
 이 문서는 `decide` 종류의 절차·형식·승인 기준을 소유합니다.
 공통 뼈대·상태·전이·명령은 [project-item skill](../SKILL.md)이 소유합니다.
-형식 검사의 실행 원본은 `codex/tools/project-item/project_item/decide.py`입니다. 두 곳을 함께 고칩니다.
+형식 검사 코드(`codex/tools/project-item/project_item/decide.py`)는 이 문서의 구현입니다. 둘이 어긋나면 `codex/tools/project-item/tests/test_doc_contract.py`가 실패합니다. 형식을 바꾸면 문서와 코드를 함께 고칩니다.
 
 ## 만들기 전에 확인합니다
 

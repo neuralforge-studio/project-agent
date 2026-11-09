@@ -84,7 +84,7 @@ CR·결정 popup의 너비가 70 column 미만이면 `목록` 버튼으로 목�
 오류가 나도 popup은 열린 상태를 유지합니다.
 원본 경로는 등록한 CR root의 해당 상태에서 열거한 항목으로 제한합니다.
 
-`review_wait`는 `in-progress` CR에서만 판정합니다. Write CR은 `Result`의 마지막 유효한 제출 commit을 `Disposition`이 앞 7자리 이상으로 인용하지 않았을 때 대기입니다. 제출 행의 문법은 [CR 계약](../codex/skills/project-item/references/cr.md)이 소유합니다. Read-only CR은 `Result`에 내용이 있으면 대기입니다. 이 표시는 `R` 표시와 별개입니다.
+`review_wait`의 판정 규칙은 [project-board README](../codex/tools/project-board/README.md#review-wait)가 소유합니다. 제출 행의 문법은 [CR 계약](../codex/skills/project-item/references/cr.md)이 소유합니다. 이 표시는 `R` 표시와 별개입니다.
 
 ## 4. 결정 popup
 

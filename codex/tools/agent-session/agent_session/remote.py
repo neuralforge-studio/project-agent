@@ -33,6 +33,20 @@ from agent_session.remote_runtime import respond
 respond(r,d)
 """
 
+# Repository-relative documents that a remote Worker follows (shipped under `guidance/`).
+# Every link of these documents that points into codex/skills or docs/project-team must name a
+# file in this list; tests/test_remote.py checks it. Tool READMEs stay in the source tree.
+GUIDANCE_FILES = (
+    "codex/skills/project-team/SKILL.md",
+    "codex/skills/project-team/assets/commit-message.txt",
+    "codex/skills/project-item/SKILL.md",
+    "codex/skills/project-item/references/cr.md",
+    "codex/skills/project-item/references/decide.md",
+    "docs/project-team/spec.md",
+    "docs/project-team/project-registry.example.json",
+    "docs/project-team/state.example.json",
+)
+
 
 def source_archive():
     """Ship only maintained Python helpers, never project files or user credentials."""
@@ -45,10 +59,7 @@ def source_archive():
                 info.compress_type = zipfile.ZIP_DEFLATED
                 archive.writestr(info, path.read_bytes())
         repository = root.parents[1]
-        for relative in ("codex/skills/project-team/SKILL.md", "codex/skills/project-team/assets/commit-message.txt",
-                         "codex/skills/project-item/SKILL.md", "codex/skills/project-item/references/cr.md",
-                         "docs/project-team/spec.md", "docs/project-team/project-registry.example.json",
-                         "docs/project-team/state.example.json"):
+        for relative in GUIDANCE_FILES:
             path = repository / relative
             if path.is_file():
                 info = zipfile.ZipInfo("guidance/" + relative)

@@ -65,43 +65,23 @@ CR은 JOB을 겸합니다. project-team의 `agent-session start --job <CR-ID>`�
   - Write CR의 in-progress→done(`Outcome: fixed`)은 review 기록이 있어야 합니다. `## Result`의 마지막 `- 제출 commit: <40자리 hash>`가 있고, `## Disposition`에 `project-item accept`가 쓴 그 hash의 인수 기록이 있고, 그 hash가 base 저장소의 `origin/main`에 있어야 합니다. 하나라도 없으면 `review_missing`으로 거절하고 파일을 바꾸지 않습니다. Read-only CR과 fixed가 아닌 Outcome은 이 확인을 하지 않습니다.
 - 다른 project의 요청자는 `new cr`로 그 project의 open에 만들기만 합니다.
 
-`move`의 동작:
-
-1. 출발·도착 쌍이 위 표에 있는지 확인합니다.
-2. `--outcome`이 있으면 Outcome header를 씁니다. `--by`가 있으면 `--note`를 근거로 Disposition 항목을 씁니다.
-   판정은 결정자를 남기므로 `--outcome`·`--note`는 `--by`와 함께 씁니다. `--by`가 없으면 `decider_missing`으로 거절합니다.
-   도착 상태에 맞지 않는 Outcome은 `invalid_outcome`으로 거절합니다. 예를 들어 cr의 `moved`는 deferred에만 씁니다.
-3. 도착 상태 기준 형식 검사를 합니다. 실패하면 파일을 바꾸지 않습니다.
-4. Git이 추적하는 파일은 `git mv`로 옮깁니다. 추적하지 않는 파일은 rename합니다.
-   이동이 실패하면 원문·경로를 되돌리고 index는 쓰지 않습니다. 되돌리지 못하면 `move_partial` 오류가 남은 경로와 index 항목을 알립니다.
-5. 도구는 commit하지 않습니다. Commit은 담당 session이 project 규칙에 따라 합니다.
-
+`move`의 동작 단계·오류 code·잠금은 [project-item README](../../tools/project-item/README.md)가 설명합니다.
 `check`는 파일이 지금 디렉토리의 형식에 맞는지만 봅니다. 전이 허용 여부는 `move`가 봅니다.
 
-## 명령
+## 언제 무엇을 쓰는가
 
-진입점은 `project-item`입니다. 설치 link는 `~/.local/bin/project-item`이고 원본은 이 저장소의 `codex/tools/project-item/bin/project-item`입니다.
-Project는 현재 경로의 등록 base·seat로 선택합니다. 다른 project는 `--project NAME`으로 지정합니다.
-
-| 명령 | 동작 |
+| 상황 | 명령 |
 | --- | --- |
-| `project-item projects` | 등록 project, 종류별 경로, 상태별 개수 |
-| `project-item ls [cr\|decide] [--state S] [--all]` | 항목 목록. 기본은 cr의 open·todo·deferred와 decide의 open·answered |
-| `project-item new cr --area A --title T [--severity S] [--body-file F]` | cr open에 생성 |
-| `project-item new decide --title T [--urgency U] [--blocks B] [--related R] [--body-file F]` | decide open에 생성하고 결정 페이지를 다시 씀 |
-| `project-item answer ID (--text T\|--body-file F)` | 열린 결정의 답변 원문을 기록하고 answered로 옮김. 팀 project에서는 현재 Leader의 직접 답변 기록에 사용 |
-| `project-item move ID STATE [--outcome O] [--by B] [--note N]` | 위 절차로 이동 |
-| `project-item accept ID --commit HASH [--note N]` | 팀 project의 현재 Leader만. Disposition에 `- <날짜> Leader: 제출 <HASH>를 인수합니다. <N>`을 씀 |
-| `project-item check [cr\|decide] [paths]` | 형식과 ID 중복 검사. 위반이 있으면 exit 1 |
-| `project-item render decide [--out F]` | 결정 페이지를 다시 씀 |
-| `project-item owner PROJECT` | Base·seat 아래의 live Claude 대화형 session 이름 |
+| 등록 project의 항목 위치와 상태별 개수를 확인합니다. | `project-item projects` |
+| 미결 항목을 확인합니다. 담당 session이 작업을 시작할 때 합니다. | `project-item ls` |
+| 문제나 작업을 발견해 CR을 엽니다. 다른 project의 파일이면 요청 CR을 엽니다. | `project-item new cr` |
+| 사용자에게 결정을 묻습니다. | `project-item new decide` |
+| 사용자의 결정 답변을 접수합니다. | `project-item answer` |
+| Worker의 제출을 인수합니다. Leader만 합니다. | `project-item accept` |
+| 판정이나 결과에 따라 항목의 상태를 옮깁니다. | `project-item move` |
+| 항목 파일을 직접 고친 뒤 형식을 확인합니다. | `project-item check` |
+| 결정 페이지를 다시 씁니다. | `project-item render decide` |
+| 관리 Leader가 없는 project에 알릴 담당 session을 찾습니다. | `project-item owner` |
 
+옵션과 입력은 `project-item <명령> --help`가 소유합니다. 설치와 진입점은 [README](../../tools/project-item/README.md)를 봅니다.
 다른 project에 CR을 만들면 생성 경로와 [알림 계약](references/cr.md#다른-project에-요청할-때)의 위치를 출력합니다. 알림은 자동 전송하지 않습니다.
-
-입력·등록 오류는 exit 2와 `project-item: <code>: <message>`입니다.
-
-## 동시 실행
-
-- `new`, `answer`, `move`, 결정 페이지 쓰기는 항목 루트마다 잠금 하나를 잡고 실행합니다. 잠금 파일은 `~/.cache/project-item/locks/`에 있습니다.
-- 이 잠금은 같은 머신의 session끼리만 순서를 정합니다.
-- 다른 머신이 같은 network 경로에 동시에 발급할 수 있습니다. `check`가 모든 상태의 ID 중복을 위반으로 보고합니다.

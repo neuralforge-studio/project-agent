@@ -948,6 +948,7 @@ Leader restart는 기존 Worker 배정을 바꾸지 않습니다.
 ### shutdown·resume
 
 Workstation을 내리기 전에 운영자가 shutdown을 실행합니다. 서버가 다시 뜨면 resume을 실행합니다.
+서버를 내리기 전에 stop으로 Worker를 하나씩 반납하지 않습니다. 실행 근거가 tmux에 있으므로 shutdown 없이 server가 내려가면 배정을 다시 제어할 수 없습니다(3절 실행 근거와 잠금).
 두 명령은 운영자 명령입니다. 관리 session(Leader·Worker)이 호출하면 role_denied이고, 등록 밖의 agent가 호출하면 caller_unbound입니다. 등록된 모든 project에 대해 이 판정을 먼저 하며, 판정 전에는 아무것도 바꾸지 않습니다.
 두 명령은 현재 디렉토리로 project를 고르지 않습니다. `--project NAME`은 등록 이름, `--all`은 등록 파일의 모든 project입니다. 등록에 없는 이름은 project_not_found·exit 2입니다.
 Provider가 Claude인 project만 처리합니다. Codex project는 건드리지 않고 결과의 `skipped`에 `provider_not_supported`로 보고합니다. Codex의 thread 재개를 검증하지 못했기 때문입니다.
@@ -1168,9 +1169,8 @@ CR 형식·상태·전이는 project-item skill과 `codex/skills/project-item/re
 | agent-session | todo→in-progress 이동, Base 기록 |
 
 역할 지침·읽을 문서는 CR 본문에 link와 문장으로 적습니다. Submodule 초기화는 start의 Git 준비가 합니다. 공통 형식은 이를 해석하지 않습니다.
-팀 project에서 `project-item move`의 in-progress 이동은 agent_session_only로 거절합니다.
-in-progress에서 나가는 이동과 `--by Leader`는 현재 Leader와 operator(`--by Leader`는 Leader만)만 할 수 있고, 다른 호출자는 role_denied입니다. 호출자 판정은 이 명세의 호출자 규칙(`agent_session.api.caller`)을 `project-item`이 그대로 씁니다.
-Write CR의 in-progress→done(fixed)은 `## Result`의 마지막 제출 hash, `project-item accept`가 쓴 Leader의 인수 기록, base `origin/main`에 있는 그 hash가 모두 있어야 하며, 없으면 review_missing으로 거절합니다.
+`project-item move`의 허용 전이와 호출자 권한(`agent_session_only`·`role_denied`·`review_missing`)은 [project-item skill의 상태와 전이](../../codex/skills/project-item/SKILL.md#상태와-전이)가 소유합니다.
+이 명세는 호출자 판정만 소유합니다. `project-item`은 이 명세의 호출자 규칙(`agent_session.api.caller`)을 그대로 씁니다.
 
 ### 실행 입력
 
