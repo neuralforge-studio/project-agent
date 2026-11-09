@@ -159,6 +159,43 @@ def test_the_tmux_default_mouse_binding_is_replaced(server, conf):
     assert PRODUCT_MOUSE in tmux.key("root", "MouseDown1Pane")
 
 
+def test_a_click_on_the_board_leaves_no_output_in_the_active_pane(server, tmp_path):
+    """BOARD-006: a failing click job (a click on no item) must not show up in the pane that is active.
+
+    A click on the Board pane does not select it, so the pane that run-shell reports to is another one.
+    """
+    log = tmp_path / "log"
+    release = make_release(tmp_path / "releases" / "r1", "r1", log)
+    board = release / "tools" / "project-board" / "bin" / "project-board"
+    board.write_text('#!/bin/sh\necho "board $*" >> "%s"\necho no item to click >&2\nexit 1\n' % log)
+    tmux = server()
+    tmux.read(release / "integrations" / "tmux" / "project-agent.conf")
+    tmux.run("set-option", "-g", "mouse", "on")
+    work = tmux.run("display-message", "-p", "#{pane_id}")
+    pane = tmux.run("split-window", "-d", "-h", "-b", "-l", "20", "-P", "-F", "#{pane_id}", "sleep", "300")
+    tmux.run("set-option", "-w", "@project_board_pane", pane)
+
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    env = {**os.environ, "TERM": "xterm-256color"}
+    env.pop("TMUX", None)
+    client = subprocess.Popen(["tmux", "-L", tmux.name, "-f", "/dev/null", "attach-session", "-t", "home"],
+                              stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env=env)
+    os.close(slave)
+    try:
+        time.sleep(1.0)
+        os.write(master, b"\x1b[<0;5;5M\x1b[<0;5;5m")           # press and release inside the Board pane
+        wait_for(log, "board click --client")
+        time.sleep(1.0)                                         # run-shell reports when the job ends
+        assert tmux.run("display-message", "-p", "#{pane_id}") == work   # the click did not select the Board
+        for target in (work, pane):
+            assert tmux.run("display-message", "-p", "-t", target, "#{pane_mode}") == ""
+            assert tmux.run("capture-pane", "-M", "-p", "-t", target).strip() == ""
+    finally:
+        client.terminate()
+        os.close(master)
+
+
 def test_board_key_option_selects_the_prefix_key(server, conf):
     tmux = server()
     tmux.run("set-option", "-g", "@project_agent_board_key", "X")
