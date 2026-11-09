@@ -3,6 +3,7 @@
 - Opened: 2026-11-10
 - Scope: project-agent
 - Severity: S2
+- Base: 2a2406201f0cd4a66f7b49ffcdb16888e8374792 2026-11-10T00:02:14+09:00
 
 ## Symptom
 Worker가 제출하고 Leader의 review를 기다리는데 Leader가 잊으면, 지금 설계에서는 양쪽 모두 멈춥니다. Worker 자기 점검(`skills/project-team/references/self-check.md` Worker 2번)은 "회신을 기다리는 중이면 아무것도 하지 않고 메시지도 보내지 않는다"이고, `agent-session watch`(SESSION-005)도 Leader 회신 대기를 `awaiting_leader`로 제외합니다. 또 `watch`는 자식 process의 CPU 사용으로 '일하는 중'을 판정하므로, 자식 process가 없는 대화의 정체는 그 신호로 보지 못합니다.

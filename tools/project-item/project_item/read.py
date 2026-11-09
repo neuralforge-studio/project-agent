@@ -11,7 +11,12 @@ from .kinds import CR, DECIDE
 
 def sections(path: Path) -> list[tuple[str, str]]:
     """(name, body) of each '## <name>' section of an item file, in file order."""
-    lines = path.read_text(encoding="utf-8").splitlines()
+    return text_sections(path.read_text(encoding="utf-8"))
+
+
+def text_sections(text: str) -> list[tuple[str, str]]:
+    """`sections` of text already read, so that a reader that also parses the header reads the file once."""
+    lines = text.splitlines()
     heads = section_heads(lines)
     out = []
     for index, (start, name) in enumerate(heads):

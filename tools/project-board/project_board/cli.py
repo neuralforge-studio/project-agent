@@ -55,7 +55,9 @@ def main(argv=None) -> int:
         tui.run_sidebar(args.config, on_project=on_project, on_decision=on_decision,
                         on_seat=on_seat, on_cr=on_cr,
                         expanded_reader=tmux_control.expanded_projects,
-                        expanded_toggler=tmux_control.toggle_expanded_project)
+                        expanded_toggler=tmux_control.toggle_expanded_project,
+                        mark_ready=tmux_control.mark_ready,
+                        visibility_reader=tmux_control.board_visible)
         return 0
     if args.command == "popup":
         from . import tui

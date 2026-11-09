@@ -26,9 +26,11 @@ TUI는 답변 접수에만 `project_item`의 Decision 기록 경로를 사용합
 
 ### 갱신과 실행 단위
 
-Sidebar가 표시되는 tmux window마다 TUI 프로세스 하나를 둡니다. 같은 window를 보는 client는 같은 pane과 화면을 봅니다. 각 프로세스의 이벤트 루프가 화면과 마우스·키보드 입력을 처리합니다. 별도 상주 HTTP server나 project별 감시 프로세스를 두지 않습니다. 결정 popup을 열 때만 별도의 단기 TUI 프로세스를 실행합니다. Popup은 같은 파일 원본을 직접 읽습니다. 제출 경로는 Decision root 잠금 안에서 `open`을 다시 확인합니다.
+TUI 프로세스를 새로 띄우는 비용은 Python·Textual 기동과 첫 읽기입니다. 이 host에서 수 초이므로 사용자의 조작(창 이동, 클릭)마다 프로세스를 새로 만들지 않습니다. 조작은 이미 떠 있는 프로세스에 도달하거나 읽기만 하는 짧은 명령이 되게 합니다(BOARD-002).
 
-Sidebar TUI는 파일 상태를 2초마다, 실행 상태를 10초마다 다시 읽습니다. 파일 조회와 `agent_session.api.liveness`처럼 대기할 수 있는 호출은 최대 2개의 조회 worker thread에서 실행합니다. 화면 갱신은 UI 이벤트 루프에서만 합니다. 이전 조회가 끝나지 않았으면 같은 조회를 중복 시작하지 않습니다. 새 배정의 session ID와 맞지 않는 실행 결과는 버립니다. 닫힌 popup이나 sidebar에 늦게 도착한 결과도 버립니다.
+Sidebar를 한 번 표시한 tmux window마다 TUI 프로세스 하나를 둡니다. 이 프로세스는 Board를 끄거나 window가 닫힐 때까지, 동시에 8개까지 유지합니다(5절). 어느 client도 보지 않는 window의 프로세스는 읽지 않습니다. 같은 window를 보는 client는 같은 pane과 화면을 봅니다. 각 프로세스의 이벤트 루프가 화면과 마우스·키보드 입력을 처리합니다. 별도 상주 HTTP server나 project별 감시 프로세스를 두지 않습니다. 결정 popup을 열 때만 별도의 단기 TUI 프로세스를 실행합니다. Popup은 같은 파일 원본을 직접 읽습니다. 제출 경로는 Decision root 잠금 안에서 `open`을 다시 확인합니다.
+
+Sidebar TUI는 파일 상태를 2초마다, 실행 상태를 10초마다 다시 읽습니다. 실행 상태는 tmux를 여러 번 부르는 읽기이므로 2초 읽기에 넣지 않습니다. 반납 대기(`release_pending`)도 10초 읽기가 갱신합니다(`model.liveness`가 채우고 `snapshot`이 씁니다). 어느 client에도 보이지 않는 window의 TUI는 두 읽기를 모두 멈추고, 보이게 되면 각각 곧바로 한 번 읽습니다. tmux hook이 보임 상태가 바뀐 pane에 SIGUSR1을 보내고, pane이 tmux에 자기 window가 보이는지 묻습니다(`tmux_control.board_visible`). 2초마다 tmux를 새로 부르지 않습니다. 읽기는 바뀐 것만 다시 파싱합니다. CR·결정 파일은 크기와 수정 시각이 이전 읽기와 같으면 이전 결과를 씁니다(`project_board.model._cached`). 파일 목록·`state.json`·실행 상태는 매번 읽습니다. 등록 파일은 한 번 읽고 그 project 객체로 상태와 실행 상태를 읽으므로(`agent_session.api.project_state`·`project_liveness`) project마다 등록 파일을 다시 읽지 않습니다. Popup은 자기 project 하나만 읽습니다(`model.snapshot(project_id=…)`). 파일 조회와 `agent_session.api.liveness`처럼 대기할 수 있는 호출은 최대 2개의 조회 worker thread에서 실행합니다. 화면 갱신은 UI 이벤트 루프에서만 합니다. 이전 조회가 끝나지 않았으면 같은 조회를 중복 시작하지 않습니다. 새 배정의 session ID와 맞지 않는 실행 결과는 버립니다. 닫힌 popup이나 sidebar에 늦게 도착한 결과도 버립니다.
 
 답변 알림의 `agent-session send`는 오래 걸릴 수 있습니다. Popup은 접수와 알림 중에도 화면과 스크롤이 멈추지 않게 이 동작을 백그라운드에서 실행합니다. 잠금 안에서 첫 답변만 접수하므로 다시 누르거나 다른 client에서 동시에 제출해도 중복 전송하지 않습니다.
 
@@ -119,9 +121,9 @@ TUI는 Textual 8.2.8의 [Markdown](https://textual.textualize.io/widgets/markdow
 
 사용자가 선택한 표시 범위는 **모든 tmux client 공통**입니다. Sidebar 내용은 항상 모든 등록 project입니다. 사용자가 어느 client에서 켜거나 끄든 같은 tmux server의 client에 적용합니다. 각 client가 session과 window를 바꿔도 같은 전체 목록을 볼 수 있어야 합니다. tmux pane은 window에 속하므로, client가 현재 보는 window를 추적하는 controller가 필요합니다.
 
-tmux `next-3.9`의 전체 높이 일반 pane을 사용합니다. Controller는 전역 `@project_board_enabled` 옵션을 관리합니다. Sidebar가 켜지면 현재 client가 보는 window마다 왼쪽 25 column을 Board pane에 할당합니다. 사용자가 Board pane의 폭을 조정하면 다음 window에서 Board pane을 만들 때 실제 폭을 적용합니다. 창 크기나 다른 pane의 최소 폭 때문에 Board pane 폭이 제한되어도 저장한 폭은 유지합니다. 충분한 공간이 있는 window로 돌아오면 저장한 폭을 다시 적용합니다. 폭은 tmux pane과 서버 option에 유지합니다. 기존 pane은 오른쪽의 남은 공간에 표시합니다. 같은 window를 보는 client는 Board pane을 공유합니다. 마지막 client가 다른 window로 이동하면 Board pane을 정리합니다. Controller는 Board를 만들기 전의 pane 배치와 선택 pane을 저장합니다. Board를 끄거나 window에서 제거하면 기존 pane의 배치, 크기, 선택 상태를 복원합니다.
+tmux `next-3.9`의 전체 높이 일반 pane을 사용합니다. Controller는 전역 `@project_board_enabled` 옵션을 관리합니다. Sidebar가 켜지면 client가 처음 보는 window마다 왼쪽 25 column을 Board pane에 할당합니다. 사용자가 Board pane의 폭을 조정하면 다음 window에서 Board pane을 만들 때 실제 폭을 적용합니다. 창 크기나 다른 pane의 최소 폭 때문에 Board pane 폭이 제한되어도 저장한 폭은 유지합니다. 충분한 공간이 있는 window로 돌아오면 저장한 폭을 다시 적용합니다. 폭은 tmux pane과 서버 option에 유지합니다. 기존 pane은 오른쪽의 남은 공간에 표시합니다. 같은 window를 보는 client는 Board pane을 공유합니다. 마지막 client가 다른 window로 이동해도 Board pane은 그 window에 남습니다. 돌아온 client는 이미 떠 있는 pane을 봅니다(이전에는 이동마다 pane을 지우고 새 TUI 프로세스를 만들어 수 초가 걸렸습니다). 아직 보지 않은 window에는 만들지 않습니다. 유지하는 pane은 8개까지이고(`tmux_control.MAX_KEPT`) 더 만들 때는 어느 client도 보지 않는 window 중 가장 오래전에 보인 window의 pane을 제거합니다. 8은 Board process 하나의 RSS 약 50 MB(최대 약 400 MB)와 보이지 않는 pane의 CPU 0을 실측해 정했습니다. 근거 수치는 BOARD-002 Result에 있습니다. Board pane은 Board를 끌 때, 그 window의 관리 pane이 끝났을 때, 또는 pane이 스스로 끝났을 때 제거합니다. Controller는 Board를 만들기 전의 pane 배치와 선택 pane을 저장합니다. Board를 끄거나 window에서 제거하면 기존 pane의 배치, 크기, 선택 상태를 복원합니다.
 
-tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합니다. Controller는 보이는 window와 Board pane을 동기화합니다. 관리된 `agent-session` pane이 종료되면 Board pane도 먼저 제거해 종료 window의 정리를 방해하지 않습니다. 이 구조에는 별도의 서버나 상주 감시 프로세스가 없습니다.
+tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합니다. Hook은 `sync`를 시작할 일이 있을 때만 시작합니다. 시작 조건은 tmux format(`@project_agent_sync_needed`)이며 "Board가 켜져 있고 이 window의 Board pane이 없거나 저장한 폭이 아님"입니다. 이미 Board pane이 있는 window로 옮긴 hook은 프로세스를 시작하지 않습니다. 조건이 참이면 Controller는 보이는 window와 Board pane을 동기화합니다. 관리된 `agent-session` pane이 종료되면 Board pane도 먼저 제거해 종료 window의 정리를 방해하지 않습니다. 이 구조에는 별도의 서버나 상주 감시 프로세스가 없습니다.
 
 상태줄 `Board`와 prefix `B`는 전역 toggle을 실행합니다. 일반 pane의 클릭은 tmux에 전달합니다. Board pane의 클릭은 tmux binding이 클릭한 client 이름, pane ID, 좌표를 Unix socket으로 TUI에 전달합니다. 따라서 같은 Board pane을 공유하는 client도 자신의 popup을 열거나 자신의 window를 이동합니다. 결정 popup은 90%, CR popup은 80% 크기로 해당 client에 엽니다.
 

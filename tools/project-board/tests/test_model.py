@@ -1,6 +1,7 @@
 """Project facts and review state from files in a temporary registry."""
 import datetime as dt
 import json
+from pathlib import Path
 
 import pytest
 
@@ -218,14 +219,92 @@ def test_liveness_is_collected_per_project_and_a_missing_state_has_none(board, m
     board.state(first, {"leader": leader(), "0": {"job_id": None, "git_hash": None, "session": None}})
     calls = []
 
-    def liveness(cwd, config_path=None):
-        calls.append(cwd)
-        if cwd != first:
+    def liveness(project, socket=None):
+        calls.append(project.base)
+        if project.base != first:
             raise model.SessionError("state_not_found", "The project state has not been initialized.")
         return {"leader": {"session_id": LEADER_ID, "state": "stopped"}}
-    monkeypatch.setattr(model.api, "liveness", liveness)
+    monkeypatch.setattr(model.api, "project_liveness", liveness)
     assert model.liveness(board.config) == {"alpha": {"leader": {"session_id": LEADER_ID, "state": "stopped"}}, "beta": {}}
     assert len(calls) == 2
+
+
+# ------------------------------------------------------------ cost of a refresh (BOARD-002)
+def _count_reads(monkeypatch):
+    """Names of the Markdown files that are read from now on."""
+    reads = []
+    original = Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if self.suffix == ".md":
+            reads.append(self.name)
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    return reads
+
+
+def test_a_refresh_reads_only_the_files_that_changed(board, monkeypatch):
+    base = board.project("alpha", seats=1)
+    cr = board.cr(base, "in-progress", "TOOL-001", "First")
+    board.cr(base, "open", "TOOL-010", "Open one")
+    decision = board.decide(base, "open", "D-20261105-01", "Question")
+    board.decide(base, "done", "D-20261105-02", "Old question")
+    board.state(base, {"leader": leader(), "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)}})
+    reads = _count_reads(monkeypatch)
+
+    first = model.snapshot(board.config, now=NOW)
+    assert sorted(reads) == sorted(["TOOL-001-item.md", "TOOL-010-item.md", "D-20261105-01.md", "D-20261105-02.md"])
+    reads.clear()
+
+    assert model.snapshot(board.config, now=NOW) == first         # nothing changed: nothing is read
+    assert reads == []
+
+    cr.write_text(cr.read_text(encoding="utf-8").replace("First", "Renamed title"), encoding="utf-8")
+    reads.clear()
+    again = model.snapshot(board.config, now=NOW)["projects"][0]
+    assert reads == ["TOOL-001-item.md"]
+    assert again["seats"][0]["title"] == "Renamed title" and again["crs"]["in-progress"][0]["title"] == "Renamed title"
+    reads.clear()
+
+    decision.unlink()                                             # a removed file leaves the list
+    after = model.snapshot(board.config, now=NOW)["projects"][0]
+    assert [item["id"] for item in after["decide"]] == ["D-20261105-02"] and reads == []
+
+
+def test_a_cached_file_still_follows_the_directory_it_is_listed_in(board):
+    base = board.project("alpha", seats=1)
+    path = board.decide(base, "open", "D-20261105-01", "Question")
+    assert model.snapshot(board.config, now=NOW)["projects"][0]["decide"][0]["state"] == "open"
+    path.rename(base / "agent/decide/answered" / path.name)       # a move keeps the file, not its state
+    (item,) = model.snapshot(board.config, now=NOW)["projects"][0]["decide"]
+    assert item["state"] == "answered" and item["display_state"] == "답변 접수"
+
+
+def test_a_refresh_reads_the_registry_once_however_many_projects_it_shows(board, monkeypatch):
+    for name in ("alpha", "beta", "gamma"):
+        board.project(name, seats=1)
+    from agent_session import config as session_config
+    calls = []
+    original = session_config.load_registry
+
+    def counted(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(session_config, "load_registry", counted)
+    monkeypatch.setattr(model, "load_registry", counted)
+    assert len(model.snapshot(board.config, now=NOW)["projects"]) == 3
+    assert len(calls) == 1
+    calls.clear()
+    assert set(model.liveness(board.config)) == {"alpha", "beta", "gamma"}
+    assert len(calls) == 1
+
+
+def test_a_popup_snapshot_holds_only_its_project(board):
+    board.project("alpha", seats=1)
+    board.project("beta", seats=1)
+    assert [p["id"] for p in model.snapshot(board.config, now=NOW)["projects"]] == ["alpha", "beta"]
+    assert [p["id"] for p in model.snapshot(board.config, now=NOW, project_id="beta")["projects"]] == ["beta"]
+    assert model.snapshot(board.config, now=NOW, project_id="missing")["projects"] == []
 
 
 def test_a_seat_whose_stopped_worker_waits_for_release_shows_release_pending(board, monkeypatch):
@@ -236,7 +315,10 @@ def test_a_seat_whose_stopped_worker_waits_for_release_shows_release_pending(boa
                        "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)},
                        "1": {"job_id": "TOOL-002", "git_hash": None, "session": session(1)}})
     hold = {"seat": 0, "since": "2026-11-05T10:00:00Z", "reasons": ["the CR is still in-progress"]}
-    monkeypatch.setattr(model.api, "pending_releases", lambda cwd, config_path=None: {"TOOL-001": hold})
+    monkeypatch.setattr(model.api, "project_pending_releases", lambda project, socket=None: {"TOOL-001": hold})
+    monkeypatch.setattr(model.api, "project_liveness", lambda project, socket=None: {"0": {}})
+    assert model.snapshot(board.config, now=NOW)["projects"][0]["seats"][0]["status"] == "working"   # not read on the file refresh
+    model.liveness(board.config)                                   # the run-fact refresh reads it
     seats = model.snapshot(board.config, now=NOW)["projects"][0]["seats"]
     assert [(s["job_id"], s["status"]) for s in seats] == [("TOOL-001", "release_pending"), ("TOOL-002", "working")]
     assert seats[0]["release_pending"] == hold and seats[1]["release_pending"] is None
@@ -247,9 +329,11 @@ def test_an_unreadable_release_record_does_not_hide_the_seats(board, monkeypatch
     board.cr(base, "in-progress", "TOOL-001")
     board.state(base, {"leader": leader(), "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)}})
 
-    def unreadable(cwd, config_path=None):
+    def unreadable(project, socket=None):
         raise model.SessionError("tmux_unknown", "tmux is unreadable")
 
-    monkeypatch.setattr(model.api, "pending_releases", unreadable)
+    monkeypatch.setattr(model.api, "project_pending_releases", unreadable)
+    monkeypatch.setattr(model.api, "project_liveness", lambda project, socket=None: {"0": {}})
+    model.liveness(board.config)
     project = model.snapshot(board.config, now=NOW)["projects"][0]
     assert project["errors"] == [] and project["seats"][0]["status"] == "working"
