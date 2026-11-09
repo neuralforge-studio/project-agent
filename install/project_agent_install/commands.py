@@ -121,6 +121,9 @@ def plan_install(env, source, python, adopt=None):
     if os.path.realpath(env.bin) not in path_entries:
         b.note("%s is not in PATH; add it to your shell settings (the installer does not edit them)."
                % env.display(env.bin))
+    old_tmux = tmuxconf.too_old(source.root)
+    if old_tmux:
+        b.note(old_tmux[0])
     plan = b.finish()
     new["created_dirs"] = b.created_dirs
     owned.append(records.owned(env.display(env.record), "file"))
@@ -540,6 +543,9 @@ def run_check(env):
     else:
         failures += _check_entries(env, current)
         notices += _check_textual(current)
+        old_tmux = tmuxconf.too_old(current)
+        if old_tmux:
+            (failures if old_tmux[1] else notices).append(old_tmux[0])
     tmux = installed["tmux"]
     if tmux.get("state") == "inserted":
         path = env.expand(tmux["file"])

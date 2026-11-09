@@ -115,6 +115,17 @@ tmux 통합 파일은 읽힐 때 tmux server에 binding과 hook을 넣습니다(
 4. 통합 파일이 넣은 binding과 hook은 `uninstall` 뒤에도 server가 끝날 때까지 남습니다. `uninstall`은 이를 되돌리는 명령을 출력합니다. 출력하는 명령은 `unbind-key`, 기본값이 있는 `MouseDown1Pane`의 기본값 복원, `set-hook -gu`·`set-hook -gwu`입니다. 대상은 5.3절 표의 목록이며, 건너뛴 키(`@project_agent_board_skipped`)는 되돌리지 않습니다. 사용자의 binding은 되돌림 대상이 아닙니다.
 5. 설치기는 이 명령을 실행하지 않습니다. 실행 중인 server를 바꾸지 않는 원칙은 3절의 "실행 중인 tmux server" 행과 같습니다.
 
+### 3.2 tmux 최소 버전
+
+최소 버전: tmux 3.8
+
+통합 파일의 본체(`integrations/tmux/project-agent-main.conf`)는 tmux 3.8 이상에서만 읽힙니다. 이름 붙은 hook index(`client-attached[project-agent]`)가 3.8에서 동작하고, 이 host에서 실행해 본 2.7(`{ }` 명령 블록을 읽지 못함)과 3.6a(이름 붙은 hook index를 받지 못함)에서는 동작하지 않기 때문입니다. 3.6a와 3.8 사이(3.7 계열)는 이 host에 없어 검증하지 않았으므로 지원하지 않습니다. 근거 표는 CR TMUX-002의 Result입니다. 이 값을 안내하는 문서(안내문 1절)는 이 절을 link하고 값을 다시 쓰지 않습니다.
+
+1. **판정은 tmux가 읽는 첫 파일이 합니다.** `tmux.conf`(2절의 고정 파일)가 읽는 `project-agent.conf`는 tmux 2.x도 parse하는 문법만 씁니다. 실행 중인 tmux의 `#{version}`을 최소 버전과 비교해, 최소 버전 이상이면 `source-file -F`로 본체를 읽고 아니면 읽지 않습니다. 고정 파일은 바뀌지 않으므로 이미 설치한 사람도 release를 갱신하면(`upgrade`) 적용됩니다.
+2. **최소 버전보다 낮은 tmux가 설정을 읽으면** parse 오류 대신 오류 한 줄을 냅니다. 한 줄은 최소 버전과 사내 tmux 경로(`/primehome/tools/Inhouse/tmux/latest/bin`을 PATH 앞에 둠)를 담고, tmux가 설정 오류를 첫 client에 보이는 방식으로 보입니다. binding·hook과 `@project_agent_*` option은 남지 않습니다.
+3. **코드의 원본**은 `project-agent.conf`의 `set-option -g @project_agent_tmux_min '<버전>'` 한 줄입니다. 판정이 이 값을 쓰고(읽은 뒤 option은 지웁니다), 설치기 `check`·`install`이 같은 줄을 읽습니다. 이 절의 "최소 버전" 줄과 같은지는 `install/tests`가 검사합니다. 3.8 이상이면 `#{version}`이 `3.8`, `3.6a`, `next-3.9`처럼 `major.minor`로 시작하는 문자열이고, 그렇지 않은 tmux(`master`, 빈 값)는 낮은 것으로 봅니다.
+4. 설치기는 PATH에서 처음 찾은 `tmux`의 `-V`를 최소 버전과 비교합니다. `install`은 낮으면 같은 사실과 해소 방법을 안내하고 설치는 진행합니다. `check`는 실패(종료 코드 1)로 알립니다(7절). PATH에 `tmux`가 없으면 `check`·`install`은 안내만 하고 실패가 아닙니다. 설치기는 PATH를 고치지 않습니다(4절).
+
 ## 4. 설치가 절대 건드리지 않는 것
 
 - Claude·Codex 설정 파일: `settings.json`, `config.toml`, `.claude.json`. 실행 중의 신뢰 기록은 5절이 따로 다룹니다.
@@ -183,9 +194,9 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 | `run-shell -b` | stop·restart 예약, Board popup | controller script 실행, `display-popup` | [tmux.py:619](../../tools/agent-session/agent_session/tmux.py), [tmux_control.py:366](../../tools/project-board/project_board/tmux_control.py) |
 | Board option | Board를 켜고 끌 때, 크기를 바꿀 때 | server option `@project_board_enabled`, `@project_board_config`, `@project_board_width`, `@project_board_expanded`, window option `@project_board_pane`, `@project_board_restore`, pane option `@project_board_managed`, `@project_board_click_socket` | [tmux_control.py:146, 182-208, 233-237, 289-352](../../tools/project-board/project_board/tmux_control.py) |
 | Board pane | Board가 켜져 있을 때, client가 보는 window마다 | `split-window`로 사이드바 pane을 추가합니다. | [tmux_control.py:218-250](../../tools/project-board/project_board/tmux_control.py) |
-| 통합 파일의 binding (`source-file`로 읽힐 때. 규칙은 3.1절) | tmux 설정을 읽을 때 | prefix table의 Board 키(`@project_agent_board_key`, 없으면 `B`)와 root table의 `MouseDown1Pane`. 제품 binding은 명령에 `tmux_project_board.sh`가 들어 있습니다. `MouseDown1Pane`을 되돌리는 기본값은 `select-pane -t = \; send-keys -M`입니다. | [project_agent_bind.sh](../../integrations/tmux/project_agent_bind.sh) |
-| 통합 파일의 hook | tmux 설정을 읽을 때 | 이름이 `[project-agent]`인 hook 8개. session scope(`set-hook -g`로 넣고 `set-hook -gu '<event>[project-agent]'`로 지움) 5개: `client-attached`, `client-detached`, `client-session-changed`, `session-window-changed`, `after-resize-pane`. window scope(`set-hook -gw`로 보이고 `set-hook -gwu`로 지움) 3개: `window-created`, `window-closed`, `pane-died`. 같은 이름의 항목만 바뀌고 사용자 hook은 그대로입니다. | [project-agent.conf](../../integrations/tmux/project-agent.conf) |
-| 통합 파일의 server option | tmux 설정을 읽을 때 | `@project_agent_tmux_dir`: 통합 파일을 읽은 디렉터리입니다. 설치본은 `current` link를 풀지 않은 경로입니다. binding·hook·`@project_agent_decide_status`가 이 경로의 helper를 부릅니다. `@project_agent_board_skipped`: 3.1절의 건너뛴 키입니다. `@project_agent_decide_status`: 결정 대기 표시 조각입니다(아래). | [project-agent.conf](../../integrations/tmux/project-agent.conf), [project_agent_bind.sh](../../integrations/tmux/project_agent_bind.sh) |
+| 통합 파일의 binding (`source-file`로 읽힐 때. 규칙은 3.1절, 최소 버전은 3.2절) | tmux 설정을 읽을 때 | prefix table의 Board 키(`@project_agent_board_key`, 없으면 `B`)와 root table의 `MouseDown1Pane`. 제품 binding은 명령에 `tmux_project_board.sh`가 들어 있습니다. `MouseDown1Pane`을 되돌리는 기본값은 `select-pane -t = \; send-keys -M`입니다. | [project_agent_bind.sh](../../integrations/tmux/project_agent_bind.sh), [project-agent-main.conf](../../integrations/tmux/project-agent-main.conf) |
+| 통합 파일의 hook | tmux 설정을 읽을 때 | 이름이 `[project-agent]`인 hook 8개. session scope(`set-hook -g`로 넣고 `set-hook -gu '<event>[project-agent]'`로 지움) 5개: `client-attached`, `client-detached`, `client-session-changed`, `session-window-changed`, `after-resize-pane`. window scope(`set-hook -gw`로 보이고 `set-hook -gwu`로 지움) 3개: `window-created`, `window-closed`, `pane-died`. 같은 이름의 항목만 바뀌고 사용자 hook은 그대로입니다. | [project-agent-main.conf](../../integrations/tmux/project-agent-main.conf) |
+| 통합 파일의 server option | tmux 설정을 읽을 때 | `@project_agent_tmux_dir`: 통합 파일을 읽은 디렉터리입니다. 설치본은 `current` link를 풀지 않은 경로입니다. binding·hook·`@project_agent_decide_status`가 이 경로의 helper를 부릅니다. `@project_agent_board_skipped`: 3.1절의 건너뛴 키입니다. `@project_agent_decide_status`: 결정 대기 표시 조각입니다(아래). 판정 파일은 최소 버전을 `@project_agent_tmux_min`에 잠시 두었다가 지웁니다(3.2절). | [project-agent-main.conf](../../integrations/tmux/project-agent-main.conf), [project-agent.conf](../../integrations/tmux/project-agent.conf), [project_agent_bind.sh](../../integrations/tmux/project_agent_bind.sh) |
 
 사용자 status 배치(`status-left`, `status-format[0]`, `MouseDown1Status`)는 통합 파일에 넣지 않습니다. 각자의 tmux 설정이 소유합니다(DIST-001 5단계). `project_board_home_status.conf`는 각 사용자의 tmux 설정 파일이며 제품에 넣지 않습니다.
 
@@ -279,6 +290,7 @@ release 이름 `<version>-<hash>`: `<version>`은 원본 root의 `VERSION` 첫 �
 - `current`가 존재하는 release를 가리키고, release 안의 진입점이 실행됩니다.
 - tmux 블록이 기록된 파일에 있습니다. symlink 때문에 건너뛴 경우는 실패가 아니라 안내입니다.
 - `~/.local/bin`이 PATH에 있습니다. 없으면 안내입니다(실패가 아닙니다).
+- PATH에서 처음 찾은 `tmux`가 최소 버전(3.2절) 이상입니다. 낮으면 실패이고, 그 tmux의 버전과 경로, 최소 버전, 해소 방법(사내 tmux 경로를 PATH 앞에 둠)을 알립니다. PATH에 `tmux`가 없으면 안내입니다(실패가 아닙니다).
 - 건너뛴 tmux binding이 있으면 "binding 건너뜀"으로 알립니다(3.1절). 실패가 아닙니다.
 - `project-board`가 쓰는 `textual`이 설치 interpreter에 `tools/project-board/requirements.txt`의 버전으로 있는지 안내합니다. 없거나 버전이 다르면 안내만 합니다(실패가 아닙니다).
 - 사용자가 소유 경로를 다른 것으로 바꿨으면 그 경로를 알리고 `check`는 실패로 끝납니다(위 첫 항목). `upgrade`와 `uninstall`은 그런 경로를 바꾸거나 지우지 않고 알립니다. 원격 runtime의 skill link가 같은 규칙을 씁니다([remote_runtime.py:74-90](../../tools/agent-session/agent_session/remote_runtime.py)) .
