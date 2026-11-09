@@ -203,6 +203,10 @@ def project_view(project, now: dt.datetime) -> dict:
             view["decide"] = decide_items(project.path_decide, project.path_cr)
         except Exception as error:
             view["errors"].append({"source": "decide", **_error(error)})
+    try:
+        waiting = api.pending_releases(project.base, config_path=project.config_path) if state else {}
+    except SessionError:
+        waiting = {}                                    # an unreadable tmux is not a pending release
     in_progress = {item["id"]: item for item in (view["crs"] or {}).get("in-progress", [])}
     leader = state["leader"] if state else None
     reviewing = leader.get("reviewing") if leader else None
@@ -213,6 +217,8 @@ def project_view(project, now: dt.datetime) -> dict:
         cr = in_progress.get(job) if job else None
         if job is None:
             status = "empty"
+        elif job in waiting:
+            status = "release_pending"
         elif session is None:
             status = "pending"
         elif reviewing == job:
@@ -228,6 +234,7 @@ def project_view(project, now: dt.datetime) -> dict:
             "session_id": session["session_id"] if session else None,
             "elapsed": _elapsed(session.get("connected_at"), now) if session else None,
             "title": cr["title"] if cr else None, "cr": cr,
+            "release_pending": waiting.get(job) if job else None,
         })
     if leader:
         seat = next((s["index"] for s in view["seats"] if reviewing and s["job_id"] == reviewing), None)

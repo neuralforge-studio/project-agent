@@ -124,8 +124,9 @@ submission. The owner of this rule is this section; `review_wait` and `cited` in
 - This rule answers "has the Leader responded to the submission". It is not the acceptance
   check of `project-item move` (`project_item.cr.accepted`), which needs the exact 40-hex
   acceptance entry that `project-item accept` writes.
-- The seat status is chosen in this order: no job (`empty`), no session (`pending`), the
-  Leader's `reviewing` job (`reviewing`), `review_wait`, else `working`. The `R` mark and the
+- The seat status is chosen in this order: no job (`empty`), a stopped Worker whose release
+  waits for its CR to leave in-progress (`release_pending`, from `agent_session.api.pending_releases`),
+  no session (`pending`), the Leader's `reviewing` job (`reviewing`), `review_wait`, else `working`. The `R` mark and the
   colors are owned by `docs/project-board-tui-plan.md`.
 
 ## Check

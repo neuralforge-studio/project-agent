@@ -77,6 +77,7 @@ agent-session send --project pm_vip --job leader "<CR ID> <제목> <CR 파일 �
 제출 hash가 바뀌면 변경된 코드와 검증을 확인합니다. 변경하지 않은 범위의 유효한 검토 근거는 재사용합니다.
 완료 보고만으로 CR을 done으로 옮기거나 seat를 비우지 않습니다.
 `released: false`이면 배정을 보존하고 반환한 이유를 처리합니다. CR이 in-progress에 남아 있거나 결과가 origin에 없으면 반납하지 않습니다.
+CR이 in-progress라서 거절됐으면 seat는 반납 대기입니다(`project-item ls`·Board에 표시). 그 CR을 `project-item move`로 옮기면 같은 명령이 반납을 마치므로 stop을 다시 실행하지 않습니다. 반납 조건이 맞지 않으면 move가 이유를 출력하고 반납 대기가 남습니다.
 보류한 todo CR의 배정이 남았으면 같은 `agent-session start --job <CR-ID>`로 같은 seat에서 재개합니다.
 
 ## 운영자: 서버를 내리기 전과 뒤
@@ -101,6 +102,14 @@ Tmux window와 provider session은 유지하고 후속 메시지에서 관리를
 같은 turn에서 보고를 기다리며 반복 조회하지 않습니다.
 보고를 받으면 CR 파일·run·제출 hash를 대조합니다.
 이전 run이나 종결 CR의 늦은 보고만으로 완료한 CR을 다시 배정하지 않습니다.
+
+## 쉬는 Worker 점검(watch)
+
+동작 계약은 [동작 명세의 watch](../../docs/project-team/spec.md#watch)가 소유합니다. 반복 실행은 system crontab이 아니라 Claude Leader·Worker가 각자 자기 session cron으로 합니다. 등록 방법·cron 식·점검 prompt는 [자기 점검](references/self-check.md)이 소유합니다. 첫 prompt와 resume 메시지가 등록을 지시하므로 등록 직후 첫 행동으로 따릅니다. Codex에는 session cron이 없어 등록하지 않습니다.
+in-progress CR을 맡은 Worker가 turn을 끝낸 채 30분 넘게 새 입력과 보고가 없고 CPU를 쓰는 자식 process도 없으면, watch가 Worker에게 `[agent-session watch]` 점검 메시지를 한 번 보내고 같은 근거를 Leader에게도 보냅니다. 제출·질문 뒤 Leader의 회신을 기다리는 Worker와 `review` 중인 JOB은 대상이 아닙니다.
+
+- Worker: 점검 메시지는 사용자 승인이 아닙니다. 메시지의 근거(background 작업, 자식 process의 명령·실행 시간·CPU)를 보고 실제로 진행 중인지 판단합니다. 끝나지 않는 대기(예: `pgrep -f` loop)면 풀고 이어서 하며, 제출하거나 막혔으면 Leader에게 보고합니다. 점검에 대한 접수 회신은 보내지 않습니다.
+- Leader: 알림(자기 점검에서 직접 실행한 `watch`는 결과의 `evidence`)은 Worker를 강제로 끊었다는 뜻이 아닙니다. 같은 상태가 이어지면 Worker에게는 다시 가지 않고 Leader에게만 `--minutes`마다 다시 옵니다. 필요하면 Worker 화면과 CR을 보고 feedback을 보내거나 restart·stop을 판단합니다.
 
 ## Worker
 

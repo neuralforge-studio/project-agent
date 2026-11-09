@@ -4,6 +4,16 @@
 
 ## Unreleased
 
+- SESSION-005
+- SESSION-004
+- SESSION-003
+- TEST-005
+- SESSION-006
+
+형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
+
+## 0.1.0 - 2026-11-09
+
 - REPO-001
 - TMUX-001
 - RELEASE-001
@@ -21,6 +31,6 @@
 - TEST-004
 - BOARD-001
 - TMUX-002
-- BOARD-002
+- INSTALL-006
 
 형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)

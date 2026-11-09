@@ -91,7 +91,7 @@ def plan_install(env, source, python, adopt=None):
             b.conflict(env.lib, "is not empty and has no install record")
     b.ensure_dir(env.lib)
     b.ensure_dir(env.releases)
-    extra = {releases.PYTHON_ENV: releases.python_env(python)}
+    extra = {releases.PYTHON_ENV: releases.python_env(*python)}
     b.add(actions.build_release(places, source.name, source.files, source.root, extra))
     owned.append(records.owned(env.display(release_dir), "dir", digest=actions.release_digest(source.files, extra)))
     b.add(actions.new_link(places, "current", "releases/" + source.name))
@@ -315,7 +315,7 @@ def plan_upgrade(env, source, python, root):
     _require_compatible(env, root, source.root, source.name)
     release_dir = env.releases / source.name
     new = _switch(env, installed, source.name, installed["current"])
-    python_env = releases.python_env(python)
+    python_env = releases.python_env(*python)
     if os.path.lexists(release_dir):
         try:
             same = (release_dir / releases.PYTHON_ENV).read_bytes() == python_env
@@ -542,7 +542,9 @@ def run_check(env):
                                                                            installed["current"]))
     else:
         failures += _check_entries(env, current)
-        notices += _check_textual(current)
+        interpreter_failures, interpreter_notices = _check_interpreter(current)
+        failures += interpreter_failures
+        notices += interpreter_notices
         old_tmux = tmuxconf.too_old(current)
         if old_tmux:
             (failures if old_tmux[1] else notices).append(old_tmux[0])
@@ -564,19 +566,22 @@ def run_check(env):
     return failures, notices
 
 
-def _release_python(release):
+def _release_python_env(release):
+    """The names of the release's `tools/python.env` (contract section 6.1) as a dict; empty when unreadable."""
+    values = {}
     try:
         for line in (release / releases.PYTHON_ENV).read_text().splitlines():
-            if line.startswith("PROJECT_AGENT_PYTHON="):
-                return line.split("=", 1)[1]
+            name, separator, value = line.partition("=")
+            if separator:
+                values[name] = value
     except OSError:
         pass
-    return None
+    return values
 
 
 def _check_entries(env, release):
     failures = []
-    python = _release_python(release)
+    python = _release_python_env(release).get("PROJECT_AGENT_PYTHON")
     child_env = {**os.environ, **({"PROJECT_AGENT_PYTHON": python} if python else {})}
     for tool in TOOLS:
         entry = env.current / "tools" / tool / "bin" / tool
@@ -590,24 +595,40 @@ def _check_entries(env, release):
     return failures
 
 
-def _check_textual(release):
-    """Board needs `textual` in the installation's interpreter; a missing package is a notice, not a failure."""
-    python = _release_python(release)
+LAUNCH = 'source "$1" && project_agent_select_python && [ -n "$PY" ] && exec "$PY" -c "$2"'
+INTERPRETER_CODE = ("import sys, importlib.metadata as m\nprint(sys.prefix)\n"
+                    "try:\n    print(m.version('textual'))\nexcept Exception:\n    print('')")
+
+
+def _check_interpreter(release):
+    """Runs the release's interpreter the way an entry point does (through the launcher) in an empty environment,
+    so that the user's LD_LIBRARY_PATH cannot hide a missing library path. A different `sys.prefix` than at
+    install time is a failure (contract 6.1); a missing `textual` is a notice."""
+    values = _release_python_env(release)
+    python, prefix = values.get("PROJECT_AGENT_PYTHON"), values.get("PROJECT_AGENT_PYTHON_PREFIX")
+    if not python or not prefix:
+        return [], []
+    try:
+        result = subprocess.run(["bash", "-c", LAUNCH, "bash", str(release / "tools/python-launcher.sh"),
+                                 INTERPRETER_CODE], capture_output=True, text=True, timeout=30,
+                                env={**releases.PROBE_ENV, "PYTHONNOUSERSITE": "1"})
+        lines = result.stdout.splitlines() if result.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError):
+        lines = []
+    found_prefix, found = (lines + ["", ""])[:2] if lines else (None, "")
+    failures, notices = [], []
+    if found_prefix != prefix:
+        failures.append("%s runs with sys.prefix %s in an empty environment, but was installed with %s "
+                        "(PROJECT_AGENT_LD_LIBRARY_PATH=%s in %s). The entry points would run another Python; "
+                        "run `install` again with that interpreter."
+                        % (python, found_prefix or "(does not start)", prefix,
+                           values.get("PROJECT_AGENT_LD_LIBRARY_PATH", ""), releases.PYTHON_ENV))
     try:
         lines = (release / "tools/project-board/requirements.txt").read_text().splitlines()
         wanted = next(line.strip() for line in lines if line.strip().startswith("textual=="))[len("textual=="):]
     except (OSError, StopIteration):
-        return []
-    if not python:
-        return []
-    try:
-        result = subprocess.run([python, "-c", "import importlib.metadata as m; print(m.version('textual'))"],
-                                capture_output=True, text=True, timeout=30,
-                                env={**os.environ, "PYTHONNOUSERSITE": "1"})
-        found = result.stdout.strip() if result.returncode == 0 else None
-    except (OSError, subprocess.SubprocessError):
-        found = None
-    if found == wanted:
-        return []
-    return ["Project Board needs textual==%s in %s (%s). Board will not start until it is installed there."
-            % (wanted, python, "found " + found if found else "not installed")]
+        return failures, notices
+    if found != wanted:
+        notices.append("Project Board needs textual==%s in %s (%s). Board will not start until it is installed "
+                       "there." % (wanted, python, "found " + found if found else "not installed"))
+    return failures, notices

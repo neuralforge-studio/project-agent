@@ -100,6 +100,8 @@ def _seat_text(seat: dict) -> str:
         prefix = "R "
     elif seat.get("status") == "pending":
         prefix = "대기 "
+    elif seat.get("status") == "release_pending":
+        prefix = "반납대기 "
     else:
         prefix = "  "
     host = "@" + seat["host"] if seat.get("host") else ""
@@ -129,7 +131,7 @@ class SidebarApp(App):
     .decision-open { color: #ff8f8f; }
     .seat { color: #c7dbf1; }
     .seat-empty { color: #778596; }
-    .seat-pending { color: #ffcb84; }
+    .seat-pending, .seat-release-pending { color: #ffcb84; }
     .seat-stopped { color: #ff8f8f; }
     .seat-unknown { color: #ffcb84; }
     .project-error { height: auto; color: #ff8f8f; }
@@ -387,6 +389,8 @@ class SidebarApp(App):
                     classes += " seat-empty"
                 elif seat.get("status") == "pending":
                     classes += " seat-pending"
+                elif seat.get("status") == "release_pending":
+                    classes += " seat-release-pending"
                 live = self._seat_liveness(project, seat)
                 if live in ("stopped", "unknown"):
                     classes += f" seat-{live}"
@@ -398,6 +402,8 @@ class SidebarApp(App):
                     button.tooltip += f" · 호스트: {seat['host']} · {seat['path']}"
                 if seat.get("status") == "pending":
                     button.tooltip += " · 시작 대기"
+                elif seat.get("status") == "release_pending":
+                    button.tooltip += " · 반납 대기: Worker는 끝났고 CR이 in-progress에 있습니다. CR을 옮기면 반납됩니다"
                 if live == "stopped":
                     button.tooltip += " · 실행 종료"
                 elif live == "unknown":

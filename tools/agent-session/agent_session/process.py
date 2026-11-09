@@ -129,6 +129,42 @@ def descendants(pid):
     return sorted(child for child in found if not rows[child]["state"].startswith(("Z", "X")))
 
 
+def started(pid):
+    """Unix seconds at which a process started, or None if it is gone. Linux only (process_unknown elsewhere)."""
+    if not sys.platform.startswith("linux"):
+        raise SessionError("process_unknown", "Process start times are read on Linux only.", 4)
+    row = _linux_row(_pid(pid))
+    return None if row is None else boot_time() + int(row["birth"]) / os.sysconf("SC_CLK_TCK")
+
+
+def tree(pid):
+    """The live descendants of a process with what `watch` needs: pid, birth, start time, CPU, command line.
+
+    `cpu` is the CPU seconds the process used, including the children it already reaped, so a shell that
+    runs short commands in a loop shows their cost. `started` is Unix seconds. Linux only: other platforms
+    raise process_unknown, because `ps` cannot give the reaped children's time."""
+    if not sys.platform.startswith("linux"):
+        raise SessionError("process_unknown", "Process CPU time is read on Linux only.", 4)
+    found = []
+    ticks = os.sysconf("SC_CLK_TCK")
+    for child in descendants(pid):
+        try:
+            base = Path("/proc") / str(child)
+            stat = (base / "stat").read_text().rsplit(")", 1)[1].split()
+            args = (base / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+            identity = birth(child)
+            used = sum(int(stat[index]) for index in (11, 12, 13, 14))      # utime stime cutime cstime
+            began = started(child)
+        except (FileNotFoundError, ProcessLookupError):
+            continue                       # it ended while the tree was read
+        except (OSError, IndexError, ValueError) as exc:
+            raise SessionError("process_unknown", "Cannot read a descendant's CPU time.", 4,
+                               {"pid": child}) from exc
+        if identity is not None and began is not None:
+            found.append({"pid": child, "birth": identity, "started": began, "cpu": used / ticks, "args": args})
+    return found
+
+
 def cli_alive(meta, pane):
     """Whether the run's CLI process (or the pane process before it marked one) still runs."""
     pid = meta.get("cli_pid") or pane.get("pane_pid")     # a window handed to a new run holds cli_pid null

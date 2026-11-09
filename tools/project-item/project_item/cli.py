@@ -75,14 +75,18 @@ def cmd_ls(args) -> int:
             print(f"-- {name}: {error.code}")
             continue
         states = args.state or (kind.states if args.all else kind.listed)
+        waiting = registry.pending_releases(project) if kind is CR and project.seats else {}
         for state in states:
             if state not in kind.states:
                 raise ItemError("invalid_state", f"{name} states are {', '.join(kind.states)}.")
             for path in store.item_files(kind, root, state):
                 item = kind.fmt.parse(path, state)
                 level = (item.headers.get("Severity") if kind is CR else item.headers.get("Urgency")) or "--"
-                print(f"{name:6s} {state:8s} {level.split()[0]:6s} {kind.item_id(item) or path.stem:14s} "
-                      f"{(item.title or '')[:90]}")
+                item_id = kind.item_id(item) or path.stem
+                hold = waiting.get(item_id) if state == "in-progress" else None
+                print(f"{name:6s} {state:8s} {level.split()[0]:6s} {item_id:14s} "
+                      f"{(item.title or '')[:90]}"
+                      + (f"  [release pending: seat {hold['seat']} stopped]" if hold else ""))
         print(f"-- {name}: {root}  {_counts(kind, root) if root.is_dir() else '(no directory yet)'}")
     return 0
 
@@ -170,6 +174,24 @@ def cmd_check(args) -> int:
     return 1 if total else 0
 
 
+def _finish_release(project, cr_id: str) -> None:
+    """A stop that came before this move left the seat's release pending; this move finishes it.
+    The move stands whatever happens here."""
+    try:
+        result = registry.finish_release(project, cr_id)
+    except ItemError as error:
+        print(f"warning: {cr_id} moved, but its seat release failed: {error.code}: {error}", file=sys.stderr)
+        return
+    if result is None:
+        return
+    if result["released"]:
+        print(f"released seat {result['seat']}")
+    else:
+        print(f"seat {result['seat']} is not released and stays assigned to {cr_id}:")
+        for reason in result["reasons"]:
+            print(f"  - {reason}")
+
+
 def cmd_move(args) -> int:
     project = _select(args)
     kind = kind_of_id(args.id)
@@ -177,14 +199,18 @@ def cmd_move(args) -> int:
     if args.state == "in-progress" and project.seats:
         raise ItemError("agent_session_only", "In a team project, `agent-session start --job <CR-ID>` "
                         "moves a CR to in-progress with its seat assignment.")
+    left_in_progress = False
     with store.root_lock(root):
         if project.seats:
+            left_in_progress = kind is CR and store.find(kind, root, args.id)[0] == "in-progress"
             guard.check_move(project, kind, root, args.id, args.state, args.outcome, args.by)
             if kind is DECIDE and args.state == "done" and store.find(kind, root, args.id)[0] == "answered":
                 guard.require_leader(project)
         target = store.move_locked(kind, root, args.id, args.state, outcome=args.outcome, by=args.by,
                                    note=args.note)
     print(f"moved {target}")
+    if left_in_progress:
+        _finish_release(project, args.id)       # after the root lock: the release reads the CR again
     try:
         if kind is DECIDE:
             _render(project, root)

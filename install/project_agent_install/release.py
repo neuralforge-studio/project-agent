@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import sysconfig
 
 from .layout import InstallerError
 
@@ -109,13 +110,43 @@ def read_formats(root):
     return value
 
 
-def python_env(python, python_path=""):
-    """The release's `tools/python.env`: the two names the entry points read (contract section 6.1)."""
-    return ("PROJECT_AGENT_PYTHON=%s\nPROJECT_AGENT_PYTHONPATH=%s\n" % (python, python_path)).encode()
+PROBE_ENV = {"PATH": "/usr/bin:/bin"}
+PROBE_CODE = "import sys; print(sys.prefix)"
+
+
+def prefix_in_empty_environment(python, library_path=""):
+    """`sys.prefix` of `python` started with an empty environment (only `library_path` as LD_LIBRARY_PATH).
+    None when it does not start."""
+    env = {**PROBE_ENV, **({"LD_LIBRARY_PATH": library_path} if library_path else {})}
+    try:
+        result = subprocess.run([python, "-c", PROBE_CODE], capture_output=True, text=True, timeout=30, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def python_env(python, prefix, library_path="", python_path=""):
+    """The release's `tools/python.env` (contract section 6.1). The launcher reads the first three names;
+    `PROJECT_AGENT_PYTHON_PREFIX` is what `check` compares the running interpreter with."""
+    return ("PROJECT_AGENT_PYTHON=%s\nPROJECT_AGENT_PYTHONPATH=%s\nPROJECT_AGENT_LD_LIBRARY_PATH=%s\n"
+            "PROJECT_AGENT_PYTHON_PREFIX=%s\n" % (python, python_path, library_path, prefix)).encode()
 
 
 def installer_python():
-    """The interpreter that runs the installer is the one the release will use."""
+    """The interpreter that runs the installer is the one the release will use. Returns `(path, prefix,
+    library_path)`: the `sys.prefix` it runs with here, and the library directory it needs to start with that
+    same `sys.prefix` in an empty environment (empty when it needs none). Contract section 6.1."""
     if sys.version_info < MINIMUM_PYTHON:
         raise InstallerError("python_version", "Python 3.10 or later is required.")
-    return os.path.abspath(sys.executable)
+    python = os.path.abspath(sys.executable)
+    candidates = [""]
+    for directory in (os.path.join(sys.prefix, "lib"), sysconfig.get_config_var("LIBDIR")):
+        if directory and directory not in candidates and os.path.isdir(directory):
+            candidates.append(directory)
+    for library_path in candidates:
+        if prefix_in_empty_environment(python, library_path) == sys.prefix:
+            return python, sys.prefix, library_path
+    raise InstallerError("python_environment", "%s does not start as the interpreter that runs the installer "
+                         "(sys.prefix %s) in an empty environment, with or without its library directory (%s). "
+                         "Entry points would run another Python. Nothing was changed."
+                         % (python, sys.prefix, ", ".join(candidates[1:]) or "none found"))

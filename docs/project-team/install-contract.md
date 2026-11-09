@@ -26,7 +26,7 @@
 
 | 경로 | 종류 | 내용 |
 | --- | --- | --- |
-| `~/.local/lib/project-agent/releases/<version>-<hash>/` | 디렉터리 | 불변 release. 도구, skill, 문서, tmux 통합 파일, 설치기(`install/`)를 담고 test·`__pycache__`·`docs/cr`는 담지 않습니다. 설치 interpreter를 적은 `tools/python.env`를 더합니다(6.1절). 외부 package는 담지 않습니다(사용자 결정 D-20261109-01 waive). 만들 때 설치 interpreter로 미리 compile하고(`__pycache__`) 쓰기 권한을 모두 뺍니다. 그래야 실행이 release에 파일을 더하지 않습니다. |
+| `~/.local/lib/project-agent/releases/<version>-<hash>/` | 디렉터리 | 불변 release. 도구, skill, 문서, tmux 통합 파일, 설치기(`install/`)를 담고 test·`__pycache__`·`docs/cr`는 담지 않습니다. 설치 interpreter와 그 library 경로를 적은 `tools/python.env`를 더합니다(6.1절). 외부 package는 담지 않습니다(사용자 결정 D-20261109-01 waive). 만들 때 설치 interpreter로 미리 compile하고(`__pycache__`) 쓰기 권한을 모두 뺍니다. 그래야 실행이 release에 파일을 더하지 않습니다. |
 | `~/.local/lib/project-agent/current` | symlink | 활성 release를 가리킵니다. 원자적으로 바꿉니다. |
 | `~/.local/lib/project-agent/tmux.conf` | 파일 | tmux include의 고정 대상입니다. `source-file -q ~/.local/lib/project-agent/current/integrations/tmux/project-agent.conf` 한 줄을 담습니다. 설치 때 한 번 쓰고 갱신하지 않습니다. |
 | `~/.local/lib/project-agent/install.json` | 파일 | 설치 기록 |
@@ -250,19 +250,22 @@ set-option -ag status-right '#{E:@project_agent_decide_status}'
 
 세 CLI(`agent-session`, `project-item`, `project-board`)의 `bin/` 진입점과 tmux helper `integrations/tmux/tmux_decide_status.sh`는 같은 규칙을 씁니다. 규칙의 원본은 공용 launcher [`tools/python-launcher.sh`](../../tools/python-launcher.sh) 하나입니다. 진입점은 이 파일을 `source`하며, 도구 디렉터리(`tools/<도구>/`)의 부모에 있어야 합니다. release는 이 상대 배치를 유지합니다.
 
-설치본은 아래 두 값을 환경 변수나 `python.env`로 정합니다. 설치기는 release에 `python.env`를 씁니다(shim은 `current`를 거치는 symlink라 값을 정하지 않습니다). tmux가 shim 없이 부르는 helper(`tmux_project_board.sh`, `tmux_decide_status.sh`)는 `python.env`로 같은 값을 얻습니다.
+설치본은 아래 세 값을 환경 변수나 `python.env`로 정합니다. 설치기는 release에 `python.env`를 씁니다(shim은 `current`를 거치는 symlink라 값을 정하지 않습니다). tmux가 shim 없이 부르는 helper(`tmux_project_board.sh`, `tmux_decide_status.sh`)는 `python.env`로 같은 값을 얻습니다.
 
 | 변수 | 뜻 | 없을 때 |
 | --- | --- | --- |
 | `PROJECT_AGENT_PYTHON` | 설치 때 고른 interpreter의 절대 경로. 값이 있으면 후보는 이것 하나입니다. 다른 interpreter로 되돌아가지 않습니다. | 개발 checkout 규칙: macOS는 `python3`, WSL은 `~/python/.venv/bin/python`만, 그 밖에는 `/primehome/tools/Inhouse/Python3/latest/bin/python3`, `~/python/.venv/bin/python`, `python3` 순서 |
 | `PROJECT_AGENT_PYTHONPATH` | release 안 외부 package 디렉터리. `:`로 여럿을 이을 수 있습니다. `project-board`만 `PYTHONPATH`에 더합니다. 설치기는 외부 package를 넣지 않으므로 빈 값을 적습니다. | 더하지 않음 |
+| `PROJECT_AGENT_LD_LIBRARY_PATH` | 설치 interpreter가 설치 때와 같은 interpreter(같은 `sys.prefix`)로 뜨는 데 필요한 library 디렉터리. `PROJECT_AGENT_PYTHON`을 쓸 때 launcher가 `LD_LIBRARY_PATH` 앞에 붙이고 export합니다. 필요 없으면 빈 값입니다. | 붙이지 않음. 개발 checkout 규칙의 `LD_LIBRARY_PATH`는 바뀌지 않습니다. |
 
-`python.env`: 위치는 launcher와 같은 디렉터리, 곧 release의 `tools/python.env`입니다. 설치기가 release를 만들 때 씁니다. `PROJECT_AGENT_PYTHON`에는 설치기를 실행한 interpreter의 절대 경로를, `PROJECT_AGENT_PYTHONPATH`에는 빈 값을 적습니다(외부 package를 넣지 않습니다). 개발 checkout에는 없고 root `.gitignore`가 commit을 막습니다.
+`python.env`: 위치는 launcher와 같은 디렉터리, 곧 release의 `tools/python.env`입니다. 설치기가 release를 만들 때 씁니다. `PROJECT_AGENT_PYTHON`에는 설치기를 실행한 interpreter의 절대 경로를, `PROJECT_AGENT_PYTHONPATH`에는 빈 값을 적습니다(외부 package를 넣지 않습니다). `PROJECT_AGENT_LD_LIBRARY_PATH`와 `PROJECT_AGENT_PYTHON_PREFIX`는 아래 "설치 때의 interpreter 시험"이 정합니다. 개발 checkout에는 없고 root `.gitignore`가 commit을 막습니다.
 
-- 형식: 한 줄에 `NAME=값` 하나. 이름은 `PROJECT_AGENT_PYTHON`과 `PROJECT_AGENT_PYTHONPATH` 둘뿐이며, 값은 따옴표 없이 줄 끝까지입니다(공백을 포함할 수 있습니다). 같은 이름이 여러 번 나오면 마지막 줄이 이깁니다.
+- 형식: 한 줄에 `NAME=값` 하나. launcher가 읽는 이름은 `PROJECT_AGENT_PYTHON`, `PROJECT_AGENT_PYTHONPATH`, `PROJECT_AGENT_LD_LIBRARY_PATH` 셋뿐이며(`PROJECT_AGENT_PYTHON_PREFIX`는 `check`만 읽고 launcher는 무시합니다), 값은 따옴표 없이 줄 끝까지입니다(공백을 포함할 수 있습니다). 같은 이름이 여러 번 나오면 마지막 줄이 이깁니다.
 - launcher는 파일을 shell로 `source`하지 않고 두 이름의 줄만 읽습니다. 다른 이름이나 shell 문법(`$(…)`, 백틱)을 가진 줄은 무시하고 실행하지 않으며, 값 안의 `$`·백틱도 그대로의 글자입니다.
 - 우선순위: 환경 변수에 값이 있으면 환경 변수가 이깁니다(변수마다 따로 판단합니다. 빈 값은 없는 것으로 봅니다). 값이 없는 변수만 파일에서 읽습니다. 파일이 없으면 위 표의 "없을 때" 규칙입니다.
 - `python.env`의 `PROJECT_AGENT_PYTHON`이 가리키는 interpreter가 없거나 실행할 수 없으면 아래 `python_unavailable`과 같이 끝납니다. 다른 interpreter로 되돌아가지 않습니다.
+
+설치 때의 interpreter 시험: 설치기는 `PROJECT_AGENT_PYTHON`에 적을 interpreter(설치기를 실행한 interpreter)의 `sys.prefix`를 `PROJECT_AGENT_PYTHON_PREFIX`에 적습니다. 사내 Python은 자기 `lib`이 `LD_LIBRARY_PATH`에 없으면 시스템 libpython으로 떠서 다른 `sys.prefix`(`/usr`)가 되고 사내 site-packages가 보이지 않으므로, 설치기는 빈 환경(`PATH`만 있음)에서 그 interpreter를 실행해 `sys.prefix`를 시험합니다. 같으면 `PROJECT_AGENT_LD_LIBRARY_PATH`는 빈 값입니다. 다르면 `<sys.prefix>/lib`, 그다음 `sysconfig`의 `LIBDIR`을 `LD_LIBRARY_PATH`로 주어 시험하고 처음으로 같아지는 디렉터리를 적습니다. 어느 것으로도 같아지지 않으면 오류 `python_environment`로 아무것도 바꾸기 전에 설치를 거절합니다(종료 코드 3). 같은 interpreter라도 library 경로가 다르면 `PROJECT_AGENT_LD_LIBRARY_PATH`가 달라지므로 `upgrade`는 "다른 interpreter"로 판정합니다.
 
 - `project-board`와 `project-item`은 `PYTHONNOUSERSITE=1`로 실행하므로, 사용자 site의 package는 보이지 않습니다. release의 package는 `PROJECT_AGENT_PYTHONPATH`로만 보입니다.
 - `PROJECT_AGENT_PYTHON`이 없거나 실행할 수 없는 파일이면 `agent-session`은 JSON 오류 `python_unavailable`(종료 코드 5)을, 버전이 3.10 미만이면 `python_version`을 출력합니다. `project-item`, `project-board`와 `tmux_decide_status.sh`는 stderr에 한 줄을 쓰고 종료 코드 5로 끝납니다.
@@ -292,7 +295,8 @@ release 이름 `<version>-<hash>`: `<version>`은 원본 root의 `VERSION` 첫 �
 - `~/.local/bin`이 PATH에 있습니다. 없으면 안내입니다(실패가 아닙니다).
 - PATH에서 처음 찾은 `tmux`가 최소 버전(3.2절) 이상입니다. 낮으면 실패이고, 그 tmux의 버전과 경로, 최소 버전, 해소 방법(사내 tmux 경로를 PATH 앞에 둠)을 알립니다. PATH에 `tmux`가 없으면 안내입니다(실패가 아닙니다).
 - 건너뛴 tmux binding이 있으면 "binding 건너뜀"으로 알립니다(3.1절). 실패가 아닙니다.
-- `project-board`가 쓰는 `textual`이 설치 interpreter에 `tools/project-board/requirements.txt`의 버전으로 있는지 안내합니다. 없거나 버전이 다르면 안내만 합니다(실패가 아닙니다).
+- release의 launcher로 설치 interpreter를 빈 환경(`PATH`만 있음. 사용자의 `LD_LIBRARY_PATH`가 library 경로의 누락을 가리지 않습니다)에서 실행해 `sys.prefix`가 `PROJECT_AGENT_PYTHON_PREFIX`(설치 때의 값)와 같은지 확인합니다. 다르거나 뜨지 않으면 실패이고, 실제 `sys.prefix`와 설치 때의 값을 알립니다.
+- `project-board`가 쓰는 `textual`이 같은 방식으로 실행한 설치 interpreter에 `tools/project-board/requirements.txt`의 버전으로 있는지 안내합니다. 없거나 버전이 다르면 안내만 합니다(실패가 아닙니다).
 - 사용자가 소유 경로를 다른 것으로 바꿨으면 그 경로를 알리고 `check`는 실패로 끝납니다(위 첫 항목). `upgrade`와 `uninstall`은 그런 경로를 바꾸거나 지우지 않고 알립니다. 원격 runtime의 skill link가 같은 규칙을 씁니다([remote_runtime.py:74-90](../../tools/agent-session/agent_session/remote_runtime.py)) .
 
 ### 7.1 떠 있는 run
@@ -396,6 +400,7 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 | T30 | release가 아닌 경로(이 저장소의 checkout, 동결 사본 대용)에서 시작한 run이 떠 있음 | 첫 release의 `install`, 형식이 같은 release로 `upgrade`, 형식이 다른 release로 `upgrade` | 앞의 둘은 T1·T6과 같음. 셋째는 없음 | 셋째만 거절하고 출력에 "a copy that is not a release"와 다른 값이 있음 |
 | T31 | 설치·갱신을 두 번 한 상태(release 셋). 떠 있는 run이 첫 release에서 시작됨 / 없음 / `unknown` / 첫 release 디렉터리에 사용자의 파일 | `prune`(`--dry-run` 포함) | run이 떠 있거나 `unknown`이거나 사용자의 파일이 있으면 없음(이유를 알림). 아니면 첫 release의 삭제와 설치 기록 | `current`·`previous`는 남음(`rollback` 뒤에는 새 `previous`도 남음). dry-run 목록과 실제 삭제 목록이 같음. `check`가 통과함. Board가 켜져 있으면 알림 |
 | T32 | 위의 `prune`을 SIGKILL로 끊음(첫 step의 앞·뒤) | `check`, `upgrade`, `prune --dry-run`, `prune` | `prune`이 마침 | `check`는 실패, `upgrade`는 `prune_interrupted`, `--dry-run`은 거절. 마친 뒤 journal·임시 디렉터리가 없음 |
+| T33 | 설치 interpreter가 빈 환경에서 다른 `sys.prefix`로 뜸(INSTALL-006) | `install`, 빈 환경에서 진입점과 `check`, `python.env`의 `PROJECT_AGENT_PYTHON_PREFIX`·library 경로 변경 후 `check` | 2절의 경로 | `python.env`에 library 경로가 적히고, 빈 환경의 진입점이 설치 때와 같은 `sys.prefix`로 실행됨. 어느 경로로도 같아지지 않으면 `python_environment`로 거절함(종료 코드 3). 값을 틀리게 하거나 library 경로를 지우면 `check`가 실패함 |
 
 기대 변경 목록의 "정확히"는 T1~T18과 T20~T32에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding은 TMUX-001이 구현했습니다([test](../../integrations/tmux/test_project_agent_conf.py)).
 

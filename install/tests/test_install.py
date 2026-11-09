@@ -616,7 +616,7 @@ def test_the_release_is_precompiled_and_read_only(home, source, name):
 def test_the_release_names_its_interpreter_in_python_env(home, source, name):
     installed(home, source)
     text = home.read(tree(name) + "/tools/python.env").decode()
-    assert text == "PROJECT_AGENT_PYTHON=%s\nPROJECT_AGENT_PYTHONPATH=\n" % os.path.abspath(sys.executable)
+    assert text.startswith("PROJECT_AGENT_PYTHON=%s\nPROJECT_AGENT_PYTHONPATH=\n" % os.path.abspath(sys.executable))
     assert not home.path(".local/lib/project-agent/releases/%s/tools/python.env" % name).is_symlink()
 
 
