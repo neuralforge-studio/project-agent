@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: SESSION-014
 - Base: bacf7491632de23af9f0f905227f7670b1486db1 2026-11-10T22:43:10+09:00
+- Outcome: fixed
 
 ## Symptom
 fc2_cpu처럼 큰 저장소의 seat에서는 start의 Git 준비(switch main, fetch, merge --ff-only, switch -c, submodule update)가 명령마다 1~7분 걸립니다. 그래서 seat를 반납한 직후의 start가 기본 한도 600초를 Git 준비에만 다 씁니다. SESSION-014는 한도가 지나면 다음 Git 명령을 멈추고 단계를 알리게 했지만, 첫 시도가 실패하는 일은 그대로입니다.
@@ -27,6 +28,7 @@ fc2_cpu처럼 큰 저장소의 seat에서는 start의 Git 준비(switch main, fe
 - 2026-11-10 Leader: open -> todo. fc2_cpu start 실패의 남은 원인, reflog 근거
 - 2026-11-10 Leader: 제출 63a6663 검토. 원인 측정(훑기 3→1, 자식 git 약 93→1)과 ref 단계의 의미는 확인했습니다. 수정 요청: local main이 없는 seat에서 옛 흐름(`switch main`의 DWIM 생성)과 달리 git_failed로 멈추는 회귀가 있습니다. origin/main에서 main을 만들어 옛 결과와 같게 하고 oracle test를 더합니다.
 - 2026-11-10 Leader: 제출 8de0c43add6027717a23abbb5b463413f599f056를 인수합니다. 검토 8de0c43(63a6663 + local main 없는 seat 처리). 첫 제출에서 확인한 원인 측정과 ref 단계의 의미는 재사용합니다. 바뀐 것은 sync_main의 tip 없음 분기(origin/main을 target으로 두고 전환 뒤 branch --track main으로 생성)와 tip==upstream일 때 branch 갱신이 없는 순서뿐이며, 옛 명령열 oracle과 같다는 test(write·read-only)가 수정 전 실패를 확인했습니다. tools/agent-session/tests + distribution boundary 855 passed, 문서는 spec 한 줄과 install-contract line 참조.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 6d499e6 (origin/main)
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [동작 명세](../../project-team/spec.md)의 Git 준비와 "한도를 넘긴 start", `tools/agent-session/agent_session/git_ops.py`(`prepare`), `workspace.py`, SESSION-014 Result, [project-team Worker 절](../../../skills/project-team/SKILL.md).
