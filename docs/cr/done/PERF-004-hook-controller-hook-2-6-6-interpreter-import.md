@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: PERF-003, SESSION-011, SESSION-013
 - Base: 16fce569de54eec284550d1a6bb1a4b243f834b7 2026-11-10T19:54:37+09:00
+- Outcome: fixed
 
 ## Symptom
 등록 hook과 controller는 PERF-003의 시동 번들을 쓰지 않습니다. hook process 하나가 interpreter 시동과 import에만 4×4에서 2초, 16×16(load 78)에서 6.6초를 씁니다. 같은 hook 명령이 SessionStart뿐 아니라 Stop·StopFailure·SessionEnd에도 실행됩니다. 그래서 모든 대화가 turn이 끝날 때마다 이 비용을 치릅니다.
@@ -23,6 +24,7 @@
 - 2026-11-10 Leader: 고친다(Leader 판정). 측정 근거가 있는 속도 결함이며 PERF-003의 범위 밖으로 남긴 경로입니다.
 - 2026-11-10 Leader: open -> todo. hook·controller 시동 번들, 측정 근거 있는 속도 결함
 - 2026-11-10 Leader: 제출 14b0c8fb139b878d7ba2f1bceed51da0a73afea6를 인수합니다. 검토 14b0c8f(구현 fdacd6f + main 1b0ea72 merge). 세 생성 명령의 -S 추가(-c 프로그램·entry·인자 순서 그대로), agent_session/__init__.py의 번들 연결(이미 reader가 있으면 건너뜀, bundle_boot.py·번들이 없으면 일반 import), bundle_boot.py의 표지, 문서 두 곳을 읽었습니다. 고친 문서의 상대 link는 Leader가 확인했습니다(0 broken). README 표 행: tools/agent-session/** 832 passed + test_remote 1건 부하 timeout(단독 통과), bundle_boot.py 행의 네 번째 명령 130·install/tests 280 passed(merge commit). 16x16 start wall 0.68·CPU 0.77 improved, hook 시동+import 0.70→0.21초. Result가 적은 pkill -f 사고는 Leader가 사용자에게 알립니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 047968c (origin/main)
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [실행 경로 계약](../../project-team/README.md#실행-경로-계약), [동작 명세](../../project-team/spec.md)의 등록(5절), 측정 도구 [`tools/tests/perf/perf_bench.py`](../../../tools/tests/perf/perf_bench.py) 머리말(가짜 `claude`의 `hooks.log`), [project-team Worker 절](../../../skills/project-team/SKILL.md), PERF-003 Result와 [`tools/bundle_boot.py`](../../../tools/bundle_boot.py), [설치 계약 6.1절](../../project-team/install-contract.md#61-python-선택).
