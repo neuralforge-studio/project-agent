@@ -88,8 +88,11 @@ def hook(settings, event, payload):
     try:
         for entry in settings.get("hooks", {}).get(event, []):
             for item in entry.get("hooks", []):
-                subprocess.run(item["command"], shell=True, input=json.dumps(payload), text=True, capture_output=True,
-                               timeout=item.get("timeout", 30))
+                try:
+                    subprocess.run(item["command"], shell=True, input=json.dumps(payload), text=True, capture_output=True,
+                                   timeout=item.get("timeout", 30))
+                except (OSError, subprocess.SubprocessError):
+                    pass                     # a hook that fails or times out does not end the real CLI either
     finally:
         if marker:
             os.unlink(marker)

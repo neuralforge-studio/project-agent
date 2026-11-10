@@ -21,23 +21,41 @@ def test_percentile_interpolates_between_ranks():
     assert perf_bench.percentile([5.0, 1.0, 3.0, 2.0, 4.0], 0.9) == pytest.approx(4.6)
 
 
-def row(exe, op, wall, tmux=0, git=0, rc=0, mode="warm", scale="2x2", load=10.0, pane_tmux=0):
-    return {"exe": exe, "scale": scale, "mode": mode, "rep": 1, "op": op, "wall": wall, "rc": rc, "load": load,
+def row(exe, op, wall, tmux=0, git=0, rc=0, mode="warm", scale="2x2", load=10.0, pane_tmux=0, cpu=None):
+    return {"exe": exe, "scale": scale, "mode": mode, "rep": 1, "op": op, "wall": wall, "cpu": cpu, "rc": rc, "load": load,
             "spawns": {k: v for k, v in (("tmux", tmux), ("git", git)) if v},
             "pane_spawns": {"tmux": pane_tmux} if pane_tmux else {}}
 
 
-def test_summary_and_markdown_give_median_p90_counts_and_ratios():
-    rows = [row("old", "ls", w) for w in (1.0, 2.0, 3.0)] + [row("new", "ls", w) for w in (0.5, 1.0, 1.5)]
+def test_summary_and_markdown_give_median_interval_counts_ratios_and_verdicts():
+    old = [1.0, 1.1, 0.9, 1.05, 0.95, 1.0, 1.02, 0.98, 1.0]
+    new = [0.5, 0.55, 0.45, 0.52, 0.48, 0.5, 0.51, 0.49, 0.5]
+    rows = [row("old", "ls", w, cpu=w / 2) for w in old] + [row("new", "ls", w, cpu=w * 2) for w in new]
     rows += [row("old", "ls", 99.0, rc=1)]                                    # a failed command is not a timing
     rows += [row("old", "ls", 5.0, tmux=32, mode="count"), row("new", "ls", 5.0, tmux=8, mode="count")]   # the counting pass
     summary = perf_bench.summarize(rows, ["old", "new"])
     (entry,) = summary["operations"]                                           # a count row is not a timing row
-    assert entry["exe"]["old"]["median"] == 2.0 and entry["exe"]["old"]["failed"] == 1
-    assert entry["exe"]["old"]["p90"] == pytest.approx(2.8) and entry["exe"]["new"]["tmux"] == 8
+    old_stats, new_stats = entry["exe"]["old"], entry["exe"]["new"]
+    assert old_stats["median"] == 1.0 and old_stats["failed"] == 1 and old_stats["n"] == 9
+    assert old_stats["ci"][0] <= 1.0 <= old_stats["ci"][1] and new_stats["tmux"] == 8
     assert entry["ratio"]["median"] == pytest.approx(0.5) and entry["ratio"]["tmux"] == pytest.approx(0.25)
-    text = perf_bench.markdown(summary, {"executables": {"old": "/a", "new": "/b"}, "reps": 3})
-    assert "## 2x2 warm" in text and "| ls | 2.000 | 2.800 | 1.000 | 1.400 | 0.50 | 0.50 | 32 -> 8 |" in text
+    assert entry["ratio"]["verdict"] == "improved" and entry["ratio"]["ci"][1] < 1      # the whole interval is below 1
+    assert entry["ratio"]["cpu"] == pytest.approx(2.0) and entry["ratio"]["cpu_verdict"] == "worse"   # the cpu doubled
+    text = perf_bench.markdown(summary, {"executables": {"old": "/a", "new": "/b"}, "reps": 9})
+    assert "## 2x2 warm" in text and "| ls | 9/9 | 1.000 [" in text and "| improved |" in text and "32 -> 8" in text
+
+
+def test_the_same_values_on_both_sides_are_not_called_an_improvement():
+    values = [1.0, 1.4, 0.8, 1.2, 0.9, 1.1, 1.3, 0.7, 1.0]
+    rows = [row(name, "ls", w) for name in ("a", "b") for w in values]
+    (entry,) = perf_bench.summarize(rows, ["a", "b"])["operations"]
+    assert entry["ratio"]["verdict"] == "same" and entry["ratio"]["ci"][0] < 1 < entry["ratio"]["ci"][1]
+
+
+def test_few_repetitions_give_no_interval_and_no_verdict():
+    rows = [row(name, "ls", w) for name in ("a", "b") for w in (1.0, 2.0)]
+    (entry,) = perf_bench.summarize(rows, ["a", "b"])["operations"]
+    assert entry["exe"]["a"]["ci"] is None and entry["ratio"]["verdict"] == "-"
 
 
 def test_server_side_processes_count_toward_the_command():
@@ -94,6 +112,7 @@ def test_small_run_with_an_isolated_candidate_counts_the_same_and_leaves_no_serv
     assert {"agent_start_worker", "agent_send_to_worker", "agent_finish_ended", "project_item_ls", "board_liveness",
             "status_cache_valid", "steady_board_1"} <= {r["op"] for r in rows}
     assert {r["mode"] for r in rows} == {"count", "warm"}
+    assert any(r["cpu"] and r["cpu"] > 0 for r in rows if r["op"] == "project_item_ls")      # the command's own CPU is recorded
     assert not any(r["spawns"] or r["pane_spawns"] for r in rows if r["mode"] == "warm")        # no shim in a timing pass
     summary = json.loads((out / "summary.json").read_text())
     by = {(e["op"]): e["exe"] for e in summary["operations"] if e["mode"] == "warm"}
