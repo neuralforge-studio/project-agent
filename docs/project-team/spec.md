@@ -640,6 +640,7 @@ Claude는 시작 때 지정한 UUID와 실제 hook의 session·cwd·source를 �
 run이 resume인지는 그 window의 `resume` option이 정합니다. hook의 matcher도 같은 값을 씁니다.
 Codex는 실제 도구 문맥의 CODEX_THREAD_ID와 endpoint를 확인합니다.
 내부 등록은 현재 run과 자기 window를 대조하고 그 window의 binding만 기록합니다. run은 한 번의 tmux 읽기로 project의 모든 slot 포인터를 읽어 이 run_id를 가리키는 slot의 window만 읽어 찾습니다. 그래서 hook과 `mark_process`가 시작하는 tmux process 수는 seat 수와 무관합니다.
+hook과 `mark_process`, controller의 interpreter는 `-S`로 시작하고, 설치본에서는 시동 번들에서 모듈을 읽어 시동과 import 시간을 줄입니다(설치 계약 6.1절 "생성 명령의 시동"). 판정과 결과는 같습니다.
 등록은 하나의 deadline 안에서 일합니다. deadline은 Claude hook은 hook process가 만들어진 시각에서, Codex는 도구 호출이 시작한 시각에서 25초 뒤입니다. hook 제한 30초보다 짧습니다. Claude의 제한도 process 시작부터 세므로, 부하로 interpreter 시동과 import에 쓴 시간(최대 10초)을 25초에서 뺍니다. 그래야 hook이 제한에 닿기 전에 스스로 실패를 기록합니다. binding 확인(최대 20초)은 deadline 6초 전에 끝나야 하고, 대상 제어 잠금과 state 잠금은 남은 시간을 나눠 씁니다. deadline이 지나면 등록 실패입니다.
 게시는 대상 제어 잠금을 잡고 다음 순서로 합니다.
 

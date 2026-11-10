@@ -5,6 +5,7 @@ function that came to need `Manager` fails here. The full start/stop/restart flo
 """
 import os
 import shlex
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -88,8 +89,8 @@ def test_the_launch_script_cleans_the_environment_enters_the_cwd_and_marks_the_p
     assert unset[1:] == sorted(unset[1:])
     assert lines[4] == "cd '/seat/with space'"
     marker = shlex.split(lines[5].rsplit(" ", 1)[0])
-    assert marker[:2] == ["/usr/bin/python3", "-c"] and "mark_process" in marker[2]
-    assert marker[3:] == ["/lib", "r" * 32, "/cfg.json", "/tmp/s"] and lines[5].endswith(' "$$"')
+    assert marker[:3] == ["/usr/bin/python3", "-S", "-c"] and "mark_process" in marker[3]
+    assert marker[4:] == ["/lib", "r" * 32, "/cfg.json", "/tmp/s"] and lines[5].endswith(' "$$"')
     assert lines[6:] == ["export K='v w'", "exec cli --x 'a b'", ""]
 
 
@@ -99,8 +100,8 @@ def test_the_controller_script_runs_the_request_through_the_internal_entry(tmp_p
     lines = script.read_text(encoding="utf-8").split("\n")
     assert lines[:3] == ["#!/bin/bash", "set -e", "unset CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID TMUX TMUX_PANE"]
     words = shlex.split(lines[3])
-    assert words[0] == "exec" and "run_controller" in words[3]
-    assert words[4] == str(launch_artifacts.library_path()) and words[5] == str(tmp_path / "request file.json")
+    assert words[:3] == ["exec", sys.executable, "-S"] and words[3] == "-c" and "run_controller" in words[4]
+    assert words[5] == str(launch_artifacts.library_path()) and words[6] == str(tmp_path / "request file.json")
     assert (launch_artifacts.library_path() / "agent_session" / "internal.py").is_file()
 
 

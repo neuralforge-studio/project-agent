@@ -7,6 +7,7 @@ installed release the way a user does.
 
 import marshal
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -144,3 +145,54 @@ def test_optimized_interpreters_do_not_use_the_bundle(release):
     result = subprocess.run([sys.executable, "-S", "-O", "-c", "import sys\n" + program, str(directory / "tools")],
                             capture_output=True, text=True, timeout=60, env=home.env)
     assert result.stdout.split() == ["SourceFileLoader"], result.stderr
+
+
+# PERF-004: the processes of the generated commands (registration hook, `mark_process`, controller) start as
+# `python -S -c "import sys; sys.path.insert(0, library); from agent_session.internal import ..."`: no reader is
+# installed before that import, so `agent_session/__init__.py` installs it.
+GENERATED = ("import sys; sys.path.insert(0, sys.argv[1]); from agent_session.internal import register_from_hook\n"
+             "import json\n"
+             "print(*(type(m.__spec__.loader).__name__ for m in (sys.modules['agent_session'], sys.modules['agent_session.internal'],\n"
+             "                                                 sys.modules['agent_session.state'], json)))\n"
+             "print(sum(getattr(finder, 'project_agent_bundle', False) for finder in sys.meta_path))\n")
+
+
+def generated_command(tools, tmp_path, home):
+    return subprocess.run([sys.executable, "-S", "-c", GENERATED, str(tools / "agent-session")], capture_output=True, text=True,
+                          timeout=60, env=home.env, cwd=tmp_path)
+
+
+def test_a_generated_command_imports_the_internal_entry_from_the_bundle(release, tmp_path):
+    directory, home = release
+    result = generated_command(directory / "tools", tmp_path, home)
+    assert result.returncode == 0, result.stderr
+    # `agent_session` itself is read from its file: the reader is installed by the first line of that file.
+    assert result.stdout.split("\n")[:2] == ["SourceFileLoader BundleFinder BundleFinder BundleFinder", "1"]
+
+
+def test_the_entry_point_of_the_cli_installs_one_reader_and_the_package_does_not_install_another(release):
+    directory, home = release
+    program = "import agent_session.cli\nprint(sum(getattr(finder, 'project_agent_bundle', False) for finder in sys.meta_path))\n"
+    result = python_in(directory, home, "import sys\n" + program.replace("import agent_session.cli", "sys.path.insert(0, %r)\nimport agent_session.cli"
+                                                                         % str(directory / "tools" / "agent-session")))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["1"]
+
+
+def test_a_generated_command_without_a_bundle_imports_the_modules_as_always(release, tmp_path):
+    directory, home = release
+    tools = tmp_path / "tools-without-bundle"
+    shutil.copytree(directory / "tools", tools, ignore=shutil.ignore_patterns("__pycache__"))
+    result = generated_command(tools, tmp_path, home)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split("\n")[:2] == ["SourceFileLoader SourceFileLoader SourceFileLoader SourceFileLoader", "0"]
+
+
+def test_a_generated_command_beside_no_reader_imports_the_modules_as_always(release, tmp_path):
+    """The remote runtime's copy of the package has no `bundle_boot.py` beside it."""
+    directory, home = release
+    tools = tmp_path / "remote-tools"
+    shutil.copytree(directory / "tools" / "agent-session", tools / "agent-session", ignore=shutil.ignore_patterns("__pycache__"))
+    result = generated_command(tools, tmp_path, home)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split("\n")[:2] == ["SourceFileLoader SourceFileLoader SourceFileLoader SourceFileLoader", "0"]

@@ -473,8 +473,8 @@ def test_claude_hook_command_is_fixed_python_function(claude, tmp_path):
     assert set(hooks) == {"SessionStart", "Stop", "StopFailure", "SessionEnd"}
     argv = shlex.split(hooks["SessionStart"][0]["hooks"][0]["command"])
     assert argv[0] == sys.executable
-    assert argv[1] == "-c"
-    assert "register_from_hook" in argv[2]
+    assert argv[1:3] == ["-S", "-c"]
+    assert "register_from_hook" in argv[3]
     assert argv[-1] == IDENTITY
     assert hooks["SessionStart"][0]["matcher"] == "startup"
 
