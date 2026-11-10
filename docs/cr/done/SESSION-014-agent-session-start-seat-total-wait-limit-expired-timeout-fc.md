@@ -6,6 +6,7 @@
 - Related: SESSION-011, SESSION-013
 - Requester: fc2_cpu, /primehome/swain/Project/falcon2/git/fc2.cpu.desk, 2026-11-10
 - Base: a4dc75d7b1c29718c6d44661e6fdb78143bec595 2026-11-10T22:14:44+09:00
+- Outcome: fixed
 
 ## Symptom
 - `agent-session start --job <CR> --seat N` 가 `{"ok": false, "error": {"code": "timeout", "message": "The command's total wait limit expired."}}` 로 끝나는 일이 fc2_cpu 에서 2026-11-10 하루에 3 번 있었습니다(seat0 CPUDES-104, seat1 CPUDES-107, seat4 CPUVER-104). 세 번 모두 같은 명령을 다시 실행하면 `ok: true` 로 시작했습니다. 첫 시도 뒤 seat0 window 에는 Claude CLI 대신 `sleep` 만 떠 있는 pane 이 남아 있었습니다(`pane_current_command sleep`).
@@ -24,6 +25,7 @@
 - 2026-11-10 Leader: 고친다(Leader 판정). 다른 project(fc2_cpu)의 재현 기록이 있는 결함입니다. start가 기본 한도 600초를 다 기다린 뒤 단계 정보 없이 끝납니다.
 - 2026-11-10 Leader: open -> todo. fc2_cpu 요청, 재현 기록 있는 start 결함
 - 2026-11-10 Leader: 제출 8022f012ac97122fe2e60039f99fe0b8e59dbaac를 인수합니다. 검토 8022f01(구현 1229021 + main 2fd84c7 merge). git_ops.observing/_git_step(다음 Git 명령 앞에서 deadline 확인, 시작한 명령은 끊지 않음), start의 진행 기록과 timeout details(stage·step·retry_safe·elapsed·git_steps), restart 등 다른 명령은 details {} 그대로, 명세 절을 읽었습니다. 원인 근거(seat reflog 시각, 재시도의 _start_existing 경로)가 fc2_cpu 세 실패와 맞습니다. 수정 전 실패하는 test 2개(Git 단계 중단·이어받기, registration 단계)가 있습니다. merge commit에서 tools/agent-session/tests 839 passed, distribution boundary 9 passed, spec.md link 이상 없음. Worker가 수정 전 실패 확인에 git stash를 쓴 것은 global AGENTS.md 위반이며 Result에 밝혔습니다. 첫 시도가 여전히 600초에 끝날 수 있는 Git 준비 속도 자체는 Leader가 후속 CR로 엽니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 22fb6e2 (origin/main)
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [동작 명세](../../project-team/spec.md)의 start·등록, `tools/agent-session/agent_session/lifecycle.py`(start와 `remaining`), SESSION-011 Result, [project-team Worker 절](../../../skills/project-team/SKILL.md).
