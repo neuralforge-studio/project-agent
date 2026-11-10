@@ -46,6 +46,7 @@
 - 2026-11-10 Leader: RUST-001은 D-20261110-02 A로 닫혔습니다(waived). 6단계의 "Rust로 바꾸면 얼마나 줄어드는지" 추정은 그대로 적습니다. 이 값은 남은 시동 비용을 다루는 PERF-003의 판단 근거가 됩니다.
 - 2026-11-10 Leader: 제출 3(265ef84, 도구 수정)을 검토했습니다. 명령별 자식 CPU 시간, 중앙값 95% bootstrap 구간과 ratio 구간 기준 판정(구간이 1을 벗어날 때만 improved/worse), 반복 9회, lifecycle 실패 내성을 인정합니다. 남은 것: merge(265ef84)로 들어온 BOARD-012가 바꾼 `tools/project-board`는 `tools/tests/perf` 통합 test의 입력(측정하는 제품 tree)입니다. README 표 `tools/tests/perf/**` 행의 명령 전체를 merge commit에서 다시 실행해야 하므로 통합은 그 결과를 받은 뒤에 합니다. 진행 중인 측정의 부하와 겹치지 않도록 현재 측정 단계 뒤에 실행해도 됩니다.
 - 2026-11-10 Leader: 제출 55a6313a25b796ee9145e203902c221c2cd7c135를 인수합니다. Leader review(제출 3·4, 도구 부분 인수·선통합): 자식 CPU 시간, 중앙값 95% bootstrap 구간과 ratio 구간 판정, 반복 9회, lifecycle 실패 내성, 가짜 claude의 hook 시간 기록을 인정합니다. README 표 tools/tests/perf/** 행 전체(통합 test 포함 8 passed, 배포 경계 9 passed, link 확인)를 BOARD-012가 들어간 tree에서 다시 실행했습니다. 이후 main은 CR 문서만 움직였습니다. CR은 in-progress로 둡니다. v0.3.0과 v0.4.0, PERF-002 후보의 측정표와 원인 분류 제출을 기다립니다.
+- 2026-11-11 Leader: 제출 7df707f6904a4d9dd037eed1df51a81dbe22634a를 인수합니다. 최종 제출 7df707f 검토. 도구 수정(start timeout 180초와 count pass 재시도, 실패 뒤 seat·CR 복구, unit 실패 내성, SIGTERM 처리, steady의 Board ready 대기, -S launcher 후보)과 측정 결과 A~D, 원인 분류(a~d)·연산별 목표 시간을 읽었습니다. 제출 뒤 main에 들어온 BOARD-013이 통합 test가 실행하는 project-board를 바꿨으므로 Leader가 merge commit(8055c85와 tree가 같은 395e3f9 clone)에서 tools/tests/perf를 다시 실행했습니다: 8 passed(780초). 결과 D의 board_popup·sidebar_ready 증가(n=2)는 BOARD-014가 n=5로 재현되지 않음을 확인했습니다. (c)의 MCP close 1초 대기와 stop의 observe마다 세션은 SESSION-012(v0.5.0)가 이미 고쳤습니다.
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증)(test tmux server 규칙), [동작 명세 5절 Python API](../../project-team/spec.md#프로젝트-consumer용-python-api), [project-team Worker 절](../../../skills/project-team/SKILL.md), [tmux 통합](../../../integrations/tmux/project-agent-main.conf).
 
@@ -343,3 +344,297 @@ steady 8×8: Board pane 1개는 v0.3.0 17.47 CPU초, v0.4.0 9.95(상태줄 5.99 
 - 265ef84(BOARD-012 merge 포함)에 가짜 `claude`가 hook 소요 시간을 환경의 `hooks.log`에 남기는 한 commit(`tools/tests/perf/fake_claude.py`)만 더했습니다. 이 변경은 16×16 `start` 등록 hook이 얼마나 걸리는지 직접 재려고 넣었습니다.
 - 검증: README 표 `tools/tests/perf/**` 행 전체를 이 tree(작업 트리가 55a6313과 같은 상태)에서 실행했습니다. `python -m pytest -q tools/tests/perf` **8 passed**(통합 test 포함, host load 120~240에서 2028초). `python -m pytest -q tools/test_distribution_boundary.py` 9 passed, README 상대 link 검사 이상 없음. 이 뒤 origin/main은 CR 문서 commit(3d104c8)만 움직였습니다.
 - 16×16 `start` 등록 hook(요청 3): shim 없는 timing 환경에서 직접 잰 값(load 34~74): v0.3.0 hook 15.5초·13.8초(start 38.6·30.1초), v0.4.0(main d417943) hook 8.5초(start 24.0초)이고 load 73에서 v0.4.0 hook이 25.97초 만에 `registration_failed`로 실패했습니다. 등록 hook의 25초 예산에 대한 여유가 slot 수와 부하에 따라 줄어듭니다. counting pass(shim, load 50~117)에서는 두 실행본 모두 600초 기다리다 timeout했습니다. 결함으로 여는 것은 Leader가 판정합니다.
+
+### 측정 결과 A (새 도구, 4×4): A/A와 v0.3.0 대 v0.4.0
+앞의 "측정 1·2" 중간 보고는 이전 도구(CPU·구간 없음)의 값이라 이 절이 대신합니다. 도구는 main 9d746d8(제출 4) 위에 이 branch에서 고친 것(아래 "도구 수정")을 더한 것입니다. 원본: scratchpad `out/f-aa-4x4`, `out/f-main-4x4`(`results.jsonl`·`summary.json`·`summary.md`).
+
+**실행.** `python3 tools/tests/perf/perf_bench.py run --exe v0.3.0=DIR --exe main=DIR --workdir W --out O --scales 4x4 --reps 9 --slow-reps 3 --cold-reps 0 --steady-seconds 60`(A/A는 `--exe base=<git archive 2fd2739>`, `--groups startup,readonly,board_cli,lifecycle`). warm 9회(lifecycle·board_cli는 3회, `n` 열이 실행 수). 실행본 `main`은 d417943(= v0.4.0 제품 코드). host load는 A/A 46~105, 비교 run 40~240(행마다 `load`). 표의 wall은 경과 초, cpu는 명령과 그 자손의 user+sys 초(tmux server가 대신 하는 일은 제외), 괄호는 95% bootstrap 구간, verdict는 ratio 구간이 1을 벗어날 때만 improved/worse입니다. tmux·other는 counting pass의 호출 수(규모·실행본당 1회, 늘 같음)입니다. 호출 수가 `-`인 lifecycle 연산은 그 run의 counting pass에서 start가 host 부하로 3번 모두 실패한 경우입니다(비교 run 표에서 같은 연산의 호출 수를 봅니다).
+
+**A/A (v0.3.0 대 Base 2fd2739, 같은 제품 코드).** wall verdict 41개 모두 `same`, cpu verdict 38개 모두 `same`입니다(거짓 improved/worse 0건). 9회 연산의 cpu ratio 구간은 0.8~1.15 안(예: ls 1.00 [0.93-1.06], review_clear 0.98 [0.87-1.07], liveness 1.01 [0.96-1.07]), 3회 연산은 0.7~1.5까지 넓습니다. wall ratio 구간은 훨씬 넓어서(9회 연산 [0.4-2.1] 안팎, 3회 연산 [0.2-5.9]) 이 host에서 wall 시간으로는 ±2배 안의 차이를 구분하지 못하고, cpu 시간은 9회 기준 약 ±15%를 구분합니다. 따라서 이 CR의 "개선"은 cpu 구간이 1을 벗어나는 경우와 호출 수 감소로 판정합니다.
+
+| scale | operation | n | v0.3.0 wall s | base wall s | wall ratio [95% CI] | verdict | v0.3.0 cpu s | base cpu s | cpu ratio [95% CI] | verdict | tmux v0.3.0->base | other v0.3.0->base |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 4x4 | agent_finish_ended | 3/3 | 13.30 | 12.72 | 0.96 [0.64-3.29] | same | - | - | - | - | -->- | -->- |
+| 4x4 | agent_restart_worker | 3/3 | 75.83 | 53.89 | 0.71 [0.46-3.25] | same | 6.915 | 6.264 | 0.91 [0.79-1.43] | same | -->- | -->- |
+| 4x4 | agent_review | 3/3 | 7.90 | 4.16 | 0.53 [0.28-3.66] | same | 0.691 | 0.666 | 0.96 [0.81-1.14] | same | -->- | -->- |
+| 4x4 | agent_review_clear | 9/9 | 4.04 | 4.16 | 1.03 [0.52-2.11] | same | 0.492 | 0.483 | 0.98 [0.87-1.07] | same | 8->8 | 0->0 |
+| 4x4 | agent_review_clear_after | 3/3 | 6.84 | 3.26 | 0.48 [0.22-3.75] | same | 0.501 | 0.459 | 0.92 [0.88-1.12] | same | -->- | -->- |
+| 4x4 | agent_send_to_leader | 3/3 | 11.41 | 10.72 | 0.94 [0.19-3.93] | same | 1.044 | 1.039 | 1.00 [0.74-1.22] | same | -->- | -->- |
+| 4x4 | agent_send_to_worker | 3/3 | 12.38 | 11.45 | 0.93 [0.33-1.99] | same | 1.047 | 1.057 | 1.01 [0.85-1.06] | same | -->- | -->- |
+| 4x4 | agent_start_worker | 6/6 | 48.58 | 52.93 | 1.09 [0.65-2.95] | same | 5.856 | 5.961 | 1.02 [0.87-1.26] | same | -->- | -->- |
+| 4x4 | agent_stop_ended_worker | 3/3 | 12.83 | 11.27 | 0.88 [0.63-3.64] | same | 1.265 | 1.305 | 1.03 [0.94-1.22] | same | -->- | -->- |
+| 4x4 | agent_stop_worker | 3/3 | 33.00 | 29.33 | 0.89 [0.70-4.42] | same | 2.190 | 2.194 | 1.00 [0.93-1.51] | same | -->- | -->- |
+| 4x4 | agent_watch | 9/9 | 9.81 | 8.42 | 0.86 [0.66-1.11] | same | 1.188 | 1.179 | 0.99 [0.92-1.04] | same | 52->52 | 0->0 |
+| 4x4 | bin_agent_session_help | 9/9 | 1.36 | 1.85 | 1.36 [0.44-1.66] | same | 0.237 | 0.230 | 0.97 [0.89-1.06] | same | 0->0 | 0->0 |
+| 4x4 | bin_project_item_help | 9/9 | 2.86 | 2.97 | 1.04 [0.51-1.88] | same | 0.388 | 0.373 | 0.96 [0.89-1.05] | same | 0->0 | 0->0 |
+| 4x4 | board_context | 9/9 | 0.04 | 0.04 | 1.05 [0.33-1.37] | same | 0.011 | 0.011 | 0.98 [0.85-1.03] | same | 1->1 | 0->0 |
+| 4x4 | board_import | 9/9 | 2.02 | 2.26 | 1.12 [0.68-1.78] | same | 0.214 | 0.227 | 1.06 [0.97-1.12] | same | 0->0 | 0->0 |
+| 4x4 | board_liveness | 9/9 | 16.69 | 15.05 | 0.90 [0.72-1.23] | same | 3.144 | 3.175 | 1.01 [0.96-1.07] | same | 308->308 | 0->0 |
+| 4x4 | board_popup_ready | 3/3 | 13.48 | 23.34 | 1.73 [0.25-3.74] | same | - | - | - | - | 0->0 | 0->0 |
+| 4x4 | board_sidebar_ready | 3/3 | 18.39 | 26.57 | 1.45 [0.22-4.11] | same | - | - | - | - | 0->0 | 0->0 |
+| 4x4 | board_snapshot_first | 9/9 | 1.77 | 2.23 | 1.26 [0.60-1.75] | same | 0.126 | 0.130 | 1.03 [0.94-1.13] | same | 0->0 | 0->0 |
+| 4x4 | board_snapshot_warm | 9/9 | 0.17 | 0.23 | 1.31 [0.73-2.15] | same | 0.048 | 0.053 | 1.09 [0.92-1.31] | same | 0->0 | 0->0 |
+| 4x4 | board_sync_nochange | 3/3 | 7.67 | 11.31 | 1.47 [0.28-2.56] | same | 1.501 | 1.504 | 1.00 [0.89-1.08] | same | 200->210 | 8->10 |
+| 4x4 | board_sync_off | 3/3 | 7.81 | 9.18 | 1.18 [0.27-1.27] | same | 1.206 | 1.184 | 0.98 [0.87-1.07] | same | 70->70 | 2->2 |
+| 4x4 | board_toggle_off | 3/3 | 7.45 | 11.43 | 1.53 [0.36-2.54] | same | 1.285 | 1.349 | 1.05 [0.88-1.11] | same | 85->125 | 6->12 |
+| 4x4 | board_toggle_on | 3/3 | 12.17 | 10.58 | 0.87 [0.38-2.37] | same | 1.723 | 1.686 | 0.98 [0.89-1.04] | same | 106->105 | 3->4 |
+| 4x4 | board_visibility_sh | 3/3 | 0.27 | 0.24 | 0.90 [0.26-2.37] | same | 0.058 | 0.057 | 0.98 [0.84-1.17] | same | 3->7 | 0->2 |
+| 4x4 | board_visibility_sh_off | 3/3 | 0.14 | 0.17 | 1.23 [0.33-3.37] | same | 0.046 | 0.047 | 1.02 [0.80-1.22] | same | 2->2 | 0->0 |
+| 4x4 | board_visible | 9/9 | 0.10 | 0.09 | 0.98 [0.58-1.80] | same | 0.019 | 0.019 | 0.96 [0.89-1.13] | same | 2->2 | 0->0 |
+| 4x4 | import_agent_session | 9/9 | 4.09 | 3.18 | 0.78 [0.46-1.69] | same | 0.304 | 0.292 | 0.96 [0.91-1.02] | same | 0->0 | 0->0 |
+| 4x4 | import_project_board | 9/9 | 14.78 | 16.66 | 1.13 [0.45-1.51] | same | 1.200 | 1.150 | 0.96 [0.89-1.01] | same | 0->0 | 0->0 |
+| 4x4 | import_project_item | 9/9 | 3.11 | 4.44 | 1.43 [0.58-2.17] | same | 0.325 | 0.329 | 1.01 [0.95-1.05] | same | 0->0 | 0->0 |
+| 4x4 | project_item_accept | 3/3 | 6.46 | 4.74 | 0.73 [0.34-4.34] | same | 0.520 | 0.486 | 0.93 [0.84-1.10] | same | -->- | -->- |
+| 4x4 | project_item_check | 9/9 | 6.11 | 6.41 | 1.05 [0.46-2.13] | same | 0.561 | 0.562 | 1.00 [0.84-1.08] | same | 0->0 | 6->6 |
+| 4x4 | project_item_ls | 9/9 | 5.67 | 5.09 | 0.90 [0.43-2.18] | same | 0.794 | 0.791 | 1.00 [0.93-1.06] | same | 32->32 | 0->0 |
+| 4x4 | project_item_move_done | 3/3 | 19.22 | 20.12 | 1.05 [0.56-5.93] | same | 1.428 | 1.418 | 0.99 [0.96-1.25] | same | -->- | -->- |
+| 4x4 | project_item_move_done_waived | 3/3 | 12.21 | 7.39 | 0.61 [0.38-2.74] | same | 1.116 | 1.132 | 1.01 [0.95-1.16] | same | -->- | -->- |
+| 4x4 | project_item_move_todo | 6/6 | 6.84 | 6.19 | 0.90 [0.46-4.04] | same | 0.560 | 0.550 | 0.98 [0.87-1.14] | same | 8->8 | 2->2 |
+| 4x4 | project_item_new | 6/6 | 6.06 | 6.00 | 0.99 [0.58-4.00] | same | 0.466 | 0.452 | 0.97 [0.91-1.26] | same | 0->0 | 2->2 |
+| 4x4 | startup_python | 9/9 | 0.31 | 0.32 | 1.02 [0.63-2.94] | same | 0.051 | 0.056 | 1.09 [0.92-1.14] | same | 0->0 | 0->0 |
+| 4x4 | status_cache_expired | 9/9 | 4.52 | 4.60 | 1.02 [0.64-2.01] | same | 0.401 | 0.416 | 1.04 [0.93-1.08] | same | 0->0 | 0->0 |
+| 4x4 | status_cache_valid | 9/9 | 1.35 | 1.24 | 0.92 [0.56-1.52] | same | 0.185 | 0.187 | 1.01 [0.96-1.13] | same | 0->0 | 0->0 |
+| 4x4 | status_no_cache | 9/9 | 3.93 | 4.13 | 1.05 [0.46-1.71] | same | 0.392 | 0.403 | 1.03 [0.92-1.10] | same | 0->0 | 0->0 |
+
+**v0.3.0 대 v0.4.0 (main d417943), 4×4.**
+
+| scale | operation | n | v0.3.0 wall s | main wall s | wall ratio [95% CI] | verdict | v0.3.0 cpu s | main cpu s | cpu ratio [95% CI] | verdict | tmux v0.3.0->main | other v0.3.0->main |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 4x4 | agent_finish_ended | 3/3 | 10.86 | 8.27 | 0.76 [0.30-1.09] | same | - | - | - | - | 61->18 | 3->3 |
+| 4x4 | agent_restart_worker | 3/3 | 51.70 | 28.39 | 0.55 [0.33-0.80] | improved | 6.262 | 3.131 | 0.50 [0.41-0.56] | improved | 662->234 | 0->0 |
+| 4x4 | agent_review | 3/3 | 4.25 | 3.58 | 0.84 [0.51-1.61] | same | 0.618 | 0.488 | 0.79 [0.67-0.85] | improved | 24->8 | 0->0 |
+| 4x4 | agent_review_clear | 9/9 | 2.06 | 1.59 | 0.77 [0.31-3.98] | same | 0.415 | 0.397 | 0.96 [0.71-1.14] | same | 8->3 | 0->0 |
+| 4x4 | agent_review_clear_after | 3/3 | 3.40 | 3.10 | 0.91 [0.44-2.20] | same | 0.478 | 0.382 | 0.80 [0.75-0.87] | improved | 8->3 | 0->0 |
+| 4x4 | agent_send_to_leader | 3/3 | 7.59 | 7.15 | 0.94 [0.45-1.58] | same | 1.009 | 0.699 | 0.69 [0.66-0.73] | improved | 48->16 | 0->0 |
+| 4x4 | agent_send_to_worker | 3/3 | 9.58 | 7.62 | 0.80 [0.59-1.20] | same | 1.015 | 0.674 | 0.66 [0.62-0.74] | improved | 48->15 | 0->0 |
+| 4x4 | agent_start_worker | 6/6 | 36.81 | 28.63 | 0.78 [0.45-0.95] | improved | 5.689 | 2.992 | 0.53 [0.50-0.56] | improved | 590->203.5 | 18->18 |
+| 4x4 | agent_stop_ended_worker | 3/3 | 10.37 | 10.20 | 0.98 [0.49-1.46] | same | 1.250 | 0.824 | 0.66 [0.61-0.68] | improved | 66->17 | 3->3 |
+| 4x4 | agent_stop_worker | 3/3 | 34.01 | 17.70 | 0.52 [0.40-1.17] | same | 2.113 | 1.276 | 0.60 [0.60-0.67] | improved | 146.5->45 | 3->3 |
+| 4x4 | agent_watch | 9/9 | 4.15 | 3.77 | 0.91 [0.31-2.78] | same | 1.095 | 0.780 | 0.71 [0.63-0.77] | improved | 52->17 | 0->0 |
+| 4x4 | bin_agent_session_help | 9/9 | 1.46 | 0.84 | 0.57 [0.27-1.98] | same | 0.232 | 0.208 | 0.90 [0.83-1.17] | same | 0->0 | 0->0 |
+| 4x4 | bin_project_item_help | 9/9 | 2.53 | 1.19 | 0.47 [0.17-2.55] | same | 0.357 | 0.324 | 0.91 [0.70-1.21] | same | 0->0 | 0->0 |
+| 4x4 | board_context | 9/9 | 0.04 | 0.03 | 0.70 [0.35-2.54] | same | 0.010 | 0.011 | 1.11 [0.97-1.61] | same | 1->1 | 0->0 |
+| 4x4 | board_import | 9/9 | 2.27 | 1.31 | 0.58 [0.19-3.94] | same | 0.178 | 0.183 | 1.03 [0.85-1.40] | same | 0->0 | 0->0 |
+| 4x4 | board_liveness | 9/9 | 12.30 | 0.63 | 0.05 [0.02-0.10] | improved | 2.916 | 0.092 | 0.03 [0.03-0.04] | improved | 308->3 | 0->0 |
+| 4x4 | board_popup_ready | 3/3 | 17.87 | 21.32 | 1.19 [0.42-2.83] | same | - | - | - | - | 0->0 | 0->0 |
+| 4x4 | board_sidebar_ready | 3/3 | 14.71 | 18.53 | 1.26 [0.42-3.56] | same | - | - | - | - | 0->0 | 0->0 |
+| 4x4 | board_snapshot_first | 9/9 | 1.15 | 0.92 | 0.80 [0.18-2.73] | same | 0.115 | 0.105 | 0.91 [0.77-1.11] | same | 0->0 | 0->0 |
+| 4x4 | board_snapshot_warm | 9/9 | 0.15 | 0.12 | 0.85 [0.37-1.87] | same | 0.044 | 0.042 | 0.95 [0.84-1.26] | same | 0->0 | 0->0 |
+| 4x4 | board_sync_nochange | 3/3 | 8.69 | 7.67 | 0.88 [0.23-2.42] | same | 1.464 | 1.441 | 0.98 [0.91-1.02] | same | 197->107 | 5->8 |
+| 4x4 | board_sync_off | 3/3 | 9.13 | 7.85 | 0.86 [0.35-2.11] | same | 1.173 | 1.225 | 1.04 [0.97-1.07] | same | 70->70 | 2->2 |
+| 4x4 | board_toggle_off | 3/3 | 7.12 | 9.96 | 1.40 [0.47-3.12] | same | 1.292 | 1.289 | 1.00 [0.97-1.06] | same | 153->95 | 8->10 |
+| 4x4 | board_toggle_on | 3/3 | 10.68 | 8.33 | 0.78 [0.19-2.66] | same | 1.698 | 1.594 | 0.94 [0.86-1.05] | same | 106->105 | 3->4 |
+| 4x4 | board_visibility_sh | 3/3 | 0.17 | 0.34 | 2.04 [0.61-3.79] | same | 0.053 | 0.055 | 1.04 [0.96-1.24] | same | 7->3 | 0->0 |
+| 4x4 | board_visibility_sh_off | 3/3 | 0.19 | 0.22 | 1.13 [0.52-2.84] | same | 0.049 | 0.043 | 0.88 [0.82-1.03] | same | 2->2 | 0->0 |
+| 4x4 | board_visible | 9/9 | 0.06 | 0.06 | 1.09 [0.43-2.81] | same | 0.018 | 0.020 | 1.11 [0.93-1.42] | same | 2->2 | 0->0 |
+| 4x4 | import_agent_session | 9/9 | 1.65 | 1.36 | 0.83 [0.34-2.90] | same | 0.262 | 0.265 | 1.01 [0.87-1.26] | same | 0->0 | 0->0 |
+| 4x4 | import_project_board | 9/9 | 8.00 | 6.25 | 0.78 [0.33-2.30] | same | 1.034 | 1.040 | 1.01 [0.76-1.17] | same | 0->0 | 0->0 |
+| 4x4 | import_project_item | 9/9 | 1.34 | 1.50 | 1.12 [0.32-3.54] | same | 0.289 | 0.301 | 1.04 [0.65-1.18] | same | 0->0 | 0->0 |
+| 4x4 | project_item_accept | 3/3 | 3.02 | 3.25 | 1.07 [0.33-2.12] | same | 0.475 | 0.408 | 0.86 [0.80-1.05] | same | 8->3 | 0->0 |
+| 4x4 | project_item_check | 9/9 | 4.43 | 3.31 | 0.75 [0.22-2.38] | same | 0.546 | 0.523 | 0.96 [0.82-1.02] | same | 0->0 | 6->6 |
+| 4x4 | project_item_ls | 9/9 | 3.25 | 2.38 | 0.73 [0.30-2.07] | same | 0.765 | 0.478 | 0.62 [0.57-0.74] | improved | 32->3 | 0->0 |
+| 4x4 | project_item_move_done | 3/3 | 14.61 | 12.05 | 0.83 [0.41-1.06] | same | 1.346 | 0.981 | 0.73 [0.68-0.84] | improved | 58->17 | 8->8 |
+| 4x4 | project_item_move_done_waived | 3/3 | 6.86 | 6.08 | 0.89 [0.55-1.18] | same | 1.055 | 0.751 | 0.71 [0.61-0.78] | improved | 56->16 | 5->5 |
+| 4x4 | project_item_move_todo | 6/6 | 4.80 | 4.53 | 0.94 [0.48-1.23] | same | 0.542 | 0.475 | 0.88 [0.81-0.91] | improved | 8->3 | 2->2 |
+| 4x4 | project_item_new | 6/6 | 4.01 | 4.10 | 1.02 [0.54-1.82] | same | 0.434 | 0.440 | 1.01 [0.98-1.08] | same | 0->0 | 2->2 |
+| 4x4 | startup_python | 9/9 | 0.26 | 0.16 | 0.62 [0.35-2.48] | same | 0.046 | 0.044 | 0.96 [0.81-1.33] | same | 0->0 | 0->0 |
+| 4x4 | status_cache_expired | 9/9 | 2.87 | 2.92 | 1.02 [0.21-7.06] | same | 0.377 | 0.381 | 1.01 [0.73-1.30] | same | 0->0 | 0->0 |
+| 4x4 | status_cache_valid | 9/9 | 0.86 | 0.05 | 0.06 [0.02-0.22] | improved | 0.181 | 0.017 | 0.09 [0.08-0.12] | improved | 0->0 | 0->0 |
+| 4x4 | status_no_cache | 9/9 | 2.30 | 4.20 | 1.83 [0.30-6.08] | same | 0.349 | 0.368 | 1.06 [0.88-1.38] | same | 0->0 | 0->0 |
+
+해석: 호출 수 감소(tmux liveness 308→3, `project-item ls` 32→3, start 590→204, restart 662→234, stop 147→45, send 48→15)는 확정입니다. 시간은 cpu로 start 0.53배(구간 [0.50-0.56]), restart 0.50배, send 약 0.67배, stop 0.60배, `project-item ls` 0.62배, 상태줄(cache 유효) 0.09배, Board liveness 0.03배로 개선입니다. wall은 구간이 넓어 start(0.78 [0.45-0.95])·restart(0.55 [0.33-0.80])·liveness·상태줄만 improved이고 나머지는 구간에 1이 들어 있습니다. 개선이 없는 것(cpu verdict `same`): Python 시동·import(startup_python 0.044/0.046초, import_project_board 1.03/1.04초), `bin_*_help`, `project-item check`/`new`, Board `sync`·`toggle`(호출 수 197→107, 106→105, 153→95이나 cpu는 1.0배), 상태줄 cache 만료·없음(0.38초 안팎). 이들이 남은 비용입니다(원인 분류에서 다룹니다).
+
+steady(이 표의 4×4 값은 Board TUI가 부하 아래 시작하는 중에 측정 창이 겹쳐 신뢰하지 않습니다. 도구를 고쳐 TUI가 ready를 표시한 뒤 재므로 이후 run의 값을 씁니다):
+ (Board panes, one client, status-interval 1)
+
+| scale | exe | board panes | seconds | board CPU s | status runs | status CPU s | tmux per s | other per s | load |
+|---|---|---|---|---|---|---|---|---|---|
+| 4x4 | main | 1 (1) | 60 | 6.71 | 42 | 1.67 | 0.3 | 0.0 | 83 |
+| 4x4 | v0.3.0 | 1 (1) | 60 | 13.2 | 33 | 6.5 | 1.2 | 0.1 | 59 |
+| 4x4 | main | 4 (4) | 60 | 8.79 | 58 | 2.46 | 1.8 | 0.8 | 49 |
+| 4x4 | v0.3.0 | 4 (4) | 60 | 24.87 | 53 | 9.94 | 4.3 | 0.7 | 47 |
+
+
+**도구 수정(이 branch, 다음 제출에 hash).** (1) lifecycle `start`의 `--timeout`을 180초로 두고 count pass의 lifecycle은 실패하면 최대 3번 다시 합니다(host 부하로 등록 hook이 예산을 넘는 일이 실제로 있어서, 실패를 10분 기다리지 않고 알아봅니다). (2) 실패한 lifecycle 뒤 spare seat의 git clone(남은 cr branch)과 벤치마크 CR을 되돌립니다(CR은 지웁니다). (3) 어떤 unit이 실패해도 run이 계속되고 그 row는 `failed`로 남습니다. (4) SIGTERM이 `SystemExit`이 아닌 예외라 unit의 실패 처리에 삼켜지지 않습니다. (5) steady 측정은 Board pane이 ready를 표시할 때까지 기다린 뒤 잽니다.
+
+### 측정 결과 B (16×16): v0.3.0 대 v0.4.0 (main d417943)
+원본: scratchpad `out/f-main-16x16`. 명령: `perf_bench.py run --exe v0.3.0=DIR --exe main=DIR --scales 16x16 --reps 4 --slow-reps 2 --cold-reps 0 --steady-seconds 60`. 환경은 project 16 × seat 16(slot 272개, project 0에 spare seat 1개 더), host load는 행마다 `load`(대부분 20~65, 이 run은 앞 run들보다 낮음). `n`이 2인 연산(lifecycle·board_cli)은 반복이 3 미만이라 구간과 verdict가 없습니다. 9회가 아니라 4회·2회로 줄였습니다(v0.3.0의 Board liveness 한 번이 1분이 넘어 시간이 오래 걸림). wall·cpu 정의와 구간·verdict 규칙은 측정 결과 A와 같습니다. 이 run의 counting pass에서 v0.3.0의 `start`가 `registration_failed`로 2번 실패한 뒤 성공했고(행은 `failed`로 남음) v0.4.0은 첫 시도에 성공했습니다.
+
+| scale | operation | n | v0.3.0 wall s | main wall s | wall ratio [95% CI] | verdict | v0.3.0 cpu s | main cpu s | cpu ratio [95% CI] | verdict | tmux v0.3.0->main | other v0.3.0->main |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 16x16 | agent_finish_ended | 2/2 | 3.38 | 2.58 | 0.76 | - | - | - | - | - | 86->18 | 3->3 |
+| 16x16 | agent_restart_worker | 2/2 | 23.34 | 13.33 | 0.57 | - | 6.669 | 2.602 | 0.39 | - | 1358->387 | 0->0 |
+| 16x16 | agent_review | 2/2 | 0.84 | 0.75 | 0.89 | - | 0.586 | 0.459 | 0.78 | - | 24->8 | 0->0 |
+| 16x16 | agent_review_clear | 4/4 | 0.58 | 0.52 | 0.88 [0.60-1.29] | same | 0.427 | 0.364 | 0.85 [0.71-1.14] | same | 8->3 | 0->0 |
+| 16x16 | agent_review_clear_after | 2/2 | 0.63 | 0.56 | 0.88 | - | 0.453 | 0.390 | 0.86 | - | 8->3 | 0->0 |
+| 16x16 | agent_send_to_leader | 2/2 | 2.70 | 2.09 | 0.77 | - | 0.946 | 0.638 | 0.67 | - | 48->16 | 0->0 |
+| 16x16 | agent_send_to_worker | 2/2 | 3.17 | 2.07 | 0.65 | - | 0.994 | 0.642 | 0.65 | - | 48->15 | 0->0 |
+| 16x16 | agent_start_worker | 4/4 | 13.83 | 6.58 | 0.48 [0.37-0.50] | improved | 5.916 | 2.119 | 0.36 [0.34-0.37] | improved | 1145->275.5 | 18->18 |
+| 16x16 | agent_stop_ended_worker | 2/2 | 3.25 | 2.42 | 0.75 | - | 1.382 | 0.741 | 0.54 | - | 90->17 | 3->3 |
+| 16x16 | agent_stop_worker | 2/2 | 12.54 | 6.87 | 0.55 | - | 2.458 | 1.281 | 0.52 | - | 265.5->67 | 3->3 |
+| 16x16 | agent_watch | 4/4 | 6.37 | 5.17 | 0.81 [0.65-1.02] | same | 3.524 | 2.536 | 0.72 [0.67-0.87] | improved | 160->53 | 0->0 |
+| 16x16 | bin_agent_session_help | 4/4 | 0.21 | 0.21 | 1.02 [0.77-1.33] | same | 0.145 | 0.149 | 1.03 [0.91-1.16] | same | 0->0 | 0->0 |
+| 16x16 | bin_project_item_help | 4/4 | 0.36 | 0.30 | 0.84 [0.60-1.37] | same | 0.214 | 0.200 | 0.94 [0.75-1.15] | same | 0->0 | 0->0 |
+| 16x16 | board_context | 4/4 | 0.01 | 0.02 | 1.36 [0.56-2.44] | same | 0.009 | 0.009 | 1.11 [0.86-1.69] | same | 1->1 | 0->0 |
+| 16x16 | board_import | 4/4 | 0.17 | 0.27 | 1.62 [0.25-7.20] | same | 0.095 | 0.133 | 1.40 [0.56-2.34] | same | 0->0 | 0->0 |
+| 16x16 | board_liveness | 4/4 | 66.79 | 1.83 | 0.03 [0.01-0.03] | improved | 39.250 | 0.428 | 0.01 [0.01-0.01] | improved | 4496->3 | 0->0 |
+| 16x16 | board_popup_ready | 2/2 | 6.02 | 2.96 | 0.49 | - | - | - | - | - | 0->0 | 0->0 |
+| 16x16 | board_sidebar_ready | 2/2 | 4.65 | 5.40 | 1.16 | - | - | - | - | - | 0->0 | 0->0 |
+| 16x16 | board_snapshot_first | 4/4 | 1.62 | 1.98 | 1.22 [0.55-3.40] | same | 0.541 | 0.688 | 1.27 [0.97-1.59] | same | 0->0 | 0->0 |
+| 16x16 | board_snapshot_warm | 4/4 | 0.41 | 0.39 | 0.94 [0.73-1.27] | same | 0.241 | 0.243 | 1.01 [0.91-1.13] | same | 0->0 | 0->0 |
+| 16x16 | board_sync_nochange | 2/2 | 19.56 | 16.87 | 0.86 | - | 10.330 | 9.627 | 0.93 | - | 2090->1118 | 6->4 |
+| 16x16 | board_sync_off | 2/2 | 15.02 | 13.80 | 0.92 | - | 7.369 | 7.693 | 1.04 | - | 826->826 | 2->2 |
+| 16x16 | board_toggle_off | 2/2 | 12.67 | 13.55 | 1.07 | - | 7.475 | 7.509 | 1.00 | - | 1344->847 | 7->6 |
+| 16x16 | board_toggle_on | 2/2 | 21.51 | 18.25 | 0.85 | - | 10.374 | 9.957 | 0.96 | - | 1274->1122 | 5->6 |
+| 16x16 | board_visibility_sh | 2/2 | 0.09 | 0.08 | 0.87 | - | 0.065 | 0.055 | 0.84 | - | 6->3 | 0->0 |
+| 16x16 | board_visibility_sh_off | 2/2 | 0.08 | 0.08 | 1.03 | - | 0.056 | 0.057 | 1.02 | - | 2->2 | 0->0 |
+| 16x16 | board_visible | 4/4 | 0.03 | 0.03 | 1.11 [0.44-2.86] | same | 0.018 | 0.018 | 1.03 [0.63-1.32] | same | 2->2 | 0->0 |
+| 16x16 | import_agent_session | 4/4 | 0.34 | 0.25 | 0.74 [0.53-0.97] | improved | 0.159 | 0.147 | 0.92 [0.64-1.03] | same | 0->0 | 0->0 |
+| 16x16 | import_project_board | 4/4 | 1.31 | 1.06 | 0.81 [0.59-1.09] | same | 0.649 | 0.567 | 0.87 [0.73-1.05] | same | 0->0 | 0->0 |
+| 16x16 | import_project_item | 4/4 | 0.27 | 0.29 | 1.05 [0.70-1.72] | same | 0.156 | 0.168 | 1.08 [0.83-1.41] | same | 0->0 | 0->0 |
+| 16x16 | project_item_accept | 2/2 | 0.78 | 0.52 | 0.67 | - | 0.495 | 0.416 | 0.84 | - | 8->3 | 0->0 |
+| 16x16 | project_item_check | 4/4 | 0.86 | 0.85 | 0.99 [0.59-1.39] | same | 0.494 | 0.520 | 1.05 [0.83-1.19] | same | 0->0 | 6->6 |
+| 16x16 | project_item_ls | 4/4 | 2.49 | 0.83 | 0.33 [0.27-0.51] | improved | 1.691 | 0.565 | 0.33 [0.30-0.40] | improved | 128->3 | 0->0 |
+| 16x16 | project_item_move_done | 2/2 | 4.23 | 2.93 | 0.69 | - | 1.607 | 1.087 | 0.68 | - | 82->17 | 8->8 |
+| 16x16 | project_item_move_done_waived | 2/2 | 1.86 | 1.08 | 0.58 | - | 1.270 | 0.744 | 0.59 | - | 80->16 | 5->5 |
+| 16x16 | project_item_move_todo | 4/4 | 0.69 | 0.71 | 1.03 [0.62-1.36] | same | 0.466 | 0.452 | 0.97 [0.78-1.19] | same | 8->3 | 2->2 |
+| 16x16 | project_item_new | 4/4 | 0.79 | 0.72 | 0.91 [0.73-1.08] | same | 0.541 | 0.532 | 0.98 [0.81-1.08] | same | 0->0 | 2->2 |
+| 16x16 | startup_python | 4/4 | 0.05 | 0.04 | 0.85 [0.41-1.15] | same | 0.034 | 0.031 | 0.90 [0.73-1.04] | same | 0->0 | 0->0 |
+| 16x16 | status_cache_expired | 4/4 | 0.69 | 0.70 | 1.02 [0.72-4.19] | same | 0.410 | 0.403 | 0.98 [0.82-1.39] | same | 0->0 | 0->0 |
+| 16x16 | status_cache_valid | 4/4 | 0.17 | 0.03 | 0.15 [0.11-0.19] | improved | 0.127 | 0.016 | 0.13 [0.10-0.17] | improved | 0->0 | 0->0 |
+| 16x16 | status_no_cache | 4/4 | 1.12 | 0.86 | 0.77 [0.55-1.32] | same | 0.433 | 0.438 | 1.01 [0.84-1.24] | same | 0->0 | 0->0 |
+
+해석(16×16): 호출 수는 Board liveness 4,496→3, `project-item ls` 128→3, start 1,145→276(자기 tmux와 서버가 대신 한 등록 호출의 합), restart 1,358→387, stop 266→67, send 48→15~16, watch 160→53으로 줄었습니다. cpu 시간 개선: Board liveness 0.01배(39.3초→0.43초, wall 66.8초→1.8초), `project-item ls` 0.33배 [0.30-0.40](wall 2.49→0.83초), start 0.36배 [0.34-0.37](cpu 5.9→2.1초, wall 13.8→6.6초), watch 0.72배, 상태줄(cache 유효) 0.13배. 반복 2회라 구간은 없지만 같은 방향: restart cpu 0.39배, stop 0.52배, send 0.65~0.67배, `project-item` accept·done 0.58~0.84배. **개선이 없는 것**: Board `sync`·`toggle`(호출 수는 줄었어도 cpu 9.6~10.4초 → v0.4.0에서 한 번 실행에 tmux 약 1,100번, cpu 약 10초; 창 수에 비례), Python 시동·import(startup_python 0.03초, import_project_board 0.65초), `project-item check`·`new`, 상태줄 cache 만료·없음. `stop`은 v0.4.0에서도 16×16 6.9초(cpu 1.28초)이고 4×4의 약 2배입니다.
+
+steady 16×16(Board TUI가 ready를 표시한 뒤 60초):
+ (Board panes, one client, status-interval 1)
+
+| scale | exe | board panes | seconds | board CPU s | status runs | status CPU s | tmux per s | other per s | load |
+|---|---|---|---|---|---|---|---|---|---|
+| 16x16 | main | 1 (1) | 60 | 32.0 | 58 | 2.64 | 1.3 | 1.0 | 29 |
+| 16x16 | v0.3.0 | 1 (1) | 60 | 46.91 | 55 | 9.06 | 13.2 | 1.0 | 39 |
+| 16x16 | main | 4 (4) | 60 | 25.12 | 41 | 1.87 | 1.3 | 1.0 | 64 |
+| 16x16 | v0.3.0 | 4 (4) | 60 | 95.73 | 54 | 9.83 | 133.0 | 1.0 | 33 |
+
+
+v0.3.0 대 v0.4.0: Board pane 1개 cpu 46.9초→32.0초(60초 중 78%→53% 코어), 4개(client 1개, 보이는 pane 1개) 95.7초→25.1초. 상태줄 script cpu 9.06초→2.64초. **v0.4.0에서도 16×16의 보이는 Board pane 하나가 1분에 약 25~32 cpu초(코어의 약 40~53%)를 씁니다**: liveness를 읽는 3번의 호출은 작지만 snapshot(2초 주기, CR·결정 파일 stat)과 Textual TUI 갱신의 비용이 남는 것으로 보이며 원인 분류에서 다룹니다. `tmux per s`는 count pass(30초)의 Board pane 호출 수이며 v0.3.0 4개 pane의 133/s는 pane 4개가 모두 liveness를 읽은 때의 값으로 보입니다(client 1개가 한 window만 보이는데도, 새로 만든 pane들이 시작하는 동안 보임으로 간주된 구간이 있었을 가능성). 이 값은 참고용입니다.
+
+### 측정 결과 C (16×16 cold, v0.3.0 대 v0.4.0)
+원본: `out/f-cold-16x16`. 명령: `perf_bench.py run --exe v0.3.0=DIR --exe main=DIR --scales 16x16 --reps 1 --cold-reps 3 --groups readonly`. 각 측정 명령 앞에 61초 유휴(`/primehome`의 `acregmin=60`이라 파일 속성 cache가 만료됨)를 두었습니다. 읽기 전용 연산만이고 3회입니다(cold lifecycle은 시간이 너무 길어 하지 않았습니다. Leader가 8×8과 cold 확대를 줄였습니다).
+
+| scale | operation | n | v0.3.0 wall s | main wall s | wall ratio [95% CI] | verdict | v0.3.0 cpu s | main cpu s | cpu ratio [95% CI] | verdict | tmux v0.3.0->main | other v0.3.0->main |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 16x16 | agent_review_clear | 3/3 | 0.88 | 2.46 | 2.80 [0.44-5.64] | same | 0.534 | 0.633 | 1.18 [0.79-1.45] | same | 8->3 | 0->0 |
+| 16x16 | board_context | 3/3 | 0.01 | 0.01 | 1.20 [1.09-1.40] | worse | 0.007 | 0.007 | 0.96 [0.81-1.29] | same | 1->1 | 0->0 |
+| 16x16 | board_import | 3/3 | 0.24 | 0.25 | 1.06 [0.32-3.24] | same | 0.110 | 0.119 | 1.08 [0.49-1.73] | same | 0->0 | 0->0 |
+| 16x16 | board_liveness | 3/3 | 75.98 | 1.36 | 0.02 [0.02-0.03] | improved | 38.967 | 0.374 | 0.01 [0.01-0.01] | improved | 4496->3 | 0->0 |
+| 16x16 | board_snapshot_first | 3/3 | 1.55 | 1.86 | 1.19 [0.30-2.06] | same | 0.585 | 0.650 | 1.11 [0.78-1.32] | same | 0->0 | 0->0 |
+| 16x16 | board_snapshot_warm | 3/3 | 0.36 | 0.32 | 0.90 [0.52-2.35] | same | 0.235 | 0.209 | 0.89 [0.76-1.42] | same | 0->0 | 0->0 |
+| 16x16 | board_visible | 3/3 | 0.03 | 0.03 | 0.78 [0.20-1.31] | same | 0.017 | 0.019 | 1.12 [0.68-1.27] | same | 2->2 | 0->0 |
+| 16x16 | project_item_ls | 3/3 | 3.77 | 1.50 | 0.40 [0.24-1.07] | same | 1.631 | 0.707 | 0.43 [0.32-0.51] | improved | 128->3 | 0->0 |
+| 16x16 | status_cache_expired | 3/3 | 0.87 | 0.99 | 1.14 [0.65-1.57] | same | 0.426 | 0.392 | 0.92 [0.90-0.99] | improved | 0->0 | 0->0 |
+| 16x16 | status_cache_valid | 3/3 | 0.32 | 0.02 | 0.08 [0.03-0.25] | improved | 0.146 | 0.018 | 0.12 [0.08-0.17] | improved | 0->0 | 0->0 |
+| 16x16 | status_no_cache | 3/3 | 1.11 | 1.07 | 0.97 [0.58-1.78] | same | 0.440 | 0.474 | 1.08 [0.77-1.34] | same | 0->0 | 0->0 |
+
+cold는 warm보다 파일 접근이 많은 연산에서 길어집니다(예: `project-item ls` v0.3.0 wall 2.49초 warm → 3.77초 cold, v0.4.0 0.83초 → 1.50초; 상태줄 cache 유효 0.17초 → 0.32초, v0.4.0은 0.03초 → 0.02초). 개선은 cold에서도 같은 방향이고 cpu 구간이 1을 벗어납니다(liveness 0.01배, ls 0.43배, 상태줄 0.12배). `board_context`의 `worse`는 0.01초 단위 연산의 wall 구간이고 cpu는 `same`이라 무시합니다.
+
+### 측정 결과 D (16×16, v0.4.0 대 v0.5.0)
+원본: `out/f-v040-v050-16x16`. 명령: `perf_bench.py run --exe v0.4.0=<git archive v0.4.0> --exe v0.5.0=<git archive v0.5.0> --scales 16x16 --reps 3 --slow-reps 2 --cold-reps 0 --steady-seconds 60`. host가 한산해(load 9~40) 이전 run보다 시간 값이 안정적입니다. n이 2인 행(lifecycle·board_cli)은 구간·verdict가 없습니다. 모든 명령이 성공했습니다(`failed` 0).
+
+| scale | operation | n | v0.4.0 wall s | v0.5.0 wall s | wall ratio [95% CI] | verdict | v0.4.0 cpu s | v0.5.0 cpu s | cpu ratio [95% CI] | verdict | tmux v0.4.0->v0.5.0 | other v0.4.0->v0.5.0 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 16x16 | agent_finish_ended | 2/2 | 3.76 | 1.36 | 0.36 | - | - | - | - | - | 18->19 | 3->3 |
+| 16x16 | agent_restart_worker | 2/2 | 24.94 | 7.23 | 0.29 | - | 3.255 | 1.820 | 0.56 | - | 321->107 | 0->0 |
+| 16x16 | agent_review | 2/2 | 1.33 | 1.77 | 1.33 | - | 0.516 | 0.431 | 0.83 | - | 8->8 | 0->0 |
+| 16x16 | agent_review_clear | 3/3 | 0.58 | 0.37 | 0.63 [0.58-0.73] | improved | 0.455 | 0.274 | 0.60 [0.50-0.74] | improved | 3->3 | 0->0 |
+| 16x16 | agent_review_clear_after | 2/2 | 1.01 | 1.30 | 1.28 | - | 0.452 | 0.336 | 0.74 | - | 3->3 | 0->0 |
+| 16x16 | agent_send_to_leader | 2/2 | 4.50 | 1.64 | 0.37 | - | 0.820 | 0.604 | 0.74 | - | 16->16 | 0->0 |
+| 16x16 | agent_send_to_worker | 2/2 | 5.06 | 1.84 | 0.36 | - | 0.780 | 0.573 | 0.73 | - | 15->15 | 0->0 |
+| 16x16 | agent_start_worker | 4/4 | 9.19 | 4.02 | 0.44 [0.21-0.93] | improved | 2.379 | 1.448 | 0.61 [0.45-0.85] | improved | 265.5->88.5 | 18->18 |
+| 16x16 | agent_stop_ended_worker | 2/2 | 4.26 | 1.28 | 0.30 | - | 0.829 | 0.576 | 0.69 | - | 17->17 | 3->3 |
+| 16x16 | agent_stop_worker | 2/2 | 11.84 | 4.22 | 0.36 | - | 1.571 | 1.013 | 0.64 | - | 68->32 | 3->3 |
+| 16x16 | agent_watch | 3/3 | 4.17 | 3.97 | 0.95 [0.69-1.02] | same | 2.561 | 2.055 | 0.80 [0.71-0.88] | improved | 53->53 | 0->0 |
+| 16x16 | bin_agent_session_help | 3/3 | 0.20 | 0.16 | 0.79 [0.62-0.89] | improved | 0.151 | 0.123 | 0.81 [0.63-0.82] | improved | 0->0 | 0->0 |
+| 16x16 | bin_project_item_help | 3/3 | 0.32 | 0.26 | 0.81 [0.64-0.86] | improved | 0.220 | 0.175 | 0.80 [0.67-1.04] | same | 0->0 | 0->0 |
+| 16x16 | board_context | 3/3 | 0.02 | 0.02 | 0.94 [0.74-1.27] | same | 0.010 | 0.010 | 1.02 [0.93-1.09] | same | 1->1 | 0->0 |
+| 16x16 | board_import | 3/3 | 0.16 | 0.15 | 0.97 [0.73-1.16] | same | 0.099 | 0.085 | 0.86 [0.71-1.21] | same | 0->0 | 0->0 |
+| 16x16 | board_liveness | 3/3 | 1.35 | 1.25 | 0.92 [0.86-0.99] | improved | 0.356 | 0.298 | 0.84 [0.73-0.89] | improved | 3->3 | 0->0 |
+| 16x16 | board_popup_ready | 2/2 | 1.78 | 3.54 | 1.99 | - | - | - | - | - | 0->0 | 0->0 |
+| 16x16 | board_sidebar_ready | 2/2 | 3.42 | 8.61 | 2.52 | - | - | - | - | - | 0->0 | 0->0 |
+| 16x16 | board_snapshot_first | 3/3 | 0.93 | 0.88 | 0.95 [0.69-1.43] | same | 0.418 | 0.354 | 0.85 [0.66-1.01] | same | 0->0 | 0->0 |
+| 16x16 | board_snapshot_warm | 3/3 | 0.26 | 0.22 | 0.84 [0.68-1.00] | improved | 0.191 | 0.138 | 0.72 [0.54-0.77] | improved | 0->0 | 0->0 |
+| 16x16 | board_sync_nochange | 2/2 | 15.12 | 1.20 | 0.08 | - | 9.463 | 0.463 | 0.05 | - | 1118->8 | 6->6 |
+| 16x16 | board_sync_off | 2/2 | 10.38 | 0.65 | 0.06 | - | 7.022 | 0.403 | 0.06 | - | 826->4 | 3->3 |
+| 16x16 | board_toggle_off | 2/2 | 10.81 | 0.75 | 0.07 | - | 6.994 | 0.501 | 0.07 | - | 842->16 | 6->4 |
+| 16x16 | board_toggle_on | 2/2 | 15.04 | 0.91 | 0.06 | - | 9.440 | 0.657 | 0.07 | - | 1123->16 | 8->6 |
+| 16x16 | board_visibility_sh | 2/2 | 0.11 | 0.10 | 0.90 | - | 0.070 | 0.065 | 0.94 | - | 3->3 | 0->0 |
+| 16x16 | board_visibility_sh_off | 2/2 | 0.08 | 0.09 | 1.11 | - | 0.060 | 0.058 | 0.97 | - | 2->2 | 0->0 |
+| 16x16 | board_visible | 3/3 | 0.03 | 0.03 | 1.00 [0.79-1.81] | same | 0.019 | 0.018 | 0.97 [0.84-1.90] | same | 2->2 | 0->0 |
+| 16x16 | import_agent_session | 3/3 | 0.28 | 0.22 | 0.77 [0.56-1.13] | same | 0.153 | 0.120 | 0.78 [0.59-0.95] | improved | 0->0 | 0->0 |
+| 16x16 | import_project_board | 3/3 | 0.90 | 0.93 | 1.03 [0.96-1.12] | same | 0.613 | 0.567 | 0.92 [0.83-1.13] | same | 0->0 | 0->0 |
+| 16x16 | import_project_item | 3/3 | 0.24 | 0.22 | 0.95 [0.71-1.07] | same | 0.154 | 0.135 | 0.88 [0.69-1.11] | same | 0->0 | 0->0 |
+| 16x16 | project_item_accept | 2/2 | 0.96 | 0.63 | 0.66 | - | 0.455 | 0.326 | 0.72 | - | 3->3 | 0->0 |
+| 16x16 | project_item_check | 3/3 | 0.78 | 0.53 | 0.69 [0.63-0.88] | improved | 0.462 | 0.381 | 0.83 [0.61-0.84] | improved | 0->0 | 6->6 |
+| 16x16 | project_item_ls | 3/3 | 0.87 | 0.67 | 0.76 [0.53-1.06] | same | 0.584 | 0.399 | 0.68 [0.55-0.81] | improved | 3->3 | 0->0 |
+| 16x16 | project_item_move_done | 2/2 | 4.32 | 2.25 | 0.52 | - | 1.130 | 0.882 | 0.78 | - | 17->17 | 8->8 |
+| 16x16 | project_item_move_done_waived | 2/2 | 1.56 | 1.04 | 0.67 | - | 0.881 | 0.566 | 0.64 | - | 16->16 | 5->5 |
+| 16x16 | project_item_move_todo | 4/4 | 1.08 | 0.57 | 0.53 [0.18-1.37] | same | 0.482 | 0.330 | 0.69 [0.53-0.88] | improved | 3->3 | 2->2 |
+| 16x16 | project_item_new | 4/4 | 0.87 | 0.54 | 0.63 [0.21-1.41] | same | 0.557 | 0.347 | 0.62 [0.51-0.75] | improved | 0->0 | 2->2 |
+| 16x16 | startup_python | 3/3 | 0.05 | 0.05 | 0.95 [0.72-1.35] | same | 0.030 | 0.031 | 1.04 [0.64-1.33] | same | 0->0 | 0->0 |
+| 16x16 | status_cache_expired | 3/3 | 0.76 | 0.53 | 0.69 [0.56-0.90] | improved | 0.409 | 0.251 | 0.61 [0.60-0.72] | improved | 0->0 | 0->0 |
+| 16x16 | status_cache_valid | 3/3 | 0.02 | 0.02 | 0.74 [0.64-0.84] | improved | 0.018 | 0.013 | 0.74 [0.61-0.84] | improved | 0->0 | 0->0 |
+| 16x16 | status_no_cache | 3/3 | 0.97 | 0.52 | 0.53 [0.41-1.31] | same | 0.368 | 0.266 | 0.72 [0.57-0.82] | improved | 0->0 | 0->0 |
+
+해석: BOARD-012가 Board `sync`·`toggle`의 창별 tmux 호출을 없앴습니다(sync 1118→8, toggle_on 1123→16, toggle_off 842→16, sync_off 826→4번, cpu 9.5초→0.46초·7.0초→0.40초, wall 15→1.2초). PERF-002·003이 Python 시동 쪽을 약 20% 줄였습니다(`bin_agent_session_help` cpu 0.151→0.123초 [0.63-0.82], import_agent_session 0.153→0.120초, project-item check·new·move 0.62~0.83배, 상태줄 cache 만료 0.409→0.251초). start는 cpu 0.61배 [0.45-0.85](tmux 266→89번, wall 9.2→4.0초), restart cpu 0.56배(tmux 321→107), stop tmux 68→32, 상태줄 만료 0.61배입니다. 개선 없음: Board snapshot·import(import_project_board cpu 0.57~0.61초 그대로), `agent_watch`(tmux 53번 그대로, cpu 0.80배), `agent_review`·`send`의 호출 수(8·15·16번 그대로. send는 MCP 세션 비용이 남음).
+
+steady 16×16(Board TUI ready 후 60초):
+ (Board panes, one client, status-interval 1)
+
+| scale | exe | board panes | seconds | board CPU s | status runs | status CPU s | tmux per s | other per s | load |
+|---|---|---|---|---|---|---|---|---|---|
+| 16x16 | v0.4.0 | 1 (1) | 60 | 30.08 | 60 | 2.57 | 1.3 | 1.5 | 17 |
+| 16x16 | v0.5.0 | 1 (1) | 60 | 25.57 | 60 | 1.6 | 1.3 | 1.5 | 17 |
+| 16x16 | v0.4.0 | 4 (4) | 60 | 30.68 | 59 | 2.1 | 1.3 | 1.9 | 22 |
+| 16x16 | v0.5.0 | 4 (4) | 60 | 27.19 | 60 | 1.53 | 1.3 | 1.5 | 16 |
+
+
+**Board pane 하나의 steady cost는 v0.5.0에서도 60초에 cpu 25.6초(코어의 43%)**이고 v0.3.0의 46.9초에서 약 절반입니다. 상태줄 script는 9.06초→2.57초→1.60초입니다. 호출 수(`tmux per s` 1.3)는 작아졌는데 cpu가 남으므로 이 비용은 tmux 호출이 아니라 Board TUI 안(snapshot 2초 주기의 CR·결정 파일 stat과 `model` 변환, Textual 갱신)에서 나옵니다(BOARD-013으로 열림).
+
+### 원인 분류와 연산별 목표 시간 (짧게)
+**(a) 같은 조회를 slot·project마다 반복하는 알고리즘 결함** — 호출 수가 `slot` 수에 비례합니다(v0.3.0 근거: 4×4 / 8×8 / 16×16).
+- `Tmux.get_current`(`tools/agent-session/agent_session/tmux.py:411`)는 한 번에 tmux 8번(list-sessions 3, show-options 2, display-message 1, read_meta 2)이고 호출자가 slot마다 부릅니다. `api.project_liveness`(`api.py:100`, slot마다 get_current+`pane_info` 9번)·`project_pending_releases`(`api.py:230`, assigned seat마다 8번): Board liveness **308 / 1,160 / 4,496번**(16×16 wall 66.8초, cpu 39.3초; 부하 100에서는 340초). `project-item ls`(`cli.py:78` → `lifecycle.py:1034`, seat마다 8번): **32 / 64 / 128번**. 등록 hook과 launch의 `internal._run`(`internal.py:24-31`, 모든 slot의 get_current)과 `watch`(`watch.py:97`)도 같은 형태입니다. 이 때문에 16×16의 등록 hook(제한 25초)이 8.5~26초 걸려 부하 73에서 start가 `registration_failed`가 됐습니다. 고침: SESSION-010(v0.4.0)이 `list-windows` 한 번의 snapshot으로 읽음 → liveness 3번, ls 3번, start 1,145→276번. 관측 동작 변경 없음. Rust로 바꿔도 tmux fork 수는 그대로입니다(호출 하나 15~32 ms는 python과 bash가 같음).
+- Board `_reconcile`(`tools/project-board/project_board/tmux_control.py:417`, `_panes`·`_board_pane`·`_managed_pane_dead` 창마다 5~6번): sync·toggle **100 / 306 / 1,118~2,090번**, cpu 9.5~10.4초(16×16). 고침: BOARD-012(v0.5.0) → 8~16번, cpu 0.4~0.7초. 관측 동작 변경 없음. Rust 이점 없음.
+- Board 갱신마다 `reap_runtime_directories`(`tmux_control.py:144`, `_private_dir` :183, `tui.py:455`의 snapshot 적용마다)가 다른 server 디렉터리마다 `ps`를 부릅니다(2초마다 1~2번). 상태줄 script는 매초 bash+Python을 띄웠습니다(v0.3.0 cache 유효 0.86초 wall·cpu 0.18초). 고침: TMUX-003(v0.4.0, view 파일, cache 유효 0.02초 cpu 0.016초).
+- 남은 것: Board TUI 자체 비용(위 steady, BOARD-013), `watch`(slot마다 조회, tmux 53번), `review`·`send`·`stop`의 `get_current`+provider 조회 반복(`lifecycle.py:865` 루프가 0.1초마다 observe).
+
+**(b) interpreter 시동·NFS import** — Python 시동 자체는 0.03~0.05초(`startup_python`)로 작고 문제는 import입니다: `import agent_session.lifecycle` cpu 0.12~0.26초, `project_board.tui`(Textual) 0.57~1.0초, `agent-session --help` 0.12~0.23초, `project-item` 명령 0.3~0.55초. 이것이 5초 안쪽 명령(`review --clear` 0.37~0.43 cpu초 등)의 바닥입니다. 고침: PERF-002·003(v0.5.0)이 약 20% 줄임(위). 추가는 module 지연 import·단일 bundle. 관측 동작 변경 없음. **Rust로 바꾸면 줄어드는 유일한 부분**(시동+import 0.12~0.5초 → 수 ms, 명령당 cpu 0.1~0.5초 절감. 1초 안쪽 명령에서만 의미).
+
+**(c) 의도한 대기·provider** — `MCPClient.close`(`providers/mcp.py:68-85`): 입력을 닫고 `wait(timeout=1)` 뒤 `terminate`. 실제 `claude mcp serve` 한 세션 2.5초(open 0.77 + ListAgents 0.2 + close 1.57, `provider_probe.py` 실측 5회 중앙값). `send`·`verify_binding`·`observe`는 세션 하나씩, **`stop`은 observe마다 세션**이라 `lifecycle.py:865`의 0.1초 poll 루프 한 번이 2.5초 이상이고 stop은 최소 3세션 ≈ 7.5초(+CLI 종료)입니다. 사용자 server의 실제 `start`: run 기록(launch.sh와 state의 `connected_at`) 30개 중앙값 6.5초(2.4~22.7초), 등록 hook `_HOOK_BUDGET` 25초(`internal.py:16`)와 `_BINDING_INTERVAL` 1초(:18), start poll 0.1초(`lifecycle.py:445`), 파일 lock poll 0.05초(`state.py:54`), 시작 dialog 확인 1초(`lifecycle.py:15`). 고침: close는 즉시 terminate(대기 1초 제거), stop은 observe마다 새 세션 대신 한 세션 재사용, 등록 hook 예산을 slot 수에 묶지 않는 구조. 관측 동작 변경 없음(내부 대기). Rust 이점 없음(provider 프로세스).
+
+**(d) host 부하** — srv04의 load가 9~240으로 변합니다. A/A에서 wall ratio가 0.4~2.1배로 흩어져 wall로는 ±2배를 구분하지 못했고(cpu는 약 ±15%), 같은 연산이 load에 따라 13.8초(start v0.3.0, load 37)와 53초 이상, 한계 시간 초과까지 갔습니다. 등록 hook(25초 예산)이 slot 수와 load 모두에 비례하므로 16×16에서는 부하 70 이상에서 실패합니다(v0.3.0은 load 37~40에서도 2번 실패). 도구로 줄일 수 없고 예산·구조(위 (a)(c))로만 여유를 만듭니다.
+
+**연산별 목표(16×16, load 50 이하, 제안).** 표의 v0.5.0 값을 기준으로 현실적인 한계를 둡니다.
+
+| 연산 | 지금(v0.5.0, cpu초 / wall초) | 목표 |
+| --- | --- | --- |
+| Board liveness·snapshot 읽기 | 0.30 / 1.25 | cpu 0.3초, tmux 3번 이하(유지) |
+| Board sync·toggle | 0.46~0.66 / 0.7~1.2 | cpu 0.7초, tmux 20번 이하(유지) |
+| Board pane steady(60초) | 25.6초 cpu | 코어의 5%(60초 cpu 3초) 이하 |
+| 상태줄 cache 유효 | 0.013 / 0.02 | 0.02초 이하(유지) |
+| 상태줄 만료 | 0.25 / 0.53 | 0.2초 이하 |
+| `project-item ls`·`check`·`new`·`move` | 0.32~0.40 / 0.5~0.7 | cpu 0.25초 이하 |
+| `review --clear`·`review` | 0.27~0.43 / 0.4~1.8 | cpu 0.3초 이하, tmux 3번 |
+| `send` | 0.57~0.60 / 1.6~1.8 | wall 1.5초 이하(MCP 세션 1.5초 중 close 1초 제거) |
+| `watch` | 2.06 / 4.0 | tmux 10번 이하, cpu 1초 |
+| `start`(fixture) | 1.45 / 4.0 | wall 5초 이하, 등록 hook 5초 이하(25초 예산의 5배 여유) |
+| `stop`(fixture) | 1.01 / 4.2 | wall 3초 이하(observe마다 MCP 세션 제거) |
+| `restart` | 1.82 / 7.2 | wall 8초 이하 |
+| 프로세스 시동(`--help`) | 0.12 / 0.16 | cpu 0.08초(import 지연) |
+
+### 제출 5: 최종 (도구 수정 + 측정 결과 A~E + 원인 분류)
+- 제출 commit: 7df707f6904a4d9dd037eed1df51a81dbe22634a
+- 도구 수정(`tools/tests/perf`만, 제품 코드 변경 없음): 측정 결과 A의 "도구 수정" 다섯 가지(start timeout 180초와 count pass 재시도, 실패 뒤 seat clone·CR 복구, unit 실패 내성, SIGTERM이 삼켜지지 않는 예외, steady의 Board ready 대기)와 `-I -S` 후보 test가 이미 `-S`로 시작하는 launcher 형태를 그대로 두도록 한 것. 이 commit은 origin/main 0.6.0(ae30dbe)까지 merge한 것입니다.
+- 검증(7df707f에서): `python -m pytest -q tools/tests/perf` **8 passed**(통합 test 포함, 749초, host load 10~60), `python -m pytest -q tools/test_distribution_boundary.py` 9 passed, README 상대 link 검사 이상 없음. 이 뒤 origin/main이 BOARD-013(`tools/project-board`의 코드·test)으로 움직였습니다. 바뀐 파일에 `tools/tests/perf`는 없고(도구는 이 branch가 더 새로움), 통합 test는 그 merge 위에서 다시 돌리지 않았습니다.
+- 측정 범위(Leader 조정 반영): A/A와 v0.3.0 대 v0.4.0은 4×4(warm 9회, lifecycle 3회), 16×16(warm 4회, lifecycle 2회, cold 3회)입니다. 8×8은 새 도구로 재지 않았습니다(이전 도구의 호출 수만 있음: liveness 1160, ls 64, start 738→200). v0.4.0 대 v0.5.0은 16×16 한 번(warm 3회, lifecycle 2회, steady 포함, cold 생략)이고 PERF-002 후보 d2326ce는 v0.5.0에 포함돼 따로 재지 않았습니다. 이 세 가지를 줄였다는 사실은 표 머리의 `n`과 위 설명에 있습니다.
+- 환경 정리(Verification 3): 이 도구는 `claim`/`release`로 server와 socket을 지우고 작업 디렉터리를 지웁니다. 측정이 끝난 뒤 `/tmp/tmux-1028`에 내 `perf-*` socket이 없음(다른 seat의 측정 socket은 그 seat 것)과 내 자식 process 정리를 확인합니다(종료 보고 직전).
+- 재현 명령은 각 결과 절의 "명령"입니다. Leader 측정 두 개의 재측정(Verification 2): `review --clear`는 v0.3.0에서 cpu 0.415초(4×4)·0.427초(16×16)이고 tmux 8번(Leader의 3.1초 중 tmux 8번과 같음, 나머지는 시동·import: `agent-session --help` cpu 0.145~0.232초), Board liveness tmux 호출은 slot당 약 15번(4×4 308번, 8×8 1160번, 16×16 4,496번)으로 46 slot 환경의 396번과 같은 비례입니다(slot 46개 × 8~9번 = 372~414번; 이 도구의 4×4는 20 slot에 308번이라 assigned seat의 `pending_releases` 8번이 더해진 값).

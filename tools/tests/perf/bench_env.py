@@ -337,7 +337,7 @@ class Environment:
         return result.stdout.strip()
 
     def reset_spare(self):
-        """After a failed lifecycle: remove the spare seat's windows, run pointer and assignment, and put its CRs aside,
+        """After a failed lifecycle: remove the spare seat's windows, run pointer and assignment and the benchmark's CRs,
         so that the next repetition starts from the built state. Best effort; a failure here only shows in the next run."""
         slot = f"seat-{self.spare}"
         tmux = Tmux(socket_path=self.info["socket_path"])
@@ -354,10 +354,15 @@ class Environment:
             if value["leader"]:
                 value["leader"]["reviewing"] = None
         StateStore(project).update(clear)
-        done = Path(self.base) / "docs" / "cr" / "done"
-        for state in ("in-progress", "todo", "open"):
+        seat = Path(self.info["list"][0]["seats"][self.spare])      # a failed start leaves its CR branch in the seat clone
+        git(seat, "checkout", "-f", "main")
+        git(seat, "reset", "--hard", "origin/main")
+        git(seat, "clean", "-fdq")
+        for branch in git(seat, "for-each-ref", "--format=%(refname:short)", "refs/heads/cr/").splitlines():
+            git(seat, "branch", "-D", branch)
+        for state in ("in-progress", "todo", "open"):          # the benchmark's own CRs only (project-item check stays clean)
             for path in (Path(self.base) / "docs" / "cr" / state).glob("PERF-*.md"):
-                path.rename(done / path.name)
+                path.unlink()
 
     def worker_window(self):
         return Tmux(socket_path=self.info["socket_path"]).get_current("p00", f"seat-{self.spare}")
