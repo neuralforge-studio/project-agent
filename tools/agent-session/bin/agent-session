@@ -7,6 +7,7 @@ entry="${BASH_SOURCE[0]}"
 agent_session_root="$(CDPATH= cd -P -- "${entry%/*}/../.." && pwd -P)"
 source "$agent_session_root/python-launcher.sh"
 project_agent_select_python
+project_agent_read_boot
 agent_session_python="$PY"
 
 if [[ -z "$agent_session_python" || ! -x "$agent_session_python" ]]; then
@@ -14,20 +15,24 @@ if [[ -z "$agent_session_python" || ! -x "$agent_session_python" ]]; then
     exit 5
 fi
 
-exec "$agent_session_python" -S -c '
-import json
-from pathlib import Path
-import runpy
+# The bundle reader goes in before the first import of the tool's program: an import that comes first is
+# read from its own file.
+exec "$agent_session_python" -S -c "$PROJECT_AGENT_BOOT"'
+import os
 import sys
 
 if sys.version_info < (3, 10):
+    import json
     print(json.dumps({"ok": False, "data": None, "error": {"code": "python_version", "message": "Python 3.10 or later is required.", "details": {}}}))
     raise SystemExit(5)
 try:
-    entry = Path(sys.argv.pop(1)).resolve().parents[1] / "agent_session.py"
-    sys.argv[0] = str(entry)
-    runpy.run_path(str(entry), run_name="__main__")
+    tool = os.path.dirname(os.path.dirname(os.path.realpath(sys.argv.pop(1))))
+    _project_agent_bundle(os.path.dirname(tool))
+    sys.path.insert(0, tool)
+    import runpy
+    runpy.run_module("agent_session", run_name="__main__", alter_sys=True)
 except Exception:
+    import json
     print(json.dumps({"ok": False, "data": None, "error": {"code": "entry_unavailable", "message": "The agent-session source entry is unavailable.", "details": {}}}))
     raise SystemExit(5)
 ' "${BASH_SOURCE[0]}" "$@"

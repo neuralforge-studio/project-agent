@@ -26,7 +26,7 @@ import shutil
 import stat
 from typing import Callable
 
-from . import tmuxconf
+from . import bundle, tmuxconf
 from .paths import temp_of
 
 _temp_events = [0]
@@ -544,8 +544,8 @@ def replace_record(places, data):
 
 
 def build_release(places, name, files, source_root, extra):
-    """Copy `files` (relative paths of the source tree) into a new release directory, precompile it for the
-    installing interpreter, make it read-only, then rename it into place, so that the directory appears only
+    """Copy `files` (relative paths of the source tree) into a new release directory, precompile it and write
+    its start-up bundles for the installing interpreter, make it read-only, then rename it into place, so that the directory appears only
     when complete. `extra` maps a release-relative path to the bytes written after the copy."""
     ident = "release:" + name
     destination, temporary = places.tree(ident), places.release_temp(name)
@@ -571,6 +571,7 @@ def build_release(places, name, files, source_root, extra):
                 target.write_bytes(data)
             compileall.compile_dir(str(temporary), quiet=2, force=True, stripdir=str(temporary),
                                    prependdir=str(destination))         # tracebacks name the final path
+            bundle.build(temporary, destination)
             _freeze(temporary)
             os.rename(temporary, destination)
         except BaseException:

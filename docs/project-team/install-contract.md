@@ -26,7 +26,7 @@
 
 | 경로 | 종류 | 내용 |
 | --- | --- | --- |
-| `~/.local/lib/project-agent/releases/<version>-<hash>/` | 디렉터리 | 불변 release. 도구, skill, 문서, tmux 통합 파일, 설치기(`install/`)를 담고 test·`__pycache__`·`docs/cr`는 담지 않습니다. 설치 interpreter와 그 library 경로를 적은 `tools/python.env`를 더합니다(6.1절). 외부 package는 담지 않습니다(사용자 결정 D-20261109-01 waive). 만들 때 설치 interpreter로 미리 compile하고(`__pycache__`) 쓰기 권한을 모두 뺍니다. 그래야 실행이 release에 파일을 더하지 않습니다. |
+| `~/.local/lib/project-agent/releases/<version>-<hash>/` | 디렉터리 | 불변 release. 도구, skill, 문서, tmux 통합 파일, 설치기(`install/`)를 담고 test·`__pycache__`·`docs/cr`는 담지 않습니다. 설치 interpreter와 그 library 경로를 적은 `tools/python.env`를 더합니다(6.1절). 외부 package는 담지 않습니다(사용자 결정 D-20261109-01 waive). 만들 때 설치 interpreter로 미리 compile하고(`__pycache__`), 시동 번들(6.1절)을 `tools/__pycache__`에 쓰고, 쓰기 권한을 모두 뺍니다. 그래야 실행이 release에 파일을 더하지 않습니다. |
 | `~/.local/lib/project-agent/current` | symlink | 활성 release를 가리킵니다. 원자적으로 바꿉니다. |
 | `~/.local/lib/project-agent/tmux.conf` | 파일 | tmux include의 고정 대상입니다. `source-file -q ~/.local/lib/project-agent/current/integrations/tmux/project-agent.conf` 한 줄을 담습니다. 설치 때 한 번 쓰고 갱신하지 않습니다. |
 | `~/.local/lib/project-agent/install.json` | 파일 | 설치 기록 |
@@ -284,6 +284,9 @@ set-option -ag status-right '#{E:@project_agent_decide_status}'
 
 - `project-board`와 `project-item`은 `PYTHONNOUSERSITE=1`로 실행하므로, 사용자 site의 package는 보이지 않습니다. release의 package는 `PROJECT_AGENT_PYTHONPATH`로만 보입니다.
 - 시동 비용(PERF-002): 표준 library만 쓰는 `agent-session`, `project-item`, `tmux_decide_status.sh`의 interpreter는 `-S`로 시작해 site 처리(site-packages, `.pth`, `sitecustomize`)를 하지 않습니다. `project-board`도 `sync`·`click`·`toggle`(tmux hook과 key. textual을 import하지 않음)은 `-S`로, TUI 명령은 site를 처리합니다(textual이 interpreter의 site-packages에 있습니다). `-E`·`-I`는 쓰지 않으므로 `PYTHON*` 환경 변수의 효과와 `PROJECT_AGENT_PYTHONPATH`는 그대로입니다. 진입 script는 `#!/bin/bash`로 시작하고(`/usr/bin/env bash`는 PATH의 모든 NFS 디렉터리를 찾습니다), 자기 위치를 `dirname`·두 번째 `readlink` 없이 구합니다. symlink로 부른 경우에만 `readlink -f`를 한 번 실행합니다.
+- 시동 번들(PERF-003): 명령 하나가 하는 일은 수십 ms인데, 시동 시간의 대부분은 모듈 파일을 하나씩 여는 비용입니다. NFS에서는 파일 하나를 열고 닫는 데 수 ms가 들고(host load가 높으면 더 듭니다) CLI는 모듈을 100개 안팎 import합니다. 설치기는 release를 만들 때 세 도구의 모든 모듈과, 각 도구가 시동할 때 import하는 표준 library 모듈의 compile한 code를 한 파일 `tools/__pycache__/bundle.<cache tag>.pyc`에 씁니다([`bundle.py`](../../install/project_agent_install/bundle.py)). 이름이 bytecode 파일이라서 release 지문(원칙 B)은 이 파일을 `__pycache__`의 `.pyc`처럼 뺍니다. 세 CLI의 진입점(`project-board`는 `sync`·`click`·`toggle`만)은 launcher의 `project_agent_read_boot`로 [`tools/bundle_boot.py`](../../tools/bundle_boot.py)를 `-c` 프로그램 앞에 읽고, 첫 import 전에 `_project_agent_bundle`을 부릅니다. 이 reader는 파일을 한 번 열어 header(모듈 색인)만 읽고, 모듈을 import할 때 그 code를 읽습니다. 파일 형식은 `bundle_boot.py`의 머리말과 `bundle.write`가 함께 소유합니다.
+    - 모듈의 `__file__`과 code의 파일 이름은 원래 source 파일입니다(release 안의 최종 경로, 표준 library는 interpreter의 경로). 번들에 없는 모듈은 원래 경로에서 찾습니다. 번들이 없거나(개발 checkout), 헤더의 magic·`sys.version`이 지금 interpreter와 다르거나(다른 build가 쓴 것), `-O`로 시작했거나, header가 깨졌으면 reader는 아무것도 하지 않고 일반 import가 맡습니다. 따라서 interpreter가 바뀐 release도 느릴 뿐 틀리지 않습니다.
+    - release는 불변이라 번들이 source와 어긋나지 않습니다. 번들이 있으면 `PYTHONPATH`에 있는 사용자 module이 번들에 있는 표준 library module을 가리지 못합니다.
 - `PROJECT_AGENT_PYTHON`이 없거나 실행할 수 없는 파일이면 `agent-session`은 JSON 오류 `python_unavailable`(종료 코드 5)을, 버전이 3.10 미만이면 `python_version`을 출력합니다. `project-item`, `project-board`와 `tmux_decide_status.sh`는 stderr에 한 줄을 쓰고 종료 코드 5로 끝납니다.
 
 ## 7. 명령의 동작

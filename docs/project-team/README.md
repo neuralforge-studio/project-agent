@@ -38,7 +38,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 
 | 종류 | 진입점 |
 | --- | --- |
-| CLI | `agent-session`, `project-item`, `project-board`. 각 `bin/` 파일을 `~/.local/bin`에 link합니다. 세 파일과 `tmux_decide_status.sh`는 `tools/python-launcher.sh`로 Python을 고릅니다. 설치본은 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`(환경 변수 또는 release의 `tools/python.env`)로 interpreter와 package 경로를 넘깁니다([설치 계약 6.1절](install-contract.md#61-python-선택)). |
+| CLI | `agent-session`, `project-item`, `project-board`. 각 `bin/` 파일을 `~/.local/bin`에 link합니다. 세 파일과 `tmux_decide_status.sh`는 `tools/python-launcher.sh`로 Python을 고릅니다. 설치본의 세 CLI는 `tools/bundle_boot.py`로 시동 번들(release의 모듈을 한 파일에 묶은 것)에서 import합니다. 설치본은 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`(환경 변수 또는 release의 `tools/python.env`)로 interpreter와 package 경로를 넘깁니다([설치 계약 6.1절](install-contract.md#61-python-선택)). |
 | Python API | `agent_session.api`: 목록의 원본은 [api.py](../../tools/agent-session/agent_session/api.py)의 `__all__`이고 이름별 계약은 [명세 5절](spec.md#프로젝트-consumer용-python-api)이 기록합니다. `project_item.api`: 목록의 원본은 [api.py](../../tools/project-item/project_item/api.py)의 `__all__`이고 계층은 [project-item README](../../tools/project-item/README.md#layers-and-public-api)가 설명합니다. |
 | Hook·controller | `agent_session.internal`의 `register_from_hook`(Claude SessionStart hook), `register_current`(Codex 초기 도구), `mark_process`, `run_controller`([명세 5절](spec.md#provider-내부-등록)) |
 | 원격 seat | `python -m agent_session.remote_runtime`, `python -m agent_session.remote_bridge` |
