@@ -1,6 +1,7 @@
 """Project facts and review state from files in a temporary registry."""
 import datetime as dt
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -343,3 +344,127 @@ def test_an_unreadable_release_record_does_not_hide_the_seats(board, monkeypatch
     model.liveness(board.config)
     project = model.snapshot(board.config, now=NOW)["projects"][0]
     assert project["errors"] == [] and project["seats"][0]["status"] == "working"
+
+
+# ------------------------------------------------------------ an idle refresh reads no listing (BOARD-013)
+@pytest.fixture
+def settled(monkeypatch):
+    """Trust a directory's modification time at once, so the tests need not wait out `SETTLE_NS`. The margin
+    is negative because a file server's clock may be ahead of this host's (a stamp then lies in the future)."""
+    monkeypatch.setattr(model, "SETTLE_NS", -10_000_000_000)
+
+
+_bumps = iter(range(10 ** 12, 10 ** 15, 10 ** 10))
+
+
+def _bump(*directories):
+    """Give directories a modification time no earlier read had: a test changes files faster than the clock ticks."""
+    for directory in directories:
+        stamp = 1_800_000_000_000_000_000 + next(_bumps)
+        os.utime(directory, ns=(stamp, stamp))
+
+
+def _count_listings(monkeypatch):
+    calls = []
+    for name in ("item_files", "cr_states", "load_registry"):
+        original = getattr(model, name)
+
+        def counted(*args, _name=name, _original=original, **kwargs):
+            calls.append(_name)
+            return _original(*args, **kwargs)
+        monkeypatch.setattr(model, name, counted)
+    return calls
+
+
+def test_a_refresh_of_an_unchanged_tree_lists_no_directory_and_reads_no_registry(board, monkeypatch, settled):
+    base = board.project("alpha", seats=1)
+    board.cr(base, "open", "TOOL-010", "Open one")
+    board.cr(base, "in-progress", "TOOL-001", "First")
+    board.decide(base, "done", "D-20261105-02", "Old question", related="TOOL-001")
+    board.state(base, {"leader": leader(), "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)}})
+    calls = _count_listings(monkeypatch)
+
+    first = model.snapshot(board.config, now=NOW)
+    assert set(calls) == {"item_files", "cr_states", "load_registry"}
+    calls.clear()
+
+    assert model.snapshot(board.config, now=NOW) == first
+    assert calls == []
+
+
+def test_a_refresh_just_after_a_change_lists_again_because_the_stamp_may_not_have_ticked(board, monkeypatch):
+    base = board.project("alpha", seats=1)
+    board.cr(base, "open", "TOOL-010", "Open one")
+    calls = _count_listings(monkeypatch)                         # SETTLE_NS is the product's: a change this recent
+    model.snapshot(board.config, now=NOW)                        # is not trusted
+    calls.clear()
+    model.snapshot(board.config, now=NOW)
+    assert "item_files" in calls and "load_registry" in calls
+
+
+def test_changes_to_the_tree_show_on_the_next_refresh_though_listings_are_kept(board, settled):
+    base = board.project("alpha", seats=1)
+    waiting = board.cr(base, "open", "TOOL-010", "Open one")
+    board.cr(base, "in-progress", "TOOL-001", "First")
+    board.decide(base, "done", "D-20261105-02", "Waits for TOOL-002", related="TOOL-002")
+    board.state(base, {"leader": leader(), "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)}})
+    root = base / "agent"
+
+    def view():
+        project = model.snapshot(board.config, now=NOW)["projects"][0]
+        return project
+
+    first = view()
+    assert [len(first["crs"][state]) for state in ("open", "todo", "in-progress")] == [1, 0, 1]
+    assert first["decide"][0]["display_state"] == "반영 중"
+    assert first["seats"][0]["status"] == "working"
+
+    waiting.rename(root / "cr/todo" / waiting.name)              # a CR moves
+    _bump(root / "cr/open", root / "cr/todo")
+    moved = view()
+    assert [len(moved["crs"][state]) for state in ("open", "todo", "in-progress")] == [0, 1, 1]
+
+    board.decide(base, "open", "D-20261105-03", "New question")  # a decision is added
+    _bump(root / "decide/open")
+    assert [item["id"] for item in view()["decide"]] == ["D-20261105-03", "D-20261105-02"]
+
+    group = root / "cr/done/2026-11"                             # done/ keeps CRs in group directories
+    group.mkdir()
+    _bump(root / "cr/done", group)
+    assert view()["decide"][1]["display_state"] == "반영 중"
+    (group / "TOOL-002-item.md").write_text(cr_text_of("TOOL-002"), encoding="utf-8")
+    _bump(group)                                                 # only the group directory changed
+    assert [item["display_state"] for item in view()["decide"]] == ["결정 대기", "완료"]
+
+    board.state(base, {"leader": leader(), "0": {"job_id": None, "git_hash": None, "session": None}})
+    assert view()["seats"][0]["status"] == "empty"               # a run that ended (the state file is read each time)
+
+
+def cr_text_of(cr_id):
+    from board_testing import cr_text
+    return cr_text(cr_id, "Done in a group")
+
+
+def test_the_registry_is_read_again_only_when_its_file_changes(board, monkeypatch, settled):
+    board.project("alpha", seats=1)
+    calls = _count_listings(monkeypatch)
+    assert [p["id"] for p in model.snapshot(board.config, now=NOW)["projects"]] == ["alpha"]
+    assert [p["id"] for p in model.snapshot(board.config, now=NOW)["projects"]] == ["alpha"]
+    assert calls.count("load_registry") == 1
+    model.liveness(board.config)                                  # the run-fact refresh shares the read
+    assert calls.count("load_registry") == 1
+
+    board.project("beta", seats=1)                                # the registry file is rewritten
+    _bump(board.config)
+    assert [p["id"] for p in model.snapshot(board.config, now=NOW)["projects"]] == ["alpha", "beta"]
+    assert calls.count("load_registry") == 2
+
+
+def test_a_registry_that_cannot_be_read_is_reported_each_time_and_not_kept(board, settled):
+    board.project("alpha", seats=1)
+    board.config.write_text("{", encoding="utf-8")
+    _bump(board.config)
+    assert model.snapshot(board.config, now=NOW)["error"]["code"] == "registry_invalid"
+    board.config.write_text(json.dumps({}), encoding="utf-8")
+    _bump(board.config)
+    assert model.snapshot(board.config, now=NOW) == {"now": "2026-11-05T10:30:00Z", "projects": [], "error": None}

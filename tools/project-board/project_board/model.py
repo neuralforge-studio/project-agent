@@ -3,7 +3,9 @@
 The TUI plan (docs/project-board-tui-plan.md) owns the display contract. The registry,
 state.json and run liveness come from agent_session; CR and decision files are read with
 project_item. A CR or decision file is parsed again only when its size or modification time
-changed (`_cached`); every directory listing, state file and run liveness is read on each call.
+changed (`_cached`). The registry and each directory listing are read again only when the
+modification time of the registry file or of a directory of the tree changed (`_unchanged`, BOARD-013);
+every state file and run liveness is read on each call.
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import datetime as dt
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parents[2]
@@ -21,6 +24,7 @@ for _name in ("agent-session", "project-item"):
 
 from agent_session import api  # noqa: E402
 from agent_session.api import RemoteSeat, SessionError, load_registry  # noqa: E402
+from agent_session.config import registry_path  # noqa: E402
 from project_item.api import (CR, DECIDE, cr_states, decision_stage, file_id,  # noqa: E402
                               item_files, submitted_hash, text_sections)
 
@@ -100,6 +104,53 @@ def _cached(scope: tuple, paths: list[Path], build):
     return out
 
 
+# A file system stamps a change with a clock that ticks coarsely, so a second change in the same tick would leave
+# the stamp as it was. A stamp this recent is not trusted: that read is not kept, and the next call reads again.
+SETTLE_NS = 2_000_000_000
+_unchanged_cache: dict[tuple, tuple] = {}
+
+
+def _tree_stamps(base: Path) -> list[tuple[str, int]] | None:
+    """The modification time of `base` and of every directory below it; None if `base` is not a directory."""
+    try:
+        stamps = [(str(base), os.stat(base).st_mtime_ns)]
+        for top, names, _ in os.walk(base):
+            for name in names:
+                path = os.path.join(top, name)
+                stamps.append((path, os.stat(path).st_mtime_ns))
+    except OSError:
+        return None
+    return stamps
+
+
+def _unchanged(scope: tuple, bases: list[Path], read):
+    """`read()`, reused while no directory under `bases` has a new modification time.
+
+    A file added, removed or renamed changes the time of the directory it is in, and a new directory
+    changes its parent's, so the directories of the last read stand for every listing in the tree.
+    The stamps are taken before `read()`: a change during it shows as different stamps on the next call.
+    """
+    old = _unchanged_cache.get(scope)
+    if old is not None and all(_tree_stamps_same(stamps) for stamps in old[0]):
+        return old[1]
+    now = time.time_ns()
+    trees = [_tree_stamps(base) for base in bases]
+    value = read()
+    if all(tree is not None and all(now - stamp >= SETTLE_NS for _, stamp in tree) for tree in trees):
+        _unchanged_cache[scope] = (trees, value)
+    else:
+        _unchanged_cache.pop(scope, None)
+    return value
+
+
+def _tree_stamps_same(stamps: list[tuple[str, int]]) -> bool:
+    """Whether every directory of an earlier read has the time it had. A directory added since changed its parent's."""
+    try:
+        return all(os.stat(path).st_mtime_ns == stamp for path, stamp in stamps)
+    except OSError:
+        return False
+
+
 def _cr_item(state: str):
     def build(path: Path) -> dict:
         text = path.read_text(encoding="utf-8")
@@ -123,10 +174,14 @@ def _cr_item(state: str):
     return build
 
 
+def _listing(kind, root: Path, state: str) -> list[Path]:
+    return _unchanged(("files", kind.name, str(root), state), [root / state], lambda: item_files(kind, root, state))
+
+
 def cr_items(root: Path) -> dict:
     """open, todo and in-progress CRs. In-progress items carry what the seat drawer shows."""
     return {state: [dict(item) for item in
-                    _cached(("cr", str(root), state), item_files(CR, root, state), _cr_item(state))]
+                    _cached(("cr", str(root), state), _listing(CR, root, state), _cr_item(state))]
             for state in CR_STATES}
 
 
@@ -154,9 +209,10 @@ def _decision(state: str):
 
 def decide_items(root: Path, cr_root: Path | None = None) -> list[dict]:
     items = []
-    states = cr_states(cr_root)
+    states = (_unchanged(("cr_states", str(cr_root)), [cr_root / state for state in CR.states],
+                         lambda: cr_states(cr_root)) if cr_root is not None else {})
     for state in DECIDE.states:
-        for read in _cached(("decide", str(root), state), item_files(DECIDE, root, state), _decision(state)):
+        for read in _cached(("decide", str(root), state), _listing(DECIDE, root, state), _decision(state)):
             headers = read["headers"]
             items.append({
                 "id": read["id"], "title": read["title"], "path": read["path"], "state": state,
@@ -240,11 +296,34 @@ def project_view(project, now: dt.datetime) -> dict:
     return view
 
 
+_registry_cache: dict[str, tuple] = {}
+
+
+def _registry(config) -> list:
+    """`load_registry(config)`, reused while the registry file is the same file with the same size and
+    modification time. The projects are only read, so one list serves every caller."""
+    path = registry_path(config)
+    try:
+        info = os.stat(path)
+    except OSError:
+        return load_registry(config)                   # it reports what is wrong with the file
+    stamp = (info.st_mtime_ns, info.st_size, info.st_ino)
+    hit = _registry_cache.get(str(path))
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    projects = load_registry(config)
+    if time.time_ns() - info.st_mtime_ns >= SETTLE_NS:
+        _registry_cache[str(path)] = (stamp, projects)
+    else:
+        _registry_cache.pop(str(path), None)
+    return projects
+
+
 def snapshot(config=None, now: dt.datetime | None = None, project_id: str | None = None) -> dict:
     """Every registered project, or only `project_id` (a popup shows one project)."""
     now = now or dt.datetime.now(dt.timezone.utc)
     try:
-        projects = load_registry(config)
+        projects = _registry(config)
     except SessionError as error:
         return {"now": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "projects": [], "error": _error(error)}
     if project_id is not None:
@@ -267,7 +346,7 @@ def liveness(config=None) -> dict:
     It also refreshes the release holds that `snapshot` shows.
     """
     out = {}
-    projects = load_registry(config)
+    projects = _registry(config)
     try:
         view = api.server_view(projects)                # one read of the tmux server for every project
     except SessionError:
@@ -285,7 +364,7 @@ def liveness(config=None) -> dict:
 
 
 def find_project(config, project_id: str):
-    for project in load_registry(config):
+    for project in _registry(config):
         if project.project_id == project_id:
             return project
     return None

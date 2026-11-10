@@ -250,10 +250,13 @@ def _expanded(control: Tmux) -> set[str]:
 
 
 def expanded_projects(socket=None) -> set[str]:
-    """Read the project folds shared by every Board pane in this tmux server."""
-    control = _control(socket)
-    with _locked(control):
-        return _expanded(control)
+    """Read the project folds shared by every Board pane in this tmux server.
+
+    One `show-options` reads the whole value, so no lock is taken: the lock only orders the
+    read-modify-write of `toggle_expanded_project`. Every Board pane reads this on each refresh
+    (BOARD-013), and the lock would start a `display-message` and a `ps` per other tmux server each time.
+    """
+    return _expanded(_control(socket))
 
 
 def toggle_expanded_project(project_id: str, socket=None) -> set[str]:
