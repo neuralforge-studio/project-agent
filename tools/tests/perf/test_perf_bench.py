@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 
@@ -88,13 +89,17 @@ def isolated_copy(tmp_path):
     shutil.copytree(REPOSITORY / "integrations", root / "integrations", ignore=ignore)
     agent = root / "tools" / "agent-session" / "bin" / "agent-session"
     text = agent.read_text()
-    assert 'exec "$agent_session_python" -c' in text
-    agent.write_text(text.replace('exec "$agent_session_python" -c', 'exec "$agent_session_python" -I -S -c'))
+    patched, count = re.subn(r'exec "\$agent_session_python"(?: -[IS])* -c', 'exec "$agent_session_python" -I -S -c', text)
+    assert count == 1
+    agent.write_text(patched)
     item = root / "tools" / "project-item" / "bin" / "project-item"
     text = item.read_text()
-    assert 'exec "$PY" -m project_item "$@"' in text
-    item.write_text(text.replace('exec "$PY" -m project_item "$@"', 'exec "$PY" -I -S -c \'import sys; sys.path.insert(0, sys.argv.pop(1)); '
-                                 'from project_item.cli import main; sys.argv[0] = "project-item"; sys.exit(main())\' "$ROOT" "$@"'))
+    patched, count = re.subn(
+        r'exec "\$PY"(?: -[IS])* -m project_item "\$@"',
+        lambda _: ('exec "$PY" -I -S -c \'import sys; sys.path.insert(0, sys.argv.pop(1)); '
+                   'from project_item.cli import main; sys.argv[0] = "project-item"; sys.exit(main())\' "$ROOT" "$@"'), text)
+    assert count == 1
+    item.write_text(patched)
     return root
 
 
