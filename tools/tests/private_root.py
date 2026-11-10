@@ -14,6 +14,9 @@ starts next prunes the directories of runs that are over:
 - A directory with no readable ``owner`` (made before this rule) cannot be judged by its owner, so
   it is removed only when untouched for ``UNKNOWN_OWNER_AGE`` (24 hours), longer than any run.
 
+Runs that start together prune the same directories: one already removed by another run is pruned,
+not an error. ``_owner`` and ``rmtree(ignore_errors=True)`` already read it that way.
+
 A pid that was reused by another process makes a directory look alive: it is kept too long, never
 removed too early.
 """
@@ -70,7 +73,10 @@ def prune(parent=None, keep=KEEP_ENDED, unknown_age=UNKNOWN_OWNER_AGE, now=None)
     now = time.time() if now is None else now
     ended, removed = [], []
     for directory in parent.glob("pt-*"):
-        info = directory.lstat()
+        try:
+            info = directory.lstat()
+        except FileNotFoundError:  # another run's prune removed it after the listing: it is already pruned
+            continue
         if directory.is_symlink() or not directory.is_dir() or info.st_uid != os.getuid():
             continue
         pid = _owner(directory)
