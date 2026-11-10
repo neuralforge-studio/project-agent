@@ -3,6 +3,7 @@
 - Opened: 2026-11-10
 - Scope: project-agent
 - Severity: S3
+- Base: d66c2615f3aff4f6f161d1491949c2e2ec745777 2026-11-10T10:48:14+09:00
 
 ## Symptom
 pytest 여러 개가 거의 동시에 시작하면 그중 하나가 `tools/conftest.py`의 `private_root.configure` → `prune()`에서 `FileNotFoundError`(INTERNALERROR)로 끝나고 test를 하나도 실행하지 않습니다. seat 여럿이 같은 host에서 동시에 검증하는 평소 상황(README 검증)에서 일어납니다.
