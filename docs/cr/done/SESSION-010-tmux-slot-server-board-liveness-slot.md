@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: PERF-001, TMUX-003
 - Base: 6a2c0f09a9a30b88c9ab4b9794442e5b84674a92 2026-11-10T08:17:51+09:00
+- Outcome: fixed
 
 ## Symptom
 agent-session의 tmux 조회가 slot마다, 같은 명령 안에서도 호출마다 같은 server 정보를 다시 읽습니다. 그래서 Board의 liveness 한 번과 Leader의 명령이 slot 수와 조회 횟수에 비례해 느려집니다. 사용자 평가(2026-11-10): "정말 너무 느려서 쓸 수가 없는데", "반복 조회 수정은 측정 결과 기다리지 말고 바로 시작해줘. 너무 느려."
@@ -42,6 +43,7 @@ agent-session의 tmux 조회가 slot마다, 같은 명령 안에서도 호출마
 - 2026-11-10 Leader: 고친다. 재현 측정이 있는 결함이고, 사용자 지시가 있습니다(2026-11-10 대화 원문: "반복 조회 수정은 측정 결과 기다리지 말고 바로 시작해줘. 너무 느려."). PERF-001(측정)과 동시에 진행합니다. 기준선 측정은 PERF-001의 Base가 맡고, 이 CR은 자기 수정 전후만 잽니다.
 - 2026-11-10 Leader: open -> todo. 사용자 지시로 즉시 수정
 - 2026-11-10 Leader: 제출 0fdedf276f411528c11c1a9cdcba4c9e273ba087를 인수합니다. Leader review: ServerView가 tmux process 하나(window option 읽기까지 둘)로 server identity, session·owner·pointer, window, pane을 읽고, 판정은 기존과 같은 대조 함수를 지납니다. write_meta는 같은 sequence에서 쓰고 다시 읽어 자기 쓰기 뒤의 읽기가 새 값을 봅니다. 쓰기 경로에는 값 cache가 없고 매 관찰이 server identity를 새로 읽습니다. 사전 읽기를 identity·provider_launch_attempted 갱신으로 좁힌 것도 검사 대상 key가 같아 판정이 같습니다. Leader 독립 확인: 사용자 실제 server(32 slot)에서 v0.3.0과 제출본의 project_board.model.liveness를 읽기 전용으로 실행해 liveness·release hold 결과가 같았습니다(tmux 464번 -> 3번, 5.35초 -> 0.39초). 지적: merge(0fdedf2)로 들어온 TMUX-003의 integrations/tmux·install-contract.md는 tools/project-board/tests/test_tmux_control.py와 tools/test_distribution_boundary.py의 입력인데 다시 실행하지 않았습니다. Leader가 통합 commit 8d6365c(제품 tree는 제출과 같음)에서 두 test를 실행했고 30 passed입니다. 바꾼 문서 두 개의 상대 link도 확인했습니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 8d6365c(Merge cr/SESSION-010, 제출 0fdedf2). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [동작 명세 5절 Python API](../../project-team/spec.md#프로젝트-consumer용-python-api), [실행 경로 계약](../../project-team/README.md#실행-경로-계약), [project-team Worker 절](../../../skills/project-team/SKILL.md).
