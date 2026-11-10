@@ -81,8 +81,9 @@ def test_executable_needs_a_full_tree(tmp_path):
 
 
 def isolated_copy(tmp_path):
-    """A copy of the product whose launchers start Python with `-I -S`, as PERF-002's candidate may: no PYTHONPATH,
-    no site, so nothing of the benchmark can be injected through the interpreter."""
+    """A copy of the product whose launchers start Python without site processing (`-S`, and `-I` where a launcher
+    form allows it), as PERF-002's candidate does: nothing of the benchmark can be injected through the interpreter.
+    A launcher that already starts Python with `-S` is left as it is."""
     root = tmp_path / "isolated"
     ignore = shutil.ignore_patterns("__pycache__", "docs", "install", "skills", ".git")
     shutil.copytree(REPOSITORY / "tools", root / "tools", ignore=ignore, symlinks=True)
@@ -90,7 +91,8 @@ def isolated_copy(tmp_path):
     agent = root / "tools" / "agent-session" / "bin" / "agent-session"
     text = agent.read_text()
     patched, count = re.subn(r'exec "\$agent_session_python"(?: -[IS])* -c', 'exec "$agent_session_python" -I -S -c', text)
-    assert count == 1
+    if count == 0:
+        assert re.search(r'exec "\$agent_session_python" -S ', text), "the agent-session launcher has a new form"
     agent.write_text(patched)
     item = root / "tools" / "project-item" / "bin" / "project-item"
     text = item.read_text()
@@ -98,7 +100,8 @@ def isolated_copy(tmp_path):
         r'exec "\$PY"(?: -[IS])* -m project_item "\$@"',
         lambda _: ('exec "$PY" -I -S -c \'import sys; sys.path.insert(0, sys.argv.pop(1)); '
                    'from project_item.cli import main; sys.argv[0] = "project-item"; sys.exit(main())\' "$ROOT" "$@"'), text)
-    assert count == 1
+    if count == 0:
+        assert re.search(r'exec "\$PY" -S ', text), "the project-item launcher has a new form"
     item.write_text(patched)
     return root
 
