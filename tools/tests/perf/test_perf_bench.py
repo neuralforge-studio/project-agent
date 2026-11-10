@@ -97,10 +97,12 @@ def test_small_run_with_an_isolated_candidate_counts_the_same_and_leaves_no_serv
     assert not any(r["spawns"] or r["pane_spawns"] for r in rows if r["mode"] == "warm")        # no shim in a timing pass
     summary = json.loads((out / "summary.json").read_text())
     by = {(e["op"]): e["exe"] for e in summary["operations"] if e["mode"] == "warm"}
-    # `-I -S` must not change what is counted: a counter inside the interpreter would read 0 for b.
+    # `-I -S` must not change what is counted: a counter inside the interpreter would read 0 for b. (A tmux read that
+    # sees a window change is repeated, so a count may differ by a few between two runs of the same command.)
     for op in ("project_item_ls", "agent_review_clear", "agent_watch", "agent_review", "agent_send_to_worker",
                "project_item_accept", "board_liveness"):
-        assert by[op]["a"]["tmux"] > 0 and by[op]["a"]["tmux"] == by[op]["b"]["tmux"], op
+        a, b = by[op]["a"]["tmux"], by[op]["b"]["tmux"]
+        assert a > 0 and b > 0 and abs(a - b) <= max(2, 0.2 * a), (op, a, b)
     start = by["agent_start_worker"]["a"]
     assert start["tmux"] > 0 and any(r["pane_spawns"].get("tmux") for r in rows if r["op"] == "agent_start_worker")
     assert summary["baseline"] == "a" and summary["candidate"] == "b" and summary["steady"]

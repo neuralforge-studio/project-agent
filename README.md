@@ -42,7 +42,7 @@ python -m pytest -q -n 8 install/tests
 | `tools/project-board/**` | `tools/project-board/tests` |
 | `tools/project-item/**` | `tools/project-item/tests`. `project_item/api.py` 또는 CR·결정 형식(`cr.py`, `decide.py`, `kinds.py`)을 바꾸면 agent-session·project-board test와 네 번째 명령도 |
 | `tools/agent-session/**` | `tools/agent-session/tests`. `agent_session/api.py`, state 형식(`state.py`), tmux option 이름을 바꾸면 project-item·project-board test와 `install/tests`도 |
-| `tools/tests/perf/**` | `python -m pytest -q tools/tests/perf`. 개발 도구의 test라 release 검증(위 다섯 명령)에 넣지 않습니다. 작은 규모에서 두 실행본을 한 번 번갈아 실행하므로 host 부하에 따라 수 분에서 십여 분이 걸립니다 |
+| `tools/tests/perf/**` | `python -m pytest -q tools/tests/perf`. 개발 도구의 test라 release 검증(위 다섯 명령)에 넣지 않습니다. 작은 규모에서 두 실행본을 한 번 번갈아 실행하므로 host 부하에 따라 수 분에서 수십 분이 걸립니다 |
 | `tools/conftest.py`, 여러 도구가 함께 쓰는 test helper | 다섯 명령 모두 |
 | `skills/**`, `docs/**`, `README.md`, `AGENTS.md` | 고친 문서의 상대 link 검사, `tools/test_distribution_boundary.py`. `skills/project-item`의 형식 문서를 바꾸면 `tools/project-item/tests/test_doc_contract.py`, 원격 guidance 문서(`skills/**`, `docs/project-team/spec.md`)를 바꾸면 `tools/agent-session/tests/test_remote.py`도 |
 - Agent-session test는 seat 여럿이 같은 host에서 동시에 검증하는 평소 부하에서 같은 결과를 냅니다. 한도(`AGENT_SESSION_TEST_TIMEOUT`, 기본 120초)는 host가 이보다 심하게 느릴 때만 늘립니다. 자세한 사용법은 [agent-session README](tools/agent-session/README.md#프로젝트-api와-검사)가 설명합니다.

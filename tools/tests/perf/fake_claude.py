@@ -80,11 +80,19 @@ def mcp_serve():
 
 
 def hook(settings, event, payload):
-    entries = settings.get("hooks", {}).get(event, [])
-    for entry in entries:
-        for item in entry.get("hooks", []):
-            subprocess.run(item["command"], shell=True, input=json.dumps(payload), text=True, capture_output=True,
-                           timeout=item.get("timeout", 30))
+    """Run the settings' hooks of an event. While one runs, a `busy-<pid>-<event>` file lies in the peers directory,
+    so that the benchmark can wait for the hooks of the previous command before it counts the next one."""
+    marker = os.path.join(PEERS, f"busy-{os.getpid()}-{event}") if PEERS else None
+    if marker:
+        open(marker, "w").close()
+    try:
+        for entry in settings.get("hooks", {}).get(event, []):
+            for item in entry.get("hooks", []):
+                subprocess.run(item["command"], shell=True, input=json.dumps(payload), text=True, capture_output=True,
+                               timeout=item.get("timeout", 30))
+    finally:
+        if marker:
+            os.unlink(marker)
 
 
 def interactive(args):

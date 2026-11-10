@@ -57,9 +57,11 @@ class Bench:
                            "wall": round(wall, 4), "rc": rc, "load": round(load_average(), 2), "spawns": spawns or {},
                            "pane_spawns": pane or {}, **extra})
 
-    def settle(self, quiet=0.4, limit=8.0):
-        """Counting pass: wait until the tmux server's processes (a CLI's Stop and SessionEnd hooks, a wrap-up) have
-        stopped spawning, so that a late hook of one command is not counted for the next."""
+    def settle(self, quiet=0.4, limit=30.0):
+        """Counting pass: wait until the fake CLIs' hooks (Stop, SessionEnd: files `busy-*` in the peers directory) and
+        the tmux server's other processes have stopped, so that a late hook of one command neither counts for the next
+        nor makes it read the windows while they change (a read that sees a change is repeated, which would vary the
+        count)."""
         if not self.env.counting:
             return
         end, last, since = time.time() + limit, -1, time.time()
@@ -67,7 +69,7 @@ class Bench:
             size = len(self.pane_lines())
             if size != last:
                 last, since = size, time.time()
-            elif time.time() - since >= quiet:
+            elif time.time() - since >= quiet and not any(self.env.peers.glob("busy-*")):
                 return
             time.sleep(0.1)
 
@@ -133,12 +135,24 @@ class Bench:
             self.board_model(exe)
 
     def status(self, exe):
-        cache = self.env.root / "home" / ".cache" / "tmux-decide-status.json"
-        cache.unlink(missing_ok=True)
+        # The cache is the JSON file; a candidate may also keep a view file next to it (the text that its launcher
+        # prints while the cache is valid). Both are cleared for "no cache" and aged for "expired".
+        directory = self.env.root / "home" / ".cache"
+        cache = directory / "tmux-decide-status.json"
+
+        def clear():
+            for path in directory.glob("tmux-decide-status*"):
+                path.unlink()
+        clear()
         self.cmd(exe, "status_no_cache", [str(exe.status_script)], identity=None)
         self.cmd(exe, "status_cache_valid", [str(exe.status_script)], identity=None)
         old = time.time() - 600
-        os.utime(cache, (old, old))
+        assert cache.exists(), "the first status run left no cache"
+        for path in directory.glob("tmux-decide-status*"):
+            if path.suffix == ".view":
+                path.unlink()                                          # its validity time has passed
+            elif path.suffix == ".json":
+                os.utime(path, (old, old))
         self.cmd(exe, "status_cache_expired", [str(exe.status_script)], identity=None)
 
     def board_model(self, exe):
