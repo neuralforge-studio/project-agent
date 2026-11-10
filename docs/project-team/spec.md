@@ -641,7 +641,7 @@ run이 resume인지는 그 window의 `resume` option이 정합니다. hook의 ma
 Codex는 실제 도구 문맥의 CODEX_THREAD_ID와 endpoint를 확인합니다.
 내부 등록은 현재 run과 자기 window를 대조하고 그 window의 binding만 기록합니다. run은 한 번의 tmux 읽기로 project의 모든 slot 포인터를 읽어 이 run_id를 가리키는 slot의 window만 읽어 찾습니다. 그래서 hook과 `mark_process`가 시작하는 tmux process 수는 seat 수와 무관합니다.
 hook과 `mark_process`, controller의 interpreter는 `-S`로 시작하고, 설치본에서는 시동 번들에서 모듈을 읽어 시동과 import 시간을 줄입니다(설치 계약 6.1절 "생성 명령의 시동"). 판정과 결과는 같습니다.
-등록은 하나의 deadline 안에서 일합니다. deadline은 Claude hook은 hook process가 만들어진 시각에서, Codex는 도구 호출이 시작한 시각에서 25초 뒤입니다. hook 제한 30초보다 짧습니다. Claude의 제한도 process 시작부터 세므로, 부하로 interpreter 시동과 import에 쓴 시간(최대 10초)을 25초에서 뺍니다. 그래야 hook이 제한에 닿기 전에 스스로 실패를 기록합니다. binding 확인(최대 20초)은 deadline 6초 전에 끝나야 하고, 대상 제어 잠금과 state 잠금은 남은 시간을 나눠 씁니다. deadline이 지나면 등록 실패입니다.
+등록은 하나의 deadline 안에서 일합니다. deadline은 Claude hook은 hook process가 만들어진 시각에서, Codex는 도구 호출이 시작한 시각에서 50초 뒤입니다. hook 제한 60초보다 짧습니다. 부하에서 Claude MCP 서버 시동만 8~32초가 걸려서 제한을 30초에서 60초로 올렸습니다. Claude의 제한도 process 시작부터 세므로, 부하로 interpreter 시동과 import에 쓴 시간(최대 20초)을 50초에서 뺍니다. 그래야 hook이 제한에 닿기 전에 스스로 실패를 기록합니다. 제한은 hook 네 종류(SessionStart·Stop·StopFailure·SessionEnd) 모두 같은 60초이고 settings의 `timeout`과 deadline이 한 값(`hook_started.HOOK_TIMEOUT`)에서 나옵니다. binding 확인(최대 40초)은 deadline 12초 전에 끝나야 하고, 대상 제어 잠금과 state 잠금은 남은 시간을 나눠 씁니다. deadline이 지나면 등록 실패입니다.
 게시는 대상 제어 잠금을 잡고 다음 순서로 합니다.
 
 1. 현재 포인터·JOB·window·pane과 binding을 다시 대조합니다. 다르면 `target_changed`이고 아무것도 쓰지 않습니다.
@@ -667,13 +667,14 @@ Claude의 CLAUDECODE·CLAUDE_CODE_SESSION_ID·CLAUDE_CODE_MESSAGING_*와 부모 
 기존에 승인한 프로젝트 설정을 사용하며 새 승인을 대신하는 키 입력을 보내지 않습니다.
 
 내부 등록의 provider binding 확인은 ListAgents에 이 pane의 행이 하나도 없을 때만 다시 조회합니다.
-여러 Leader를 동시에 시작하면 목록이 잠시 늦을 수 있기 때문입니다. 간격은 1초이고 전체 20초 안에서만 반복하며, 등록의 deadline이 더 이르면 그때 끝납니다.
+여러 Leader를 동시에 시작하면 목록이 잠시 늦을 수 있기 때문입니다. 간격은 1초이고 전체 40초 안에서만 반복하며, 등록의 deadline이 더 이르면 그때 끝납니다.
+다시 조회하는 동안 `claude mcp serve` 서버 하나를 공유합니다. 시동이 부하에서 8~32초라서 조회마다 새로 띄우면 한도를 다 씁니다. 공유 서버가 끊기면 한 번 새 서버로 다시 묻는 규칙은 observe와 같습니다.
 행이 둘 이상이거나, 이름·UUID가 다르거나, tmux 위치를 알 수 없으면 일시적 누락이 아니므로 바로 실패합니다.
 send와 observe의 조회는 다시 시도하지 않습니다.
 등록이 실패하면 오류 code와 message를 그 run의 window option `start_error`(`{code, message}`)에 남깁니다.
 이미 다른 run이 target을 이어받았으면(`target_changed`) 남기지 않습니다. 이어받은 window에는 쓰지 않습니다.
 시작 controller는 등록 전까지 이 option을 읽습니다. 기록이 있으면 기다림을 멈추고 `registration_failed`(exit 4)를 반환합니다.
-Claude hook은 SessionStart를 받으면 binding을 확인하기 전에 자기 process(PID·birth)를 `agent/runs/<run_id>/hook-started.json`에 씁니다. hook이 Claude의 제한에 걸려 죽으면 게시도 실패 기록도 남지 않으므로, 기다리는 시작 controller가 이 기록을 읽습니다. 기록의 hook process가 끝났는데 run이 `ready`도 `start_error`도 아니면, window를 한 번 더 읽어(hook의 마지막 쓰기는 종료보다 먼저입니다) 그래도 같으면 `registration_failed`로 끝납니다. 이때 `hook_error`는 `{code: registration_hook_ended, message}`입니다. 그래서 start는 hook 제한(30초)에 시작 controller의 관찰 간격을 더한 시간 안에 끝나고 `--timeout`을 다 기다리지 않습니다. 기록이 없거나 hook process가 살아 있으면 판정하지 않습니다. 이 기록은 hook 진단이며 배정의 원본이 아닙니다.
+Claude hook은 SessionStart를 받으면 binding을 확인하기 전에 자기 process(PID·birth)를 `agent/runs/<run_id>/hook-started.json`에 씁니다. hook이 Claude의 제한에 걸려 죽으면 게시도 실패 기록도 남지 않으므로, 기다리는 시작 controller가 이 기록을 읽습니다. 기록의 hook process가 끝났는데 run이 `ready`도 `start_error`도 아니면, window를 한 번 더 읽어(hook의 마지막 쓰기는 종료보다 먼저입니다) 그래도 같으면 `registration_failed`로 끝납니다. 이때 `hook_error`는 `{code: registration_hook_ended, message}`입니다. 그래서 start는 hook 제한(60초)에 시작 controller의 관찰 간격을 더한 시간 안에 끝나고 `--timeout`을 다 기다리지 않습니다. 기록이 없거나 hook process가 살아 있으면 판정하지 않습니다. 이 기록은 hook 진단이며 배정의 원본이 아닙니다.
 오류 details에는 run 정보와 `hook_error`(hook의 원래 `{code, message}`)가 들어갑니다. 배정과 생성한 window는 보존합니다.
 `registered`가 `start_error`보다 앞섭니다. 이미 보고한 실패 뒤에 이 run이 등록에 성공하면 성공한 등록이 `start_error`를 지웁니다. 그 등록은 게시까지 마친 것입니다.
 Hook은 SessionStart마다 한 번 실행하므로 실패한 run이 스스로 다시 등록하지는 않습니다.
