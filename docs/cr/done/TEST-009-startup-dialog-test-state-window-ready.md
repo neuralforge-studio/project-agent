@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: SESSION-010
 - Base: d66c2615f3aff4f6f161d1491949c2e2ec745777 2026-11-10T10:48:14+09:00
+- Outcome: fixed
 
 ## Symptom
 `tools/agent-session/tests/test_lifecycle.py::test_start_held_at_a_startup_dialog_needs_the_user_and_resumes[leader|worker]`가 부하 아래에서 `assert env.tmux.get_current("fixture", slot).get("ready") is True`(327행)로 실패합니다. v0.4.0 후보(SESSION-010·TMUX-003 통합, 802bb93)의 release 검증에서 agent-session 전체(`-n 8`)를 두 번 실행해 두 번 모두 두 parametrize가 실패했습니다(2 failed, 804 passed). 이 실패로 release를 내지 못합니다.
@@ -24,6 +25,7 @@
 - 2026-11-10 Leader: 고친다(Leader 판정). 재현과 원인 근거가 있는 test 결함이고, v0.4.0 release 검증을 막습니다(사용자 승인: 2026-11-10 "지금 0.4.0 설치").
 - 2026-11-10 Leader: open -> todo. release를 막는 test 결함
 - 2026-11-10 Leader: 제출 f0f4cb774d1795eadfbb58a76cd13b107e834109를 인수합니다. Leader review: state 게시와 window ready를 함께 기다리도록 바꿨습니다. 이것이 publish_session의 계약(state commit 뒤 window 갱신)과 맞는 단정입니다. 수정 전 18실행 중 8 실패가 수정 뒤 24실행 0 실패가 되었습니다. 같은 모양의 다른 test가 없다는 판정 근거도 인정합니다. README 표 tools/agent-session/** 행 전체 실행 결과는 805 passed, 1 failed입니다. 실패한 test_tmux.py의 launch 기록 test는 이 변경과 무관한 다른 경합입니다(파일이 생긴 뒤 내용이 쓰이기 전에 읽음). TEST-011로 엽니다. 제출 이후 main의 변경(d417943: tools/tests/perf, README)은 agent-session test의 입력이 아니어서 다시 실행하지 않습니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 a5d1f41(Merge cr/TEST-009, 제출 f0f4cb7). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [동작 명세](../../project-team/spec.md)의 게시 순서(`state.py` `publish_session` docstring), [project-team Worker 절](../../../skills/project-team/SKILL.md).
