@@ -121,7 +121,7 @@ Tmux window와 provider session은 유지하고 후속 메시지에서 관리를
 6. 같은 CR의 feedback을 받으면 해당 범위의 작업·검증을 마친 수정 제출을 보고합니다. 접수 확인이나 중간 결과를 별도로 회신하지 않습니다.
 7. Leader가 인수하면 자기가 띄운 background 작업(shell·monitor 등)을 멈추고 자기 작업의 불필요한 산출물을 정리합니다. 종료를 보고하기 직전에 자기 provider process의 자식을 확인합니다. Claude는 Bash tool에서 `ps -o pid,etime,args --ppid $PPID`를 실행합니다. Sub-agent가 띄운 shell도 같은 process의 자식입니다. 확인 명령 자신의 shell 말고 남은 것이 없을 때만 종료를 보고합니다. 남은 것이 있으면 PID로 멈춘 뒤 다시 확인합니다. 종료 준비 완료는 한 번 보고합니다.
 
-다른 process를 기다릴 때는 PID(`while kill -0 <PID>; do sleep 5; done`)나 provider의 background 완료 알림을 씁니다. `pgrep -f`·`pkill -f`는 그 명령을 담은 자기 shell의 command line과도 맞습니다. 그래서 `pgrep -f`로 기다리는 loop는 끝나지 않고, `pkill -f`는 자기 shell을 끝냅니다. Sub-agent에게 일을 맡길 때도 이 규칙을 지시합니다.
+process를 멈추고 기다리는 방법은 global AGENTS.md "환경과 권한"을 따릅니다. 원격 seat처럼 그 문서를 읽을 수 없으면 자기가 띄운 process만 PID로 멈추고 이름·pattern(`pgrep -f`·`pkill -f`)으로 고르지 않는다는 것만 지킵니다. 기다릴 때는 provider의 background 완료 알림도 쓸 수 있습니다. Sub-agent에게 일을 맡길 때도 이 규칙을 지시합니다.
 
 다른 project의 수정이 필요하면 직접 고치지 않고 자기 Leader에게 보고합니다. Worker는 다른 project에 send할 수 없습니다.
 
