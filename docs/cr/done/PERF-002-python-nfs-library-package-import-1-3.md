@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: PERF-001, SESSION-010, TMUX-003, RUST-001
 - Base: 73d45379ada1a537b49b31c59ddc6c85c0914d2d 2026-11-10T08:38:15+09:00
+- Outcome: fixed
 
 ## Symptom
 `agent-session`·`project-item`·`project-board` 명령과 tmux hook은 실행할 때마다 bash launcher와 Python interpreter를 새로 띄웁니다. 그리고 표준 library와 도구 package를 NFS(`/primehome`)에서 읽습니다. 실제 사용처럼 명령 사이가 1분을 넘으면 이 시동만으로 명령 하나에 1~3초가 걸립니다. 사용자 지시(2026-11-10): "Python 시동이 느린 것도 같이 고쳐줘."
@@ -47,6 +48,7 @@
 - 2026-11-10 Leader: 고친다. 재현 측정이 있는 결함이고, 사용자 지시가 있습니다(2026-11-10 대화 원문: "Python 시동이 느린 것도 같이 고쳐줘."). PERF-001·SESSION-010과 동시에 진행합니다.
 - 2026-11-10 Leader: open -> todo. 사용자 지시로 즉시 수정
 - 2026-11-10 Leader: 제출 944ab5b0e87922df2079552859a8f97435fd56a7를 인수합니다. Leader review(ad974fe와 944ab5b): 다섯 가지를 확인했습니다. 고른 provider만 import합니다. 표준 library만 쓰는 진입점(agent-session, project-item, 상태줄, Board의 sync·click·toggle)은 -S로 시작합니다. -E·-I는 쓰지 않아 PYTHON* 환경과 PROJECT_AGENT_PYTHONPATH가 그대로입니다. pending_releases 본문을 api.release_waits로 옮겨 원본이 하나입니다. 진입 script는 #!/bin/bash와 builtin 경로 계산을 쓰고, symlink일 때만 readlink -f를 실행합니다. cd -P로 물리 경로를 구하므로 current link를 지나는 호출도 같은 release 경로가 됩니다. 설치 계약 6.1에 이를 적었습니다. 측정은 Worker 표입니다(warm CPU 14~27% 감소, --help·sync wall 20~25% 감소). review --clear·ls와 cold는 오차 안이라 확정하지 못했습니다. 공식 A/B는 PERF-001 도구로 잽니다. 검증은 merge commit 944ab5b에서 다섯 명령입니다. 네 번째 명령의 4건 실패는 TMUX-003 test 격리 결함으로 판정합니다(사용자 cache의 .view를 읽음, origin/main에서도 같음, XDG_CACHE_HOME을 격리하면 125 passed). TEST-012로 엽니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 d2326ce(Merge cr/PERF-002, 제출 944ab5b). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [설치 계약](../../project-team/install-contract.md)(6.1 interpreter 선택), [실행 경로 계약](../../project-team/README.md#실행-경로-계약), [project-team Worker 절](../../../skills/project-team/SKILL.md).
