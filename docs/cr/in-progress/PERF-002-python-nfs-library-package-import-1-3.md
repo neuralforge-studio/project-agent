@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Related: PERF-001, SESSION-010, TMUX-003, RUST-001
+- Base: 73d45379ada1a537b49b31c59ddc6c85c0914d2d 2026-11-10T08:38:15+09:00
 
 ## Symptom
 `agent-session`·`project-item`·`project-board` 명령과 tmux hook은 실행할 때마다 bash launcher와 Python interpreter를 새로 띄웁니다. 그리고 표준 library와 도구 package를 NFS(`/primehome`)에서 읽습니다. 실제 사용처럼 명령 사이가 1분을 넘으면 이 시동만으로 명령 하나에 1~3초가 걸립니다. 사용자 지시(2026-11-10): "Python 시동이 느린 것도 같이 고쳐줘."

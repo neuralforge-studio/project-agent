@@ -41,6 +41,7 @@
 - 2026-11-10 Leader: open -> todo. Leader 판정: 측정(read-only). 사용자 보고와 재현 측정이 있는 속도 결함의 원인 조사
 - 2026-11-10 Leader: Mode를 read-only에서 write로 바꿉니다. 사용자 지시(2026-11-10 대화 원문: "측정은 필요해. 개선이 얼마나 된것인지 명확한 비교대상. 정량적 평가가 되어야 하니까.")로 측정 도구를 저장소에 남겨 v0.3.0을 기준으로 A/B 비교합니다. Base(2fd2739)는 그대로이고, Worker는 start가 write CR에 하는 것과 같이 `git switch --no-overwrite-ignore -c cr/PERF-001 2fd273983ce67607b63b3ae1c44be5b90d751c45`로 branch를 만듭니다.
 
+- 2026-11-10 Leader: 제출 1(0a77448, 측정 도구만)을 검토했고 수정을 요청합니다. 계측(`tools/tests/perf/site/sitecustomize.py`)이 측정 대상 interpreter의 site 처리와 `PYTHONPATH`에 기대고 있습니다. 그래서 PERF-002처럼 site 처리를 없앤 후보에서는 두 문제가 생깁니다. tmux·subprocess 수가 0으로 기록되고, 가짜 provider 치환이 빠집니다. 또 시간을 재는 실행에 계측 비용이 들어갑니다. 요구 사항은 넷입니다. (a) 시간을 재는 실행에는 측정 대상 process 안의 계측이 없어야 합니다. (b) 호출 수는 process 경계에서 셉니다. (c) 가짜 provider는 process 경계에서 넣습니다. (d) `-I -S` 후보로 같은 숫자가 나오는지 확인하는 test를 둡니다. README 검증 code block의 여섯 번째 명령은 release의 다섯 명령 규칙(release.md 5절)과 어긋나므로 표의 행에만 둡니다. 위치, ABAB 교대, warm/cold 분리, 격리, 산출물 형식은 인정합니다.
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증)(test tmux server 규칙), [동작 명세 5절 Python API](../../project-team/spec.md#프로젝트-consumer용-python-api), [project-team Worker 절](../../../skills/project-team/SKILL.md), [tmux 통합](../../../integrations/tmux/project-agent-main.conf).
 
@@ -141,3 +142,16 @@
 2. Evidence의 Leader 측정 두 개(`review --clear` 3.1초, liveness 396번)를 같은 방법으로 다시 재서 측정 방법이 맞는지 보입니다.
 3. 측정이 끝난 뒤 격리 tmux server와 그 process·socket이 남지 않았음을 확인합니다. 확인 기준은 README 검증의 test 자원 규칙입니다.
 4. (2026-11-10 추가) README 검증 표에서 바꾼 경로의 행을 모두 실행합니다. 측정 도구 자신의 test, 고친 문서의 상대 link 검사, `tools/test_distribution_boundary.py`가 포함됩니다. 제출 전에 `origin/main`이 움직여 그 입력을 바꿨으면 merge하고 merge commit에서 다시 실행합니다.
+
+## Result
+
+### 제출 1: 측정 도구 (기준선·원인 분류는 이어지는 제출)
+- 제출 commit: 0a77448c76f1ca32667aed9cd67276613f17fb87
+- 내용: `tools/tests/perf/`(release 제외 경로, `install/project_agent_install/release.py`의 `tests` 규칙) 아래에 두 실행본 A/B 도구를 추가했습니다. README 디렉터리 지도·검증 표에 행을 더했습니다. 제품 코드(`tools/*/` 패키지·`integrations/`·`install/`)는 바꾸지 않았습니다.
+  - 사용: `python tools/tests/perf/perf_bench.py run --exe BASE=PATH --exe CANDIDATE=PATH --workdir DIR --out DIR [--scales 4x4,8x8,16x16] [--reps 3] [--cold-reps 3 --cold-seconds 61] [--steady-seconds 60]`, 보고서만 다시 만들 때 `... report --out DIR`. 자세한 설명은 `perf_bench.py` 머리말입니다.
+  - 실행본은 `git archive <tag> | tar -x -C DIR`로 푼 사본, checkout, 설치 release 디렉터리입니다(`tools/`·`integrations/tmux`·`tools/agent-session/tests/fixtures`가 있어야 합니다).
+  - 두 실행본을 단위(연산)마다 A B A B로 번갈아 실행합니다. warm(연속)과 cold(`--cold-seconds` 유휴 뒤, `/primehome`의 `acregmin=60` 때문에 기본 61초)를 나눕니다.
+  - 격리: 규모마다 자기 tmux server(`tmux_test_server.claim`·`release`), 등록 파일, 캐시(`XDG_CACHE_HOME`), git remote·base·seat clone을 만듭니다. 모든 명령의 환경에 `TMUX`·`AGENT_SESSION_SOCKET`·`HOME`을 격리 값으로 항상 지정해 사용자 server에 닿지 않습니다.
+  - 산출물: `results.jsonl`(명령 하나당 한 줄), `meta.json`, `summary.json`, `summary.md`(중앙값·p90·tmux 수·그 밖의 subprocess 수·ratio·host load).
+- 검증(이 commit에서): `python -m pytest -q tools/tests/perf` 5 passed(작은 규모 A/A 1회 실행과 출력 형식, 서버·socket 잔존 없음 확인 포함, host load 약 100에서 180초), `python -m pytest -q tools/test_distribution_boundary.py` 9 passed, README 상대 link 검사 이상 없음.
+- 아직 없는 것: v0.3.0 기준선 표, A/A 비교, 지속 비용, 원인 분류(5·6단계), Verification 2. 측정 중이며 다음 제출에 넣습니다.

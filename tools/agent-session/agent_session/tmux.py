@@ -1,5 +1,6 @@
 """Control only windows with an exact project, run, and process identity."""
 
+from collections import namedtuple
 import json
 import os
 from pathlib import Path
@@ -101,8 +102,18 @@ _RUN_VALUES = {
     "moved_to_background": None, "last_sent": None, "last_received": None, "watch": None,
     "release_pending": None,
 }
+# What a run's waiting pane adds to the metadata the caller gives (`_waiting_values`).
+_WAITING_KEYS = frozenset({"cwd", "provider_launch_attempted", "registered", "ready", "publishing", "stopping",
+                           "placeholder_pid", "placeholder_birth", "placeholder_process_group"})
 _VALUES_MARK = "agent-session-values"
 _SEAT_TARGET = re.compile(r"seat-(0|[1-9][0-9]*)")
+# The names of the window options of a managed run that a read asks for in the same tmux sequence that lists
+# them. Only a guess that the listing checks: a name the listing shows and the guess lacks is read again and
+# remembered, so a read is one tmux process once the names are known, and never misses an option.
+_META_KEYS = frozenset(_IDENTITY) | frozenset(_RUN_VALUES) | _WAITING_KEYS
+_ARGV_LIMIT = 12000      # tmux refuses a command line of 16 KB ("command too long"); a longer batch goes in by stdin
+_WINDOW_ID = re.compile(r"@[0-9]+")
+_WINDOW_GONE = re.compile(r"(?:no such window|can't find window): (@[0-9]+)$")
 
 
 def _meta_keys(lines):
@@ -114,6 +125,191 @@ def _meta_keys(lines):
 
 def _absent(stderr):
     return any(text in stderr for text in ("no server running", "No such file or directory", "can't find session"))
+
+
+_PANE_FIELDS = ("window_id", "pane_id", "pane_pid", "pane_dead", "pane_dead_status", "pane_dead_signal")
+_ID_MARK, _SESSION_MARK, _WINDOW_MARK, _PANE_MARK = ("agent-session-" + word for word in ("server", "session", "window", "pane"))
+_Session = namedtuple("_Session", "handle owner pointers")      # a session's handle, owner marker text, pointer texts
+
+
+def _identity_from(raw):
+    """The server identity from `pid<TAB>start_time<TAB>socket_path`; the one owner of its checks."""
+    parts = (raw or "").split("\t")
+    if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit() or not parts[2]:
+        raise SessionError("tmux_unknown", "Tmux did not return a complete server identity.", 4)
+    pid = int(parts[0])
+    fingerprint = process.birth(pid)
+    if fingerprint is None:
+        raise SessionError("tmux_unknown", "The tmux server process identity is unavailable.", 4)
+    socket_path = Path(parts[2]).resolve()
+    try:
+        info = socket_path.stat()
+    except OSError as exc:
+        raise SessionError("tmux_unknown", "The selected tmux socket is unavailable.", 4) from exc
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+        raise SessionError("tmux_owner_mismatch", "The selected tmux socket is not owned by the current user.")
+    return {"server_pid": pid, "server_started": parts[1], "server_birth": fingerprint,
+            "socket_path": str(socket_path)}
+
+
+def _pane_row(raw, pane_id):
+    """The pane's fields from `_PANE_FIELDS` joined by tabs; the one owner of their checks."""
+    parts = raw.split("\t")
+    if (len(parts) != len(_PANE_FIELDS) or parts[3] not in ("0", "1")
+            or not (parts[2].isdigit() or (parts[2] == "" and parts[3] == "1"))):
+        raise SessionError("tmux_unknown", "The managed pane observation is incomplete.", 4,
+                           {"pane": pane_id, "raw": raw, "field_count": len(parts)})
+    row = dict(zip(_PANE_FIELDS, parts))
+    row["pane_pid"] = int(row["pane_pid"]) if row["pane_pid"] else None
+    row["pane_dead"] = row["pane_dead"] == "1"
+    row["pane_dead_status"] = int(row["pane_dead_status"]) if row["pane_dead_status"].isdigit() else None
+    row["pane_dead_signal"] = row["pane_dead_signal"] or None
+    return row
+
+
+def _pointer_window(raw):
+    """The window a current pointer text names, or None when the text is not a pointer."""
+    try:
+        pointer = json.loads(raw)
+    except ValueError:
+        return None
+    window = pointer.get("window_id") if isinstance(pointer, dict) else None
+    return window if isinstance(window, str) and window else None
+
+
+class ServerView:
+    """One read of a tmux server: what a single tmux process (two for the window options) told about it.
+
+    It holds the server identity, every session with its handle, owner marker and the current pointers that
+    were asked for, and, when asked, every window and pane. The checks of the product (owner, identity,
+    pointer against window) run on it with the same functions as on a live server: `Tmux.get_current` is
+    `ServerView.current` of a view of one project. A consumer that asks about many slots takes one view and
+    asks it each time, so the tmux processes do not grow with the slots.
+
+    A view is a snapshot. It reads nothing again and never writes; make a new one to see a change."""
+
+    def __init__(self, control, identity, sessions, windows, panes, targets):
+        self._control = control
+        self._identity_raw = identity
+        self.sessions = sessions        # session name -> _Session
+        self.windows = windows          # window id -> session handle, or None when windows were not read
+        self.panes = panes              # pane id -> its `_PANE_FIELDS` text, or None when panes were not read
+        self.targets = targets
+        self._identity = None
+        self._metas = {}                # window id -> its options, or the SessionError that reading them gave
+
+    def identity(self):
+        if self._identity is None:
+            self._identity = _identity_from(self._identity_raw)
+        return self._identity
+
+    def handle(self, project_id, missing_ok=False):
+        entry = self.sessions.get(project_id)
+        if entry is None:
+            if missing_ok:
+                return None
+            raise SessionError("tmux_session_not_found", "The exact tmux session is unavailable.", 3,
+                               {"project": project_id})
+        return entry.handle
+
+    def owner(self, project_id):
+        """The owner marker of the project's session when it is this server's and this project's."""
+        self.handle(project_id)                      # the session must exist
+        raw = self.sessions[project_id].owner
+        if not raw:
+            raise SessionError("tmux_owner_mismatch", "The named tmux session is not managed by agent-session.")
+        try:
+            owner = json.loads(raw)
+        except ValueError as exc:
+            raise SessionError("tmux_owner_mismatch", "The managed tmux session has an invalid owner marker.") from exc
+        if not isinstance(owner, dict) or owner.get("project_id") != project_id:
+            raise SessionError("tmux_owner_mismatch", "The managed tmux session belongs to another project.")
+        actual = self.identity()
+        if any(owner.get(key) != value for key, value in actual.items()):
+            raise SessionError("tmux_owner_mismatch", "The tmux session was restored or its server identity changed.")
+        return owner
+
+    def pointer(self, project_id, target):
+        """The text of the slot's current pointer option; empty when the slot has none."""
+        entry = self.sessions[project_id]
+        if target in entry.pointers:
+            return entry.pointers[target]
+        return self._control._run("show-options", "-qv", "-t", entry.handle, self._control._current_option(target))
+
+    def load(self, project_ids=None):
+        """Read the options of every current run of these projects (all by default) in one batch."""
+        wanted = []
+        for name, entry in self.sessions.items():
+            if project_ids is None or name in project_ids:
+                wanted += [window for window in map(_pointer_window, entry.pointers.values())
+                           if window and _WINDOW_ID.fullmatch(window) and window not in self._metas
+                           and (self.windows is None or window in self.windows)]   # another text is read alone, when asked for
+        if wanted:
+            self._metas.update(self._control._read_metas(wanted))
+        return self
+
+    def meta(self, window_id):
+        """The window's options; the error that reading them gave is raised again, as a live read would."""
+        found = self._metas.get(window_id)
+        if found is None:
+            if self.windows is not None and window_id not in self.windows:
+                found = SessionError("tmux_command_failed", "Tmux rejected the operation.", 5,
+                                     {"command": "show-options", "reason": f"can't find window: {window_id}"})
+            else:
+                found = self._control._read_metas([window_id])[window_id]
+            self._metas[window_id] = found
+        if isinstance(found, SessionError):
+            raise found
+        return dict(found)
+
+    def current(self, project_id, target):
+        """The slot's current run: its window options, or None. The rule of `Tmux.get_current`."""
+        name = _session(project_id)
+        if name not in self.sessions:
+            return None
+        self.owner(name)
+        raw = self.pointer(name, target)
+        if not raw:
+            return None
+        try:
+            pointer = json.loads(raw)
+        except ValueError as exc:
+            raise SessionError("tmux_metadata_invalid", "The current execution pointer is invalid.") from exc
+        if not isinstance(pointer, dict) or not pointer.get("window_id"):
+            raise SessionError("tmux_metadata_invalid", "The current execution pointer is incomplete.")
+        try:
+            actual = self.meta(pointer["window_id"])
+        except SessionError as error:
+            reason = error.details.get("reason", "")
+            if (error.code == "tmux_command_failed" and isinstance(reason, str)
+                    and re.fullmatch(r"(?:no such window|can't find window): .+", reason)):
+                raise SessionError("execution_evidence_missing", "The current execution window is unavailable.", 4,
+                                   {"target": target, "window_id": pointer["window_id"],
+                                    "run_id": pointer.get("run_id")}) from error
+            raise
+        if any(actual.get(key) != pointer.get(key) for key in _IDENTITY):
+            raise SessionError("target_changed", "The runtime identity no longer matches the current pointer.")
+        if actual.get("target") != target or actual.get("project_id") != name:
+            raise SessionError("target_changed", "The current execution points to another target.")
+        return actual
+
+    def pane_info(self, pane_id):
+        """The pane's fields (`Tmux.pane_info`), from this view when it read the panes."""
+        if self.panes is None:
+            return self._control.pane_info(pane_id)
+        raw = self.panes.get(_safe_text(pane_id, "pane handle"))
+        if raw is None:
+            raise SessionError("tmux_command_failed", "Tmux rejected the operation.", 5,
+                               {"command": "display-message", "reason": f"can't find pane: {pane_id}"})
+        return _pane_row(raw, pane_id)
+
+    def windows_of(self, project_id):
+        """Window handles of the project's session, in tmux's order."""
+        handle = self.handle(project_id)
+        return [window for window, session in self.windows.items() if session == handle]
+
+    def panes_of(self, window_id):
+        return [pane for pane, raw in self.panes.items() if raw.split("\t")[0] == window_id]
 
 
 class Tmux:
@@ -167,53 +363,55 @@ class Tmux:
         return str((directory / (self.socket_name or "default")).resolve())
 
     def server_identity(self):
-        raw = self._run("display-message", "-p", "#{pid}\t#{start_time}\t#{socket_path}")
-        parts = raw.split("\t")
-        if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit() or not parts[2]:
-            raise SessionError("tmux_unknown", "Tmux did not return a complete server identity.", 4)
-        pid = int(parts[0])
-        fingerprint = process.birth(pid)
-        if fingerprint is None:
-            raise SessionError("tmux_unknown", "The tmux server process identity is unavailable.", 4)
-        socket_path = Path(parts[2]).resolve()
-        try:
-            info = socket_path.stat()
-        except OSError as exc:
-            raise SessionError("tmux_unknown", "The selected tmux socket is unavailable.", 4) from exc
-        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
-            raise SessionError("tmux_owner_mismatch", "The selected tmux socket is not owned by the current user.")
-        return {"server_pid": pid, "server_started": parts[1], "server_birth": fingerprint,
-                "socket_path": str(socket_path)}
+        return _identity_from(self._run("display-message", "-p", "#{pid}\t#{start_time}\t#{socket_path}"))
+
+    def _observe(self, targets=(), windows=False, panes=False):
+        """Read the server in one tmux process: its identity, every session with its owner marker and the
+        current pointers of `targets`, and, when asked, every window and pane. Returns a `ServerView`."""
+        targets = tuple(target for target in dict.fromkeys(targets) if self._is_target(target))
+        columns = "".join("\t#{" + self._current_option(target) + "}" for target in targets)
+        arguments = ["display-message", "-p", _ID_MARK + "\t#{pid}\t#{start_time}\t#{socket_path}",
+                     ";", "list-sessions", "-F",
+                     _SESSION_MARK + "\t#{session_id}\t#{" + _PREFIX + "owner}" + columns + "\t#{session_name}"]
+        if windows:
+            arguments += [";", "list-windows", "-a", "-F", _WINDOW_MARK + "\t#{window_id}\t#{session_id}"]
+        if panes:
+            arguments += [";", "list-panes", "-a", "-F", _PANE_MARK + "\t" + "\t".join("#{" + name + "}" for name in _PANE_FIELDS)]
+        raw = self._run(*arguments, allow_missing=True)
+        identity, sessions = None, {}
+        found_windows = {} if windows else None
+        found_panes = {} if panes else None
+        for line in (raw or "").split("\n"):
+            mark, _, rest = line.partition("\t")
+            if mark == _ID_MARK:
+                identity = rest
+            elif mark == _SESSION_MARK:
+                parts = rest.split("\t", len(targets) + 2)         # handle, owner, the pointers, the name
+                sessions[parts[-1]] = _Session(parts[0], parts[1], dict(zip(targets, parts[2:-1])))
+            elif mark == _WINDOW_MARK and windows:
+                window, _, session = rest.partition("\t")
+                found_windows[window] = session
+            elif mark == _PANE_MARK and panes:
+                found_panes[rest.split("\t", 2)[1]] = rest
+        return ServerView(self, identity, sessions, found_windows, found_panes, targets)
+
+    def server_view(self, project_ids, targets):
+        """A `ServerView` of every session, window and pane, with the options of the current runs of the
+        slots `targets` (`leader`, `seat-N`) of these projects already read: two tmux processes in all."""
+        return self._observe(targets, windows=True, panes=True).load(set(project_ids))
+
+    @staticmethod
+    def _is_target(target):
+        return target == "leader" or _SEAT_TARGET.fullmatch(target or "") is not None
 
     def has_session(self, project_id):
-        name = _session(project_id)
-        return self._session_target(name, missing_ok=True) is not None
+        return _session(project_id) in self._observe().sessions
 
     def _session_target(self, project_id, missing_ok=False):
-        raw = self._run("list-sessions", "-F", "#{session_name}\t#{session_id}", allow_missing=True)
-        for line in (raw or "").splitlines():
-            name, separator, handle = line.partition("\t")
-            if separator and name == project_id:
-                return handle
-        if missing_ok:
-            return None
-        raise SessionError("tmux_session_not_found", "The exact tmux session is unavailable.", 3,
-                           {"project": project_id})
+        return self._observe().handle(_session(project_id), missing_ok)
 
     def _session_owner(self, project_id):
-        raw = self._run("show-options", "-qv", "-t", self._session_target(project_id), _PREFIX + "owner")
-        if not raw:
-            raise SessionError("tmux_owner_mismatch", "The named tmux session is not managed by agent-session.")
-        try:
-            owner = json.loads(raw)
-        except ValueError as exc:
-            raise SessionError("tmux_owner_mismatch", "The managed tmux session has an invalid owner marker.") from exc
-        if not isinstance(owner, dict) or owner.get("project_id") != project_id:
-            raise SessionError("tmux_owner_mismatch", "The managed tmux session belongs to another project.")
-        actual = self.server_identity()
-        if any(owner.get(key) != value for key, value in actual.items()):
-            raise SessionError("tmux_owner_mismatch", "The tmux session was restored or its server identity changed.")
-        return owner
+        return self._observe().owner(project_id)
 
     @staticmethod
     def _run_values(metadata):
@@ -227,7 +425,8 @@ class Tmux:
 
     def _waiting_values(self, values, base, name, window_id, pane_id, cwd):
         """The run's values once its waiting pane exists: the pane, the server, and the waiting process."""
-        pane = self.pane_info(pane_id)
+        view = self._observe(panes=True)
+        pane = view.pane_info(pane_id)
         try:
             if pane["pane_pid"] is None:
                 raise ProcessLookupError(pane_id)
@@ -235,7 +434,7 @@ class Tmux:
         except OSError as exc:
             raise SessionError("execution_unknown", "The waiting process group is unavailable.", 4) from exc
         return {**values, "base": base, "project_id": name, "window_id": window_id, "pane_id": pane_id,
-                "cwd": str(cwd), **self.server_identity(), "provider_launch_attempted": False,
+                "cwd": str(cwd), **view.identity(), "provider_launch_attempted": False,
                 "registered": False, "ready": False, "publishing": None, "stopping": False,
                 "placeholder_pid": pane["pane_pid"], "placeholder_birth": process.birth(pane["pane_pid"]),
                 "placeholder_process_group": placeholder_group}
@@ -248,24 +447,25 @@ class Tmux:
         if not cwd.is_dir():
             raise SessionError("cwd_unavailable", "The tmux working directory is unavailable.", 3)
         values, base = self._run_values(metadata)
-        if self.has_session(name):
-            owner = self._session_owner(name)
+        view = self._observe()
+        if name in view.sessions:
+            owner = view.owner(name)
             if owner.get("base") != base:
                 raise SessionError("tmux_owner_mismatch", "The tmux session belongs to another project base.")
             raw = self._run("new-window", "-d", "-P", "-F", "#{window_id}\t#{pane_id}",
-                            "-t", self._session_target(name) + ":", "-n", window_name, "-c", cwd, "sleep", "86400")
+                            "-t", view.handle(name) + ":", "-n", window_name, "-c", cwd, "sleep", "86400")
         else:
             raw = self._run("new-session", "-d", "-P", "-F", "#{window_id}\t#{pane_id}",
                             "-s", name, "-n", window_name, "-c", cwd, "sleep", "86400")
-            owner = {"base": base, "project_id": name, **self.server_identity()}
-            self._run("set-option", "-t", self._session_target(name), _PREFIX + "owner", json.dumps(owner))
+            made = self._observe()               # the session this call made: its handle, and the server it is on
+            owner = {"base": base, "project_id": name, **made.identity()}
+            self._run("set-option", "-t", made.handle(name), _PREFIX + "owner", json.dumps(owner))
         identifiers = raw.split("\t")
         if len(identifiers) != 2 or not identifiers[0].startswith("@") or not identifiers[1].startswith("%"):
             raise SessionError("tmux_unknown", "Tmux did not return exact window and pane handles.", 4)
         window_id, pane_id = identifiers
         self._run("set-option", "-w", "-t", window_id, "remain-on-exit", "on")
-        self.write_meta(window_id, self._waiting_values(values, base, name, window_id, pane_id, cwd))
-        return self.read_meta(window_id)
+        return self.write_meta(window_id, self._waiting_values(values, base, name, window_id, pane_id, cwd))
 
     def reuse_window(self, project_id, window_name, cwd, metadata, expected):
         """Give a retired window to a new run: its dead managed pane restarts as the new run's waiting pane.
@@ -285,7 +485,8 @@ class Tmux:
             raise SessionError("cwd_unavailable", "The tmux working directory is unavailable.", 3)
         values, base = self._run_values(metadata)
         window_id = _safe_text(expected.get("window_id"), "window handle")
-        owner = self._session_owner(name)
+        view = self._observe(windows=True, panes=True)
+        owner = view.owner(name)
         if owner.get("base") != base:
             raise SessionError("tmux_owner_mismatch", "The tmux session belongs to another project base.")
         meta = self.read_meta(window_id)
@@ -293,18 +494,14 @@ class Tmux:
         if (not meta.get("run_id") or any(meta.get(key) != expected.get(key) for key in keys)
                 or meta["project_id"] != name or meta["target"] != values["target"]):
             raise SessionError("target_changed", "The window no longer holds the expected run.")
-        server = self.server_identity()
+        server = view.identity()
         if any(meta.get(key) != value for key, value in server.items()):
             raise SessionError("tmux_owner_mismatch", "The window was restored or belongs to another server.")
-        handles = self._run("list-windows", "-t", self._session_target(name), "-F", "#{window_id}").splitlines()
-        panes = self._run("list-panes", "-t", window_id, "-F", "#{pane_id}").splitlines()
-        if window_id not in handles or meta["pane_id"] not in panes:
+        if window_id not in view.windows_of(name) or meta["pane_id"] not in view.panes_of(window_id):
             raise SessionError("target_changed", "The window or its managed pane is not in the project session.")
-        if not self.pane_info(meta["pane_id"])["pane_dead"]:
+        if not view.pane_info(meta["pane_id"])["pane_dead"]:
             raise SessionError("target_running", "The managed pane is still running.")
-        leftover = sorted(set(meta) - set(values) - set(_RUN_VALUES) - set(_IDENTITY)
-                          - {"cwd", "provider_launch_attempted", "registered", "ready", "publishing", "stopping",
-                             "placeholder_pid", "placeholder_birth", "placeholder_process_group"})
+        leftover = sorted(set(meta) - set(values) - set(_RUN_VALUES) - set(_IDENTITY) - _WAITING_KEYS)
         if leftover:
             raise SessionError("window_unreusable", "The window has metadata that a new run cannot replace.",
                                details={"keys": leftover})
@@ -317,11 +514,13 @@ class Tmux:
             updates = {**_RUN_VALUES, **fresh}
             pointer = {key: updates.get(key) for key in _IDENTITY}
             arguments = self._option_arguments(window_id, updates)
-            arguments += [";", "set-option", "-t", self._session_target(name), self._current_option(values["target"]),
+            arguments += [";", "set-option", "-t", view.handle(name), self._current_option(values["target"]),
                           json.dumps(pointer, ensure_ascii=False, separators=(",", ":")),
                           ";", "set-option", "-w", "-t", window_id, "remain-on-exit", "on",
                           ";", "rename-window", "-t", window_id, window_name]
-            self._run(*arguments[1:])
+            reused = self._read_metas([window_id], before=arguments[1:])[window_id]
+            if isinstance(reused, SessionError):
+                raise reused
         except BaseException:
             # The waiting process is this call's own; ending it returns the window to the retired run's evidence.
             if pid is not None:
@@ -330,56 +529,143 @@ class Tmux:
                 except OSError:
                     pass
             raise
-        return self.read_meta(window_id)
+        return reused
 
     def read_meta(self, window_id):
-        """Read values with -v, because the quoted listing escapes $ in a way shlex cannot undo.
+        """The window's run options, read as one snapshot.
 
-        One tmux command sequence lists the options and prints the requested values, so the
-        result is one snapshot. A key that write_meta added after the request is read again;
-        managed options are never unset, so the key list only grows.
-        """
+        One tmux command sequence lists the option names and prints the values of the names asked for, so
+        the result is one snapshot. A name the listing shows and the request lacked is read again; managed
+        options are never unset, so the names only grow (`_META_KEYS`)."""
         window_id = _safe_text(window_id, "window handle")
-        keys = None
-        while True:
-            arguments = ["show-options", "-w", "-t", window_id,
-                         ";", "display-message", "-p", "-t", window_id, _VALUES_MARK]
-            for key in keys or ():
-                arguments += [";", "show-options", "-wv", "-t", window_id, _PREFIX + key]
-            # JSON escapes control characters, so only tmux adds "\n"; splitlines would also cut U+2028.
-            lines = self._run(*arguments).split("\n")
-            if lines.count(_VALUES_MARK) != 1:
-                raise SessionError("tmux_metadata_invalid", "The managed window has invalid runtime metadata.")
-            mark = lines.index(_VALUES_MARK)
-            listed = _meta_keys(lines[:mark])
-            if not listed or listed == keys:
-                break
-            keys = listed
-        values = lines[mark + 1:]
+        found = self._read_metas([window_id])[window_id]
+        if isinstance(found, SessionError):
+            raise found
+        return found
+
+    def _read_metas(self, window_ids, before=None):
+        """{window id: its run options, or the SessionError of reading that window}, for several windows in
+        one tmux process (the sequence of `read_meta` once per window). `before` is a tmux command list
+        for one window that runs first in the same sequence (`write_meta` reads its result back with it)."""
+        global _META_KEYS
+        pending = list(dict.fromkeys(_safe_text(window, "window handle") for window in window_ids))
+        results = {}
+        while pending:
+            keys = sorted(_META_KEYS)
+            mark = _VALUES_MARK + "\t#{window_id}" + "".join("\t#{" + _PREFIX + key + "}" for key in keys)
+            commands = [command for window in pending
+                        for command in (["show-options", "-w", "-t", window], ["display-message", "-p", "-t", window, mark])]
+            output, gone = self._meta_sequence(commands, before)
+            before = None
+            for window in gone:
+                results[window] = SessionError("tmux_command_failed", "Tmux rejected the operation.", 5,
+                                               {"command": "show-options", "reason": f"no such window: {window}"})
+            if output is None:                          # the sequence stopped at the window that is gone
+                pending = [window for window in pending if window not in results]
+                continue
+            blocks, listing = {}, []
+            for line in output.split("\n"):
+                if line.startswith(_VALUES_MARK + "\t"):
+                    fields = line.split("\t")
+                    blocks[fields[1]] = (listing, fields[2:])
+                    listing = []
+                else:
+                    listing.append(line)
+            again = []
+            for window in pending:
+                if window in results:
+                    continue
+                block = blocks.get(window) or (next(iter(blocks.values())) if len(pending) == 1 and len(blocks) == 1 else None)
+                if block is None:
+                    results[window] = SessionError("tmux_metadata_invalid", "The managed window has invalid runtime metadata.")
+                    continue
+                lines, fields = block
+                try:
+                    listed = _meta_keys(lines)
+                    if not listed:
+                        results[window] = {}
+                        continue
+                    asked = dict(zip(keys, fields))
+                    if len(fields) != len(keys):
+                        raise ValueError("Incomplete tmux option values")
+                    if any(key not in asked for key in listed):
+                        again.append(window)
+                        _META_KEYS = _META_KEYS | frozenset(listed)
+                        continue
+                    results[window] = {key: json.loads(asked[key]) for key in listed}
+                except SessionError as error:
+                    results[window] = error
+                except ValueError:
+                    results[window] = SessionError("tmux_metadata_invalid", "The managed window has invalid runtime metadata.")
+            pending = again
+        return results
+
+    def _meta_sequence(self, commands, before):
+        """Run tmux command lists in one process. Returns (their output, the windows that no longer exist).
+
+        A short sequence is one command line; when a window is gone it stops there and the output is None.
+        A long one goes in by stdin to `source-file`, because tmux refuses a command line of 16 KB; there a
+        failing line does not stop the lines after it."""
+        if before is not None or sum(len(word) + 1 for command in commands for word in command) <= _ARGV_LIMIT:
+            words = list(before or ())
+            for command in commands:
+                words += ([";"] if words else []) + command
+            try:
+                return self._run(*words), []
+            except SessionError as error:
+                reason = error.details.get("reason", "")
+                found = _WINDOW_GONE.search(reason) if error.code == "tmux_command_failed" and isinstance(reason, str) else None
+                if before is not None or found is None:
+                    raise
+                return None, [found.group(1)]
+        script = ""
+        for index in range(0, len(commands), 2):
+            lines = [" ".join(self._quoted(word) for word in command) for command in commands[index:index + 2]]
+            script += " ; ".join(lines) + "\n"
         try:
-            if len(values) != len(listed):
-                raise ValueError("Incomplete tmux option values")
-            return {key: json.loads(value) for key, value in zip(listed, values)}
-        except ValueError as exc:
-            raise SessionError("tmux_metadata_invalid", "The managed window has invalid runtime metadata.") from exc
+            result = subprocess.run(self._argv(["source-file", "-"]), input=script, capture_output=True, text=True, timeout=10)
+        except FileNotFoundError as exc:
+            raise SessionError("tmux_unavailable", "The tmux executable is unavailable.", 5) from exc
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SessionError("tmux_unknown", "Cannot confirm the tmux operation.", 4) from exc
+        gone = []
+        for line in result.stderr.splitlines():
+            found = _WINDOW_GONE.search(line)
+            if found is None:
+                raise SessionError("tmux_command_failed", "Tmux rejected the operation.", 5,
+                                   {"command": "source-file", "reason": line.strip()})
+            gone.append(found.group(1))
+        return result.stdout.rstrip("\n"), gone
+
+    @staticmethod
+    def _quoted(word):
+        if "'" in word or "\n" in word:
+            raise SessionError("tmux_input", "A tmux word must have no quote or newline.", 2)
+        return "'" + word + "'"
 
     def write_meta(self, window_id, updates):
         """Keep mutable fields in separate options so concurrent updates merge.
 
         One tmux command sequence sets all options of one update, so a reader sees all or none of them.
+        The same sequence reads the options back, so the result is what the window holds after the update.
         """
-        current = self.read_meta(window_id)
         updates = _json_value(dict(updates))
-        for key, value in updates.items():
-            if key in _IDENTITY and key in current and current[key] != value:
-                raise SessionError("target_changed", "An immutable runtime identity cannot be replaced in place.",
-                                   details={"field": key})
-            if key == "provider_launch_attempted" and current.get(key) is True and value is not True:
-                raise SessionError("target_changed", "A provider launch attempt cannot be cleared in the same run.")
+        guarded = [key for key in updates if key in _IDENTITY or key == "provider_launch_attempted"]
+        if guarded or not updates:                 # only these updates are checked against what the window holds now
+            current = self.read_meta(window_id)
+            for key, value in updates.items():
+                if key in _IDENTITY and key in current and current[key] != value:
+                    raise SessionError("target_changed", "An immutable runtime identity cannot be replaced in place.",
+                                       details={"field": key})
+                if key == "provider_launch_attempted" and current.get(key) is True and value is not True:
+                    raise SessionError("target_changed", "A provider launch attempt cannot be cleared in the same run.")
         arguments = self._option_arguments(window_id, updates)
-        if arguments:
-            self._run(*arguments[1:])
-        return self.read_meta(window_id)
+        if not arguments:
+            return current
+        found = self._read_metas([window_id], before=arguments[1:])[window_id]
+        if isinstance(found, SessionError):
+            raise found
+        return found
 
     @staticmethod
     def _option_arguments(window_id, updates):
@@ -398,55 +684,29 @@ class Tmux:
         return _PREFIX + "current_" + target.replace("-", "_")
 
     def set_current(self, project_id, target, metadata):
-        owner = self._session_owner(_session(project_id))
+        view = self._observe()
+        owner = view.owner(_session(project_id))
         actual = self.read_meta(metadata["window_id"])
         if (actual.get("project_id") != project_id or actual.get("target") != target
                 or actual.get("base") != owner.get("base") or actual.get("run_id") != metadata.get("run_id")):
             raise SessionError("target_changed", "The current pointer does not match this managed window.")
         pointer = {key: actual.get(key) for key in _IDENTITY}
-        self._run("set-option", "-t", self._session_target(project_id), self._current_option(target),
+        self._run("set-option", "-t", view.handle(project_id), self._current_option(target),
                   json.dumps(pointer, ensure_ascii=False, separators=(",", ":")))
         return actual
 
     def get_current(self, project_id, target):
-        name = _session(project_id)
-        if not self.has_session(name):
-            return None
-        self._session_owner(name)
-        raw = self._run("show-options", "-qv", "-t", self._session_target(name), self._current_option(target))
-        if not raw:
-            return None
-        try:
-            pointer = json.loads(raw)
-        except ValueError as exc:
-            raise SessionError("tmux_metadata_invalid", "The current execution pointer is invalid.") from exc
-        if not isinstance(pointer, dict) or not pointer.get("window_id"):
-            raise SessionError("tmux_metadata_invalid", "The current execution pointer is incomplete.")
-        try:
-            actual = self.read_meta(pointer["window_id"])
-        except SessionError as error:
-            reason = error.details.get("reason", "")
-            if (error.code == "tmux_command_failed" and isinstance(reason, str)
-                    and re.fullmatch(r"(?:no such window|can't find window): .+", reason)):
-                raise SessionError("execution_evidence_missing", "The current execution window is unavailable.", 4,
-                                   {"target": target, "window_id": pointer["window_id"],
-                                    "run_id": pointer.get("run_id")}) from error
-            raise
-        if any(actual.get(key) != pointer.get(key) for key in _IDENTITY):
-            raise SessionError("target_changed", "The runtime identity no longer matches the current pointer.")
-        if actual.get("target") != target or actual.get("project_id") != name:
-            raise SessionError("target_changed", "The current execution points to another target.")
-        return actual
+        return self._observe((target,)).current(project_id, target)
 
     def clear_current(self, project_id, target, run_id):
         """Remove the slot pointer only while it still names this run."""
         name = _session(project_id)
-        if not self.has_session(name):
+        view = self._observe((target,))
+        if name not in view.sessions:
             return False
-        self._session_owner(name)
+        view.owner(name)
         option = self._current_option(target)
-        handle = self._session_target(name)
-        raw = self._run("show-options", "-qv", "-t", handle, option)
+        raw = view.pointer(name, target)
         if not raw:
             return False
         try:
@@ -455,25 +715,19 @@ class Tmux:
             raise SessionError("tmux_metadata_invalid", "The current execution pointer is invalid.") from exc
         if not isinstance(pointer, dict) or pointer.get("run_id") != run_id:
             return False
-        self._run("set-option", "-u", "-t", handle, option)
+        self._run("set-option", "-u", "-t", view.handle(name), option)
         return True
 
     def managed_windows(self, project_id, target):
         """Window handles of one slot's managed runs in the project session, current or retired."""
         name = _session(project_id)
-        if not self.has_session(name):
+        view = self._observe(windows=True)
+        if name not in view.sessions:
             return []
-        self._session_owner(name)
-        raw = self._run("list-windows", "-t", self._session_target(name), "-F", "#{window_id}")
-        handles = []
-        for window_id in (raw or "").splitlines():
-            try:
-                meta = self.read_meta(window_id)
-            except SessionError:
-                continue
-            if meta.get("project_id") == name and meta.get("target") == target:
-                handles.append(window_id)
-        return handles
+        view.owner(name)
+        found = self._read_metas(view.windows_of(name))
+        return [window for window, meta in found.items()
+                if not isinstance(meta, SessionError) and meta.get("project_id") == name and meta.get("target") == target]
 
     def close_window(self, window_id, expected):
         """Close a retired window's dead managed pane: "window" when it was the only pane, else "pane".
@@ -484,14 +738,15 @@ class Tmux:
         keys = ("base", "target", "run_id", "project_id", "window_id", "pane_id")
         if not meta.get("run_id") or any(meta.get(key) != expected.get(key) for key in keys):
             raise SessionError("target_changed", "The window no longer holds the expected run.")
-        server = self.server_identity()
+        view = self._observe(panes=True)
+        server = view.identity()
         if any(meta.get(key) != value for key, value in server.items()):
             raise SessionError("tmux_owner_mismatch", "The window was restored or belongs to another server.")
-        panes = self._run("list-panes", "-t", window_id, "-F", "#{pane_id}").splitlines()
+        panes = view.panes_of(window_id)
         if meta["pane_id"] not in panes:
             raise SessionError("target_changed", "The window no longer holds the managed pane.",
                                details={"panes": panes})
-        if not self.pane_info(meta["pane_id"])["pane_dead"]:
+        if not view.pane_info(meta["pane_id"])["pane_dead"]:
             raise SessionError("target_running", "The managed pane is still running.")
         if panes == [meta["pane_id"]]:
             self._run("kill-window", "-t", window_id)
@@ -602,20 +857,9 @@ class Tmux:
 
         Only fields that can never hold a tab are read: pane_current_path and pane_current_command
         are printed as is, so a tab in a directory name would shift every field after it."""
-        fields = ("window_id", "pane_id", "pane_pid", "pane_dead", "pane_dead_status", "pane_dead_signal")
         raw = self._run("display-message", "-p", "-t", _safe_text(pane_id, "pane handle"),
-                        "\t".join("#{" + field + "}" for field in fields))
-        parts = raw.split("\t")
-        if (len(parts) != len(fields) or parts[3] not in ("0", "1")
-                or not (parts[2].isdigit() or (parts[2] == "" and parts[3] == "1"))):
-            raise SessionError("tmux_unknown", "The managed pane observation is incomplete.", 4,
-                               {"pane": pane_id, "raw": raw, "field_count": len(parts)})
-        row = dict(zip(fields, parts))
-        row["pane_pid"] = int(row["pane_pid"]) if row["pane_pid"] else None
-        row["pane_dead"] = row["pane_dead"] == "1"
-        row["pane_dead_status"] = int(row["pane_dead_status"]) if row["pane_dead_status"].isdigit() else None
-        row["pane_dead_signal"] = row["pane_dead_signal"] or None
-        return row
+                        "\t".join("#{" + field + "}" for field in _PANE_FIELDS))
+        return _pane_row(raw, pane_id)
 
     def launch(self, window_id, cwd, script_path):
         """Replace only this run's still-owned waiting process."""
@@ -743,15 +987,16 @@ class Tmux:
                 "socket_path": self.effective_socket()}
 
     def find_by_session(self, project, session_id):
-        if not self.has_session(project.project_id):
+        view = self._observe(windows=True)
+        if project.project_id not in view.sessions:
             return None
-        owner = self._session_owner(project.project_id)
+        owner = view.owner(project.project_id)
         if owner.get("base") != str(project.base):
             raise SessionError("tmux_owner_mismatch", "The tmux session belongs to another project base.")
-        windows = self._run("list-windows", "-t", self._session_target(project.project_id), "-F", "#{window_id}").splitlines()
         found = []
-        for window_id in dict.fromkeys(windows):
-            meta = self.read_meta(window_id)
+        for window_id, meta in self._read_metas(view.windows_of(project.project_id)).items():
+            if isinstance(meta, SessionError):
+                raise meta
             if meta.get("base") == str(project.base) and meta.get("session_id") == session_id:
                 found.append(meta)
         if len(found) > 1:
