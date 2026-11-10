@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: PERF-001, SESSION-010, BOARD-012
 - Base: bdc570e4c1749431cafea0b762b4f81ac6aa6de5 2026-11-10T23:28:47+09:00
+- Outcome: fixed
 
 ## Symptom
 Project Board TUI pane 하나가 아무 조작 없이 떠 있기만 해도 16 project × seat 16 규모에서 1분에 CPU 25~32초를 씁니다. 이는 코어 하나의 40~53%입니다. v0.4.0의 Board liveness 개선(tmux 호출 3번) 뒤에도 남았습니다. 사용자는 Board를 늘 켜 두므로 이 비용이 host load에 계속 더해집니다.
@@ -29,6 +30,7 @@ Project Board TUI pane 하나가 아무 조작 없이 떠 있기만 해도 16 pr
 - 2026-11-10 Leader: 고친다(Leader 판정). 측정 근거가 있는 속도 결함이며 사용자가 늘 켜 두는 화면입니다.
 - 2026-11-10 Leader: open -> todo. 측정 근거 있는 Board idle CPU 결함
 - 2026-11-11 Leader: 제출 9e2cee8db41547ed8c141a250637597821f45d55를 인수합니다. 검토 9e2cee8(구현 fd130f3 + main 1ec9d43 merge). tui.py의 project별 signature(접힌 project의 시간 제외)와 바뀐 project block만 교체(새 block을 먼저 mount), expanded_projects의 lock 없는 show-options 한 번, model.py의 디렉터리 mtime 기반 listing·cr_states 재사용(2초 안의 stamp는 믿지 않음; 파일 내용은 기존 _cached가 파일별 size·mtime으로 계속 확인), registry stat 재사용을 읽었습니다. 고친 문서 두 개의 상대 link는 Leader가 확인했습니다(0 broken). project-board tests 171(구현), merge commit에서 project-board + distribution boundary 180 passed. 16x16 steady Board pane 1개 분당 CPU 20.2~25.5초 → 2.93~4.10초(같은 실행 비교, load 12~44).
+- 2026-11-11 Leader: in-progress -> done, Outcome fixed. 통합 cddba10 (origin/main)
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [project-board README](../../../tools/project-board/README.md), `tools/project-board/project_board/tui.py`(`refresh_snapshot`, `refresh_liveness`, `refresh_context`, `refresh_items`, `refresh_decisions`), 측정 도구 [`tools/tests/perf/perf_bench.py`](../../../tools/tests/perf/perf_bench.py) 머리말(steady), PERF-001 Result "측정 결과 B", [project-team Worker 절](../../../skills/project-team/SKILL.md).
