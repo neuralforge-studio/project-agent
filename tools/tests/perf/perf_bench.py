@@ -254,7 +254,16 @@ def make_units(bench):
     units = {"startup": bench.startup, "board_cli": bench.board_cli, "lifecycle": bench.lifecycle}
     for name in READONLY_UNITS:
         units[name] = lambda exe, name=name: bench.readonly(exe, {name})
-    return units
+
+    def tolerant(unit):
+        """A command that fails is already a row with rc != 0 (`failed` in the report); the run goes on."""
+        def run_unit(exe):
+            try:
+                unit(exe)
+            except SystemExit as error:
+                print(f"{exe.name}: a unit stopped: {str(error)[:300]}", flush=True)
+        return run_unit
+    return {name: tolerant(unit) for name, unit in units.items()}
 
 
 def _meta(args, exes):
@@ -281,7 +290,9 @@ def run(args):
     meta = _meta(args, exes)
     (out / "meta.json").write_text(json.dumps(meta, indent=1))
     recorder = bench_ops.Recorder(results)
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))      # end through the finally below, which releases the server
+    def terminate(*_):                       # end through the finally below, which releases the server; not a SystemExit,
+        raise Terminated()                   # which a unit that tolerates a failed command would swallow
+    signal.signal(signal.SIGTERM, terminate)
     for scale in args.scales:
         projects, seats = map(int, scale.split("x"))
         env = Environment(workdir, projects, seats)
@@ -301,7 +312,7 @@ def run(args):
                 if "steady" in args.groups:
                     for panes in (1, 4):
                         for exe in exes:
-                            bench.steady(exe, panes, min(args.steady_seconds, 20))
+                            bench.steady(exe, panes, min(args.steady_seconds, 30))
             finally:
                 env.set_counting(False)
             bench.mode = "warm"
@@ -382,10 +393,17 @@ def parse(argv=None):
     return args
 
 
+class Terminated(BaseException):
+    """SIGTERM reached the run."""
+
+
 def main(argv=None):
     args = parse(argv)
     if args.command == "run":
-        run(args)
+        try:
+            run(args)
+        except Terminated:
+            raise SystemExit(143)
     else:
         report(args.out)
 

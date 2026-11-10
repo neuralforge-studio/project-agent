@@ -21,6 +21,10 @@ from bench_env import HERE, cpu_seconds, count_spawns, load_average, read_spawn_
 BODY = "## Symptom\nfixture\n\n## Evidence\n`server.py:1`\n\n## Contract\nfixture\n"
 CR_TAIL = "\n\n## Implementation\nChange server.py.\n\n## Verification\npython -m py_compile server.py\n"
 
+# A start that has not registered after this many seconds has failed (the product's own default is 600). A busy host
+# makes the registration hook exceed its budget; the benchmark only needs to see that, not wait ten minutes.
+START_TIMEOUT = "180"
+
 GROUPS = ("startup", "readonly", "board_cli", "lifecycle", "steady")
 
 
@@ -215,6 +219,16 @@ class Bench:
         self.pane_ready(exe, "board_sidebar_ready", [exe.bin("project-board"), "--config", self.env.info["config"],
                                                      "sidebar"])
 
+    def wait_board_panes_ready(self, count, seconds=240):
+        """Until `count` Board panes have marked themselves ready (@project_board_ready), so that the steady window
+        holds the refresh cycle and not the TUI's start."""
+        end = time.time() + seconds
+        while time.time() < end:
+            ready = self.env.tmux("list-panes", "-a", "-F", "#{@project_board_ready}").split()
+            if ready.count("1") >= count:
+                return
+            time.sleep(0.5)
+
     def wait_board_ready(self, seconds=30):
         end = time.time() + seconds
         while time.time() < end:
@@ -254,18 +268,20 @@ class Bench:
     def lifecycle(self, exe):
         """The Worker lifecycle. A command that fails is already a row with rc != 0 (counted as `failed` in the report);
         the rest of the lifecycle is skipped and the spare seat is reset for the next repetition."""
-        try:
-            self._lifecycle(exe)
-        except SystemExit as error:
-            print(f"lifecycle of {exe.name} stopped: {str(error)[:300]}", flush=True)
-            self.env.reset_spare()
+        for attempt in range(3 if self.mode == "count" else 1):      # counts are one run: try again if the host was too busy
+            try:
+                self._lifecycle(exe)
+                return
+            except SystemExit as error:
+                print(f"lifecycle of {exe.name} stopped: {str(error)[:300]}", flush=True)
+                self.env.reset_spare()
 
     def _lifecycle(self, exe):
         env, spare = self.env, self.env.spare
         seed = env.info["seed_hash"]
         cr_id = self.new_cr(exe, f"perf {exe.name} {self.rep}")
         self.item(exe, "project_item_move_todo", "move", cr_id, "todo", "--by", "Leader", "--note", "perf approved")
-        self.agent(exe, "agent_start_worker", "start", "--job", cr_id)
+        self.agent(exe, "agent_start_worker", "start", "--job", cr_id, "--timeout", START_TIMEOUT)
         self.agent(exe, "agent_send_to_worker", "send", "--job", cr_id, "perf message to the worker")
         self.agent(exe, "agent_send_to_leader", "send", "--job", "leader", "perf report", identity=("p00", f"seat-{spare}"))
         self.agent(exe, "agent_review", "review", "--job", cr_id)
@@ -284,7 +300,7 @@ class Bench:
         # server's, so their counts are the row's pane_spawns.
         cr_end = self.new_cr(exe, f"perf end {exe.name} {self.rep}")
         self.item(exe, "project_item_move_todo", "move", cr_end, "todo", "--by", "Leader", "--note", "perf approved")
-        self.agent(exe, "agent_start_worker", "start", "--job", cr_end)
+        self.agent(exe, "agent_start_worker", "start", "--job", cr_end, "--timeout", START_TIMEOUT)
         meta = env.worker_window()
         result = Path(env.base) / "agent" / "runs" / meta["run_id"] / "finish-result.json"
         before = len(self.pane_lines())
@@ -326,7 +342,8 @@ class Bench:
         if panes > 1:
             subprocess.run([env.python, "-c", extra, str(exe.tools / "project-board"), socket, config,
                             *windows[1:panes]], env=cmd_env, check=True, capture_output=True)
-        time.sleep(8)                                    # the TUIs start and settle
+        self.wait_board_panes_ready(len(windows[:panes]))   # a TUI under load needs tens of seconds to start
+        time.sleep(5)                                    # and a few more to settle
         listing = env.tmux("list-panes", "-a", "-F", "#{pane_id} #{pane_pid} #{@project_board_managed}")
         board = [(line.split()[0], int(line.split()[1])) for line in listing.splitlines() if line.split()[-1] == "1"]
         before_lines = len(self.pane_lines())
