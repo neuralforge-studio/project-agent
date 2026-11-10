@@ -4,7 +4,10 @@ Dependency direction: `lifecycle` imports this module; this module never imports
 what the generated files contain from the project, the provider, and the run context it is given. It
 keeps no state and starts nothing: the order of preparation, the tmux window, and failure handling stay
 with the caller. The generated command lines call `agent_session.internal` by name, so a run that is
-already up keeps working (docs/project-team/README.md, "실행 경로 계약").
+already up keeps working (docs/project-team/README.md, "실행 경로 계약"). The commands that run a Python
+process (`launch.sh`'s `mark_process`, `controller.sh`, the Claude hook) start it with `-S`: they import the
+standard library only, and `agent_session/__init__.py` serves their modules from the release's start-up bundle
+(install contract 6.1).
 """
 
 import os
@@ -136,7 +139,7 @@ def launch_script(context, launch):
     """The text of `launch.sh`: clean the environment, enter the CR's Cwd, mark the process, and exec the CLI."""
     code = ("import sys;sys.path.insert(0,sys.argv[1]);from agent_session.internal import mark_process;"
             "mark_process(sys.argv[2],sys.argv[3],sys.argv[4],int(sys.argv[5]))")
-    marker = shlex.join([context["python"], "-c", code, context["library_path"], context["run_id"],
+    marker = shlex.join([context["python"], "-S", "-c", code, context["library_path"], context["run_id"],
                          context["config_path"], context["socket_path"]]) + ' "$$"'
     clean = [key for key in os.environ if key.startswith("CLAUDE_CODE_MESSAGING_") or key.startswith("AGENT_SESSION_")]
     clean += ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"] + launch.get("unset_env", [])
@@ -159,7 +162,7 @@ def write_launch_script(project, context, launch):
 def controller_script(request_file):
     """The text of `controller.sh`: run the deferred stop or restart that `request_file` describes."""
     code = "import sys;sys.path.insert(0,sys.argv[1]);from agent_session.internal import run_controller;run_controller(sys.argv[2])"
-    command = shlex.join([sys.executable, "-c", code, str(library_path()), str(request_file)])
+    command = shlex.join([sys.executable, "-S", "-c", code, str(library_path()), str(request_file)])
     return "#!/bin/bash\nset -e\nunset CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID TMUX TMUX_PANE\nexec " + command + "\n"
 
 

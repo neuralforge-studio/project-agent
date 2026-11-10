@@ -1,39 +1,48 @@
 """Internal launch and hook functions. These are not user CLI commands."""
 
+import contextlib
 import datetime as dt
 import json
 import os
 import time
 from pathlib import Path
 
+from . import hook_started
 from .config import current_project
 from .errors import SessionError
 from .state import StateStore, control_lock, publish_session
 from .tmux import control as tmux_control
 
 
-_HOOK_BUDGET = 25          # seconds from the hook's start to its deadline; the SessionStart hook limit is 30
-_PUBLISH_RESERVE = 6       # seconds of that budget kept for the control lock, the state lock and the writes
-_BINDING_TIMEOUT = 20      # seconds at most for the binding check, which ends before the reserve
+_HOOK_BUDGET = hook_started.HOOK_TIMEOUT - 10    # seconds from the hook process's creation to its deadline, 10 s short of Claude's hook limit
+_STARTUP_CAP = 20          # seconds of that budget the interpreter's start and imports may already have used
+_PUBLISH_RESERVE = 12      # seconds of that budget kept for the control lock, the state lock and the writes
+_BINDING_TIMEOUT = 40      # seconds at most for the binding check, which ends before the reserve
 _BINDING_INTERVAL = 1.0
 _FINISH_BUDGET = 120       # seconds for the wrap-up of a run that ended itself, lock wait and window cleanup included
 _HOST_TIMEOUT = 8          # seconds for the provider's background listing inside the hook
 _HOOK_FIELDS = ("session_id", "hook_event_name", "cwd", "source", "reason", "background_tasks", "session_crons")
 
 
+def _hook_deadline():
+    """The deadline of a registration hook: `_HOOK_BUDGET` seconds after its process was created.
+
+    The time the interpreter took to start and import counts: Claude ends the hook at its limit counted from
+    the process start, so a deadline counted from here would let a loaded host run past it, leaving no result."""
+    from . import process
+
+    try:
+        started = min(process.age(os.getpid()), _STARTUP_CAP)
+    except SessionError:
+        started = 0.0
+    return time.monotonic() + _HOOK_BUDGET - started
+
+
 def _run(run_id, config_path, socket_path, cwd=None):
     project = current_project(cwd, config_path)
     control = tmux_control(socket_path)
-    matches = []
-    for slot in ("leader", *(f"seat-{n}" for n in range(len(project.seats)))):
-        try:
-            meta = control.get_current(project.project_id, slot)
-        except SessionError as error:
-            if error.code != "execution_evidence_missing":
-                raise
-            continue
-        if meta and meta.get("run_id") == run_id:
-            matches.append(meta)
+    slots = ("leader", *(f"seat-{n}" for n in range(len(project.seats))))
+    matches = control.current_with_run(project.project_id, run_id, slots)
     if len(matches) != 1:
         raise SessionError("target_changed", "This run is not the current execution.")
     meta = matches[0]
@@ -68,10 +77,12 @@ def mark_process(run_id, config_path, socket_path, pid):
     })
 
 
-def _register(run_id, config_path, socket_path, session_id, endpoint=None, cwd=None, deadline=None):
-    """Bind the conversation and publish it, within one deadline (`_HOOK_BUDGET` from the start)."""
+def _register(run_id, config_path, socket_path, session_id, endpoint=None, cwd=None, deadline=None, resolved=None):
+    """Bind the conversation and publish it, within one deadline (`_HOOK_BUDGET` from the start).
+
+    `resolved` is the (project, control, context) that `_run` already returned for this run."""
     deadline = deadline or time.monotonic() + _HOOK_BUDGET
-    project, control, context = _run(run_id, config_path, socket_path, cwd)
+    project, control, context = resolved or _run(run_id, config_path, socket_path, cwd)
     try:
         session = _bind(project, control, context, session_id, endpoint, cwd, deadline)
     except SessionError as error:
@@ -115,8 +126,11 @@ def _bind(project, control, context, session_id, endpoint, cwd, deadline):
         session["endpoint"] = endpoint
     provider = get_provider(project.provider)
     context["session_id"] = session_id
-    ends = min(time.monotonic() + _BINDING_TIMEOUT, deadline - _PUBLISH_RESERVE)
-    session = _verify_binding(provider, session, context, max(ends, time.monotonic() + 0.1)) or session
+    ends = max(min(time.monotonic() + _BINDING_TIMEOUT, deadline - _PUBLISH_RESERVE), time.monotonic() + 0.1)
+    # One provider connection serves every look of the retry loop, when the provider can share it.
+    reusing = getattr(provider, "reusing_client", None)
+    with reusing(ends - time.monotonic()) if reusing else contextlib.nullcontext():
+        session = _verify_binding(provider, session, context, ends) or session
     if project.provider == "claude" and not session.get("message_to"):
         raise SessionError("session_unbound", "The native Claude recipient is unverified.", 4)
     current = control.get_current(project.project_id, context["target"])
@@ -191,7 +205,7 @@ def register_from_hook(run_id, config_path, socket_path, expected_session_id=Non
     """Read one native Claude event and reject a stale execution callback."""
     import sys
 
-    deadline = time.monotonic() + _HOOK_BUDGET
+    deadline = _hook_deadline()
     payload = json.load(sys.stdin)
     session_id = payload.get("session_id")
     if not session_id or session_id != expected_session_id:
@@ -202,6 +216,8 @@ def register_from_hook(run_id, config_path, socket_path, expected_session_id=Non
     if event not in ("SessionStart", "Stop", "StopFailure", "SessionEnd"):
         raise SessionError("hook_invalid", "This hook event is not used by agent-session.", 2)
     if event == "SessionStart":
+        # A hook that Claude ends at its limit leaves no result; the waiting start reads this record to see that.
+        hook_started.write(project, run_id)
         # Only a resume run (tmux option `resume`) binds a resumed conversation; other runs need a new one.
         wanted = "resume" if context.get("resume") else "startup"
         if payload.get("source") != wanted:
@@ -209,6 +225,7 @@ def register_from_hook(run_id, config_path, socket_path, expected_session_id=Non
                                + " conversation.")
         project, control, context, _ = _register(
             run_id, config_path, socket_path, session_id, endpoint, cwd, deadline,
+            resolved=(project, control, context),
         )
     elif context.get("session_id") != session_id:
         raise SessionError("owner_mismatch", "This event belongs to an old conversation.")

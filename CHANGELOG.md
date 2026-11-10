@@ -4,11 +4,23 @@
 
 ## Unreleased
 
+- PERF-004
+- SESSION-013
+- SESSION-014
+- PERF-005
+
+형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
+
+## 0.5.0 - 2026-11-10
+
 - TEST-010
 - TEST-011
 - PERF-002
 - TEST-012
 - BOARD-012
+- PERF-003
+- SESSION-012
+- SESSION-011
 
 형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
 

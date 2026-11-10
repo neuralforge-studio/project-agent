@@ -302,7 +302,7 @@ shutdown 없이 서버가 내려갔어도 운영자가 `resume --lost`로 재부
 `agent/suspend.json`은 shutdown이 종료를 확인한 slot의 기록입니다. slot(`leader` 또는 `seat-N`)마다 job_id·종료한 run_id·session_id·종료 시각(UTC)·forced를 담습니다. `resume --lost`가 만든 기록은 판정 근거인 `lost`를 더 담습니다.
 이 파일은 배정과 연결의 원본이 아닙니다. resume과 start가 state와 대조하는 데만 사용합니다.
 저장은 `agent/suspend.lock` 아래 원자적 교체로 합니다. 손상한 파일은 `suspend_invalid`이며 덮어쓰지 않습니다.
-`agent/runs/<run_id>/`에는 prompt·settings·launch·hook 진단·제어 결과를 둡니다.
+`agent/runs/<run_id>/`에는 prompt·settings·launch·hook 진단(`hook-started.json` 등)·제어 결과를 둡니다.
 이 파일은 실행 산출물이며 배정의 두 번째 원본으로 사용하지 않습니다.
 `agent/diagnostics/`에는 예상하지 못한 예외의 traceback을 둡니다.
 이 파일도 배정의 원본이 아닙니다.
@@ -467,6 +467,23 @@ Worker는 CR 본문을 지시 원본으로 사용하며 추가 prompt-file을 �
 
 `--prompt-file`을 Worker JOB에 주거나 `--seat`를 Leader에 주면 `invalid_arguments`·exit 2이며 어떤 효과도 생기기 전에 거절합니다. 이 검사는 `lifecycle.check_start_arguments` 한 곳이 소유합니다. `Manager.start`와 CLI(`Manager`를 만들기 전)가 부르므로, 등록 밖 cwd에서도 CLI와 Python 호출이 같은 오류를 받습니다.
 
+#### 한도를 넘긴 start
+
+`--timeout`의 전체 대기 제한을 넘기면 start는 `timeout`(exit 4)으로 끝나고 details에 멈춘 곳을 적습니다. 다른 명령의 `timeout`은 details가 비어 있습니다.
+
+| details | 뜻 |
+| --- | --- |
+| `stage` | 멈춘 단계. `assignment`(잠금 대기·seat 검사·배정·prompt 파일), `git`(배정한 seat의 Git 준비), `launch`(launch script와 provider 시작), `registration`(provider 등록 대기) |
+| `step` | `git` 단계에서 한도 때문에 시작하지 못한 Git 명령(인자). 다른 단계는 null |
+| `retry_safe` | 같은 start를 다시 실행해도 되는지. 항상 true입니다 |
+| `job_id`, `seat` | 대상 JOB과 seat(배정 전이면 요청한 seat 또는 null) |
+| `elapsed` | 단계별로 쓴 초. 지나간 단계만 적습니다 |
+| `git_steps` | 이 start가 끝낸 Git 명령과 각 명령의 초(`step`, `seconds`) |
+
+Git 준비의 명령은 각자 600초 한도로 돌지만, start는 Git 명령을 시작하기 전에 전체 한도를 확인합니다. 한도가 지났으면 다음 명령을 시작하지 않고 위 details로 끝냅니다. 이미 시작한 Git 명령은 끊지 않습니다(작업 tree가 반쯤 바뀌지 않게 하려는 것입니다). 그래서 한 명령이 한도를 넘겨 끝날 수는 있지만, 그 뒤 Git 단계가 이어서 도는 일은 없습니다.
+
+start가 한도를 넘겨도 배정·CR claim·대기 window(`sleep`만 도는 pane)는 그대로 남습니다. 같은 `agent-session start --job <CR-ID>`가 그 window를 이어받아 남은 단계를 합니다. Git 준비는 Base를 이미 적었으면 main을 다시 맞추지 않습니다(4절 "Git 준비"). 이어받지 않고 그만두려면 `stop`이 그 window를 종료하고 반납 조건을 확인합니다.
+
 ### Leader
 
 ```sh
@@ -564,15 +581,19 @@ CR의 `- Base: <commit> <ISO 시각>` header가 준비 이력입니다. 이 head
 
 공통 Git 명령은 `-c submodule.recurse=false`로 하위 저장소를 자동 갱신하지 않습니다.
 Git 준비와 seat 검사(배정·반납)의 Git 명령은 모두 timeout 600초를 씁니다. Seat 생성 clone만 3600초입니다.
+start의 Git 명령은 시작하기 전에 명령 전체 한도(`--timeout`)도 확인합니다(위 "한도를 넘긴 start").
 Timeout이 나면 git에 먼저 SIGTERM을 보내 최대 10초 기다립니다. git은 SIGTERM을 받으면 자기 `index.lock`을 지웁니다. 그래도 살아 있을 때만 SIGKILL을 보냅니다.
 중단한 명령의 작업 tree는 반쯤 바뀐 채 남을 수 있습니다. 도구는 lock이나 변경을 지우지 않습니다.
 Timeout은 `git_failed`(exit 5)로 보고하며 message에 중단 사실과 반쯤 적용됐을 수 있다는 점을 적습니다. details는 `operation`, `timeout_seconds`, `interrupted`(`SIGTERM` 또는 `SIGKILL`), `index_lock`(경로 또는 null), `index_lock_left`입니다. 경로는 `git rev-parse --git-path index.lock`으로 확인합니다.
 Seat에 `index.lock`이 있으면 배정 검사·반납 검사의 reason에 "seat has <경로> left by an interrupted Git command"를 더하고, Git 준비는 같은 문장으로 `workspace_dirty`를 반환합니다. 운영자 정리는 7절 "중단된 Git 단계의 정리"를 따릅니다.
 Start의 Git 준비(첫 준비·재시도·재배정·read-only)는 마지막에 한 번 `git submodule update --init --recursive`(timeout 600초)를 실행해 seat의 모든 submodule을 초기화하고 현재 HEAD의 gitlink에 맞춥니다. 실패하면 git_failed로 start가 멈추고 기록한 Git 기준과 배정은 유지합니다. 반납 검사는 바꾸지 않으며, Worker가 건드리지 않은 submodule은 깨끗하므로 반납됩니다. Submodule의 원격 접속·인증·protocol 허용은 사용자 Git 설정을 따릅니다.
-Main 갱신은 `switch --no-overwrite-ignore main`, `fetch origin main`,
-`merge --ff-only --no-overwrite-ignore origin/main` 순서입니다.
-이는 origin/main의 fast-forward pull과 같은 갱신이며 ignored 파일 덮어쓰기도 거절합니다.
-Ignored 파일 때문에 실패해도 파일을 삭제하거나 강제로 덮어쓰지 않습니다.
+Main 갱신은 `fetch origin main` 뒤 local main을 origin/main으로 fast-forward하는 것과 같은 결과를 냅니다.
+Local main이 origin/main보다 앞서 있으면 그대로 두고 그 tip을 기준으로 삼으며, 갈라졌으면 `git_failed`로 거절합니다.
+Local main이 없으면 origin/main을 추적하는 main을 `branch --track main refs/remotes/origin/main`으로 만듭니다.
+작업 tree를 바꾸는 Git 명령은 파일 전체를 훑으므로 큰 NFS seat에서는 한 번에 수 분이 걸립니다(PERF-005). 그래서 작업 tree 갱신은
+`switch --quiet --no-overwrite-ignore --detach <기준 commit>` 한 번만 하고, 나머지는 ref 갱신입니다.
+Local main은 `branch --force main`으로 옮기고, write의 `cr/<ID>`는 `branch`로 만든 뒤 `symbolic-ref HEAD`로 붙입니다(read-only는 main에 붙입니다).
+이 전환이 ignored 파일 덮어쓰기를 거절합니다. Ignored 파일 때문에 실패해도 파일을 삭제하거나 강제로 덮어쓰지 않습니다.
 기준은 `rev-parse HEAD`와 `show -s --format=%cI HEAD`에서 읽습니다.
 Branch 이름은 `cr/<CR-ID>`입니다.
 단계 실패 시 다음 단계를 실행하지 않습니다.
@@ -639,8 +660,9 @@ Claude는 시작 때 지정한 UUID와 실제 hook의 session·cwd·source를 �
 일반 start·restart의 run은 SessionStart의 source가 `startup`일 때만 등록합니다. resume의 run은 `resume`일 때만 등록합니다.
 run이 resume인지는 그 window의 `resume` option이 정합니다. hook의 matcher도 같은 값을 씁니다.
 Codex는 실제 도구 문맥의 CODEX_THREAD_ID와 endpoint를 확인합니다.
-내부 등록은 현재 run과 자기 window를 대조하고 그 window의 binding만 기록합니다.
-등록은 하나의 deadline 안에서 일합니다. deadline은 hook(Codex는 도구 호출)이 시작한 시각에서 25초 뒤입니다. hook 제한 30초보다 짧습니다. binding 확인(최대 20초)은 deadline 6초 전에 끝나야 하고, 대상 제어 잠금과 state 잠금은 남은 시간을 나눠 씁니다. deadline이 지나면 등록 실패입니다.
+내부 등록은 현재 run과 자기 window를 대조하고 그 window의 binding만 기록합니다. run은 한 번의 tmux 읽기로 project의 모든 slot 포인터를 읽어 이 run_id를 가리키는 slot의 window만 읽어 찾습니다. 그래서 hook과 `mark_process`가 시작하는 tmux process 수는 seat 수와 무관합니다.
+hook과 `mark_process`, controller의 interpreter는 `-S`로 시작하고, 설치본에서는 시동 번들에서 모듈을 읽어 시동과 import 시간을 줄입니다(설치 계약 6.1절 "생성 명령의 시동"). 판정과 결과는 같습니다.
+등록은 하나의 deadline 안에서 일합니다. deadline은 Claude hook은 hook process가 만들어진 시각에서, Codex는 도구 호출이 시작한 시각에서 50초 뒤입니다. hook 제한 60초보다 짧습니다. 부하에서 Claude MCP 서버 시동만 8~32초가 걸려서 제한을 30초에서 60초로 올렸습니다. Claude의 제한도 process 시작부터 세므로, 부하로 interpreter 시동과 import에 쓴 시간(최대 20초)을 50초에서 뺍니다. 그래야 hook이 제한에 닿기 전에 스스로 실패를 기록합니다. 제한은 hook 네 종류(SessionStart·Stop·StopFailure·SessionEnd) 모두 같은 60초이고 settings의 `timeout`과 deadline이 한 값(`hook_started.HOOK_TIMEOUT`)에서 나옵니다. binding 확인(최대 40초)은 deadline 12초 전에 끝나야 하고, 대상 제어 잠금과 state 잠금은 남은 시간을 나눠 씁니다. deadline이 지나면 등록 실패입니다.
 게시는 대상 제어 잠금을 잡고 다음 순서로 합니다.
 
 1. 현재 포인터·JOB·window·pane과 binding을 다시 대조합니다. 다르면 `target_changed`이고 아무것도 쓰지 않습니다.
@@ -666,12 +688,14 @@ Claude의 CLAUDECODE·CLAUDE_CODE_SESSION_ID·CLAUDE_CODE_MESSAGING_*와 부모 
 기존에 승인한 프로젝트 설정을 사용하며 새 승인을 대신하는 키 입력을 보내지 않습니다.
 
 내부 등록의 provider binding 확인은 ListAgents에 이 pane의 행이 하나도 없을 때만 다시 조회합니다.
-여러 Leader를 동시에 시작하면 목록이 잠시 늦을 수 있기 때문입니다. 간격은 1초이고 전체 20초 안에서만 반복하며, 등록의 deadline이 더 이르면 그때 끝납니다.
+여러 Leader를 동시에 시작하면 목록이 잠시 늦을 수 있기 때문입니다. 간격은 1초이고 전체 40초 안에서만 반복하며, 등록의 deadline이 더 이르면 그때 끝납니다.
+다시 조회하는 동안 `claude mcp serve` 서버 하나를 공유합니다. 시동이 부하에서 8~32초라서 조회마다 새로 띄우면 한도를 다 씁니다. 공유 서버가 끊기면 한 번 새 서버로 다시 묻는 규칙은 observe와 같습니다.
 행이 둘 이상이거나, 이름·UUID가 다르거나, tmux 위치를 알 수 없으면 일시적 누락이 아니므로 바로 실패합니다.
 send와 observe의 조회는 다시 시도하지 않습니다.
 등록이 실패하면 오류 code와 message를 그 run의 window option `start_error`(`{code, message}`)에 남깁니다.
 이미 다른 run이 target을 이어받았으면(`target_changed`) 남기지 않습니다. 이어받은 window에는 쓰지 않습니다.
 시작 controller는 등록 전까지 이 option을 읽습니다. 기록이 있으면 기다림을 멈추고 `registration_failed`(exit 4)를 반환합니다.
+Claude hook은 SessionStart를 받으면 binding을 확인하기 전에 자기 process(PID·birth)를 `agent/runs/<run_id>/hook-started.json`에 씁니다. hook이 Claude의 제한에 걸려 죽으면 게시도 실패 기록도 남지 않으므로, 기다리는 시작 controller가 이 기록을 읽습니다. 기록의 hook process가 끝났는데 run이 `ready`도 `start_error`도 아니면, window를 한 번 더 읽어(hook의 마지막 쓰기는 종료보다 먼저입니다) 그래도 같으면 `registration_failed`로 끝납니다. 이때 `hook_error`는 `{code: registration_hook_ended, message}`입니다. 그래서 start는 hook 제한(60초)에 시작 controller의 관찰 간격을 더한 시간 안에 끝나고 `--timeout`을 다 기다리지 않습니다. 기록이 없거나 hook process가 살아 있으면 판정하지 않습니다. 이 기록은 hook 진단이며 배정의 원본이 아닙니다.
 오류 details에는 run 정보와 `hook_error`(hook의 원래 `{code, message}`)가 들어갑니다. 배정과 생성한 window는 보존합니다.
 `registered`가 `start_error`보다 앞섭니다. 이미 보고한 실패 뒤에 이 run이 등록에 성공하면 성공한 등록이 `start_error`를 지웁니다. 그 등록은 게시까지 마친 것입니다.
 Hook은 SessionStart마다 한 번 실행하므로 실패한 run이 스스로 다시 등록하지는 않습니다.

@@ -12,6 +12,10 @@ from .common import clean_env, deadline
 
 class MCPClient:
     MAX_LINE = 8 * 1024 * 1024
+    # `claude mcp serve` ignores the end of its input and runs until it is terminated (measured: it was still
+    # alive 10 s after stdin closed, and ended 0.6 s after SIGTERM), so waiting a second for it only delays the
+    # terminate. A server that does end with its input has this long to do so.
+    EXIT_GRACE = 0.1
 
     def __init__(self, argv, timeout=30):
         self.argv = [str(part) for part in argv]
@@ -72,7 +76,7 @@ class MCPClient:
             if self.process.stdin and not self.process.stdin.closed:
                 self.process.stdin.close()
             try:
-                self.process.wait(timeout=1)
+                self.process.wait(timeout=self.EXIT_GRACE)
             except subprocess.TimeoutExpired:
                 self.process.terminate()
                 try:

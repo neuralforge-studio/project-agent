@@ -1,6 +1,6 @@
 """Project session commands, Git preparation, and confirmed slot release."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import datetime
 import os
 import shlex
@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import api, background, ended, git_ops, handoff, jobs, launch_artifacts, process, windows, workspace
+from . import api, background, ended, git_ops, handoff, hook_started, jobs, launch_artifacts, process, windows, workspace
 from .config import RemoteSeat, current_project, load_registry, require_base
 from .errors import SessionError
 from .providers import get_provider
@@ -57,13 +57,56 @@ class Manager(SuspendMixin, WatchMixin):
         self.tmux = Tmux(**self.socket)
         self.provider = get_provider(self.project.provider)
         self._held = {}                            # slot -> the control lock this command holds
+        self._progress = None                      # where a start is, for a timeout's details (see `_at`)
 
     def remaining(self):
         value = self.end - time.monotonic()
         if value <= 0:
-            raise SessionError("timeout", "The command's total wait limit expired.", 4)
+            raise SessionError("timeout", "The command's total wait limit expired.", 4, self._where())
         self.store.timeout = value
         return value
+
+    def _at(self, stage):
+        """Record the stage that this start is in now. `assignment` is the lock waits, the seat checks and the
+        reservation; `git` is the Git preparation of the reserved seat; `launch` is the prompt, the script and
+        the provider's start; `registration` is the wait for the provider's registration. Only `start` keeps
+        a record; the other commands that reach these stages (restart) report a plain timeout."""
+        progress = self._progress
+        if progress is not None:
+            self._spend(progress, time.monotonic())
+            progress.update(stage=stage, step=None)
+
+    @staticmethod
+    def _spend(progress, now):
+        elapsed = progress["elapsed"]
+        elapsed[progress["stage"]] = elapsed.get(progress["stage"], 0.0) + now - progress["since"]
+        progress["since"] = now
+
+    def _where(self):
+        """The details of a start's timeout: the stage it stopped in, the Git step it was refused at, the time
+        each stage took, and that the same start may run again. A start that ran out of time leaves its
+        assignment, its CR claim and its waiting window, and the next start takes them over."""
+        progress = self._progress
+        if progress is None:
+            return {}
+        self._spend(progress, time.monotonic())
+        return {"stage": progress["stage"], "step": progress["step"], "retry_safe": True,
+                "job_id": progress["job"], "seat": progress["seat"],
+                "elapsed": {name: round(value, 1) for name, value in progress["elapsed"].items()},
+                "git_steps": progress["git_steps"]}
+
+    @contextmanager
+    def _git_step(self, args):
+        """Before each Git command of a start: refuse it when the deadline has passed, and time it."""
+        progress = self._progress
+        progress["step"] = " ".join(args)[:160]
+        self.remaining()
+        began = time.monotonic()
+        try:
+            yield
+        finally:
+            progress["git_steps"].append({"step": progress["step"], "seconds": round(time.monotonic() - began, 1)})
+            progress["step"] = None
 
     @contextmanager
     def _lock(self, slot, blocking=True):
@@ -354,6 +397,7 @@ class Manager(SuspendMixin, WatchMixin):
     def _require_handoff(self, meta):
         return handoff.require(self.project, meta, self.remaining())
     def _launch(self, context, request=None):
+        self._at("launch")
         if context.get("remote_seat"):
             from .remote_lifecycle import launch
             return launch(self, context)
@@ -396,6 +440,7 @@ class Manager(SuspendMixin, WatchMixin):
     def _wait_ready(self, context):
         """Wait until the run is published or fails, and report it. A local run is published by its own
         registration (`internal._register`), so this command holds no control lock while it waits."""
+        self._at("registration")
         if context.get("remote_seat"):
             return self._observe_ready(context)
         with self._unlocked(context["target"]):
@@ -427,8 +472,20 @@ class Manager(SuspendMixin, WatchMixin):
             if meta.get("ready"):
                 return self._result(meta, ready=True)
             failure = meta.get("start_error")
+            if (not isinstance(failure, dict) and not meta.get("remote_seat")
+                    and hook_started.ended(self.project, meta["run_id"])):
+                # The hook's last write comes before its end, so a fresh read decides: published, failed, or neither.
+                meta = self.tmux.get_current(self.project.project_id, context["target"])
+                if not meta or meta.get("run_id") != context["run_id"]:
+                    raise SessionError("target_changed", "Another execution replaced this startup.")
+                if meta.get("ready"):
+                    return self._result(meta, ready=True)
+                failure = meta.get("start_error") or {
+                    "code": "registration_hook_ended",
+                    "message": "The registration hook ended before it reported a result (Claude ends a hook at its time limit)."}
             if isinstance(failure, dict):
-                # The registration recorded why it failed; the run's CLI stays alive, so nothing else ends this wait.
+                # The registration recorded why it failed, or its hook ended without a result; the run's CLI
+                # stays alive, so nothing else ends this wait.
                 raise SessionError("registration_failed", "The provider's registration was rejected: "
                                    f"{failure.get('message')}", 4,
                                    {**self._result(meta), "hook_error": failure})
@@ -505,6 +562,7 @@ class Manager(SuspendMixin, WatchMixin):
         if meta.get("job"):
             meta["job"] = jobs.claim(self.project, meta["job_id"])
             self._prepare_launch(meta)
+            self._at("git")
             git_ops.prepare(meta, self.project, self.store)
             self.tmux.write_meta(meta["window_id"], {"job": meta["job"]})
         else:
@@ -524,6 +582,14 @@ class Manager(SuspendMixin, WatchMixin):
         return self._launch(context)
 
     def start(self, job, prompt_file=None, seat=None):
+        """Start `job`. A timeout names the stage it stopped in (see `_where`); `_git_step` makes the Git
+        preparation stop at its next step instead of running on past the deadline."""
+        self._progress = {"stage": "assignment", "since": time.monotonic(), "elapsed": {}, "git_steps": [],
+                          "step": None, "job": job, "seat": seat}
+        with git_ops.observing(self._git_step):
+            return self._start(job, prompt_file, seat)
+
+    def _start(self, job, prompt_file, seat):
         leader = job == "leader"
         check_start_arguments(job, prompt_file, seat)
         self.tmux.require_version()
@@ -645,6 +711,7 @@ class Manager(SuspendMixin, WatchMixin):
                             candidate_guard.__exit__(*sys.exc_info())
                 if number is None:
                     raise SessionError("no_available_seat", "No seat passed the allocation checks.", details={"seats": reasons})
+        self._progress["seat"] = number
         if assigned and suspended:
             return self.start_suspended(slot, item)
         if assigned:
@@ -657,6 +724,7 @@ class Manager(SuspendMixin, WatchMixin):
                 return self._start_existing(current)
         try:
             self._prepare_launch(context)
+            self._at("git")
             git_ops.prepare(context, self.project, self.store)
             self.tmux.write_meta(context["window_id"], {"job": context["job"]})
             return self._launch(context)
@@ -835,38 +903,39 @@ class Manager(SuspendMixin, WatchMixin):
             if meta.get("control_pending") and expected_run is None:
                 raise SessionError("control_busy", "This run has an accepted control request.", 4)
             carried = self._require_handoff(meta) if operation == "restart" else None
-            if not meta.get("registered") and meta.get("provider_launch_attempted") is False and operation == "stop":
-                self.tmux.request_placeholder_stop(meta["window_id"])
-                exit_sent = True
-            else:
-                session = self._session(meta)
-                observed = self.provider.request_stop(session, meta, meta, timeout=self.remaining())
-                self._record_background_clear(meta, observed)
-                exit_sent = False
-            self.tmux.write_meta(meta["window_id"], {"stopping": True})
-            last = None
-            try:
-                while True:
-                    try:
-                        observed = self._observe(meta)
-                    except SessionError as error:
-                        # After the exit request, leaving the provider's listing is part of the end.
-                        # Keep watching the same CLI and pane until the wait limit expires.
-                        if not exit_sent or error.code != "session_not_bound":
-                            raise
-                        observed = None
-                    if observed is not None:
-                        last = observed
-                        if observed["stopped"]:
-                            break
-                        if observed.get("idle") and not exit_sent:
-                            self.provider.request_exit(meta, self.tmux)
-                            exit_sent = True
-                    time.sleep(min(0.1, self.remaining()))
-            except BaseException as error:
-                self._restore_stopping(meta, error)
-                _note_exit_wait(error, exit_sent, last)
-                raise
+            with self._reusing_provider_client():
+                if not meta.get("registered") and meta.get("provider_launch_attempted") is False and operation == "stop":
+                    self.tmux.request_placeholder_stop(meta["window_id"])
+                    exit_sent = True
+                else:
+                    session = self._session(meta)
+                    observed = self.provider.request_stop(session, meta, meta, timeout=self.remaining())
+                    self._record_background_clear(meta, observed)
+                    exit_sent = False
+                self.tmux.write_meta(meta["window_id"], {"stopping": True})
+                last = None
+                try:
+                    while True:
+                        try:
+                            observed = self._observe(meta)
+                        except SessionError as error:
+                            # After the exit request, leaving the provider's listing is part of the end.
+                            # Keep watching the same CLI and pane until the wait limit expires.
+                            if not exit_sent or error.code != "session_not_bound":
+                                raise
+                            observed = None
+                        if observed is not None:
+                            last = observed
+                            if observed["stopped"]:
+                                break
+                            if observed.get("idle") and not exit_sent:
+                                self.provider.request_exit(meta, self.tmux)
+                                exit_sent = True
+                        time.sleep(min(0.1, self.remaining()))
+                except BaseException as error:
+                    self._restore_stopping(meta, error)
+                    _note_exit_wait(error, exit_sent, last)
+                    raise
             self._retire_name(meta)
             if meta.get("remote_native"):
                 from .remote_lifecycle import detach
@@ -884,6 +953,11 @@ class Manager(SuspendMixin, WatchMixin):
                 # after it saved its result, when its own pending window may close.
                 return {**result, "deferred_cleanup": meta["target"]} if defer_cleanup else result
             return self._settle(meta, defer_cleanup)
+
+    def _reusing_provider_client(self):
+        """One provider connection for the observations of a wait loop, when the provider can share it."""
+        reusing = getattr(self.provider, "reusing_client", None)
+        return reusing(self.remaining()) if reusing else nullcontext()
 
     def _settle(self, meta, defer_cleanup=False):
         """What follows the confirmed end of a run, under its control lock: release or hold the slot, then clean up.

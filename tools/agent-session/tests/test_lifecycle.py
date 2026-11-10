@@ -543,6 +543,42 @@ def test_a_registration_that_cannot_publish_is_not_registered(session_env, monke
     assert again.value.code == "registration_failed" and again.value.details["hook_error"]["code"] == expected
 
 
+def test_start_reports_a_hook_that_ended_without_a_result_before_its_timeout(session_env, monkeypatch):
+    """SESSION-011. Claude ends a hook at its limit: it neither publishes nor records a failure. `start` used to
+    wait out its whole limit (600 seconds by default); it reports the ended hook within the hook's own time."""
+    env = session_env
+    with_flags(monkeypatch, "--kill-hook")
+    started = time.monotonic()
+    with pytest.raises(SessionError) as error:      # waiting out the limit would raise "timeout" instead
+        env.manager(timeout=120).start("leader")
+    from agent_session import hook_started
+    assert time.monotonic() - started < hook_started.HOOK_TIMEOUT       # SESSION-013: within the raised hook limit too
+    assert error.value.code == "registration_failed" and error.value.exit_code == 4
+    assert error.value.details["hook_error"]["code"] == "registration_hook_ended"
+    waiting = env.tmux.get_current("fixture", "leader")
+    assert error.value.details["run_id"] == waiting["run_id"] and waiting.get("registered") is not True
+    assert env.store.read()["leader"] is None
+    # A repeated start names the same failure at once; it neither waits again nor launches another run.
+    with pytest.raises(SessionError) as again:
+        env.manager(timeout=60).start("leader")
+    assert again.value.code == "registration_failed"
+    assert env.tmux.get_current("fixture", "leader")["run_id"] == waiting["run_id"]
+
+
+def test_a_hook_that_ends_after_it_published_is_not_a_failed_registration(session_env, monkeypatch):
+    """The hook publishes and ends between two reads of the waiting `start`: the fresh read says published."""
+    import agent_session.hook_started as hook_started
+
+    env = session_env
+
+    def ended_once_published(project, run_id):
+        wait_until(lambda: (env.tmux.get_current("fixture", "leader") or {}).get("ready"), limit=60)
+        return True
+    monkeypatch.setattr(hook_started, "ended", ended_once_published)
+    result = env.manager().start("leader")
+    assert result["session"] is not None and env.store.read()["leader"] is not None
+
+
 def test_a_failed_window_update_leaves_nothing_published(session_env, monkeypatch):
     """The state write is the commit; a window update that fails after it puts the state back."""
     env = session_env
@@ -1228,6 +1264,57 @@ def test_claude_stop_signals_its_cli_and_types_nothing_in_the_pane(session_env, 
     assert result["stopped"] is True and result["released"] is False
     assert recorded(record) == [{"signal": "SIGTERM"}]
     assert "/exit" not in env.tmux.capture_pane(worker["pane_id"])
+
+
+def sharing_claude_project(env, monkeypatch):
+    """A Claude project whose provider shares one connection inside `reusing_client`; returns the event list."""
+    import contextlib
+    import agent_session.lifecycle as lifecycle
+    from agent_session_fake_provider import FakeClaudeProvider
+
+    events = []
+
+    class Sharing(FakeClaudeProvider):
+        @contextlib.contextmanager
+        def reusing_client(self, timeout):
+            events.append("open")
+            try:
+                yield
+            finally:
+                events.append("close")
+
+        def observe(self, session, context, meta=None, timeout=30):
+            events.append("observe")
+            return super().observe(session, context, meta, timeout)
+
+    claude_project(env, monkeypatch)
+    monkeypatch.setattr(lifecycle, "get_provider", lambda name: Sharing())
+    return events
+
+
+def test_stop_shares_one_provider_connection_for_all_its_observations(session_env, monkeypatch):
+    env = session_env
+    events = sharing_claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    del events[:]
+    result = env.manager().control("stop", job=worker["job_id"])
+    assert result["stopped"] is True
+    # Every observation of the stop (the idle wait, the exit wait) lies between one open and one close;
+    # the number of observations does not change the number of connections.
+    assert events[0] == "open" and events[-1] == "close" and events.count("open") == events.count("close") == 1
+    assert events.count("observe") >= 2 and "open" not in events[1:] and "close" not in events[:-1]
+
+
+def test_stop_that_times_out_still_closes_the_shared_provider_connection(session_env, monkeypatch):
+    env = session_env
+    events = sharing_claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    (env.base / "agent" / "fixture-shell-seat-0").write_text("")
+    del events[:]
+    with pytest.raises(SessionError) as error:
+        env.manager(timeout=3).control("stop", job=worker["job_id"])
+    assert error.value.code == "timeout"
+    assert events.count("open") == events.count("close") == 1 and events[-1] == "close"
 
 
 def test_claude_stop_that_times_out_on_a_background_shell_names_it_without_signalling(session_env, monkeypatch):

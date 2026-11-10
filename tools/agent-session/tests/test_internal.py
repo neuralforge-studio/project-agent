@@ -1,5 +1,6 @@
 """Registration regression tests across real tmux and canonical state."""
 
+import contextlib
 import io
 import json
 import os
@@ -15,7 +16,7 @@ import pytest
 TOOL = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
-from agent_session import api, internal, providers
+from agent_session import api, hook_started, internal, process, providers
 from agent_session.config import resolve_project
 from agent_session.errors import SessionError
 from agent_session.state import StateStore, locked
@@ -454,6 +455,31 @@ def _not_listed():
                         {"retryable": True})
 
 
+def test_the_retries_of_the_binding_check_share_one_provider_connection(native_slot, monkeypatch):
+    """SESSION-013. Each look used to start `claude mcp serve` again (8-32 s under load); one block serves them all."""
+    events = []
+
+    class Provider:
+        @contextlib.contextmanager
+        def reusing_client(self, timeout):
+            events.append(("open", timeout))
+            try:
+                yield
+            finally:
+                events.append(("close",))
+
+        def verify_binding(self, session, context, metadata, timeout=20):
+            events.append(("look",))
+            if sum(event == ("look",) for event in events) <= 3:
+                raise _not_listed()
+            return session
+
+    pending, register = _registering(native_slot, monkeypatch, Provider())
+    register()
+    assert [event[0] for event in events] == ["open", "look", "look", "look", "look", "close"]
+    assert 0 < events[0][1] <= internal._BINDING_TIMEOUT
+
+
 def test_registration_waits_out_a_listing_that_misses_the_pane_at_first(native_slot, monkeypatch):
     calls = []
 
@@ -466,7 +492,7 @@ def test_registration_waits_out_a_listing_that_misses_the_pane_at_first(native_s
 
     pending, register = _registering(native_slot, monkeypatch, Provider())
     register()
-    assert len(calls) == 3 and all(0 < timeout <= 20 for timeout in calls)
+    assert len(calls) == 3 and all(0 < timeout <= internal._BINDING_TIMEOUT for timeout in calls)
     current = native_slot["tmux"].get_current("fixture", "seat-0")
     assert current["registered"] is True and not current.get("start_error")
 
@@ -557,3 +583,85 @@ def test_a_hook_with_another_id_stays_an_owner_mismatch_without_a_move_record(na
         _hook_with(native_slot, monkeypatch, str(uuid.uuid4()), moved, {"listed": True, "pid": 1})
     assert error.value.code == "owner_mismatch"
     assert not native_slot["tmux"].get_current("fixture", "seat-0").get("moved_to_background")
+
+
+def test_a_session_start_hook_records_that_it_started(native_slot, monkeypatch):
+    """SESSION-011. A hook that Claude ends at its limit leaves no result; the record is how `start` learns it ended."""
+    fixture = native_slot
+    pending = pending_run(fixture, monkeypatch)
+    native_id = str(uuid.uuid4())
+    payload = {"session_id": native_id, "hook_event_name": "SessionStart", "cwd": str(fixture["seat"]),
+               "source": "startup"}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    internal.register_from_hook("pending-run", str(fixture["config"]), pending["socket_path"],
+                                expected_session_id=native_id, endpoint=fixture["endpoint"])
+    record = json.loads(hook_started.path(fixture["project"], "pending-run").read_text())
+    assert record["run_id"] == "pending-run" and record["pid"] == os.getpid()
+    assert record["birth"] == process.birth(os.getpid())
+    assert hook_started.ended(fixture["project"], "pending-run") is False       # this process is alive
+
+
+def test_a_hook_record_says_ended_only_for_its_own_dead_process(tmp_path):
+    from types import SimpleNamespace
+
+    project = SimpleNamespace(runtime_path=tmp_path)
+    assert hook_started.ended(project, "run-a") is False                            # no record: not an end
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        record = {"run_id": "run-a", "pid": child.pid, "birth": process.birth(child.pid)}
+        path = hook_started.path(project, "run-a")
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(record))
+        assert hook_started.ended(project, "run-a") is False                        # the hook is running
+        assert hook_started.ended(project, "run-b") is False                        # another run's record is not read
+        child.kill()
+        child.wait()
+        assert hook_started.ended(project, "run-a") is True
+        path.write_text(json.dumps({**record, "birth": "linux:other:1"}))           # a reused PID is another process
+        assert hook_started.ended(project, "run-a") is True
+        path.write_text(json.dumps({**record, "run_id": "run-b"}))
+        assert hook_started.ended(project, "run-a") is False
+        path.write_text("{not json")
+        assert hook_started.ended(project, "run-a") is False
+    finally:
+        child.kill()
+        child.wait()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the creation time is read from /proc")
+def test_the_hook_deadline_counts_from_the_creation_of_its_process(monkeypatch):
+    """Claude's hook limit counts from the process start; a loaded host spends seconds in the interpreter's start
+    and imports, which the budget must include."""
+    monkeypatch.setattr(process, "age", lambda pid: 7.0)
+    now = time.monotonic()
+    budget = internal._HOOK_BUDGET
+    assert budget - 7 - 0.5 < internal._hook_deadline() - now <= budget - 7 + 0.5
+    monkeypatch.setattr(process, "age", lambda pid: 600.0)                          # a wrong clock costs the cap at most
+    assert internal._hook_deadline() - time.monotonic() > budget - internal._STARTUP_CAP - 0.5
+
+
+def test_the_registration_deadline_is_shorter_than_the_hook_limit_claude_is_given():
+    """SESSION-013. The hook writes its own failure before Claude ends it: every step of the deadline fits inside
+    the settings `timeout`, and the settings `timeout` is the one the registration's budget derives from."""
+    from agent_session.providers.claude import ClaudeProvider
+
+    limit = hook_started.HOOK_TIMEOUT
+    assert limit == 60 and internal._HOOK_BUDGET < limit
+    assert internal._BINDING_TIMEOUT < internal._HOOK_BUDGET      # and it ends `_PUBLISH_RESERVE` before the deadline anyway
+    assert internal._STARTUP_CAP < internal._HOOK_BUDGET - internal._PUBLISH_RESERVE      # the binding keeps time
+    context = {"python": sys.executable, "library_path": "/lib", "run_id": "r", "config_path": "/c", "socket_path": "/s",
+               "expected_session_id": str(uuid.uuid4())}
+    hooks = ClaudeProvider().registration_hooks(context)
+    assert {entry["hooks"][0]["timeout"] for entries in hooks.values() for entry in entries} == {limit}
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the creation time is read from /proc")
+def test_process_age_is_the_seconds_since_creation():
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        time.sleep(1.2)
+        assert 1.0 <= process.age(child.pid) < 60
+    finally:
+        child.kill()
+        child.wait()
+    assert process.age(child.pid) == 0.0                                               # a gone process has no age

@@ -167,14 +167,19 @@ def _pane_row(raw, pane_id):
     return row
 
 
-def _pointer_window(raw):
-    """The window a current pointer text names, or None when the text is not a pointer."""
+def _pointer_field(raw, key):
+    """A text field of a current pointer text, or None when the text is not a pointer or lacks the field."""
     try:
         pointer = json.loads(raw)
     except ValueError:
         return None
-    window = pointer.get("window_id") if isinstance(pointer, dict) else None
-    return window if isinstance(window, str) and window else None
+    value = pointer.get(key) if isinstance(pointer, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+def _pointer_window(raw):
+    """The window a current pointer text names, or None when the text is not a pointer."""
+    return _pointer_field(raw, "window_id")
 
 
 class ServerView:
@@ -697,6 +702,31 @@ class Tmux:
 
     def get_current(self, project_id, target):
         return self._observe((target,)).current(project_id, target)
+
+    def current_with_run(self, project_id, run_id, targets):
+        """The window options of the slots among `targets` whose current run is `run_id`: normally one, else none.
+
+        The pointers of all `targets` come in the one tmux process that reads the server, and only the windows
+        the pointers name this run for are read, so the tmux processes do not grow with the slots (a
+        `get_current` per slot did). A pointer that is unreadable or names another run is not this run's
+        concern; a slot whose window is gone is not a match."""
+        name = _session(project_id)
+        view = self._observe(targets)
+        if name not in view.sessions:
+            return []
+        found = []
+        for target in view.targets:
+            if _pointer_field(view.pointer(name, target), "run_id") != run_id:
+                continue
+            try:
+                meta = view.current(project_id, target)
+            except SessionError as error:
+                if error.code != "execution_evidence_missing":
+                    raise
+                continue
+            if meta and meta.get("run_id") == run_id:
+                found.append(meta)
+        return found
 
     def clear_current(self, project_id, target, run_id):
         """Remove the slot pointer only while it still names this run."""

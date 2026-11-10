@@ -88,6 +88,21 @@ def birth(pid):
     return None if row is None else sys.platform + ":" + row["birth"]
 
 
+def age(pid):
+    """Seconds since the process was created, or 0.0 when the platform gives no creation time (not Linux, or
+    the process is gone)."""
+    if not sys.platform.startswith("linux"):
+        return 0.0
+    row = _linux_row(_pid(pid))
+    if row is None:
+        return 0.0
+    try:
+        uptime = float((Path("/proc") / "uptime").read_text().split()[0])
+    except (OSError, ValueError, IndexError) as exc:
+        raise SessionError("process_unknown", "Cannot read the system uptime.", 4) from exc
+    return max(0.0, uptime - int(row["birth"]) / os.sysconf("SC_CLK_TCK"))
+
+
 def alive(pid, expected_birth=None):
     """A zombie or a PID with a different creation fingerprint is not alive."""
     pid = _pid(pid)

@@ -1,5 +1,6 @@
 """Interactive Claude launch and the public cross-session MCP transport."""
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import time
 import uuid
 
 from .. import process
+from ..hook_started import HOOK_TIMEOUT
 from ..errors import SessionError
 from .common import (TRANSCRIPT_TAIL, context_timeout, deadline, executable, json_result, last_record_time, run,
                      session_id, text_file)
@@ -121,7 +123,7 @@ def report_background(stopped, meta):
     return (tasks if adopt_disabled(meta) else tasks + crons), crons
 
 
-HOST_QUERY_SECONDS = 8                      # `claude agents` wait inside a hook's 30 seconds
+HOST_QUERY_SECONDS = 8                      # `claude agents` wait inside a hook (its own limit is HOOK_TIMEOUT)
 
 
 def transcript_files(cwds, conversation_id):
@@ -232,6 +234,12 @@ def parse_peers(result, skipped=None):
     if not isinstance(listing, str) or not isinstance(sections, list):
         raise SessionError("provider_protocol_unsupported", "Claude returned an unsupported ListAgents format.", 4)
     output = []
+    # The listing's lines, grouped by the text up to their first "] " (the row prefix "name [ref]"), so that a
+    # row finds its line without reading all of them: the cost follows the number of rows, not its square.
+    stripped = [line for line in (line.strip() for line in listing.splitlines()) if line]
+    heads = {}
+    for line in stripped:
+        heads.setdefault(line.partition("] ")[0] + "]", []).append(line)
     for section in sections:
         if not isinstance(section, dict) or section.get("kind") != "sessions":
             continue
@@ -246,7 +254,10 @@ def parse_peers(result, skipped=None):
                     skipped.append(row)
                 continue
             prefix = row["name"] + " [" + row["ref"] + "]"
-            lines = [line.strip() for line in listing.splitlines() if line.strip().startswith(prefix + " ")]
+            if "] " in prefix[:-1]:                  # a name or ref with "] " cannot be found by its head
+                lines = [line for line in stripped if line.startswith(prefix + " ")]
+            else:
+                lines = [line for line in heads.get(prefix, ()) if line.startswith(prefix + " ")]
             if len(lines) != 1:
                 raise SessionError("provider_protocol_error", "Claude peer rows and listing do not agree.", 4)
             matches = re.findall(r"\btmux\s+(.+?):(@\d+)\.(%\d+)(?=\s*(?:·|$))", lines[0])
@@ -262,6 +273,49 @@ def parse_peers(result, skipped=None):
 class ClaudeProvider:
     name = "claude"
     mcp_factory = MCPClient
+    _reused = None                 # the MCP server shared inside `reusing_client`: {"limit", "argv", "stack", "client"}
+
+    @contextlib.contextmanager
+    def reusing_client(self, timeout):
+        """Share one `claude mcp serve` among the `observe` calls inside the block (a wait loop).
+
+        Starting the server costs seconds (Node start, 1.8-2.7 s measured) and ending it ~0.6 s, and every `observe`
+        paid both; the listing itself takes 0.1 s. The server lists the sessions of the moment on every call, so a
+        reused server reports a session that appeared or ended as a new one does. `timeout` bounds the shared
+        server as it bounds one `observe`. A server that failed is dropped and the next call starts another."""
+        if self._reused is not None:
+            yield
+            return
+        self._reused = {"limit": deadline(timeout), "argv": None, "stack": None, "client": None}
+        try:
+            yield
+        finally:
+            held, self._reused = self._reused, None
+            if held["stack"] is not None:
+                held["stack"].close()
+
+    def _peer_of(self, argv, session, context, meta, timeout):
+        """`_peer` through a client of its own, or through the shared one inside `reusing_client`."""
+        held = self._reused
+        if held is None or held["argv"] not in (None, argv):
+            with self.mcp_factory(argv, timeout) as client:
+                return self._peer(client, session, context, meta)
+        held["argv"] = argv
+        for attempt in (0, 1):
+            reused = held["client"] is not None
+            if not reused:
+                held["stack"] = contextlib.ExitStack()
+                held["client"] = held["stack"].enter_context(self.mcp_factory(argv, held["limit"]))
+            try:
+                return self._peer(held["client"], session, context, meta)
+            except SessionError as error:
+                if not error.code.startswith("provider_"):
+                    raise                          # an answer about the session; the server is fine
+                stack, held["stack"], held["client"] = held["stack"], None, None
+                stack.close()
+                if reused and error.code == "provider_connection_closed" and attempt == 0:
+                    continue                       # the shared server ended between two calls: ask a new one
+                raise
 
     def prepare_context(self, context):
         result = dict(context)
@@ -303,12 +357,12 @@ class ClaudeProvider:
             "register_from_hook(run_id=sys.argv[2],config_path=sys.argv[3],"
             "socket_path=sys.argv[4],expected_session_id=sys.argv[5])"
         )
-        command = shlex.join([str(context["python"]), "-c", code, str(context["library_path"]),
+        command = shlex.join([str(context["python"]), "-S", "-c", code, str(context["library_path"]),
                               str(context["run_id"]), str(context["config_path"]),
                               str(context["socket_path"]), identity])
         hooks = {}
         for event in ("SessionStart", "Stop", "StopFailure", "SessionEnd"):
-            entry = {"hooks": [{"type": "command", "command": command, "timeout": 30}]}
+            entry = {"hooks": [{"type": "command", "command": command, "timeout": HOOK_TIMEOUT}]}
             if event == "SessionStart":
                 # A resumed conversation reports source "resume"; every other run starts a new one.
                 entry["matcher"] = "resume" if context.get("resume") else "startup"
@@ -415,9 +469,8 @@ class ClaudeProvider:
         return matches[0]
 
     def verify_binding(self, session, context, meta, timeout=30):
-        limit = deadline(timeout)
-        with self.mcp_factory([executable("claude", context), "mcp", "serve"], limit) as client:
-            peer = self._peer(client, session, context, meta)
+        """The binding of this pane; inside `reusing_client` the repeated checks of a registration share one server."""
+        peer = self._peer_of([executable("claude", context), "mcp", "serve"], session, context, meta, timeout)
         return {"session_id": session_id(session), "message_to": peer["message_to"]}
 
     def send(self, session, text, context, timeout=30):
@@ -476,8 +529,8 @@ class ClaudeProvider:
         meta = meta or context.get("meta", {})
         peer = None
         try:
-            with self.mcp_factory([executable("claude", context), "mcp", "serve"], timeout) as client:
-                peer = self._peer(client, session, context, meta)
+            argv = [executable("claude", context), "mcp", "serve"]
+            peer = self._peer_of(argv, session, context, meta, timeout)
         except SessionError as error:
             # A CLI that exits while ListAgents runs leaves the listing before the caller sees a
             # dead pane, and a later stop passes no pane state; its hooks then tell the end.
