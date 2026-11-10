@@ -22,6 +22,7 @@ class MCPClient:
         self.counter = 0
         self.schemas = {}
         self.unreaped_pid = None
+        self.grace = 1                 # seconds `close` waits for the server to end after its input closes
 
     def __enter__(self):
         try:
@@ -72,7 +73,7 @@ class MCPClient:
             if self.process.stdin and not self.process.stdin.closed:
                 self.process.stdin.close()
             try:
-                self.process.wait(timeout=1)
+                self.process.wait(timeout=self.grace)
             except subprocess.TimeoutExpired:
                 self.process.terminate()
                 try:

@@ -603,3 +603,42 @@ def test_transcript_files_follow_claudes_directory_naming(tmp_path, monkeypatch)
     # Without a directory every project directory is searched, in the same config directory.
     assert transcript_files(None, IDENTITY) == [folder / f"{IDENTITY}.jsonl"]
     assert transcript_files(None, "other") == [] and transcript_files(None, "../" + IDENTITY) == []
+
+
+def test_the_binding_check_does_not_wait_for_a_server_that_outlives_its_input(claude):
+    """SESSION-011. `claude mcp serve` keeps running when its input closes, so the wait on close (1 second) was
+    always spent in the hook. The check sent nothing; only `send` still waits for the server to finish."""
+    provider, fake, context, meta, _ = claude
+    provider.verify_binding({"session_id": IDENTITY}, context, meta)
+    assert fake.grace == 0
+    del fake.grace
+    provider.send({"session_id": IDENTITY, "message_to": "worker [6d267e]"}, "text", context)
+    assert not hasattr(fake, "grace")
+
+
+def test_closing_the_client_waits_only_as_long_as_its_grace():
+    waits = []
+
+    class Server:
+        def __init__(self):
+            self.stdin = type("Pipe", (), {"closed": False, "close": lambda s: None})()
+            self.stdout = type("Pipe", (), {"close": lambda s: None})()
+            self.ended = False
+
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            if not self.ended:
+                self.ended = bool(waits[1:])                    # it ends once it is terminated
+                if not self.ended:
+                    raise subprocess.TimeoutExpired("server", timeout)
+
+        def terminate(self):
+            pass
+
+    for grace in (1, 0):
+        del waits[:]
+        client = MCPClient([sys.executable])
+        client.grace = grace
+        client.process = Server()
+        client.close()
+        assert waits[0] == grace

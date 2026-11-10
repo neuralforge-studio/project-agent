@@ -543,6 +543,41 @@ def test_a_registration_that_cannot_publish_is_not_registered(session_env, monke
     assert again.value.code == "registration_failed" and again.value.details["hook_error"]["code"] == expected
 
 
+def test_start_reports_a_hook_that_ended_without_a_result_before_its_timeout(session_env, monkeypatch):
+    """SESSION-011. Claude ends a hook at its limit: it neither publishes nor records a failure. `start` used to
+    wait out its whole limit (600 seconds by default); it reports the ended hook within the hook's own time."""
+    env = session_env
+    with_flags(monkeypatch, "--kill-hook")
+    started = time.monotonic()
+    with pytest.raises(SessionError) as error:      # waiting out the limit would raise "timeout" instead
+        env.manager(timeout=120).start("leader")
+    assert time.monotonic() - started < 60
+    assert error.value.code == "registration_failed" and error.value.exit_code == 4
+    assert error.value.details["hook_error"]["code"] == "registration_hook_ended"
+    waiting = env.tmux.get_current("fixture", "leader")
+    assert error.value.details["run_id"] == waiting["run_id"] and waiting.get("registered") is not True
+    assert env.store.read()["leader"] is None
+    # A repeated start names the same failure at once; it neither waits again nor launches another run.
+    with pytest.raises(SessionError) as again:
+        env.manager(timeout=60).start("leader")
+    assert again.value.code == "registration_failed"
+    assert env.tmux.get_current("fixture", "leader")["run_id"] == waiting["run_id"]
+
+
+def test_a_hook_that_ends_after_it_published_is_not_a_failed_registration(session_env, monkeypatch):
+    """The hook publishes and ends between two reads of the waiting `start`: the fresh read says published."""
+    import agent_session.hook_started as hook_started
+
+    env = session_env
+
+    def ended_once_published(project, run_id):
+        wait_until(lambda: (env.tmux.get_current("fixture", "leader") or {}).get("ready"), limit=60)
+        return True
+    monkeypatch.setattr(hook_started, "ended", ended_once_published)
+    result = env.manager().start("leader")
+    assert result["session"] is not None and env.store.read()["leader"] is not None
+
+
 def test_a_failed_window_update_leaves_nothing_published(session_env, monkeypatch):
     """The state write is the commit; a window update that fails after it puts the state back."""
     env = session_env

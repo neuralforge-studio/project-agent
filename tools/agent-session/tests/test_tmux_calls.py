@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 from agent_session_fixture import session_env  # noqa: E402,F401
-from agent_session import api, config, tmux as tmux_module  # noqa: E402
+from agent_session import api, config, internal, providers, tmux as tmux_module  # noqa: E402
 from agent_session.errors import SessionError  # noqa: E402
 from agent_session.tmux import Tmux  # noqa: E402
 from fleet import build_fleet, count_tmux, start_server  # noqa: E402
@@ -27,6 +27,9 @@ import tmux_test_server  # noqa: E402
 # A read of the server for one project or for all: the server's sessions, windows and panes in one tmux
 # process, then the window options of the current runs in one more (the names of the options are learned).
 SERVER_READ = 2
+# A registration after the interpreter (finding the run, the binding check's look at the slot, the publication):
+# 10 tmux processes measured for 2, 6 and 16 seats alike. It is a number of steps, not of seats.
+REGISTRATION = 10
 # A command starts what its own steps need; `start` waits for the provider to register in a loop, so its
 # number follows the wait and is not limited here.
 COMMANDS = {"review": 8, "review --clear": 3, "send": 16, "stop": 30}
@@ -166,3 +169,63 @@ def test_a_window_that_vanishes_during_a_batch_read_is_reported_alone(tmp_path, 
         assert set(found) == set(ids)
         assert isinstance(found["@9999"], SessionError) and found["@9999"].details["reason"] == "no such window: @9999"
         assert all(found[window]["window_id"] == window for window in windows)
+
+
+def _registration(tmp_path, fleet_socket, seats):
+    """(registry, project, the run of the project's last seat) of a fleet of 3 projects."""
+    registry = build_fleet(tmp_path, fleet_socket, 3, seats)
+    project = config.load_registry(registry)[1]
+    return registry, project, Tmux(socket_path=fleet_socket).get_current(project.project_id, f"seat-{seats - 1}")
+
+
+@pytest.mark.parametrize("seats", [2, 6, 16])
+def test_finding_the_run_of_a_hook_starts_two_tmux_processes_whatever_the_seats(
+        tmp_path, monkeypatch, fleet_socket, seats):
+    """SESSION-011. The hook and `mark_process` found their run by reading every slot of the project: two tmux
+    processes per slot (4 for 2 seats, 34 for 16), and the hook did it twice."""
+    registry, project, run = _registration(tmp_path, fleet_socket, seats)
+    calls = count_tmux(monkeypatch)
+    found, control, context = internal._run(run["run_id"], str(registry), fleet_socket, cwd=project.base)
+    assert found.project_id == project.project_id and context["target"] == f"seat-{seats - 1}"
+    assert context["run_id"] == run["run_id"] and context["seat"] == seats - 1
+    assert len(calls) <= SERVER_READ, calls
+
+
+@pytest.mark.parametrize("seats", [2, 6, 16])
+def test_a_registration_starts_the_same_tmux_processes_whatever_the_seats(
+        tmp_path, monkeypatch, fleet_socket, seats):
+    """The whole of a hook's registration after the interpreter: finding the run, the binding check, the publication."""
+    registry, project, run = _registration(tmp_path, fleet_socket, seats)
+    session_id = "11111111-2222-3333-4444-555555555555"
+
+    class Provider:
+        def verify_binding(self, session, context, meta, timeout=30):
+            return session
+    monkeypatch.setattr(providers, "get_provider", lambda name: Provider())
+    endpoint = "unix:///tmp/fleet.sock"             # the fleet is a Codex fleet: a conversation has an endpoint
+    Tmux(socket_path=fleet_socket).write_meta(run["window_id"], {"run_id": run["run_id"], "endpoint": endpoint})
+    calls = count_tmux(monkeypatch)
+    resolved = internal._run(run["run_id"], str(registry), fleet_socket, cwd=project.base)
+    internal._register(run["run_id"], str(registry), fleet_socket, session_id, endpoint, cwd=run["cwd"],
+                       resolved=resolved)
+    assert len(calls) <= REGISTRATION, calls
+    assert Tmux(socket_path=fleet_socket).get_current(project.project_id, f"seat-{seats - 1}")["session_id"] == session_id
+
+
+def test_the_run_of_a_hook_is_found_among_the_slots_that_name_it(tmp_path, fleet_socket):
+    """`current_with_run` names the slot whose pointer holds the run; another run, an unreadable pointer, a gone
+    window and a project without a session are no match, and a pointer of another slot is never an error."""
+    registry, project, _ = _registration(tmp_path, fleet_socket, 4)
+    control = Tmux(socket_path=fleet_socket)
+    slots = ["leader", *(f"seat-{n}" for n in range(4))]
+    runs = {slot: control.get_current(project.project_id, slot)["run_id"] for slot in slots}
+    meta = control.get_current(project.project_id, "seat-1")
+    control.command("kill-window", "-t", meta["window_id"])                       # seat-1: the window is gone
+    control.command("set-option", "-t", project.project_id, "@agent_session_current_seat_2", "not json")
+    def found(run_id, name=project.project_id):
+        return [meta["target"] for meta in control.current_with_run(name, run_id, slots)]
+    assert found(runs["seat-3"]) == ["seat-3"]
+    assert found(runs["leader"]) == ["leader"]
+    assert found(runs["seat-1"]) == [] and found(runs["seat-2"]) == []
+    assert found("no-such-run") == [] and found(runs["seat-3"], "no-such-project") == []
+    assert found(runs["seat-3"], "p0") == []                                      # another project's slots hold other runs

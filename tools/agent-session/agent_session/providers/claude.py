@@ -417,6 +417,8 @@ class ClaudeProvider:
     def verify_binding(self, session, context, meta, timeout=30):
         limit = deadline(timeout)
         with self.mcp_factory([executable("claude", context), "mcp", "serve"], limit) as client:
+            # Claude's server keeps running when its input closes; this check sent nothing, so do not wait for it.
+            client.grace = 0
             peer = self._peer(client, session, context, meta)
         return {"session_id": session_id(session), "message_to": peer["message_to"]}
 
