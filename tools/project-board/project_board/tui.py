@@ -233,6 +233,9 @@ class SidebarApp(App):
         self._expansion_lock = asyncio.Lock()
         self._signature = None
         self._blocks: list[Vertical] = []     # the mounted block of each project, in order
+        self._shapes: list[tuple] = []        # the rows (`_shape`) each mounted block was built with
+        self._widgets: list[dict] = []        # the widgets of each mounted block by role, written by `_update_block`
+        self._render_lock = asyncio.Lock()
         self._pool: ThreadPoolExecutor | None = None
         self._tasks: set[asyncio.Task] = set()
         self._snapshot_busy = False
@@ -489,123 +492,193 @@ class SidebarApp(App):
                 tuple(_count(project, state) for state in model.CR_STATES),
                 _decide_count(project), _decide_stages(project), seats, errors, leader)
 
-    def _project_block(self, number: int, project: dict) -> Vertical:
-        """The widgets of one project, and its click targets in `_actions` (ids are `project-<number>-...`)."""
+    def _shape(self, project: dict) -> tuple:
+        """Which rows `_project_block` has for one project. A change of shape replaces the block (inside one
+        batch); any other change of what is shown is written into the widgets that are already mounted."""
+        expanded = project["id"] in self._expanded_projects
+        leader = bool(format_elapsed((project.get("leader") or {}).get("elapsed"))) if expanded else False
+        seats = tuple(seat["index"] for seat in project.get("seats", [])) if expanded else ()
+        return expanded, leader, seats, len(project.get("errors", []))
+
+    def _register_actions(self, number: int, project: dict) -> None:
+        """The click targets of one project's block, keyed by widget id (`project-<number>-...`)."""
         prefix = f"project-{number}-"
         for button_id in [key for key in self._actions if key.startswith(prefix)]:
             del self._actions[button_id]
-        counters = []
+        for short, state in (("O", "open"), ("T", "todo"), ("I", "in-progress")):
+            self._actions[f"{prefix}{short}"] = ("cr", project, state)
+        self._actions[f"{prefix}D"] = ("decision", project["id"])
+        self._actions[f"{prefix}name"] = ("project", project["id"])
+        self._actions[f"{prefix}seats"] = ("seats", project["id"])
+        if project["id"] in self._expanded_projects:
+            for seat in project.get("seats", []):
+                self._actions[f"{prefix}seat-{seat['index']}"] = ("seat", project["id"], seat["index"])
+
+    @staticmethod
+    def _show(widget: Button, label: str, *, disabled: bool | None = None, tooltip: str | None = None,
+              classes: dict[str, bool] | None = None) -> None:
+        """Write what a mounted (or not yet mounted) button shows; a value that is already shown is not set again."""
+        if str(widget.label) != label:
+            widget.label = label
+        if disabled is not None and widget.disabled != disabled:
+            widget.disabled = disabled
+        if tooltip is not None and widget.tooltip != tooltip:
+            widget.tooltip = tooltip
+        for name, on in (classes or {}).items():
+            widget.set_class(on, name)
+
+    def _fill_summary(self, widgets: dict, project: dict) -> None:
+        """Name, decision, counters and fold button of a project, in the block's widgets."""
         for short, state in (("O", "open"), ("T", "todo"), ("I", "in-progress")):
             label = _count(project, state)
-            button_id = f"project-{number}-{short}"
-            button = Button(f"{short}:{label}", id=button_id, classes="cr-count")
-            button.disabled = label in ("-", "!", "0")
-            counters.append(button)
-            self._actions[button_id] = ("cr", project, state)
-        decision_id = f"project-{number}-D"
+            self._show(widgets[short], f"{short}:{label}",
+                       disabled=label in ("-", "!", "0"))
         decision_count = _decide_count(project)
-        decision = Button(f"D:{decision_count}", id=decision_id, classes="decision")
-        decision.disabled = not _visible_decisions(project)
-        if decision_count not in ("-", "!", "0"):
-            decision.add_class("decision-open")
         stages = _decide_stages(project)
-        decision.tooltip = " · ".join(f"{stage} {count}" for stage, count in
-                                      zip(("결정 대기", "답변 접수", "반영 중", "완료"), stages))
-        self._actions[decision_id] = ("decision", project["id"])
-        name_id = f"project-{number}-name"
+        self._show(widgets["D"], f"D:{decision_count}",
+                   disabled=not _visible_decisions(project),
+                   tooltip=" · ".join(f"{stage} {count}" for stage, count in
+                                      zip(("결정 대기", "답변 접수", "반영 중", "완료"), stages)),
+                   classes={"decision-open": decision_count not in ("-", "!", "0")})
         active, slot = self._is_active(project), self._active_slot(project)
-        name = Button(("▶ " if active else "") + project["id"], id=name_id,
-                      classes="project-name project-active" if active else "project-name")
-        name.styles.line_pad = 0
-        name.tooltip = project["id"]
-        self._actions[name_id] = ("project", project["id"])
-        fold_id = f"project-{number}-seats"
+        self._show(widgets["name"], ("▶ " if active else "") + project["id"],
+                   tooltip=project["id"], classes={"project-active": active})
         expanded = project["id"] in self._expanded_projects
-        fold = Button("▾" if expanded else "▸", id=fold_id)
-        fold.tooltip = "좌석 접기" if expanded else "좌석 펼치기"
-        if slot is not None and not expanded:       # the slot's own row is folded away
-            fold.add_class("slot-active")
-            fold.tooltip += " · 현재 창: " + ("Leader" if slot == "leader" else slot.replace("-", " "))
-        counters.append(fold)
-        self._actions[fold_id] = ("seats", project["id"])
-        children = [name, decision, Horizontal(*counters, classes="counts")]
+        tooltip = "좌석 접기" if expanded else "좌석 펼치기"
+        slot_hidden = slot is not None and not expanded      # the slot's own row is folded away
+        if slot_hidden:
+            tooltip += " · 현재 창: " + ("Leader" if slot == "leader" else slot.replace("-", " "))
+        self._show(widgets["seats"], "▾" if expanded else "▸",
+                   tooltip=tooltip, classes={"slot-active": slot_hidden})
+
+    def _fill_rows(self, widgets: dict, project: dict) -> None:
+        """Leader row, seat rows and error rows of a project whose shape is the block's, in its widgets."""
+        expanded = project["id"] in self._expanded_projects
+        slot = self._active_slot(project)
         leader_time = format_elapsed((project.get("leader") or {}).get("elapsed")) if expanded else None
         if leader_time:
-            leader_row = Static(f"  Leader {leader_time}",
-                                classes="leader slot-active" if slot == "leader" else "leader")
+            row = widgets["leader"]
+            text = f"  Leader {leader_time}"
+            if str(row.content) != text:
+                row.update(text)
+            row.set_class(slot == "leader", "slot-active")
+        for seat in (project.get("seats", []) if expanded else []):
+            button = widgets[f"seat-{seat['index']}"]
+            live = self._seat_liveness(project, seat)
+            tooltip = (f"{seat['job_id']}: {seat['title']}" if seat.get("title") else
+                       seat.get("job_id") or f"{seat['index']} -")
+            if seat.get("host"):
+                tooltip += f" · 호스트: {seat['host']} · {seat['path']}"
+            if seat.get("status") == "pending":
+                tooltip += " · 시작 대기"
+            elif seat.get("status") == "release_pending":
+                tooltip += " · 반납 대기: Worker는 끝났고 CR이 in-progress에 있습니다. CR을 옮기면 반납됩니다"
+            if live == "stopped":
+                tooltip += " · 실행 종료"
+            elif live == "unknown":
+                tooltip += " · 실행 확인 불가"
+            self._show(button, _seat_text(seat), tooltip=tooltip,
+                       disabled=seat.get("job_id") is None or seat.get("session_id") is None,
+                       classes={"slot-active": slot == f"seat-{seat['index']}",
+                                "seat-empty": seat.get("job_id") is None,
+                                "seat-pending": seat.get("job_id") is not None and seat.get("status") == "pending",
+                                "seat-release-pending": (seat.get("job_id") is not None
+                                                         and seat.get("status") == "release_pending"),
+                                "seat-stopped": live == "stopped", "seat-unknown": live == "unknown"})
+        for number, item in enumerate(project.get("errors", [])):
+            row = widgets[f"error-{number}"]
+            text = f"{item.get('source')}: {item.get('message')}"
+            if str(row.content) != text:
+                row.update(text)
+
+    def _project_block(self, number: int, project: dict) -> Vertical:
+        """A new block with the widgets of one project, and its click targets in `_actions`
+        (ids are `project-<number>-...`). Values are written by `_fill_summary` and `_fill_rows`,
+        the same code that updates a block that is already mounted."""
+        prefix = f"project-{number}-"
+        widgets = {short: Button("", id=f"{prefix}{short}", classes="cr-count") for short in ("O", "T", "I")}
+        widgets["seats"] = Button("", id=f"{prefix}seats")
+        widgets["name"] = name = Button("", id=f"{prefix}name", classes="project-name")
+        name.styles.line_pad = 0
+        widgets["D"] = Button("", id=f"{prefix}D", classes="decision")
+        children = [name, widgets["D"],
+                    Horizontal(*(widgets[key] for key in ("O", "T", "I", "seats")), classes="counts")]
+        expanded = project["id"] in self._expanded_projects
+        if expanded and format_elapsed((project.get("leader") or {}).get("elapsed")):
+            widgets["leader"] = leader_row = Static("", classes="leader")
             leader_row.tooltip = "Leader session이 게시된 뒤 지난 시간"
             children.append(leader_row)
         for seat in (project.get("seats", []) if expanded else []):
-            button_id = f"project-{number}-seat-{seat['index']}"
-            classes = "seat slot-active" if slot == f"seat-{seat['index']}" else "seat"
-            if seat.get("job_id") is None:
-                classes += " seat-empty"
-            elif seat.get("status") == "pending":
-                classes += " seat-pending"
-            elif seat.get("status") == "release_pending":
-                classes += " seat-release-pending"
-            live = self._seat_liveness(project, seat)
-            if live in ("stopped", "unknown"):
-                classes += f" seat-{live}"
-            button = Button(_seat_text(seat), id=button_id, classes=classes)
-            button.disabled = seat.get("job_id") is None or seat.get("session_id") is None
-            button.tooltip = (f"{seat['job_id']}: {seat['title']}" if seat.get("title") else
-                              seat.get("job_id") or f"{seat['index']} -")
-            if seat.get("host"):
-                button.tooltip += f" · 호스트: {seat['host']} · {seat['path']}"
-            if seat.get("status") == "pending":
-                button.tooltip += " · 시작 대기"
-            elif seat.get("status") == "release_pending":
-                button.tooltip += " · 반납 대기: Worker는 끝났고 CR이 in-progress에 있습니다. CR을 옮기면 반납됩니다"
-            if live == "stopped":
-                button.tooltip += " · 실행 종료"
-            elif live == "unknown":
-                button.tooltip += " · 실행 확인 불가"
+            widgets[f"seat-{seat['index']}"] = button = Button("", id=f"{prefix}seat-{seat['index']}", classes="seat")
             children.append(button)
-            self._actions[button_id] = ("seat", project["id"], seat["index"])
-        for item in project.get("errors", []):
-            children.append(Static(f"{item.get('source')}: {item.get('message')}", classes="project-error"))
+        for index, _ in enumerate(project.get("errors", [])):
+            widgets[f"error-{index}"] = row = Static("", classes="project-error")
+            children.append(row)
+        self._fill_summary(widgets, project)
+        self._fill_rows(widgets, project)
+        self._register_actions(number, project)
+        if number < len(self._widgets):
+            self._widgets[number] = widgets
+        else:
+            self._widgets.append(widgets)
         return Vertical(*children, classes="project")
 
+    def _update_block(self, number: int, project: dict) -> None:
+        """Write the changed values into the project's mounted widgets; nothing is mounted or removed."""
+        self._fill_summary(self._widgets[number], project)
+        self._fill_rows(self._widgets[number], project)
+        self._register_actions(number, project)
+
     async def _render_projects(self) -> None:
-        """Draw what changed. A project whose signature is unchanged keeps its widgets; only when the
-        project list or order changed is everything drawn again (BOARD-013)."""
-        projects = self.snapshot_data.get("projects", [])
-        error = self.snapshot_data.get("error")
-        signature = (error.get("message") if error else None,
-                     tuple(self._project_signature(project) for project in projects))
-        old = self._signature
-        if signature == old:
-            return
-        self._signature = signature
-        self.query_one("#board-error", Static).update(signature[0] or "")
-        scroll = self.query_one("#projects", VerticalScroll)
-        previous_y = scroll.scroll_y
-        focused_id = self.focused.id if self.focused else None
-        same_list = (old is not None and projects and len(old[1]) == len(signature[1])
-                     and all(before[0] == after[0] for before, after in zip(old[1], signature[1])))
-        if same_list:
-            for number, project in enumerate(projects):
-                if old[1][number] == signature[1][number]:
-                    continue
-                stale = self._blocks[number]
-                self._blocks[number] = block = self._project_block(number, project)
-                await scroll.mount(block, before=stale)      # the list never gets shorter, so its scroll position stays
-                await stale.remove()
-        else:
-            await scroll.remove_children()
-            self._actions.clear()
-            self._blocks = [self._project_block(number, project) for number, project in enumerate(projects)]
-            await scroll.mount(*(self._blocks or [Static("등록된 project가 없습니다.")]))
+        """Draw what changed. A project whose signature is unchanged keeps its widgets (BOARD-013). A changed
+        value is written into the mounted widget. Rows that appear or disappear, and a changed project list,
+        are applied inside one `batch_update`, so the screen only ever shows the state before or after the
+        change (BOARD-017). The lock keeps two renders from interleaving their awaits."""
+        async with self._render_lock:
+            projects = self.snapshot_data.get("projects", [])
+            error = self.snapshot_data.get("error")
+            signature = (error.get("message") if error else None,
+                         tuple(self._project_signature(project) for project in projects))
+            old = self._signature
+            if signature == old:
+                return
+            self._signature = signature
+            scroll = self.query_one("#projects", VerticalScroll)
+            previous_y = scroll.scroll_y
+            focused_id = self.focused.id if self.focused else None
+            same_list = (old is not None and projects and len(old[1]) == len(signature[1])
+                         and all(before[0] == after[0] for before, after in zip(old[1], signature[1])))
+            with self.batch_update():
+                self.query_one("#board-error", Static).update(signature[0] or "")
+                if same_list:
+                    for number, project in enumerate(projects):
+                        if old[1][number] == signature[1][number]:
+                            continue
+                        shape = self._shape(project)
+                        if shape == self._shapes[number]:
+                            self._update_block(number, project)
+                            continue
+                        stale = self._blocks[number]
+                        self._blocks[number] = block = self._project_block(number, project)
+                        self._shapes[number] = shape
+                        await scroll.mount(block, before=stale)      # the list never gets shorter, so its scroll position stays
+                        await stale.remove()
+                else:
+                    await scroll.remove_children()
+                    self._actions.clear()
+                    self._widgets = []
+                    self._blocks = [self._project_block(number, project) for number, project in enumerate(projects)]
+                    self._shapes = [self._shape(project) for project in projects]
+                    await scroll.mount(*(self._blocks or [Static("등록된 project가 없습니다.")]))
 
-        def restore() -> None:
-            scroll.scroll_to(y=previous_y, animate=False)
-            if focused_id:
-                selected = self.query(f"#{focused_id}")
-                if selected:
-                    selected.first().focus()
+            def restore() -> None:
+                scroll.scroll_to(y=previous_y, animate=False)
+                if focused_id:
+                    selected = self.query(f"#{focused_id}")
+                    if selected:
+                        selected.first().focus()
 
-        self.call_after_refresh(restore)
+            self.call_after_refresh(restore)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         target = self._actions.get(event.button.id or "")

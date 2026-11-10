@@ -63,6 +63,7 @@ R 0 GPU-007
   - 강조하지 않는 경우: 관리 window가 아니거나(`pane_slot`이 None), 그 project가 등록 목록에 없거나, tmux 밖에서 실행한 경우. `target`이 `leader`·`seat-N`이 아니거나 그 seat 번호가 없으면 project만 강조합니다. Leader 줄은 Leader session이 게시된 때만 있으므로(위 동작 시간) 그 전에는 Leader slot의 줄이 없습니다.
   - 읽는 때: pane을 시작할 때, 창이 보이게 되어 SIGUSR1로 가시성을 다시 물을 때(창 이동 직후), 그리고 10초 실행 상태 읽기와 같은 주기입니다. 창을 바꾸면 이동한 window의 pane이 보이게 되는 그 읽기에서 곧바로 강조가 정해집니다. 2초 파일 읽기에는 tmux 호출을 넣지 않습니다. Board pane이 관리 window보다 먼저 만들어지는 경우(`window-created`) 관리 option은 10초 안에 반영됩니다. 읽기 실패와 보이지 않는 window는 이전 강조를 유지하며 읽지 않습니다. 강조가 바뀔 때만 다시 그립니다.
 - `path_cr` 또는 `path_decide`가 없는 project는 해당 개수를 `-`로 표시합니다. 읽기 오류도 `0`으로 바꾸지 않습니다.
+- 다시 그리기(BOARD-017): 글자·class·tooltip·disabled 값만 바뀌면 이미 mount한 widget에 그 값을 씁니다. widget을 다시 mount하지 않습니다. 행이 생기거나 없어지는 변경(펼치기·접기, Leader·seat·오류 행의 증감)과 project 목록의 변경(추가·삭제·순서·첫 그리기)은 Textual `App.batch_update()` 하나 안에서 적용합니다. 화면에는 변경 전이나 변경 후의 상태만 그려지고, 빈 목록·같은 project가 두 번 있는 목록·밀렸다 돌아오는 행은 그려지지 않습니다. 목록이 화면보다 길어지거나 짧아져 스크롤바가 생기고 없어질 때의 Textual 자체의 추가 layout 한 번은 이 규칙의 범위 밖입니다.
 - 화면은 등록 순서를 유지합니다. 긴 project 이름과 CR ID는 tooltip과 가로 스크롤로 전체 값을 볼 수 있게 합니다.
 - Tooltip은 pane이 focus를 잃으면(`AppBlur`) 곧바로, 그 밖에는 마지막 mouse motion 5초 뒤에 지웁니다(`SidebarApp.TOOLTIP_IDLE`). Mouse가 다른 pane으로 나가면 tmux는 이 pane에 아무 event도 보내지 않아 Textual이 tooltip을 지울 계기가 없습니다. 그래서 모든 경우에 tooltip이 남아 사용자가 따로 치울 일이 없게 시간으로 닫습니다. 5초는 표시 지연(0.5초) 뒤 가장 긴 tooltip(seat의 CR 제목·호스트·원격 경로)을 읽기에 충분하고, 움직이지 않는 mouse 때문에 오래 남지는 않는 값입니다. Motion이 이어지면 시간을 다시 잽니다. 닫은 tooltip은 mouse를 다시 움직여야 다시 뜹니다.
 
