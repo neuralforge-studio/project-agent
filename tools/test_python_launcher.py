@@ -5,11 +5,36 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import time
 
 import pytest
 
 TOOLS = Path(__file__).resolve().parent
 ENTRIES = {name: TOOLS / name / "bin" / name for name in ("agent-session", "project-item", "project-board")}
+
+# The user's cache and settings are not an input of these tests: tmux_decide_status.sh prints a valid view
+# file of the user's status line without running the interpreter. Every child below gets these empty
+# directories instead (set by the autouse fixture `empty_user_dirs`).
+USER_DIRS = {}
+USER_DIR_VARIABLES = ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME")
+
+
+@pytest.fixture(autouse=True)
+def empty_user_dirs(tmp_path, monkeypatch):
+    home = tmp_path / "user-home"
+    cache = tmp_path / "user-cache"
+    home.mkdir()
+    cache.mkdir()
+    monkeypatch.setitem(USER_DIRS, "HOME", str(home))
+    monkeypatch.setitem(USER_DIRS, "XDG_CACHE_HOME", str(cache))
+
+
+def child_env(env=None):
+    """The environment of an entry point: the caller's, with the interpreter selection removed and no user dirs."""
+    base = {key: value for key, value in os.environ.items()
+            if key not in ("PROJECT_AGENT_PYTHON", "PROJECT_AGENT_PYTHONPATH", "PROJECT_AGENT_LD_LIBRARY_PATH", "PYTHONPATH",
+                           *USER_DIR_VARIABLES)}
+    return {**base, **USER_DIRS, **(env or {})}
 
 
 def run(entry, *args, env=None, link_dir=None):
@@ -17,9 +42,7 @@ def run(entry, *args, env=None, link_dir=None):
     if link_dir is not None:
         path = link_dir / entry.name
         path.symlink_to(entry)
-    base = {key: value for key, value in os.environ.items()
-            if key not in ("PROJECT_AGENT_PYTHON", "PROJECT_AGENT_PYTHONPATH", "PROJECT_AGENT_LD_LIBRARY_PATH", "PYTHONPATH")}
-    return subprocess.run([str(path), *args], env={**base, **(env or {})}, capture_output=True, text=True, timeout=60)
+    return subprocess.run([str(path), *args], env=child_env(env), capture_output=True, text=True, timeout=60)
 
 
 @pytest.fixture
@@ -36,8 +59,9 @@ def test_installer_interpreter_is_the_only_candidate(name, fake_python):
     result = run(ENTRIES[name], "--help", env={"PROJECT_AGENT_PYTHON": str(fake_python)})
     assert result.returncode == 0
     assert result.stdout.startswith("ARGV1=")
-    # project-item and project-board run `python -m <package>`; agent-session runs `python -c <source>`.
-    assert ("ARGV1=-c" if name == "agent-session" else "ARGV1=-m") in result.stdout
+    # agent-session and project-item (standard library only) skip the site step: `-S` first. project-board
+    # needs the interpreter's site-packages for textual: `python -m <package>`.
+    assert result.stdout.startswith("ARGV1=-m" if name == "project-board" else "ARGV1=-S")
 
 
 def test_missing_interpreter_is_a_json_error_for_agent_session(tmp_path):
@@ -64,6 +88,14 @@ def test_project_board_adds_package_paths_after_its_own_root(fake_python, tmp_pa
     assert "NOUSERSITE=1" in result.stdout
 
 
+@pytest.mark.parametrize("command,site_flag", [("sync", True), ("click", True), ("toggle", True),
+                                                ("sidebar", False), ("popup", False), (None, False)])
+def test_project_board_skips_site_only_for_the_commands_without_textual(command, site_flag, fake_python):
+    """The tmux hooks and keys run at every window change and import no textual; the TUI needs site-packages."""
+    result = run(ENTRIES["project-board"], *([command] if command else []), env={"PROJECT_AGENT_PYTHON": str(fake_python)})
+    assert result.stdout.startswith("ARGV1=-S" if site_flag else "ARGV1=-m")
+
+
 def test_project_board_without_package_paths_keeps_only_its_root(fake_python):
     result = run(ENTRIES["project-board"], env={"PROJECT_AGENT_PYTHON": str(fake_python)})
     assert f"PYTHONPATH={ENTRIES['project-board'].parents[1]} " in result.stdout
@@ -73,6 +105,27 @@ def test_project_item_ignores_package_paths(fake_python, tmp_path):
     result = run(ENTRIES["project-item"], env={"PROJECT_AGENT_PYTHON": str(fake_python),
                                                "PROJECT_AGENT_PYTHONPATH": str(tmp_path)})
     assert f"PYTHONPATH={ENTRIES['project-item'].parents[1]} " in result.stdout
+
+
+@pytest.mark.parametrize("name", ["agent-session", "project-item"])
+def test_standard_library_tools_do_not_run_the_site_step(name, tmp_path):
+    """`-S`: site-packages, `.pth` files and sitecustomize cost tens of milliseconds on NFS and are not needed."""
+    (tmp_path / "sitecustomize.py").write_text(f"open({str(tmp_path / 'ran')!r}, 'w').close()\n")
+    result = run(ENTRIES[name], "--help", env={"PYTHONPATH": str(tmp_path)})
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "ran").exists()
+
+
+@pytest.mark.parametrize("name", sorted(ENTRIES))
+def test_entry_point_runs_from_its_own_directory_and_through_a_linked_directory(name, tmp_path):
+    """The directory of the entry point and of the launcher is found without `dirname`."""
+    entry = ENTRIES[name]
+    result = subprocess.run(["bash", entry.name, "--help"], cwd=entry.parent, env={**os.environ, **USER_DIRS}, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    (tmp_path / "tools").symlink_to(TOOLS)
+    linked = tmp_path / "tools" / name / "bin" / name
+    result = subprocess.run([str(linked), "--help"], env={**os.environ, **USER_DIRS}, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("name", sorted(ENTRIES))
@@ -164,7 +217,7 @@ def test_python_env_is_parsed_not_executed(release, fake_python, tmp_path):
     write_env(release, f"$(touch {marks[0]})", f"touch {marks[1]}", f"OTHER=$(touch {marks[2]})",
               f"PROJECT_AGENT_PYTHON={fake_python}", f"`touch {marks[3]}`")
     result = run(release_entry(release, "project-item"))
-    assert result.stdout.startswith("ARGV1=-m")
+    assert result.stdout.startswith("ARGV1=-S")
     assert not any(mark.exists() for mark in marks)
 
 
@@ -200,7 +253,7 @@ def test_python_env_library_path_goes_in_front_of_ld_library_path(name, release,
 
 def test_library_path_alone_is_the_whole_value_without_a_user_value(release, ld_python):
     write_env(release, f"PROJECT_AGENT_PYTHON={ld_python}", "PROJECT_AGENT_LD_LIBRARY_PATH=/lib/installed")
-    env = {key: value for key, value in os.environ.items() if key != "LD_LIBRARY_PATH"}
+    env = {key: value for key, value in child_env().items() if key != "LD_LIBRARY_PATH"}
     result = subprocess.run([str(release_entry(release, "project-item"))], env=env, capture_output=True, text=True)
     assert result.stdout == "LD=/lib/installed\n"
 
@@ -217,3 +270,22 @@ def test_library_path_is_not_applied_without_the_installer_interpreter(release, 
     write_env(release, "PROJECT_AGENT_LD_LIBRARY_PATH=/lib/installed")
     result = run(release_entry(release, "project-item"), "--help", env={"LD_LIBRARY_PATH": "/lib/users"})
     assert "/lib/installed" not in result.stdout + result.stderr
+
+
+def test_valid_view_of_the_users_status_line_does_not_change_the_result(release, fake_python, tmp_path, monkeypatch):
+    """The user's cache (`$XDG_CACHE_HOME`, else `~/.cache`) holds a valid view: the launcher cases run as without it."""
+    view = f"{int(time.time()) + 3600}\nUSER-STATUS-LINE"
+    for variable in ("XDG_CACHE_HOME", "HOME"):
+        cache = tmp_path / f"planted-{variable}"
+        user_cache = cache if variable == "XDG_CACHE_HOME" else cache / ".cache"
+        user_cache.mkdir(parents=True)
+        (user_cache / "tmux-decide-status.view").write_text(view)
+        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        monkeypatch.setenv(variable, str(cache))
+        entry = release_entry(release, "tmux_decide_status.sh")
+        # The planted view is effective for an unisolated run, so the assertion below is not vacuous.
+        direct = subprocess.run([str(entry)], env={**os.environ, "PROJECT_AGENT_PYTHON": str(fake_python)},
+                                capture_output=True, text=True, timeout=60)
+        assert direct.stdout == "USER-STATUS-LINE"
+        result = run(entry, env={"PROJECT_AGENT_PYTHON": str(fake_python)})
+        assert result.stdout.startswith("ARGV1="), variable

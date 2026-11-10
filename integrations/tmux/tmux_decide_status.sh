@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Print the decision status line for the tmux status line (@project_agent_decide_status).
 #
 # While the cache of tmux_decide_status.py is valid this prints the stored status line and starts no
@@ -18,7 +18,9 @@ if [[ -r "$view" ]]; then
     fi
 fi
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+script="${BASH_SOURCE[0]}"
+[[ "$script" == */* ]] || script="./$script"
+SCRIPT_DIR="$(CDPATH= cd -P -- "${script%/*}" && pwd -P)"
 source "$SCRIPT_DIR/../../tools/python-launcher.sh"
 project_agent_select_python
 if [[ -z "$PY" ]]; then
@@ -27,4 +29,4 @@ if [[ -z "$PY" ]]; then
 fi
 export PYTHONNOUSERSITE=1
 unset PYTHONHOME
-exec "$PY" "$SCRIPT_DIR/tmux_decide_status.py" "$@"
+exec "$PY" -S "$SCRIPT_DIR/tmux_decide_status.py" "$@"

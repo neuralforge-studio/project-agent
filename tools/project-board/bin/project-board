@@ -1,7 +1,10 @@
 #!/bin/bash
 # Entry point of project-board: a tmux TUI of every registered project team.
 # Source: project-agent repo tools/project-board. Install: ln -s <this file> ~/.local/bin/project-board
-ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+entry="${BASH_SOURCE[0]}"
+[[ ! -L "$entry" ]] || entry="$(readlink -f -- "$entry")"
+[[ "$entry" == */* ]] || entry="./$entry"
+ROOT="$(CDPATH= cd -P -- "${entry%/*}/.." && pwd -P)"
 source "$ROOT/../python-launcher.sh"
 project_agent_select_python
 if [ -z "$PY" ]; then
@@ -11,4 +14,8 @@ fi
 export PYTHONPATH="$ROOT${PROJECT_AGENT_PYTHONPATH:+:$PROJECT_AGENT_PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 unset PYTHONHOME
-exec "$PY" -m project_board "$@"
+# Only the TUI commands import textual from the interpreter's site-packages. The tmux hooks and the
+# toggle/click keys (sync, click, toggle) are standard library only and run at every window change.
+site=()
+case "${1:-}" in sync|click|toggle) site=(-S) ;; esac
+exec "$PY" "${site[@]}" -m project_board "$@"

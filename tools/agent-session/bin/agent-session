@@ -1,7 +1,10 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
-agent_session_root="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
+entry="${BASH_SOURCE[0]}"
+[[ ! -L "$entry" ]] || entry="$(readlink -f -- "$entry")"
+[[ "$entry" == */* ]] || entry="./$entry"
+agent_session_root="$(CDPATH= cd -P -- "${entry%/*}/../.." && pwd -P)"
 source "$agent_session_root/python-launcher.sh"
 project_agent_select_python
 agent_session_python="$PY"
@@ -11,7 +14,7 @@ if [[ -z "$agent_session_python" || ! -x "$agent_session_python" ]]; then
     exit 5
 fi
 
-exec "$agent_session_python" -c '
+exec "$agent_session_python" -S -c '
 import json
 from pathlib import Path
 import runpy
