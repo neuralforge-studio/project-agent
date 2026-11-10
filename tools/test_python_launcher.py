@@ -117,6 +117,17 @@ def test_standard_library_tools_do_not_run_the_site_step(name, tmp_path):
 
 
 @pytest.mark.parametrize("name", sorted(ENTRIES))
+def test_a_tree_without_the_bundle_reader_imports_module_by_module(name, tmp_path):
+    """`bundle_boot.py` is missing: the entry point runs without it (PERF-003)."""
+    tools = tmp_path / "tools"
+    shutil.copytree(TOOLS, tools, ignore=shutil.ignore_patterns("tests", "test_*.py", "conftest.py", "__pycache__",
+                                                                "bundle_boot.py", "python.env"))
+    result = subprocess.run([str(tools / name / "bin" / name), "--help"], env=child_env(), capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert "usage" in result.stdout.lower()
+
+
+@pytest.mark.parametrize("name", sorted(ENTRIES))
 def test_entry_point_runs_from_its_own_directory_and_through_a_linked_directory(name, tmp_path):
     """The directory of the entry point and of the launcher is found without `dirname`."""
     entry = ENTRIES[name]

@@ -9,7 +9,7 @@ project-agent는 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로
 | `tools/agent-session/` | Leader·Worker의 시작·전송·종료·재시작·review·shutdown·resume | [README](tools/agent-session/README.md), [동작 명세](docs/project-team/spec.md) |
 | `tools/project-item/` | CR과 결정 항목의 생성·조회·이동·검사 | [README](tools/project-item/README.md) |
 | `tools/project-board/` | 모든 프로젝트의 상황을 보이는 tmux 화면 | [README](tools/project-board/README.md) |
-| `tools/` 바로 아래 | 세 CLI가 공유하는 `python-launcher.sh`와 저장소 수준 test(`conftest.py`, `test_*.py`)와 세 도구의 test가 함께 쓰는 test 전용 module(`tests/`, release에 넣지 않음) | [설치 계약 6.1절](docs/project-team/install-contract.md#61-python-선택) |
+| `tools/` 바로 아래 | 세 CLI가 공유하는 `python-launcher.sh`, 시동 번들을 읽는 `bundle_boot.py`와 저장소 수준 test(`conftest.py`, `test_*.py`)와 세 도구의 test가 함께 쓰는 test 전용 module(`tests/`, release에 넣지 않음) | [설치 계약 6.1절](docs/project-team/install-contract.md#61-python-선택) |
 | `tools/tests/perf/` | 두 실행본(기준·후보)을 같은 격리 환경에서 번갈아 실행해 명령·Board·상태줄의 시간과 process 수를 비교하는 개발 도구(release에 넣지 않음). 사용법은 `perf_bench.py` 머리말 | [perf_bench.py](tools/tests/perf/perf_bench.py) |
 | `install/` | 설치기(`install`·`upgrade`·`rollback`·`uninstall`·`check`, `--dry-run`)와 격리 HOME 인수 test | [설치 계약](docs/project-team/install-contract.md) |
 | `skills/project-team/`, `skills/project-item/` | Leader·Worker·운영자 절차와 CR·결정 항목 형식 | [SKILL.md](skills/project-team/SKILL.md), [SKILL.md](skills/project-item/SKILL.md) |
@@ -38,7 +38,7 @@ python -m pytest -q -n 8 install/tests
 | --- | --- |
 | `install/**` | `install/tests` |
 | `integrations/tmux/**` | 네 번째 명령, `tools/project-board/tests/test_tmux_control.py`, `install/tests` |
-| `tools/python-launcher.sh`, `tools/formats.json`, `VERSION` | 네 번째 명령, `install/tests` |
+| `tools/python-launcher.sh`, `tools/bundle_boot.py`, `tools/formats.json`, `VERSION` | 네 번째 명령, `install/tests` |
 | `tools/project-board/**` | `tools/project-board/tests` |
 | `tools/project-item/**` | `tools/project-item/tests`. `project_item/api.py` 또는 CR·결정 형식(`cr.py`, `decide.py`, `kinds.py`)을 바꾸면 agent-session·project-board test와 네 번째 명령도 |
 | `tools/agent-session/**` | `tools/agent-session/tests`. `agent_session/api.py`, state 형식(`state.py`), tmux option 이름을 바꾸면 project-item·project-board test와 `install/tests`도 |
