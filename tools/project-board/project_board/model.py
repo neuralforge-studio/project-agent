@@ -254,7 +254,7 @@ def snapshot(config=None, now: dt.datetime | None = None, project_id: str | None
 
 
 # JOB ID -> release hold of each project, as the last `liveness()` read it. Both facts come from
-# tmux (several `tmux` processes per assigned seat), so they are read on the 10-second run-fact
+# tmux (`api.server_view`: two `tmux` processes for all projects), so they are read on the 10-second run-fact
 # refresh and not on the 2-second file refresh that `snapshot` is (BOARD-002). A hold that ended is
 # shown until the next run-fact refresh.
 _releases: dict[str, dict] = {}
@@ -267,13 +267,18 @@ def liveness(config=None) -> dict:
     It also refreshes the release holds that `snapshot` shows.
     """
     out = {}
-    for project in load_registry(config):
+    projects = load_registry(config)
+    try:
+        view = api.server_view(projects)                # one read of the tmux server for every project
+    except SessionError:
+        view = None                                     # each project then reads (and fails) for itself
+    for project in projects:
         try:
-            out[project.project_id] = api.project_liveness(project)
+            out[project.project_id] = api.project_liveness(project, view=view)
         except SessionError as error:
             out[project.project_id] = {} if error.code == "state_not_found" else {"error": _error(error)}
         try:
-            _releases[project.project_id] = api.project_pending_releases(project)
+            _releases[project.project_id] = api.project_pending_releases(project, view=view)
         except SessionError:
             _releases[project.project_id] = {}          # an unreadable tmux is not a pending release
     return out

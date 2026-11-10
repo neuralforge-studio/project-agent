@@ -14,7 +14,7 @@ __all__ = (
     "PANE_ID_OPTION", "RemoteSeat", "SessionError", "Tmux",
     "caller", "check_binding", "finish_release", "liveness", "load_registry", "pane_slot", "pending_releases",
     "project_liveness", "project_pending_releases", "project_state",
-    "read_state", "require_live", "resolve_project",
+    "read_state", "require_live", "resolve_project", "server_view",
 )
 
 
@@ -49,9 +49,11 @@ def caller(project, tmux=None, store=None):
     pane = os.environ.get("TMUX_PANE")
     inherited_socket = os.environ.get("TMUX", "").split(",", 1)[0]
     if pane and inherited_socket and Path(inherited_socket).resolve() == Path(tmux.effective_socket()).resolve():
-        for slot in ("leader", *(f"seat-{n}" for n in range(len(project.seats)))):
+        slots = ("leader", *(f"seat-{n}" for n in range(len(project.seats))))
+        view = tmux.server_view([project.project_id], slots)         # every slot's run in two tmux processes
+        for slot in slots:
             try:
-                meta = tmux.get_current(project.project_id, slot)
+                meta = view.current(project.project_id, slot)
             except SessionError as error:
                 if error.code != "execution_evidence_missing":
                     raise
@@ -97,10 +99,22 @@ def liveness(cwd=None, config_path=None, socket=None):
     return project_liveness(config.current_project(cwd, config_path), socket)
 
 
-def project_liveness(project, socket=None):
-    """`liveness` of a project the caller already holds (from `load_registry`)."""
+def server_view(projects, socket=None):
+    """One read of the tmux server for these projects (from `load_registry`): hand it to `project_liveness`
+    and `project_pending_releases` as `view` and every project is judged from this one read. Tmux processes
+    started: two, whatever the number of projects and slots. A view is a snapshot; read again for a change."""
+    slots = ("leader", *(f"seat-{n}" for n in range(max((len(project.seats) for project in projects), default=0))))
+    return tmux_module.control(socket).server_view([project.project_id for project in projects], slots)
+
+
+def project_liveness(project, socket=None, view=None):
+    """`liveness` of a project the caller already holds (from `load_registry`). `view` is a `server_view`
+    to judge from instead of reading the server again (`socket` is then unused)."""
     state = StateStore(config.require_base(project)).read()
-    control = tmux_module.control(socket)
+    try:
+        control = view or server_view([project], socket)
+    except SessionError:
+        control = None                      # a server that cannot be read leaves every verdict unknown
     result = {}
     for key, entry in state.items():
         session = entry if key == "leader" else entry["session"]
@@ -109,7 +123,7 @@ def project_liveness(project, socket=None):
         slot = "leader" if key == "leader" else f"seat-{key}"
         verdict = "unknown"
         try:
-            meta = control.get_current(project.project_id, slot)
+            meta = control.current(project.project_id, slot) if control else None
             if meta and meta.get("session_id") == session["session_id"]:
                 if meta.get("remote_seat"):
                     tmux_module.check_owner(project, slot, session, meta)
@@ -227,9 +241,10 @@ def pending_releases(cwd=None, config_path=None, socket=None):
     return _manager(cwd, config_path, socket, 60).pending_releases()
 
 
-def project_pending_releases(project, socket=None):
-    """`pending_releases` of a project the caller already holds (from `load_registry`)."""
-    return _manager(None, None, socket, 60, project=project).pending_releases()
+def project_pending_releases(project, socket=None, view=None):
+    """`pending_releases` of a project the caller already holds (from `load_registry`). `view` is a
+    `server_view` to read from instead of reading the server again."""
+    return _manager(None, None, socket, 60, project=project).pending_releases(view)
 
 
 def finish_release(cwd, job_id, config_path=None, socket=None):
