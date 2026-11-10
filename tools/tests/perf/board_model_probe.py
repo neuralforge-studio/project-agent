@@ -1,13 +1,13 @@
 """One process of the benchmark: import the Board model of the tools tree PERF_TOOLS, then time snapshot / liveness /
-context reads. The per-read spawn counts come from the spawn log (site/sitecustomize.py).
+context reads. The per-read spawn counts come from the PATH shims' log (counting pass only).
 usage: python board_model_probe.py CONFIG"""
 import json, os, sys, time
 sys.path.insert(0, os.path.join(os.environ["PERF_TOOLS"], "project-board"))
-LOG = os.environ["PERF_SPAWN_LOG"]
+LOG = os.environ.get("PERF_SPAWN_LOG")        # set in the counting pass only
 
 def counts():
     c = {}
-    for line in open(LOG).read().splitlines():
+    for line in (open(LOG).read().splitlines() if LOG and os.path.exists(LOG) else []):
         p = line.split("\t")
         if p[0] == "spawn":
             c[p[1]] = c.get(p[1], 0) + 1

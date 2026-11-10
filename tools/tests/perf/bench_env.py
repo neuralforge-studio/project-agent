@@ -9,6 +9,15 @@ The environment is built with this checkout's agent_session and project_item (th
 tools/formats.json, so the executables under comparison read the same state and window options). Every
 command of the benchmark names the environment through `Environment.command_env`, which always sets TMUX,
 AGENT_SESSION_SOCKET, HOME and XDG_CACHE_HOME, so no command can reach the user's tmux server.
+
+Nothing is injected into the interpreter of an executable under test (no sitecustomize, PYTHONPATH or -X option),
+so the numbers do not depend on how a launcher starts Python (-I, -S). Two things are put at the process boundary
+instead, both through PATH:
+- the provider: `fake_bin/claude` (fake_claude.py) stands in for the Claude CLI, and the product's own provider code
+  runs against it (the CLI, its hooks, `claude mcp serve`, `claude --version`);
+- the counters: `shim_bin/{tmux,git,ps}` append the program name to $PERF_SPAWN_LOG and exec the real program. A
+  shim costs time, so it is on PATH only in a separate counting pass (`Environment.set_counting`), never in the
+  timing passes.
 """
 from dataclasses import dataclass
 import json
@@ -24,7 +33,6 @@ import uuid
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parents[1]                    # this checkout's tools/
 REPOSITORY = TOOLS.parent
-SITE = HERE / "site"                       # sitecustomize: spawn and sleep counters, fake provider
 for _part in (TOOLS / "agent-session", TOOLS / "project-item", TOOLS / "tests"):
     if str(_part) not in sys.path:
         sys.path.insert(0, str(_part))
@@ -56,10 +64,6 @@ class Executable:
         return str(self.tools / tool / "bin" / tool)
 
     @property
-    def fixtures(self):
-        return self.tools / "agent-session" / "tests" / "fixtures"
-
-    @property
     def status_script(self):
         return self.root / "integrations" / "tmux" / "tmux_decide_status.sh"
 
@@ -68,10 +72,10 @@ class Executable:
         return self.root / "integrations" / "tmux" / "project_board_visibility.sh"
 
     def check(self):
-        for path in (self.bin("agent-session"), self.bin("project-item"), self.bin("project-board"),
-                     self.status_script, self.fixtures / "agent_session_fake_provider.py"):
+        for path in (self.bin("agent-session"), self.bin("project-item"), self.bin("project-board"), self.status_script,
+                     self.visibility_script):
             if not Path(path).exists():
-                raise SystemExit(f"{self.name}: {path} does not exist (an executable needs a full tree with tests/fixtures)")
+                raise SystemExit(f"{self.name}: {path} does not exist (an executable is a tree with tools/ and integrations/tmux)")
 
 
 def parse_executable(text):
@@ -156,7 +160,11 @@ class Environment:
         self.projects, self.seats = projects, seats
         self.scale = f"{projects}x{seats}"
         self.root = Path(workdir) / self.scale
-        self.python = self.root / "py"
+        self.counting = False
+        self.fake_bin, self.shim_bin, self.peers = self.root / "fake_bin", self.root / "shim_bin", self.root / "peers"
+        self.real_tmux = shutil.which("tmux")
+        self.real_path = f"{self.fake_bin}:{os.environ.get('PATH', '')}"
+        self.python = sys.executable
         self.info = None
 
     # ------------------------------------------------------------------ build
@@ -190,22 +198,33 @@ class Environment:
         config = self.root / "project.json"
         config.write_text(json.dumps(registry, indent=1))
         (self.root / "home" / ".config" / "project-agent" / "project.json").symlink_to(config)   # the status script's registry
+        self._write_boundary_programs()
         self.info = {"scale": self.scale, "socket_name": name, "socket_path": socket_path, "config": str(config),
                      "seed_hash": seed_hash, "list": listing}
         (self.root / "env.json").write_text(json.dumps(self.info, indent=1))
-        self.python.write_text(
-            "#!/bin/bash\n# PROJECT_AGENT_PYTHON of the benchmark: the interpreter of the run plus the harness's sitecustomize,\n"
-            "# which project-item's and project-board's launchers would hide by resetting PYTHONPATH.\n"
-            f'export PYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}{SITE}"\nexec {sys.executable} "$@"\n')
-        self.python.chmod(self.python.stat().st_mode | stat.S_IXUSR)
         self._start_server()
         self._populate(registry)
         return time.time() - started
 
+    def _write_boundary_programs(self):
+        """fake_bin/claude and the counting shims (see the module docstring)."""
+        for directory in (self.fake_bin, self.shim_bin, self.peers):
+            directory.mkdir()
+        claude = self.fake_bin / "claude"
+        claude.write_text(f'#!/bin/sh\nexec {sys.executable} -I -S {HERE / "fake_claude.py"} "$@"\n')
+        claude.chmod(0o755)
+        for name in ("tmux", "git", "ps"):
+            shim = self.shim_bin / name
+            # The real program is found without PATH changing for the program: a tmux client's PATH is the PATH of the
+            # panes it creates, and the panes' own commands must find the shims too.
+            shim.write_text('#!/bin/bash\nname=${0##*/}\n[ -n "$PERF_SPAWN_LOG" ] && printf \'spawn\\t%s\\n\' "$name" >> "$PERF_SPAWN_LOG"\n'
+                            'real=$(PATH=$PERF_REAL_PATH command -v "$name") && exec "$real" "$@"\n')
+            shim.chmod(0o755)
+
     def _start_server(self):
-        # The server starts with the harness environment, so that its panes (the fake CLI's registration, a Board
-        # pane) load the instrumentation too; their spawns go to pane-spawns.log, apart from a measured command's.
-        env = self._base_env(spawn_log=self.root / "pane-spawns.log")
+        # The server's environment is the panes' environment (the fake CLI and its hooks, a Board pane). It starts
+        # without counters; `set_counting` adds them for the counting pass (their spawns go to pane-spawns.log).
+        env = self._base_env()
         subprocess.run(["tmux", "-L", self.info["socket_name"], "-f", os.devnull, "new-session", "-d", "-s", "harness",
                         "sleep", "86400"], check=True, capture_output=True, env=env)
 
@@ -228,13 +247,18 @@ class Environment:
                 window = f"{project.project_id}-leader" if n is None else f"{project.project_id}-seat{n}-{job}"
                 meta = tmux.create_window(project.project_id, window, cwd, values)
                 pid = meta["placeholder_pid"]
+                name, ref = f"{project.project_id}-{slot}", session_id.replace("-", "")[:6]
                 tmux.write_meta(meta["window_id"], {
                     "cli_pid": pid, "cli_birth": process.birth(pid), "process_group": os.getpgid(pid),
                     "provider_launch_attempted": True, "registered": True, "ready": True, "publishing": None,
-                    "stopping": False, "message_to": f"{slot} [{session_id[:6]}]", "socket_path": socket_path,
+                    "stopping": False, "message_to": f"{name} [{ref}]", "socket_path": socket_path,
                     "start_error": None})
                 tmux.set_current(project.project_id, slot, meta)
-                binding = {"session_id": session_id, "message_to": f"{slot} [{session_id[:6]}]",
+                # The provider lists this slot's CLI (fake_claude.py reads these files while the pid lives).
+                (self.peers / f"{pid}.json").write_text(json.dumps({
+                    "pid": pid, "name": name, "ref": ref,
+                    "tmux": f"{project.project_id}:{meta['window_id']}.{meta['pane_id']}"}))
+                binding = {"session_id": session_id, "message_to": f"{name} [{ref}]",
                            "connected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
                 if n is None:
                     state["leader"] = binding
@@ -260,24 +284,38 @@ class Environment:
     def spare(self):
         return self.seats                  # index of project 0's seat that has no run
 
+    def set_counting(self, on):
+        """Counting pass: the commands get the shims from `command_env`. A pane gets its PATH from the tmux client that
+        created it (so the shims reach the panes of a counted command) and $PERF_SPAWN_LOG from the server's global
+        environment, which names the log of the server's processes."""
+        self.counting = on
+        if on:
+            self.tmux("set-environment", "-g", "PERF_SPAWN_LOG", str(self.root / "pane-spawns.log"))
+            self.tmux("set-environment", "-g", "PATH", f"{self.shim_bin}:{self.real_path}")
+        else:
+            self.tmux("set-environment", "-gu", "PERF_SPAWN_LOG")
+            self.tmux("set-environment", "-g", "PATH", self.real_path)
+
     def _base_env(self, spawn_log=None):
         home = self.root / "home"
         env = {k: v for k, v in os.environ.items()
                if k not in ("TMUX", "TMUX_PANE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "AGENT_SESSION_BASE",
-                            "AGENT_SESSION_CONFIG", "PYTHONPATH", "PROJECT_BOARD_SOCKET")}
+                            "AGENT_SESSION_CONFIG", "PROJECT_BOARD_SOCKET", "PERF_SPAWN_LOG")}
         env.update({"HOME": str(home), "XDG_CACHE_HOME": str(home / ".cache"),
                     "TMUX": f"{self.info['socket_path']},0,0", "AGENT_SESSION_SOCKET": self.info["socket_path"],
                     "PROJECT_BOARD_SOCKET": self.info["socket_path"], "AGENT_SESSION_CONFIG": self.info["config"],
                     "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
-                    "PERF_FAKE": "1", "PYTHONPATH": str(SITE), "PROJECT_AGENT_PYTHON": str(self.python)})
+                    "PATH": self.real_path, "PERF_REAL_PATH": self.real_path, "PERF_REAL_TMUX": self.real_tmux,
+                    "PERF_PEERS": str(self.peers)})
         if spawn_log:
+            env["PATH"] = f"{self.shim_bin}:{self.real_path}"
             env["PERF_SPAWN_LOG"] = str(spawn_log)
         return env
 
     def command_env(self, exe, spawn_log=None, identity=None, extra=None):
-        """The environment of one measured command. `identity` is (project id, slot): the caller is that slot's live conversation."""
+        """The environment of one measured command. `spawn_log` puts the counting shims on PATH (counting pass only).
+        `identity` is (project id, slot): the caller is that slot's live conversation."""
         env = self._base_env(spawn_log)
-        env["PERF_FIXTURES"] = str(exe.fixtures)
         if identity:
             env["CLAUDE_CODE_SESSION_ID"] = self.session_of(*identity)
         env.update(extra or {})
@@ -309,19 +347,8 @@ def run_command(argv, env, cwd, stdin=None, timeout=900):
 
 
 def read_spawn_log(path):
-    """({name: spawn count}, sleep seconds, {name: seconds waited}) of a log written by site/sitecustomize.py."""
-    counts, sleep, waited = {}, 0.0, {}
-    path = Path(path)
-    if path.exists():
-        for line in path.read_text().splitlines():
-            parts = line.split("\t")
-            if parts[0] == "spawn":
-                counts[parts[1]] = counts.get(parts[1], 0) + 1
-            elif parts[0] == "wait":
-                waited[parts[1]] = waited.get(parts[1], 0.0) + float(parts[2])
-            elif parts[0] == "sleep":
-                sleep += float(parts[1])
-    return counts, round(sleep, 3), {k: round(v, 3) for k, v in waited.items()}
+    """{program: spawn count} of a log written by the counting shims."""
+    return count_spawns(Path(path).read_text().splitlines() if Path(path).exists() else [])
 
 
 def count_spawns(lines):

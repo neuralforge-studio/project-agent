@@ -1,10 +1,11 @@
 """The measured operations of the performance benchmark (PERF-001).
 
 Each function measures one executable on one environment and appends rows to `Recorder`. A row is one
-command (or one read of a probe) with its wall time, its Popen counts by program, the seconds it slept
-(time.sleep) and the Popen counts of the processes that its tmux server started for it (a Worker's
-registration). Groups: startup, readonly, board_cli, lifecycle, steady. `perf_bench.run` interleaves the
-executables (ABAB) around these functions.
+command (or one read of a probe) with its wall time, the number of tmux/git/ps processes it started (`spawns`,
+filled in the counting pass only, from the PATH shims) and the number that its tmux server started for it
+(`pane_spawns`: a Worker's registration, a hook). Groups: startup, readonly, board_cli, lifecycle, steady.
+`perf_bench.run` interleaves the executables (ABAB) around these functions. Rows have a `mode`: count (shims on
+PATH; its times carry the shims' cost and are not reported), warm and cold (no instrumentation).
 """
 import json
 import os
@@ -15,7 +16,7 @@ import sys
 import time
 
 import bench_env
-from bench_env import HERE, SITE, TOOLS, cpu_seconds, count_spawns, load_average, read_spawn_log, run_command
+from bench_env import HERE, cpu_seconds, count_spawns, load_average, read_spawn_log, run_command
 
 BODY = "## Symptom\nfixture\n\n## Evidence\n`server.py:1`\n\n## Contract\nfixture\n"
 CR_TAIL = "\n\n## Implementation\nChange server.py.\n\n## Verification\npython -m py_compile server.py\n"
@@ -33,7 +34,7 @@ class Recorder:
         with self.path.open("a") as stream:
             stream.write(json.dumps(row, ensure_ascii=False) + "\n")
         spawns = " ".join(f"{k}:{v}" for k, v in sorted(row.get("spawns", {}).items()))
-        print(f"{row['scale']:6s} {row['mode']:4s} {row['exe']:10s} rep{row['rep']} {row['op']:28s} {row['wall']:8.2f}s "
+        print(f"{row['scale']:6s} {row['mode']:5s} {row['exe']:10s} rep{row['rep']} {row['op']:28s} {row['wall']:8.2f}s "
               f"load {row['load']:5.1f} [{spawns}]" + ("" if row["rc"] == 0 else f"  !! rc={row['rc']}"), flush=True)
 
 
@@ -51,18 +52,39 @@ class Bench:
     def pane_lines(self):
         return self.pane_log.read_text().splitlines() if self.pane_log.exists() else []
 
-    def row(self, exe, op, wall, rc, spawns=None, sleep=0.0, waited=None, pane=None, **extra):
+    def row(self, exe, op, wall, rc, spawns=None, pane=None, **extra):
         self.recorder.add({"exe": exe.name, "scale": self.env.scale, "mode": self.mode, "rep": self.rep, "op": op,
                            "wall": round(wall, 4), "rc": rc, "load": round(load_average(), 2), "spawns": spawns or {},
-                           "sleep": sleep, "spawn_wait": waited or {}, "pane_spawns": pane or {}, **extra})
+                           "pane_spawns": pane or {}, **extra})
+
+    def settle(self, quiet=0.4, limit=8.0):
+        """Counting pass: wait until the tmux server's processes (a CLI's Stop and SessionEnd hooks, a wrap-up) have
+        stopped spawning, so that a late hook of one command is not counted for the next."""
+        if not self.env.counting:
+            return
+        end, last, since = time.time() + limit, -1, time.time()
+        while time.time() < end:
+            size = len(self.pane_lines())
+            if size != last:
+                last, since = size, time.time()
+            elif time.time() - since >= quiet:
+                return
+            time.sleep(0.1)
+
+    def counting_log(self, enabled=True):
+        """The spawn log for a command of the counting pass, None in a timing pass (no shim on PATH)."""
+        if not (self.env.counting and enabled):
+            return None
+        self.log.unlink(missing_ok=True)
+        return self.log
 
     def cmd(self, exe, op, argv, identity=("p00", "leader"), stdin=None, expect_ok=True, spawn_log=True, extra_env=None):
-        self.log.unlink(missing_ok=True)
-        env = self.env.command_env(exe, self.log if spawn_log else None, identity, extra_env)
+        self.settle()
+        log = self.counting_log(spawn_log)
+        env = self.env.command_env(exe, log, identity, extra_env)
         before = len(self.pane_lines())
         wall, rc, out, err = run_command(argv, env, self.env.base, stdin=stdin)
-        counts, slept, waited = read_spawn_log(self.log)
-        self.row(exe, op, wall, rc, counts, slept, waited, count_spawns(self.pane_lines()[before:]))
+        self.row(exe, op, wall, rc, read_spawn_log(log) if log else {}, count_spawns(self.pane_lines()[before:]))
         if expect_ok and rc != 0:
             raise SystemExit(f"{exe.name} {op} failed (rc {rc}): {(out + err)[:1500]}")
         return out, err
@@ -78,7 +100,7 @@ class Bench:
         return self.cmd(exe, op, [exe.bin("project-board"), "--config", self.env.info["config"], *args], **kw)
 
     def python(self, exe, op, code, **kw):
-        return self.cmd(exe, op, [str(self.env.python), "-c", code], identity=None, **kw)
+        return self.cmd(exe, op, [self.env.python, "-c", code], identity=None, **kw)
 
     # ------------------------------------------------------------------ startup
     def startup(self, exe):
@@ -122,9 +144,9 @@ class Bench:
     def board_model(self, exe):
         """snapshot, liveness and the Board pane's context reads in one process, each read as its own row."""
         pane = self.env.tmux("list-panes", "-t", "p00", "-F", "#{pane_id}").splitlines()[0]
-        self.log.unlink(missing_ok=True)
-        env = self.env.command_env(exe, self.log, None, {"TMUX_PANE": pane, "PERF_TOOLS": str(exe.tools)})
-        wall, rc, out, err = run_command([str(self.env.python), str(HERE / "board_model_probe.py"), self.env.info["config"]],
+        log = self.counting_log()
+        env = self.env.command_env(exe, log, None, {"TMUX_PANE": pane, "PERF_TOOLS": str(exe.tools)})
+        wall, rc, out, err = run_command([self.env.python, str(HERE / "board_model_probe.py"), self.env.info["config"]],
                                          env, self.env.base)
         if rc:
             raise SystemExit(f"{exe.name} board_model failed: {err[-1500:]}")
@@ -169,10 +191,10 @@ class Bench:
         self.board(exe, "board_toggle_on", "toggle", "--socket", socket, identity=None)
         self.wait_board_ready()
         self.board(exe, "board_sync_nochange", "sync", "--socket", socket, identity=None)
-        self.cmd(exe, "board_visibility_sh", [str(exe.visibility_script), "--socket", socket], identity=None, spawn_log=False)
+        self.cmd(exe, "board_visibility_sh", [str(exe.visibility_script), "--socket", socket], identity=None)
         self.board(exe, "board_toggle_off", "toggle", "--socket", socket, identity=None)
         time.sleep(1)
-        self.cmd(exe, "board_visibility_sh_off", [str(exe.visibility_script), "--socket", socket], identity=None, spawn_log=False)
+        self.cmd(exe, "board_visibility_sh_off", [str(exe.visibility_script), "--socket", socket], identity=None)
         self.board(exe, "board_sync_off", "sync", "--socket", socket, identity=None)
         self.pane_ready(exe, "board_popup_ready", [exe.bin("project-board"), "--config", self.env.info["config"], "popup",
                                                    "--project", "p00"])
@@ -187,21 +209,15 @@ class Bench:
             time.sleep(0.2)
 
     def pane_ready(self, exe, op, argv, seconds=90):
-        """Seconds from `new-window` until the TUI has drawn its first screen (the pane has text)."""
-        env = self.env.command_env(exe)
+        """Seconds from `new-window` until the TUI has drawn its first screen (the pane has text). The pane runs in the
+        server's environment, which already names this environment's socket, registry and HOME."""
         import shlex
         started = time.perf_counter()
-        window = self.env.tmux("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "harness:", "-e", "PROJECT_BOARD_CLICK_SOCKET=",
-                               " ".join(f"{k}={shlex.quote(v)}" for k, v in {"PYTHONPATH": env["PYTHONPATH"],
-                                        "PROJECT_AGENT_PYTHON": env["PROJECT_AGENT_PYTHON"], "PERF_FAKE": "1",
-                                        "PERF_FIXTURES": env["PERF_FIXTURES"], "PROJECT_BOARD_SOCKET": env["PROJECT_BOARD_SOCKET"],
-                                        "HOME": env["HOME"], "TMUX": env["TMUX"],
-                                        "AGENT_SESSION_SOCKET": env["AGENT_SESSION_SOCKET"]}.items())
-                               + " " + " ".join(shlex.quote(part) for part in argv))
+        window = self.env.tmux("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "harness:",
+                               " ".join(shlex.quote(part) for part in argv))
         rc, ready = 1, False
         while time.perf_counter() - started < seconds:
-            text = self.env.tmux("capture-pane", "-p", "-t", window, check=False)
-            if "p00" in text:
+            if "p00" in self.env.tmux("capture-pane", "-p", "-t", window, check=False):
                 rc, ready = 0, True
                 break
             time.sleep(0.1)
@@ -240,26 +256,23 @@ class Bench:
         self.item(exe, "project_item_accept", "accept", cr_id, "--commit", seed, "--note", "perf")
         self.agent(exe, "agent_stop_worker", "stop", "--job", cr_id)
         self.item(exe, "project_item_move_done", "move", cr_id, "done", "--outcome", "fixed", "--by", "Leader", "--note", seed)
-        # The CLI ends by itself: the wrap-up that the pane-died hook runs (internal.finish_ended), started by hand
-        # with the hook removed so that the fake provider replaces the real Claude and the spawns are counted.
+        # The CLI ends by itself: the wrap-up that the pane-died hook runs in the tmux server (internal.finish_ended).
+        # The row is the time from the kill until the wrap-up has written finish-result.json; its processes are the
+        # server's, so their counts are the row's pane_spawns.
         cr_end = self.new_cr(exe, f"perf end {exe.name} {self.rep}")
         self.item(exe, "project_item_move_todo", "move", cr_end, "todo", "--by", "Leader", "--note", "perf approved")
         self.agent(exe, "agent_start_worker", "start", "--job", cr_end)
         meta = env.worker_window()
-        env.tmux("set-hook", "-gu", "pane-died[agent-session]")
-        os.kill(int(meta["cli_pid"]), signal.SIGKILL)
-        for _ in range(500):
-            if env.tmux("display-message", "-p", "-t", meta["pane_id"], "#{pane_dead}", check=False) == "1":
-                break
-            time.sleep(0.02)
-        self.log.unlink(missing_ok=True)
-        run_env = env.command_env(exe, self.log, None, {"PYTHONPATH": f"{SITE}:{exe.tools / 'agent-session'}"})
-        wall, rc, out, err = run_command([str(env.python), "-m", "agent_session.internal", "finish-ended",
-                                          env.info["socket_path"], meta["window_id"], meta["pane_id"]], run_env, env.base)
-        counts, slept, waited = read_spawn_log(self.log)
         result = Path(env.base) / "agent" / "runs" / meta["run_id"] / "finish-result.json"
+        before = len(self.pane_lines())
+        started = time.perf_counter()
+        os.kill(int(meta["cli_pid"]), signal.SIGKILL)
+        while not result.exists() and time.perf_counter() - started < 120:
+            time.sleep(0.02)
+        wall = time.perf_counter() - started
+        time.sleep(0.5)
         ok = bool(result.exists() and json.loads(result.read_text()).get("ok"))
-        self.row(exe, "agent_finish_ended", wall, 0 if rc == 0 and ok else 1, counts, slept, waited)
+        self.row(exe, "agent_finish_ended", wall, 0 if ok else 1, pane=count_spawns(self.pane_lines()[before:]))
         self.agent(exe, "agent_stop_ended_worker", "stop", "--job", cr_end)
         self.item(exe, "project_item_move_done_waived", "move", cr_end, "done", "--outcome", "waived", "--by", "Leader",
                   "--note", "perf")
@@ -279,6 +292,7 @@ class Bench:
                            f'echo "$start $(date +%s.%N) $cpu" >> {runs}\n')
         wrapper.chmod(0o755)
         env.tmux("set-option", "-g", "status-right", f"#({wrapper})")
+        env.tmux("set-option", "-g", "@project_board_enabled", "0", check=False)
         cmd_env = env.command_env(exe)
         subprocess.run([exe.bin("project-board"), "--config", config, "toggle", "--socket", socket], env=cmd_env,
                        capture_output=True, text=True)
@@ -286,7 +300,7 @@ class Bench:
         extra = ("import sys; sys.path.insert(0, sys.argv[1]); from project_board import tmux_control as tc; "
                  "control = tc._control(sys.argv[2]); [tc._create(control, w, sys.argv[3], 40) for w in sys.argv[4:]]")
         if panes > 1:
-            subprocess.run([str(env.python), "-c", extra, str(exe.tools / "project-board"), socket, config,
+            subprocess.run([env.python, "-c", extra, str(exe.tools / "project-board"), socket, config,
                             *windows[1:panes]], env=cmd_env, check=True, capture_output=True)
         time.sleep(8)                                    # the TUIs start and settle
         listing = env.tmux("list-panes", "-a", "-F", "#{pane_id} #{pane_pid} #{@project_board_managed}")
@@ -307,5 +321,5 @@ class Bench:
             env.tmux("kill-pane", "-t", pane, check=False)
         env.tmux("set-option", "-gu", "status-right", check=False)
         self.detach()
-        self.row(exe, f"steady_board_{panes}", elapsed, 0, spawns, board_panes=len(board), board_cpu=round(sum(used), 2),
+        self.row(exe, f"steady_board_{panes}", elapsed, 0, {}, spawns, board_panes=len(board), board_cpu=round(sum(used), 2),
                  board_cpu_each=used, status_runs=len(status), status_cpu=round(status_cpu, 2))

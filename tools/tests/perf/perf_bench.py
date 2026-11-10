@@ -18,6 +18,11 @@ so that the host load of one moment is not charged to one side only. `warm` rows
 run after an idle gap of --cold-seconds (default 61 s): the workstation's /primehome mount has acregmin=60, so
 a command that follows another by more than a minute finds every file attribute expired.
 
+Nothing is injected into the executables' interpreters. The provider is a fake `claude` program on PATH (the
+product's own provider code runs against it). Process counts come from a separate counting pass (`count` rows)
+in which shims for tmux, git and ps are on PATH; the timing passes (`warm`, `cold`) have no shim, so a time never
+includes the cost of counting. The counts are one run per executable and scale (they do not vary with load).
+
 Outputs in --out: results.jsonl (one row per command), meta.json, summary.json and summary.md (median, p90,
 tmux and other process counts, the candidate/baseline ratios and the host load, per scale x mode x operation).
 The environment lives in --workdir and is removed at the end. Choose a --workdir on the file system whose cost
@@ -54,43 +59,62 @@ def percentile(values, fraction):
 
 
 def _count(row, which):
-    spawns = row.get("spawns", {})
+    """Processes started for a command: its own plus its tmux server's (a Worker's registration, a hook)."""
+    spawns = {}
+    for source in (row.get("spawns", {}), row.get("pane_spawns", {})):
+        for name, value in source.items():
+            spawns[name] = spawns.get(name, 0) + value
     if which == "tmux":
         return spawns.get("tmux", 0)
     return sum(v for k, v in spawns.items() if k != "tmux")
 
 
+def _counts(rows):
+    """{(scale, op, exe): {"tmux", "other", "by_name"}} from the counting pass (`count` rows)."""
+    found = {}
+    for row in rows:
+        if row["mode"] == "count" and row["rc"] == 0 and not row["op"].startswith("steady_board"):
+            found.setdefault((row["scale"], row["op"], row["exe"]), []).append(row)
+    out = {}
+    for key, items in found.items():
+        names = sorted({k for r in items for src in (r["spawns"], r["pane_spawns"]) for k in src})
+        out[key] = {"tmux": statistics.median(_count(r, "tmux") for r in items),
+                    "other": statistics.median(_count(r, "other") for r in items),
+                    "by_name": {n: statistics.median(_count({"spawns": {n: r["spawns"].get(n, 0)},
+                                                              "pane_spawns": {n: r["pane_spawns"].get(n, 0)}}, "tmux")
+                                                     for r in items) for n in names}}
+    return out
+
+
 def aggregate(rows):
-    """{(scale, mode, op): {exe: stats}} from result rows; a failed row only counts in `failed`."""
+    """{(scale, mode, op): {exe: stats}}: times of the warm and cold rows, counts of the counting pass.
+    A failed row only counts in `failed`."""
+    counts = _counts(rows)
     groups = {}
     for row in rows:
-        if row["op"].startswith("steady_board"):
+        if row["mode"] == "count" or row["op"].startswith("steady_board"):
             continue
         groups.setdefault((row["scale"], row["mode"], row["op"]), {}).setdefault(row["exe"], []).append(row)
     out = {}
-    for key, per_exe in groups.items():
-        out[key] = {}
+    for (scale, mode, op), per_exe in groups.items():
+        out[(scale, mode, op)] = {}
         for exe, items in per_exe.items():
             good = [r for r in items if r["rc"] == 0]
             if not good:
-                out[key][exe] = {"n": 0, "failed": len(items)}
+                out[(scale, mode, op)][exe] = {"n": 0, "failed": len(items)}
                 continue
             walls = [r["wall"] for r in good]
-            out[key][exe] = {
+            count = counts.get((scale, op, exe), {})
+            out[(scale, mode, op)][exe] = {
                 "n": len(good), "failed": len(items) - len(good), "median": statistics.median(walls),
                 "p90": percentile(walls, 0.9), "min": min(walls), "max": max(walls),
-                "tmux": statistics.median(_count(r, "tmux") for r in good),
-                "other": statistics.median(_count(r, "other") for r in good),
-                "other_by_name": {name: statistics.median(r["spawns"].get(name, 0) for r in good)
-                                  for name in sorted({k for r in good for k in r["spawns"] if k != "tmux"})},
-                "sleep": statistics.median(r.get("sleep", 0) for r in good),
-                "pane_tmux": statistics.median(r.get("pane_spawns", {}).get("tmux", 0) for r in good),
+                "tmux": count.get("tmux"), "other": count.get("other"), "spawns_by_name": count.get("by_name", {}),
                 "load": statistics.median(r["load"] for r in good)}
     return out
 
 
 def ratio(candidate, baseline):
-    return None if not baseline else candidate / baseline
+    return None if not baseline or candidate is None else candidate / baseline
 
 
 def summarize(rows, names):
@@ -104,12 +128,22 @@ def summarize(rows, names):
             entry["ratio"] = {"median": ratio(b["median"], a["median"]), "p90": ratio(b["p90"], a["p90"]),
                               "tmux": ratio(b["tmux"], a["tmux"]), "other": ratio(b["other"], a["other"])}
         summary.append(entry)
-    steady = [r for r in rows if r["op"].startswith("steady_board")]
+    steady = []
+    counts = {(r["scale"], r["op"], r["exe"]): r for r in rows if r["op"].startswith("steady_board") and r["mode"] == "count"}
+    for r in rows:
+        if r["op"].startswith("steady_board") and r["mode"] != "count":
+            counted = counts.get((r["scale"], r["op"], r["exe"]))
+            per_second = {k: v / counted["wall"] for k, v in counted["pane_spawns"].items()} if counted else {}
+            steady.append({**r, "spawns_per_second": per_second})
     return {"baseline": base, "candidate": candidate, "operations": summary, "steady": steady}
 
 
 def _ratio(value):
     return "-" if value is None else f"{value:.2f}"
+
+
+def _number(value):
+    return "-" if value is None else f"{value:g}"
 
 
 def markdown(summary, meta):
@@ -125,8 +159,8 @@ def markdown(summary, meta):
     for scale, mode in modes:
         lines += [f"## {scale} {mode}", "",
                   f"| operation | {base} median s | p90 | {candidate} median s | p90 | ratio median | ratio p90 | "
-                  f"tmux {base} -> {candidate} | other {base} -> {candidate} | sleep s | load |",
-                  "|---|---|---|---|---|---|---|---|---|---|---|"]
+                  f"tmux {base} -> {candidate} | other {base} -> {candidate} | load |",
+                  "|---|---|---|---|---|---|---|---|---|---|"]
         for entry in summary["operations"]:
             if (entry["scale"], entry["mode"]) != (scale, mode):
                 continue
@@ -135,19 +169,19 @@ def markdown(summary, meta):
                 continue
             ratios = entry.get("ratio", {})
             lines.append(f"| {entry['op']} | {a['median']:.3f} | {a['p90']:.3f} | {b['median']:.3f} | {b['p90']:.3f} | "
-                         f"{_ratio(ratios.get('median'))} | {_ratio(ratios.get('p90'))} | {a['tmux']:g} -> {b['tmux']:g} | "
-                         f"{a['other']:g} -> {b['other']:g} | {a['sleep']:g} -> {b['sleep']:g} | "
-                         f"{a['load']:.0f}/{b['load']:.0f} |")
+                         f"{_ratio(ratios.get('median'))} | {_ratio(ratios.get('p90'))} | {_number(a['tmux'])} -> {_number(b['tmux'])} | "
+                         f"{_number(a['other'])} -> {_number(b['other'])} | {a['load']:.0f}/{b['load']:.0f} |")
         lines.append("")
     if summary["steady"]:
         lines += ["## steady cost (Board panes, one client, status-interval 1)", "",
-                  "| scale | exe | board panes | seconds | board CPU s | status runs | status CPU s | tmux spawns | other spawns | load |",
+                  "| scale | exe | board panes | seconds | board CPU s | status runs | status CPU s | tmux per s | other per s | load |",
                   "|---|---|---|---|---|---|---|---|---|---|"]
-        for r in sorted(summary["steady"], key=lambda r: (r["scale"], r["op"], r["exe"])):
-            other = sum(v for k, v in r["spawns"].items() if k != "tmux")
+        for r in sorted(summary["steady"], key=lambda r: (r["scale"], r["op"], r["exe"], r["rep"])):
+            rate = r["spawns_per_second"]
+            other = sum(v for k, v in rate.items() if k != "tmux")
             lines.append(f"| {r['scale']} | {r['exe']} | {r['board_panes']} ({r['op'][-1]}) | {r['wall']:.0f} | "
-                         f"{r['board_cpu']} | {r['status_runs']} | {r['status_cpu']} | {r['spawns'].get('tmux', 0)} | "
-                         f"{other} | {r['load']:.0f} |")
+                         f"{r['board_cpu']} | {r['status_runs']} | {r['status_cpu']} | {rate.get('tmux', 0):.1f} | "
+                         f"{other:.1f} | {r['load']:.0f} |")
         lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -194,6 +228,18 @@ def run(args):
         units = make_units(bench)
         try:
             warm = [u for u in ("startup", *READONLY_UNITS, "board_cli", "lifecycle") if u in args.warm_units]
+            bench.mode, bench.rep = "count", 1
+            env.set_counting(True)
+            try:
+                for unit in warm:
+                    for exe in exes:
+                        units[unit](exe)
+                if "steady" in args.groups:
+                    for panes in (1, 4):
+                        for exe in exes:
+                            bench.steady(exe, panes, min(args.steady_seconds, 20))
+            finally:
+                env.set_counting(False)
             bench.mode = "warm"
             for rep in range(1, args.reps + 1):
                 bench.rep = rep
@@ -209,7 +255,7 @@ def run(args):
                         time.sleep(args.cold_seconds)
                         units[unit](exe)
             if "steady" in args.groups:
-                bench.mode, bench.rep = "warm", 1
+                bench.mode = "warm"
                 for rep in range(1, args.steady_reps + 1):
                     bench.rep = rep
                     for panes in (1, 4):
