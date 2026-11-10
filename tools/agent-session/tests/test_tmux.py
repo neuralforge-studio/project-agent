@@ -248,7 +248,11 @@ def test_launch_records_attempt_before_exec_and_exit_keeps_dead_pane(tmp_path, t
     received = tmp_path / "received.txt"
     python_code = ("import sys; line = sys.stdin.readline(); open(sys.argv[1], 'w').write(line); "
                    "sys.exit(0 if line.strip() == '/exit' else 9)")
-    script.write_text("#!/bin/bash\n" + shlex.join(command) + " > " + shlex.quote(str(observed)) + "\nexec "
+    # A bare `> observed` creates the file before tmux writes into it; write a sibling and `mv` it so
+    # `observed.exists()` means the content is complete.
+    pending = shlex.quote(str(observed) + ".pending")
+    script.write_text("#!/bin/bash\n" + shlex.join(command) + " > " + pending + "\nmv " + pending + " "
+                      + shlex.quote(str(observed)) + "\nexec "
                       + shlex.join([sys.executable, "-u", "-c", python_code, str(received)]) + "\n")
     launched = tmux.launch(meta["window_id"], tmp_path, script)
     assert wait_for(lambda: observed.exists())

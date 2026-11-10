@@ -3,10 +3,13 @@
 import getpass
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
+
+import pytest
 
 
 def test_temporary_directories_are_outside_the_shared_user_root(tmp_path, request):
@@ -80,3 +83,37 @@ def test_prune_ignores_what_is_not_a_directory_of_this_user(tmp_path):
         os.utime(path, (old, old), follow_symlinks=False)
     private_root.prune(tmp_path)
     assert link.is_symlink() and plain.exists() and (target / "keep.txt").exists()
+
+
+# TEST-010: pytest runs that start together prune the same directories at the same time.
+def rival_prune(monkeypatch, moment):
+    """Make another run's prune remove every listed root at ``moment``: after the listing or after each ``lstat``."""
+    real_glob, real_lstat = Path.glob, Path.lstat
+
+    def glob(self, pattern):
+        found = list(real_glob(self, pattern))
+        if moment == "listing":
+            for path in found:
+                shutil.rmtree(path)
+        return iter(found)
+
+    def lstat(self, *args, **kwargs):
+        info = real_lstat(self, *args, **kwargs)
+        if moment == "lstat" and self.name.startswith("pt-") and self.exists():
+            shutil.rmtree(self)
+        return info
+
+    monkeypatch.setattr(Path, "glob", glob)
+    monkeypatch.setattr(Path, "lstat", lstat)
+
+
+@pytest.mark.parametrize("moment", ["listing", "lstat"])
+def test_prune_counts_a_root_that_another_run_already_removed_as_removed(tmp_path, monkeypatch, moment):
+    dead = dead_pid()
+    make_root(tmp_path, "pt-ended", dead)
+    make_root(tmp_path, "pt-unknown", age=private_root.UNKNOWN_OWNER_AGE + 60)
+    survivor = tmp_path / "other"
+    survivor.mkdir()
+    rival_prune(monkeypatch, moment)
+    private_root.prune(tmp_path, keep=0)
+    assert not list(tmp_path.glob("pt-*")) and survivor.exists()

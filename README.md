@@ -10,6 +10,7 @@ project-agent는 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로
 | `tools/project-item/` | CR과 결정 항목의 생성·조회·이동·검사 | [README](tools/project-item/README.md) |
 | `tools/project-board/` | 모든 프로젝트의 상황을 보이는 tmux 화면 | [README](tools/project-board/README.md) |
 | `tools/` 바로 아래 | 세 CLI가 공유하는 `python-launcher.sh`와 저장소 수준 test(`conftest.py`, `test_*.py`)와 세 도구의 test가 함께 쓰는 test 전용 module(`tests/`, release에 넣지 않음) | [설치 계약 6.1절](docs/project-team/install-contract.md#61-python-선택) |
+| `tools/tests/perf/` | 두 실행본(기준·후보)을 같은 격리 환경에서 번갈아 실행해 명령·Board·상태줄의 시간과 process 수를 비교하는 개발 도구(release에 넣지 않음). 사용법은 `perf_bench.py` 머리말 | [perf_bench.py](tools/tests/perf/perf_bench.py) |
 | `install/` | 설치기(`install`·`upgrade`·`rollback`·`uninstall`·`check`, `--dry-run`)와 격리 HOME 인수 test | [설치 계약](docs/project-team/install-contract.md) |
 | `skills/project-team/`, `skills/project-item/` | Leader·Worker·운영자 절차와 CR·결정 항목 형식 | [SKILL.md](skills/project-team/SKILL.md), [SKILL.md](skills/project-item/SKILL.md) |
 | `integrations/tmux/` | Board binding, status 표시, 결정 대기 알림. 설치본은 `project-agent.conf`를 읽습니다 | 각 script의 머리말, [project-board README](tools/project-board/README.md) |
@@ -41,6 +42,7 @@ python -m pytest -q -n 8 install/tests
 | `tools/project-board/**` | `tools/project-board/tests` |
 | `tools/project-item/**` | `tools/project-item/tests`. `project_item/api.py` 또는 CR·결정 형식(`cr.py`, `decide.py`, `kinds.py`)을 바꾸면 agent-session·project-board test와 네 번째 명령도 |
 | `tools/agent-session/**` | `tools/agent-session/tests`. `agent_session/api.py`, state 형식(`state.py`), tmux option 이름을 바꾸면 project-item·project-board test와 `install/tests`도 |
+| `tools/tests/perf/**` | `python -m pytest -q tools/tests/perf`. 개발 도구의 test라 release 검증(위 다섯 명령)에 넣지 않습니다. 작은 규모에서 두 실행본을 한 번 번갈아 실행하므로 host 부하에 따라 수 분에서 수십 분이 걸립니다 |
 | `tools/conftest.py`, 여러 도구가 함께 쓰는 test helper | 다섯 명령 모두 |
 | `skills/**`, `docs/**`, `README.md`, `AGENTS.md` | 고친 문서의 상대 link 검사, `tools/test_distribution_boundary.py`. `skills/project-item`의 형식 문서를 바꾸면 `tools/project-item/tests/test_doc_contract.py`, 원격 guidance 문서(`skills/**`, `docs/project-team/spec.md`)를 바꾸면 `tools/agent-session/tests/test_remote.py`도 |
 - Agent-session test는 seat 여럿이 같은 host에서 동시에 검증하는 평소 부하에서 같은 결과를 냅니다. 한도(`AGENT_SESSION_TEST_TIMEOUT`, 기본 120초)는 host가 이보다 심하게 느릴 때만 늘립니다. 자세한 사용법은 [agent-session README](tools/agent-session/README.md#프로젝트-api와-검사)가 설명합니다.
