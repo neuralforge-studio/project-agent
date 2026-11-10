@@ -30,6 +30,7 @@ project 16개 × seat 16개에서 Worker `start`의 등록 hook(SessionStart)이
 ## Disposition
 - 2026-11-10 Leader: 고친다(Leader 판정). 재현 측정이 있는 결함입니다. 사용자가 물은 규모에서 Worker 시작이 실패합니다.
 - 2026-11-10 Leader: open -> todo. 16x16에서 start 실패, 재현 측정 있음
+- 2026-11-10 Leader: 제출 3cb144015197000574d90e9781da355442df93a2를 인수합니다. 검토 3cb1440(구현 81d4322 + main 2e73d06·c784f59 merge, providers/는 main과 같음). Tmux.current_with_run(포인터 한 번 읽기, 이 run을 가리키는 slot만 window 읽기; 포인터의 run_id는 v0.1.0부터 _IDENTITY에 있어 옛 run과도 맞습니다), register_from_hook의 두 번째 _run 제거, hook_started 기록과 start 대기의 종료 판정(재읽기 뒤 ready·start_error 우선, remote seat 제외), process.age로 센 hook deadline(최대 10초 차감), 명세 문구를 읽었습니다. README 표 행(tools/agent-session/**: 833 passed, spec.md의 test_remote 포함)과 merge가 입력을 바꾼 네 번째 명령(130 passed)을 merge commit에서 실행했습니다. 수정 전 실패하는 hook 강제 종료 test, seat 2·6·16 호출 수 test가 있습니다. 16x16 A/B start wall 0.71·CPU 0.72 improved, v0.4.0은 start 2회 registration_failed였고 후보 timing pass는 6회 모두 성공. 한도 조정 제안과 hook의 MCP 시동 비용은 후속 CR로 Leader가 판정합니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [동작 명세](../../project-team/spec.md)의 등록·게시(3절, 5절), `tools/agent-session/agent_session/internal.py`, `providers/claude.py`, SESSION-010의 `ServerView`, 측정 도구 `tools/tests/perf/perf_bench.py` 머리말(가짜 `claude`의 `hooks.log`), [project-team Worker 절](../../../skills/project-team/SKILL.md).
@@ -53,9 +54,9 @@ project 16개 × seat 16개에서 Worker `start`의 등록 hook(SessionStart)이
 6. 제출 전에 `origin/main`이 움직여 위 명령의 입력을 바꿨으면 merge하고 merge commit에서 다시 실행합니다.
 
 ## Result
-- 제출 commit: cfb0da4037c8f70cc023794eb7ec87ee7c8c4652
+- 제출 commit: 3cb144015197000574d90e9781da355442df93a2
 
-`origin/main`(9d746d8, 측정 도구 새 판)을 merge한 commit입니다. `cr/SESSION-011`을 push했습니다. 아래 test는 이 commit에서 실행했습니다.
+`origin/main`(PERF-003 2e73d06, SESSION-012 c784f59까지)을 merge한 commit입니다. `cr/SESSION-011`을 push했습니다. 검증은 아래 "검증"의 근거 재사용 표를 따릅니다.
 
 ### 원인 (1단계 시간 분해, 수정 전 측정)
 가짜 `claude`와 sitecustomize 추적(분석용, 저장소에는 없음)으로 hook 한 번의 단계를 쟀습니다.
@@ -76,17 +77,20 @@ project 16개 × seat 16개에서 Worker `start`의 등록 hook(SessionStart)이
 1. `Tmux.current_with_run`: 한 번의 tmux 읽기로 모든 slot의 포인터를 읽고 이 run_id를 가리키는 slot의 window만 읽습니다. `_run`은 tmux 2번이고 seat 수와 무관합니다. `register_from_hook`이 찾은 run을 `_register(resolved=)`에 넘겨 두 번째 `_run`을 없앴습니다.
 2. `hook_started`(새 module): SessionStart hook이 binding 확인 전에 `agent/runs/<run_id>/hook-started.json`(PID·birth)을 씁니다. `start`의 대기 루프가 그 hook process의 종료를 보고, run이 `ready`도 `start_error`도 아니면 window를 한 번 더 읽은 뒤 `registration_failed`(`hook_error.code = registration_hook_ended`)로 끝냅니다. 새 tmux option·state 필드·JSON 필드는 없습니다(run 디렉터리 파일은 `ended.json`과 같은 종류의 진단 기록). 형식 버전은 올리지 않습니다.
 3. hook deadline을 hook process의 생성 시각부터 셉니다(`process.age`, 시동에 쓴 시간은 최대 10초까지만 뺍니다).
-4. binding 확인(`verify_binding`)은 MCP client를 닫을 때 1초를 기다리지 않고 바로 종료 신호를 보냅니다. `send`는 이전과 같습니다. Claude CLI와의 계약(`claude mcp serve`, ListAgents)은 그대로입니다.
+4. (MCP `close`의 1초 대기: 이 CR은 binding 확인만 대기를 없앴으나, SESSION-012가 `MCPClient.EXIT_GRACE = 0.1`로 모든 close의 대기를 줄여 merge에서 그쪽을 채택하고 이 CR의 per-call grace 코드·test·명세 문구를 뺐습니다. Claude CLI와의 계약은 그대로입니다.)
 5. 동작 명세의 해당 절(등록 deadline, `start_error`와 hook 종료 판정, run 디렉터리, MCP 종료)을 고쳤습니다.
 
 ### 검증
-- `python -m pytest -q -n 8 tools/agent-session/tests` → **825 passed** (30분, `cfb0da4`). README 표의 `tools/agent-session/**` 행입니다. `api.py`·`state.py`·tmux option 이름은 바꾸지 않아 project-item·project-board·`install/tests`는 실행하지 않았습니다.
-- `python -m pytest -q tools/test_distribution_boundary.py` → 9 passed. `docs/project-team/spec.md`의 상대 link 검사 이상 없음. 원격 guidance 문서는 위 agent-session test(`test_remote.py`)에 포함됩니다.
+- 제출 commit `3cb1440`(merge commit)에서 실행한 명령:
+  - `python -m pytest -q -n 8 tools/agent-session/tests` → **833 passed** (17분). README 표의 `tools/agent-session/**` 행입니다.
+  - `python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py tools/test_release_files.py tools/test_tmux_test_server.py` → **130 passed**. PERF-003이 launcher·bin 진입점을 바꿔 `tools/python-launcher.sh` 행에 해당합니다.
+- 근거 재사용: `install/tests`는 PERF-003 merge(`19f3c22`)에서 276 passed, 2 skipped였습니다. SESSION-012 merge는 `install/`·launcher를 바꾸지 않아 재실행하지 않았습니다. `api.py`·`state.py`·tmux option 이름은 바꾸지 않아 project-item·project-board test는 실행하지 않았습니다. 문서(`spec.md`)의 상대 link 검사는 이상 없었습니다.
+- `19f3c22`에서 agent-session test 2개가 실패했으나(`test_suspend.py::test_a_failed_lost_resume_keeps_its_evidence_and_start_takes_over`, `test_git_ops.py::test_timed_out_git_releases_its_lock_and_reports_the_interruption`; host load 100 이상에서 39분 동안 돌린 실행) 단독 재실행과 두 파일 전체 재실행(79 passed)에서 통과했고, `3cb1440`의 전체 실행에서도 통과했습니다. 부하로 시간이 어긋난 실패로 판단합니다.
 - 새 test (Verification 3·4):
   - `test_start_reports_a_hook_that_ended_without_a_result_before_its_timeout`(hook을 SIGKILL로 죽임, `registration_failed`, 120초 timeout 안에 끝나고 60초 미만). **감지 조건을 끄면 실패합니다**(120초 뒤 `timeout`, 확인함). 재실행한 start가 같은 오류를 바로 반환함도 확인합니다.
   - `test_a_hook_that_ends_after_it_published_is_not_a_failed_registration`(hook이 게시하고 끝나는 경합).
   - `test_finding_the_run_of_a_hook_starts_two_tmux_processes_whatever_the_seats`(seat 2·6·16 모두 tmux ≤ 2; 수정 전은 2×(seat+1)). `test_a_registration_starts_the_same_tmux_processes_whatever_the_seats`(찾기·binding·게시 전체가 seat 2·6·16 모두 tmux 10번).
-  - `current_with_run`의 판정, hook 시작 기록·종료 판정, deadline, `process.age`, MCP `close`의 grace test.
+  - `current_with_run`의 판정, hook 시작 기록·종료 판정, deadline, `process.age` test.
 
 ### A/B 측정 (Verification 1·2, 새 측정 도구 9d746d8)
 `perf_bench.py run --exe v040=<v0.4.0 트리> --exe cand=<이 checkout> --scales 4x4,16x16 --groups lifecycle --reps 3 --slow-reps 3 --cold-reps 0`. 가짜 `claude`. host load는 4×4에서 38~127, 16×16에서 45~80이었습니다(같은 host의 다른 작업 때문에 높음). 값은 median [95% 구간]이고 판정은 도구의 improved/same/worse입니다.
@@ -106,5 +110,5 @@ project 16개 × seat 16개에서 Worker `start`의 등록 hook(SessionStart)이
 - 되풀이 확인에서 MCP client를 다시 띄우지 않는 개선(3단계 예시)은 하지 않았습니다. 수정 전 측정에서 재시도가 발생한 근거가 없었고(ListAgents가 pane을 못 찾는 경우만 반복), provider 인터페이스를 바꾸는 일이라 근거 없이 넣지 않았습니다.
 
 ### 근거 재사용·재실행
-- 검증 명령은 모두 제출 commit `cfb0da4`(merge 뒤)에서 실행했습니다. merge가 가져온 변경은 측정 도구(`tools/tests/perf`)와 CR 문서라 agent-session test의 입력을 바꾸지 않습니다.
-- SESSION-012와 `lifecycle.py`·`providers/claude.py`가 겹칠 수 있다고 CR에 적혔습니다. 제출 시점 `origin/main`에는 SESSION-012의 코드가 들어오지 않았습니다.
+- SESSION-012 merge에서 `providers/mcp.py`가 한 곳 충돌했습니다(close 대기: 이 CR의 per-call `grace` 대 SESSION-012의 `EXIT_GRACE = 0.1`). SESSION-012를 채택했고, 이 CR의 `providers/` 변경과 그 test·명세 문구는 없어졌습니다. `providers/`는 `origin/main`과 같습니다.
+- A/B(위 표)는 merge 전 후보 `cfb0da4`로 쟀고, Leader 지시로 다시 재지 않았습니다. 그 사이 후보에서 바뀐 것은 close 대기뿐입니다(per-call grace 0초 → 전역 0.1초). 이 CR의 핵심 효과(`_run`의 tmux 수, hook 종료 감지, deadline)는 `3cb1440`에서도 위 test가 확인합니다.
