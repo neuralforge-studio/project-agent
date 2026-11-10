@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: TMUX-003, PERF-002
 - Base: 341901e4fb17de913d7fa3bff394d291b3c24bc0 2026-11-10T12:03:55+09:00
+- Outcome: fixed
 
 ## Symptom
 v0.4.0을 설치하고 상태줄에 결정 표시를 넣은 workstation에서는 README 검증의 네 번째 명령이 `tools/test_python_launcher.py`의 `tmux_decide_status.sh` 케이스 4건으로 실패합니다. 실행 시점에 사용자 상태줄이 갱신한 `~/.cache/tmux-decide-status.view`가 유효하면 실패합니다. release 검증이 실행하는 host와 시각에 따라 결과가 달라집니다.
@@ -25,6 +26,7 @@ v0.4.0을 설치하고 상태줄에 결정 표시를 넣은 workstation에서는
 - 2026-11-10 Leader: 고친다(Leader 판정). 재현과 원인 근거가 있는 test 결함입니다. v0.4.0을 설치한 host에서 release 검증이 깨집니다.
 - 2026-11-10 Leader: open -> todo. 0.4.0 설치 host에서 release 검증을 깨는 test 결함
 - 2026-11-10 Leader: 제출 22da49d06e56ec4afe12a9e2c95f5cf5bced024b를 인수합니다. Leader review: launcher test와 tmux 통합 test가 자식 process에 빈 HOME·XDG_CACHE_HOME을 주고 XDG_CONFIG/DATA/STATE_HOME을 뺍니다. 그래서 사용자 상태줄의 view가 결과를 바꾸지 않습니다. 회귀 test는 두 위치에 유효한 view를 두고, 격리하지 않으면 view가 출력되는 것을 먼저 확인합니다. 같은 구멍을 test_project_agent_conf.py에서 하나 더 찾아 고쳤고, 나머지 범위는 이미 격리되어 있다는 판정을 확인했습니다. 검증은 README 표 integrations/tmux 행(네 번째 명령 127 passed, test_tmux_control.py 21 passed, install/tests 267 passed·2 skipped)입니다. 제출 이후 main은 움직이지 않았습니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 2f0bbad(Merge cr/TEST-012, 제출 22da49d). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증)(test 자원 규칙), [project-team Worker 절](../../../skills/project-team/SKILL.md).
