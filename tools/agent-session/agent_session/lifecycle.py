@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import api, background, ended, git_ops, handoff, jobs, launch_artifacts, process, windows, workspace
+from . import api, background, ended, git_ops, handoff, hook_started, jobs, launch_artifacts, process, windows, workspace
 from .config import RemoteSeat, current_project, load_registry, require_base
 from .errors import SessionError
 from .providers import get_provider
@@ -427,8 +427,20 @@ class Manager(SuspendMixin, WatchMixin):
             if meta.get("ready"):
                 return self._result(meta, ready=True)
             failure = meta.get("start_error")
+            if (not isinstance(failure, dict) and not meta.get("remote_seat")
+                    and hook_started.ended(self.project, meta["run_id"])):
+                # The hook's last write comes before its end, so a fresh read decides: published, failed, or neither.
+                meta = self.tmux.get_current(self.project.project_id, context["target"])
+                if not meta or meta.get("run_id") != context["run_id"]:
+                    raise SessionError("target_changed", "Another execution replaced this startup.")
+                if meta.get("ready"):
+                    return self._result(meta, ready=True)
+                failure = meta.get("start_error") or {
+                    "code": "registration_hook_ended",
+                    "message": "The registration hook ended before it reported a result (Claude ends a hook at its time limit)."}
             if isinstance(failure, dict):
-                # The registration recorded why it failed; the run's CLI stays alive, so nothing else ends this wait.
+                # The registration recorded why it failed, or its hook ended without a result; the run's CLI
+                # stays alive, so nothing else ends this wait.
                 raise SessionError("registration_failed", "The provider's registration was rejected: "
                                    f"{failure.get('message')}", 4,
                                    {**self._result(meta), "hook_error": failure})

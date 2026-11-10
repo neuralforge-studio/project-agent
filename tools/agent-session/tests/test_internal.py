@@ -15,7 +15,7 @@ import pytest
 TOOL = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
-from agent_session import api, internal, providers
+from agent_session import api, hook_started, internal, process, providers
 from agent_session.config import resolve_project
 from agent_session.errors import SessionError
 from agent_session.state import StateStore, locked
@@ -557,3 +557,69 @@ def test_a_hook_with_another_id_stays_an_owner_mismatch_without_a_move_record(na
         _hook_with(native_slot, monkeypatch, str(uuid.uuid4()), moved, {"listed": True, "pid": 1})
     assert error.value.code == "owner_mismatch"
     assert not native_slot["tmux"].get_current("fixture", "seat-0").get("moved_to_background")
+
+
+def test_a_session_start_hook_records_that_it_started(native_slot, monkeypatch):
+    """SESSION-011. A hook that Claude ends at its limit leaves no result; the record is how `start` learns it ended."""
+    fixture = native_slot
+    pending = pending_run(fixture, monkeypatch)
+    native_id = str(uuid.uuid4())
+    payload = {"session_id": native_id, "hook_event_name": "SessionStart", "cwd": str(fixture["seat"]),
+               "source": "startup"}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    internal.register_from_hook("pending-run", str(fixture["config"]), pending["socket_path"],
+                                expected_session_id=native_id, endpoint=fixture["endpoint"])
+    record = json.loads(hook_started.path(fixture["project"], "pending-run").read_text())
+    assert record["run_id"] == "pending-run" and record["pid"] == os.getpid()
+    assert record["birth"] == process.birth(os.getpid())
+    assert hook_started.ended(fixture["project"], "pending-run") is False       # this process is alive
+
+
+def test_a_hook_record_says_ended_only_for_its_own_dead_process(tmp_path):
+    from types import SimpleNamespace
+
+    project = SimpleNamespace(runtime_path=tmp_path)
+    assert hook_started.ended(project, "run-a") is False                            # no record: not an end
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        record = {"run_id": "run-a", "pid": child.pid, "birth": process.birth(child.pid)}
+        path = hook_started.path(project, "run-a")
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(record))
+        assert hook_started.ended(project, "run-a") is False                        # the hook is running
+        assert hook_started.ended(project, "run-b") is False                        # another run's record is not read
+        child.kill()
+        child.wait()
+        assert hook_started.ended(project, "run-a") is True
+        path.write_text(json.dumps({**record, "birth": "linux:other:1"}))           # a reused PID is another process
+        assert hook_started.ended(project, "run-a") is True
+        path.write_text(json.dumps({**record, "run_id": "run-b"}))
+        assert hook_started.ended(project, "run-a") is False
+        path.write_text("{not json")
+        assert hook_started.ended(project, "run-a") is False
+    finally:
+        child.kill()
+        child.wait()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the creation time is read from /proc")
+def test_the_hook_deadline_counts_from_the_creation_of_its_process(monkeypatch):
+    """The 30 second hook limit of Claude counts from the process start; a loaded host spends seconds in the
+    interpreter's start and imports, which the 25 second budget must include."""
+    monkeypatch.setattr(process, "age", lambda pid: 7.0)
+    now = time.monotonic()
+    assert 25 - 7 - 0.5 < internal._hook_deadline() - now <= 25 - 7 + 0.5
+    monkeypatch.setattr(process, "age", lambda pid: 600.0)                          # a wrong clock costs 10 s at most
+    assert internal._hook_deadline() - time.monotonic() > internal._HOOK_BUDGET - internal._STARTUP_CAP - 0.5
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the creation time is read from /proc")
+def test_process_age_is_the_seconds_since_creation():
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        time.sleep(1.2)
+        assert 1.0 <= process.age(child.pid) < 60
+    finally:
+        child.kill()
+        child.wait()
+    assert process.age(child.pid) == 0.0                                               # a gone process has no age

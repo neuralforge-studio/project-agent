@@ -129,6 +129,7 @@ def main():
     parser.add_argument("--fail-window-write", action="store_true")  # the window update that ends a publication fails
     parser.add_argument("--fail-state-write", action="store_true")  # the registration cannot save state
     parser.add_argument("--fail-binding", action="store_true")      # ListAgents never lists this pane
+    parser.add_argument("--kill-hook", action="store_true")         # the registration hook is killed after it starts
     parser.add_argument("--session")                   # a resumed conversation keeps its recorded ID
     parser.add_argument("--claude", action="store_true")
     parser.add_argument("--record")
@@ -182,8 +183,17 @@ def main():
         def cannot_save(self, mutator):
             raise SessionError("state_write_failed", "The fixture cannot save the project state.", 5)
         StateStore.update = cannot_save
+    if args.kill_hook:
+        # What Claude does to a hook at its limit: the hook process starts, records itself, and is killed with
+        # no result. The CLI itself stays up, as a real one does.
+        import subprocess
+        hook = ("import os, signal, sys; sys.path.insert(0, sys.argv[1]); from agent_session import hook_started, internal; "
+                "project = internal._run(sys.argv[2], sys.argv[3], sys.argv[4], os.getcwd())[0]; "
+                "hook_started.write(project, sys.argv[2]); os.kill(os.getpid(), signal.SIGKILL)")
+        subprocess.run([sys.executable, "-c", hook, args.library, args.run, args.config, args.socket])
     try:
-        internal.register_current(args.run, args.config, args.socket, args.endpoint)
+        if not args.kill_hook:
+            internal.register_current(args.run, args.config, args.socket, args.endpoint)
     except SessionError as error:
         # A failed tool call does not exit an interactive provider TUI.
         base = Path(os.environ["AGENT_SESSION_BASE"])
