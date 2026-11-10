@@ -20,7 +20,14 @@
 #
 # Sets PY (empty when the selected interpreter does not exist) and LD_LIBRARY_PATH (the installer's library
 # directory, or on the Workstation rule the inhouse one).
-PROJECT_AGENT_LAUNCHER_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd -P)"
+# The directory of this file is found without exec-ing `dirname`: this runs in every command, and each
+# exec on the Workstation searches PATH and LD_LIBRARY_PATH on NFS. Only a launcher that is itself a
+# symlink needs `readlink`.
+project_agent_launcher_source="${BASH_SOURCE[0]}"
+[[ ! -L "$project_agent_launcher_source" ]] || project_agent_launcher_source="$(readlink -f -- "$project_agent_launcher_source")"
+[[ "$project_agent_launcher_source" == */* ]] || project_agent_launcher_source="./$project_agent_launcher_source"
+PROJECT_AGENT_LAUNCHER_DIR="$(CDPATH= cd -P -- "${project_agent_launcher_source%/*}" && pwd -P)"
+unset project_agent_launcher_source
 
 # Fills the three PROJECT_AGENT_* names above from python.env where the environment has no value.
 project_agent_read_python_env() {

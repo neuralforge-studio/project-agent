@@ -224,27 +224,58 @@ def check_binding(cwd, target, expected_session_id=None, config_path=None, socke
     }
 
 
-def _manager(cwd, config_path, socket, timeout, project=None):
-    from .lifecycle import Manager          # lifecycle imports this module
+def _socket_kwargs(socket):
     socket = socket or os.environ.get("AGENT_SESSION_SOCKET")
     if isinstance(socket, dict):
-        kwargs = socket
-    else:
-        kwargs = {"socket_path": str(socket)} if socket else {}
-    return Manager(cwd, config_path, timeout=timeout, project=project, **kwargs)
+        return socket
+    return {"socket_path": str(socket)} if socket else {}
+
+
+def _manager(cwd, config_path, socket, timeout, project=None):
+    from .lifecycle import Manager          # lifecycle imports this module
+    return Manager(cwd, config_path, timeout=timeout, project=project, **_socket_kwargs(socket))
+
+
+def release_waits(project, store, tmux, view=None):
+    """JOB ID -> {seat, since, reasons} for each assigned seat whose stopped run waits for release.
+
+    Reads the state and the run's tmux record only. It lives here, not in `lifecycle`, so that a command
+    that only lists these (`project-item ls`, the Board) does not import the whole lifecycle.
+    `view` is a `ServerView` to read the runs from; without one this reads the server itself, once."""
+    state = store.read(missing_ok=True)
+    found = {}
+    try:
+        view = view or tmux.server_view([project.project_id], [f"seat-{key}" for key in state if key != "leader"])
+    except SessionError:
+        return found                           # unknown evidence is not a pending release
+    for key, entry in state.items():
+        if key == "leader" or not entry["job_id"]:
+            continue
+        try:
+            meta = view.current(project.project_id, f"seat-{key}")
+        except SessionError:
+            continue                           # unknown evidence is not a pending release
+        pending = meta and meta.get("job_id") == entry["job_id"] and meta.get("release_pending")
+        if pending:
+            found[entry["job_id"]] = {"seat": int(key), **pending}
+    return found
+
+
+def _release_waits_of(project, socket, view=None):
+    return release_waits(project, StateStore(project, timeout=60), Tmux(**_socket_kwargs(socket)), view)
 
 
 def pending_releases(cwd=None, config_path=None, socket=None):
     """JOB ID -> {seat, since, reasons} for each seat whose Worker stopped but whose release waits
     because the CR was still in-progress. Read-only; an unreadable run is not listed.
     """
-    return _manager(cwd, config_path, socket, 60).pending_releases()
+    return _release_waits_of(config.current_project(cwd, config_path), socket)
 
 
 def project_pending_releases(project, socket=None, view=None):
     """`pending_releases` of a project the caller already holds (from `load_registry`). `view` is a
     `server_view` to read from instead of reading the server again."""
-    return _manager(None, None, socket, 60, project=project).pending_releases(view)
+    return _release_waits_of(config.require_base(project), socket, view)
 
 
 def finish_release(cwd, job_id, config_path=None, socket=None):

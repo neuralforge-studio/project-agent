@@ -239,6 +239,11 @@ class Runs:
         self.hook = home.root / "hook"
         self.hook.mkdir()
         (self.hook / "sitecustomize.py").write_text(SITECUSTOMIZE)
+        # agent-session starts its interpreter with -S (no site step, PERF-002), which would skip the
+        # sitecustomize above. This test-only interpreter drops that one flag and runs the real one.
+        self.interpreter = self.hook / "python-with-site"
+        self.interpreter.write_text('#!/bin/sh\n[ "$1" = -S ] && shift\nexec "%s" "$@"\n' % os.path.abspath(sys.executable))
+        self.interpreter.chmod(0o755)
         home.env["TMUX_TMPDIR"] = str(self.socket_dir)          # even a missing option cannot reach the user's server
         tmux_test_server.watch_path(self.socket)
         self.tmux("new-session", "-d", "-s", "harness", "sleep", "86400")
@@ -250,7 +255,7 @@ class Runs:
         return result
 
     def cli_env(self):
-        return {**self.home.env, "PYTHONPATH": str(self.hook), "PROJECT_AGENT_PYTHON": os.path.abspath(sys.executable),
+        return {**self.home.env, "PYTHONPATH": str(self.hook), "PROJECT_AGENT_PYTHON": str(self.interpreter),
                 "FAKE_PROVIDER_LIB": str(self.home.home / LIB / "current/tools/agent-session"),
                 "FAKE_PROVIDER_FIXTURES": str(FIXTURES)}
 
