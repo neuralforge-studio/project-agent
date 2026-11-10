@@ -1,5 +1,7 @@
 """Git preparation against local origin repos, including ignored file guards."""
 
+import contextlib
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -84,6 +86,84 @@ def test_first_preparation_records_synced_revision_and_cr_branch(tmp_path, repo,
     assert cr_bases == [baseline]
     assert store.read()["0"]["git_hash"] == expected
     assert git(seat, "branch", "--show-current") == "cr/TOOL-001"
+
+
+def old_first_preparation(tmp_path, seat, branch):
+    """The result the first preparation had when it ran `switch main`, `merge --ff-only` and `switch -c`:
+    the same commands on a clone of the same seat state, as the oracle."""
+    oracle = tmp_path / "oracle"
+    shutil.copytree(seat, oracle, symlinks=True)
+    git(oracle, "fetch", "origin", "main")
+    git(oracle, "switch", "main")
+    git(oracle, "merge", "--ff-only", "origin/main")
+    git(oracle, "switch", "-c", branch, git(oracle, "rev-parse", "HEAD"))
+    return oracle
+
+
+def seat_result(seat):
+    return {"head": git(seat, "rev-parse", "HEAD"), "branch": git(seat, "branch", "--show-current"),
+            "refs": git(seat, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads"),
+            "status": git(seat, "status", "--porcelain=v2", "--branch", "--untracked-files=all").splitlines()[2:],
+            "config": sorted(line for line in git(seat, "config", "--local", "--list").splitlines()
+                             if line.startswith(("branch.", "core.")))}
+
+
+@pytest.mark.parametrize("seat_start", ["old-branch", "main"])
+def test_first_preparation_leaves_the_seat_as_the_main_switch_sequence_did(tmp_path, repo, cr_bases, seat_start):
+    source, seat, initial = repo
+    git(seat, "switch", "-c", "cr/OLD-001") if seat_start == "old-branch" else None
+    advance(source)
+    context, store, project = setup_job(tmp_path, seat)
+    oracle = old_first_preparation(tmp_path, seat, "cr/TOOL-001")
+    git_ops.prepare(context, project, store)
+    assert seat_result(seat) == seat_result(oracle)
+    assert git(seat, "rev-parse", "main") == git(oracle, "rev-parse", "main") != initial
+
+
+def test_first_preparation_with_a_main_ahead_of_origin_keeps_the_main_tip_as_before(tmp_path, repo, cr_bases):
+    source, seat, _ = repo
+    (seat / "ahead.txt").write_text("unpublished\n")
+    git(seat, "add", "ahead.txt")
+    git(seat, "commit", "-m", "Unpublished main commit")
+    git(seat, "switch", "--detach", "HEAD~1")
+    context, store, project = setup_job(tmp_path, seat)
+    oracle = old_first_preparation(tmp_path, seat, "cr/TOOL-001")
+    baseline = git_ops.prepare(context, project, store)
+    assert baseline["base_hash"] == git(oracle, "rev-parse", "HEAD") == git(seat, "rev-parse", "main")
+    assert seat_result(seat) == seat_result(oracle)
+
+
+def test_first_preparation_refuses_a_main_that_cannot_fast_forward(tmp_path, repo, cr_bases):
+    source, seat, initial = repo
+    (seat / "local.txt").write_text("local main work\n")
+    git(seat, "add", "local.txt")
+    git(seat, "commit", "-m", "Local main work")
+    local = git(seat, "rev-parse", "main")
+    advance(source)
+    git(seat, "switch", "--detach", "HEAD~1")
+    context, store, project = setup_job(tmp_path, seat)
+    with pytest.raises(SessionError) as error:
+        git_ops.prepare(context, project, store)
+    assert error.value.code == "git_failed"
+    assert git(seat, "rev-parse", "HEAD") == initial and git(seat, "rev-parse", "main") == local
+    assert store.read()["0"]["git_hash"] is None and cr_bases == []
+
+
+def test_first_preparation_updates_the_work_tree_once(tmp_path, repo, cr_bases):
+    """Every command that updates the work tree walks all of its files: a large NFS seat takes minutes for
+    each (PERF-005), so the first preparation runs one, not the three `switch main`, `merge`, `switch -c`."""
+    source, seat, _ = repo
+    advance(source)
+    context, store, project = setup_job(tmp_path, seat)
+    steps = []
+
+    def observe(args):
+        steps.append(args[0])
+        return contextlib.nullcontext()
+
+    with git_ops.observing(observe):
+        git_ops.prepare(context, project, store)
+    assert steps.count("switch") == 1 and "merge" not in steps and "checkout" not in steps
 
 
 def test_retry_preserves_base_and_unfinished_work(tmp_path, repo, cr_bases):
