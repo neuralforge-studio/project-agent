@@ -108,7 +108,7 @@ def make_release(root, tag, log):
     board.write_text('#!/bin/sh\necho "%s board $*" >> "%s"\n' % (tag, log))
     shutil.copy2(LAUNCHER, root / "tools")
     python = root / "installed-python"
-    python.write_text('#!/bin/sh\necho "%s decide-python $(basename "$1") nousersite=$PYTHONNOUSERSITE" >> "%s"\n' % (tag, log))
+    python.write_text('#!/bin/sh\necho "%s decide-python $1 $(basename "$2") nousersite=$PYTHONNOUSERSITE" >> "%s"\n' % (tag, log))
     (root / "tools" / "python.env").write_text("PROJECT_AGENT_PYTHON=%s\nPROJECT_AGENT_PYTHONPATH=\n" % python)
     for path in (board, python):
         path.chmod(0o755)
@@ -565,7 +565,7 @@ def test_decide_status_entry_expands_to_the_decision_script(server, tmp_path):
     attach = subprocess.Popen(["script", "-qc", "tmux -L %s attach-session -t home" % tmux.name, "/dev/null"],
                               stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        wait_for(log, "r1 decide-python tmux_decide_status.py nousersite=1", timeout=max(1, deadline - time.time()))
+        wait_for(log, "r1 decide-python -S tmux_decide_status.py nousersite=1", timeout=max(1, deadline - time.time()))
     finally:
         attach.kill()
         attach.wait()
