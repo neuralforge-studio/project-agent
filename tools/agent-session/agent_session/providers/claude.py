@@ -356,7 +356,7 @@ class ClaudeProvider:
             "register_from_hook(run_id=sys.argv[2],config_path=sys.argv[3],"
             "socket_path=sys.argv[4],expected_session_id=sys.argv[5])"
         )
-        command = shlex.join([str(context["python"]), "-c", code, str(context["library_path"]),
+        command = shlex.join([str(context["python"]), "-S", "-c", code, str(context["library_path"]),
                               str(context["run_id"]), str(context["config_path"]),
                               str(context["socket_path"]), identity])
         hooks = {}

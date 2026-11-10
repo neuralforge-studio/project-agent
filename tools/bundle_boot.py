@@ -18,6 +18,10 @@ module's code is read when the module is imported.
 
 Anything that does not fit (no file, another interpreter build, `-O`, a damaged header) leaves the ordinary
 import in charge; a module that is not in the bundle is found where it always was.
+
+The finder it installs has the class attribute `project_agent_bundle = True`. A caller that may run after
+another one (`agent_session/__init__.py`, which starts the processes the generated commands run: hook,
+controller, `mark_process`) looks for it in `sys.meta_path` and does not install a second finder.
 """
 
 
@@ -57,6 +61,8 @@ def _project_agent_bundle(tools_directory):
     start = 4 + size
 
     class BundleFinder:
+        project_agent_bundle = True
+
         @staticmethod
         def _origin(name):
             origin = modules[name][3]
