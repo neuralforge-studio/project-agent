@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: PERF-001, SESSION-010, SESSION-012
 - Base: 78e6f77fb5e9bbc28d361fe8c9af9bdddfd0050b 2026-11-10T15:56:42+09:00
+- Outcome: fixed
 
 ## Symptom
 project 16개 × seat 16개에서 Worker `start`의 등록 hook(SessionStart)이 seat 수와 host 부하에 비례해 길어져 한도(`_HOOK_BUDGET` 25초, settings의 hook timeout 30초)에 닿습니다. 부하가 높으면 `start`가 `registration_failed`로 실패합니다. hook이 timeout으로 강제 종료되면 실패 기록이 남지 않아 `start`가 약 600초를 기다린 뒤에야 끝납니다. 사용자가 물은 규모(2026-11-10: "project가 굉장히 여러개 일때도? 예를 들어 각 seat가 16개씩 project 16개?")에서 Worker를 시작할 수 없는 결함입니다.
@@ -31,6 +32,7 @@ project 16개 × seat 16개에서 Worker `start`의 등록 hook(SessionStart)이
 - 2026-11-10 Leader: 고친다(Leader 판정). 재현 측정이 있는 결함입니다. 사용자가 물은 규모에서 Worker 시작이 실패합니다.
 - 2026-11-10 Leader: open -> todo. 16x16에서 start 실패, 재현 측정 있음
 - 2026-11-10 Leader: 제출 3cb144015197000574d90e9781da355442df93a2를 인수합니다. 검토 3cb1440(구현 81d4322 + main 2e73d06·c784f59 merge, providers/는 main과 같음). Tmux.current_with_run(포인터 한 번 읽기, 이 run을 가리키는 slot만 window 읽기; 포인터의 run_id는 v0.1.0부터 _IDENTITY에 있어 옛 run과도 맞습니다), register_from_hook의 두 번째 _run 제거, hook_started 기록과 start 대기의 종료 판정(재읽기 뒤 ready·start_error 우선, remote seat 제외), process.age로 센 hook deadline(최대 10초 차감), 명세 문구를 읽었습니다. README 표 행(tools/agent-session/**: 833 passed, spec.md의 test_remote 포함)과 merge가 입력을 바꾼 네 번째 명령(130 passed)을 merge commit에서 실행했습니다. 수정 전 실패하는 hook 강제 종료 test, seat 2·6·16 호출 수 test가 있습니다. 16x16 A/B start wall 0.71·CPU 0.72 improved, v0.4.0은 start 2회 registration_failed였고 후보 timing pass는 6회 모두 성공. 한도 조정 제안과 hook의 MCP 시동 비용은 후속 CR로 Leader가 판정합니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 1999c5d (origin/main)
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [동작 명세](../../project-team/spec.md)의 등록·게시(3절, 5절), `tools/agent-session/agent_session/internal.py`, `providers/claude.py`, SESSION-010의 `ServerView`, 측정 도구 `tools/tests/perf/perf_bench.py` 머리말(가짜 `claude`의 `hooks.log`), [project-team Worker 절](../../../skills/project-team/SKILL.md).
