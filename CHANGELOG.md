@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
+
+## 0.7.1 - 2026-11-11
+
 - BOARD-017
 
 형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
