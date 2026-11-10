@@ -4,9 +4,14 @@
 
 ## Unreleased
 
+형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
+
+## 0.6.0 - 2026-11-10
+
 - PERF-004
 - SESSION-013
 - SESSION-014
+- PERF-005
 
 형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
 

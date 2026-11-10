@@ -44,13 +44,13 @@ def test_git_preparation_stops_at_the_deadline_and_names_its_step(session_env, m
     err = error.value
     assert (err.code, err.exit_code) == ("timeout", 4)
     assert err.details["stage"] == "git"
-    assert err.details["step"].startswith("merge --ff-only")
+    assert err.details["step"].startswith("rev-parse --verify refs/remotes/origin/main")
     assert err.details["retry_safe"] is True
     assert (err.details["job_id"], err.details["seat"]) == (job, 0)
     assert [item["step"] for item in err.details["git_steps"]][-1] == "fetch origin main"
     assert "git" in err.details["elapsed"] and "assignment" in err.details["elapsed"]
     # No Git command was started after the deadline: nothing runs on, and nothing is half applied.
-    assert not any(line.startswith(("merge", "switch -c", "switch --no-overwrite-ignore -c", "submodule"))
+    assert not any(line.startswith(("merge", "switch", "branch", "symbolic-ref", "submodule"))
                    for line in started[started.index("fetch origin main"):])
     assert git(env.seats[0], "status", "--porcelain") == ""
 
