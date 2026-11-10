@@ -78,6 +78,152 @@ def claude(tmp_path, monkeypatch):
     return provider, fake, context, meta, prepared
 
 
+class CountingMCP(FakeMCP):
+    """A factory's clients: one FakeMCP per start, so that the starts and the closes can be counted."""
+
+    def __init__(self, failures=()):
+        super().__init__()
+        self.started, self.closed, self.calls = 0, 0, 0
+        self.failures = list(failures)               # error codes that the next ListAgents calls raise, in order
+
+    def __call__(self, argv, timeout):
+        self.started += 1
+        return self
+
+    def __exit__(self, *unused):
+        self.closed += 1
+
+    def tool(self, name, arguments):
+        self.calls += 1
+        if self.failures:
+            code = self.failures.pop(0)
+            if code:
+                raise SessionError(code, "fixture failure", 4)
+        return super().tool(name, arguments)
+
+
+def test_observations_in_a_reusing_block_share_one_mcp_server_however_many_there_are(claude):
+    provider, fake, context, meta, _ = claude
+    counting = CountingMCP()
+    provider.mcp_factory = counting
+    session = {"session_id": IDENTITY}
+    provider.observe(session, context, meta)
+    assert (counting.started, counting.closed) == (1, 1)                 # outside the block each observe has its own
+    with provider.reusing_client(30):
+        for _ in range(12):
+            assert provider.observe(session, context, meta)["listed"] is True
+        assert (counting.started, counting.closed) == (2, 1)
+    assert (counting.started, counting.closed, counting.calls) == (2, 2, 13)
+
+
+def test_a_reusing_block_inside_another_adds_no_server_and_an_unused_one_starts_none(claude):
+    provider, _, context, meta, _ = claude
+    counting = CountingMCP()
+    provider.mcp_factory = counting
+    with provider.reusing_client(30):
+        with provider.reusing_client(30):
+            provider.observe({"session_id": IDENTITY}, context, meta)
+        provider.observe({"session_id": IDENTITY}, context, meta)
+        assert counting.closed == 0
+    with provider.reusing_client(30):
+        pass
+    assert (counting.started, counting.closed) == (1, 1)
+
+
+def test_a_shared_server_that_ended_between_two_calls_is_replaced_once(claude):
+    provider, _, context, meta, _ = claude
+    counting = CountingMCP(failures=[None, "provider_connection_closed"])
+    provider.mcp_factory = counting
+    with provider.reusing_client(30):
+        provider.observe({"session_id": IDENTITY}, context, meta)
+        assert provider.observe({"session_id": IDENTITY}, context, meta)["listed"] is True
+        assert (counting.started, counting.closed) == (2, 1)             # the dead one was closed, a new one asked
+    assert (counting.started, counting.closed) == (2, 2)
+
+
+def test_a_fresh_server_that_fails_is_not_retried_and_the_next_call_starts_another(claude):
+    provider, _, context, meta, _ = claude
+    counting = CountingMCP(failures=["provider_connection_closed", "provider_timeout"])
+    provider.mcp_factory = counting
+    with provider.reusing_client(30):
+        for code in ("provider_connection_closed", "provider_timeout"):
+            with pytest.raises(SessionError) as caught:
+                provider.observe({"session_id": IDENTITY}, context, meta)
+            assert caught.value.code == code
+        assert (counting.started, counting.closed) == (2, 2)
+        assert provider.observe({"session_id": IDENTITY}, context, meta)["listed"] is True
+    assert (counting.started, counting.closed) == (3, 3)
+
+
+def test_a_shared_server_stays_after_an_answer_about_the_session(claude):
+    provider, fake, context, meta, _ = claude
+    import os
+    from agent_session.process import birth
+
+    counting = CountingMCP()
+    provider.mcp_factory = counting
+    meta.update(cli_pid=os.getpid(), cli_birth=birth(os.getpid()), pane_dead=False)     # a live CLI: not listed is an error
+    with provider.reusing_client(30):
+        counting.listing = listing(pane="%99")                             # this pane is not listed: an answer, not a failure
+        with pytest.raises(SessionError) as caught:
+            provider.observe({"session_id": IDENTITY}, context, meta)
+        assert caught.value.code == "session_not_bound"
+        counting.listing = listing()
+        assert provider.observe({"session_id": IDENTITY}, context, meta)["listed"] is True
+        assert counting.started == 1
+
+
+def test_the_end_of_a_shared_server_is_not_hidden_by_the_block_ending_with_an_error(claude):
+    provider, _, context, meta, _ = claude
+    counting = CountingMCP()
+    provider.mcp_factory = counting
+    with pytest.raises(RuntimeError):
+        with provider.reusing_client(30):
+            provider.observe({"session_id": IDENTITY}, context, meta)
+            raise RuntimeError("the wait loop failed")
+    assert (counting.started, counting.closed) == (1, 1) and provider._reused is None
+
+
+def test_mcp_close_does_not_wait_a_second_for_a_server_that_ignores_the_end_of_its_input(tmp_path):
+    # Claude's `mcp serve` keeps running when its stdin closes; only SIGTERM ends it.
+    server = tmp_path / "server.py"
+    server.write_text(
+        "import json, signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    if 'id' not in request: continue\n"
+        "    result = {'tools': [{'name': 'ListAgents'}, {'name': 'SendMessage'}]} if request['method'] == 'tools/list' else {}\n"
+        "    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)\n"
+        "while True: time.sleep(60)\n")
+    client = MCPClient([sys.executable, "-u", str(server)], 30)
+    with client:
+        process = client.process
+    assert process.poll() is not None and MCPClient.EXIT_GRACE < 1
+
+
+def test_parse_peers_reads_a_long_listing_by_row_and_keeps_the_rule_for_odd_names():
+    rows, lines = [], []
+    for n in range(300):
+        rows.append({"name": f"p{n // 16:02}-seat-{n % 16}", "ref": f"{n:06x}", "status": "idle"})
+        lines.append(f"  p{n // 16:02}-seat-{n % 16} [{n:06x}]  ·  interactive  ·  idle  ·  tmux project:@{n}.%{n}  ·  started 1h ago")
+    # A name that holds "] " is found as before, and a pane that is not in tmux is left out.
+    rows.append({"name": "odd] name", "ref": "abc123", "status": "idle"})
+    lines.append("  odd] name [abc123]  ·  interactive  ·  idle  ·  tmux project:@999.%999  ·  started 1h ago")
+    rows.append({"name": "plain", "ref": "ffffff", "status": "idle"})
+    lines.append("  plain [ffffff]  ·  interactive  ·  idle  ·  started 1h ago")
+    peers = parse_peers({"listing": "Peer sessions:\n" + "\n".join(lines), "sections": [{"kind": "sessions", "rows": rows}]})
+    assert len(peers) == 301
+    assert peers[0]["pane_id"] == "%0" and peers[299]["window_id"] == "@299" and peers[299]["message_to"] == "p18-seat-11 [00012b]"
+    assert peers[300]["message_to"] == "odd] name [abc123]" and peers[300]["pane_id"] == "%999"
+    with pytest.raises(SessionError) as caught:                          # a line twice: the listing does not agree
+        parse_peers({"listing": lines[0] + "\n" + lines[0], "sections": [{"kind": "sessions", "rows": [rows[0]]}]})
+    assert caught.value.code == "provider_protocol_error"
+    with pytest.raises(SessionError) as caught:                          # a row without its line
+        parse_peers({"listing": lines[1], "sections": [{"kind": "sessions", "rows": [rows[0]]}]})
+    assert caught.value.code == "provider_protocol_error"
+
+
 def test_claude_native_ref_is_not_a_uuid_prefix(claude):
     provider, _, context, meta, _ = claude
     result = provider.verify_binding({"session_id": IDENTITY, "message_to": "old [123456]"}, context, meta)
@@ -603,42 +749,3 @@ def test_transcript_files_follow_claudes_directory_naming(tmp_path, monkeypatch)
     # Without a directory every project directory is searched, in the same config directory.
     assert transcript_files(None, IDENTITY) == [folder / f"{IDENTITY}.jsonl"]
     assert transcript_files(None, "other") == [] and transcript_files(None, "../" + IDENTITY) == []
-
-
-def test_the_binding_check_does_not_wait_for_a_server_that_outlives_its_input(claude):
-    """SESSION-011. `claude mcp serve` keeps running when its input closes, so the wait on close (1 second) was
-    always spent in the hook. The check sent nothing; only `send` still waits for the server to finish."""
-    provider, fake, context, meta, _ = claude
-    provider.verify_binding({"session_id": IDENTITY}, context, meta)
-    assert fake.grace == 0
-    del fake.grace
-    provider.send({"session_id": IDENTITY, "message_to": "worker [6d267e]"}, "text", context)
-    assert not hasattr(fake, "grace")
-
-
-def test_closing_the_client_waits_only_as_long_as_its_grace():
-    waits = []
-
-    class Server:
-        def __init__(self):
-            self.stdin = type("Pipe", (), {"closed": False, "close": lambda s: None})()
-            self.stdout = type("Pipe", (), {"close": lambda s: None})()
-            self.ended = False
-
-        def wait(self, timeout=None):
-            waits.append(timeout)
-            if not self.ended:
-                self.ended = bool(waits[1:])                    # it ends once it is terminated
-                if not self.ended:
-                    raise subprocess.TimeoutExpired("server", timeout)
-
-        def terminate(self):
-            pass
-
-    for grace in (1, 0):
-        del waits[:]
-        client = MCPClient([sys.executable])
-        client.grace = grace
-        client.process = Server()
-        client.close()
-        assert waits[0] == grace

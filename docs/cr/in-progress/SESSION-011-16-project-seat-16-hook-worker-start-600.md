@@ -51,3 +51,60 @@ project 16개 × seat 16개에서 Worker `start`의 등록 hook(SessionStart)이
 4. hook 경로의 tmux 실행 수가 seat 수와 무관하다는 호출 수 test.
 5. README 검증 표에서 바꾼 경로의 행을 모두 실행합니다(`-rf`). `api.py`·state 형식·tmux option을 바꾸면 project-item·project-board·`install/tests`도 실행합니다.
 6. 제출 전에 `origin/main`이 움직여 위 명령의 입력을 바꿨으면 merge하고 merge commit에서 다시 실행합니다.
+
+## Result
+- 제출 commit: cfb0da4037c8f70cc023794eb7ec87ee7c8c4652
+
+`origin/main`(9d746d8, 측정 도구 새 판)을 merge한 commit입니다. `cr/SESSION-011`을 push했습니다. 아래 test는 이 commit에서 실행했습니다.
+
+### 원인 (1단계 시간 분해, 수정 전 측정)
+가짜 `claude`와 sitecustomize 추적(분석용, 저장소에는 없음)으로 hook 한 번의 단계를 쟀습니다.
+
+| 규모(host load) | hook 전체 | interpreter+import | `_run` 2회 | MCP 시동 | `close` | 게시 | hook의 subprocess |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 4×4 (42) | 6.4초 | 1.96초 | 0.97+0.68초 | 0.87초 | 1.0초 | 0.32초 | tmux 37 + claude 1 |
+| 4×4 (64) | 8.0초 | 2.19초 | 1.08+0.92초 | 1.07초 | 1.0초 | 0.45초 | tmux 37 + claude 1 |
+| 16×16 (78) | 27.2초, `registration_failed` | 6.6초 | 7.25+4.22초 | 2.25초 | 1.02초 | - | tmux 76 + claude 1 |
+
+- `_run`이 `leader`와 모든 seat의 `get_current`를 불러(slot마다 tmux 2번) hook이 run을 두 번 찾았습니다(`register_from_hook`과 `_register`). 4×4에서 tmux 37번, 16×16에서 76번이고, 16×16에서는 이 두 호출이 11.5초였습니다.
+- `MCPClient.close`가 입력을 닫은 뒤 종료를 1초 기다립니다. 실제 `claude mcp serve`를 3번 확인했을 때 2번은 입력이 닫혀도 5초 뒤까지 계속 실행했습니다(1번은 0.26초 만에 종료). 그래서 이 1초는 대개 낭비입니다.
+- hook의 25초 deadline은 hook이 import를 마친 뒤부터 쟀습니다. Claude의 30초 제한은 process 시작부터 세므로, 부하로 interpreter 시동에 6.6초가 걸리면 hook이 자기 실패를 기록하기 전에 죽을 수 있습니다(그러면 `start`는 600초를 기다림).
+- 그 밖에 slot·project 수에 비례하는 일: 등록 파일 읽기는 16×16 규모에서 0.05~0.08초라 무시할 수 있습니다.
+- 진짜 `claude mcp serve`의 시동(initialize)은 load 약 75에서 7.8~8.2초, 다른 한 번은 31.8초였습니다(측정 중 host load가 321까지 올랐습니다). 이 시간은 이 저장소가 줄일 수 없습니다(아래 제안).
+
+### 변경 (`tools/agent-session`, `docs/project-team/spec.md`)
+1. `Tmux.current_with_run`: 한 번의 tmux 읽기로 모든 slot의 포인터를 읽고 이 run_id를 가리키는 slot의 window만 읽습니다. `_run`은 tmux 2번이고 seat 수와 무관합니다. `register_from_hook`이 찾은 run을 `_register(resolved=)`에 넘겨 두 번째 `_run`을 없앴습니다.
+2. `hook_started`(새 module): SessionStart hook이 binding 확인 전에 `agent/runs/<run_id>/hook-started.json`(PID·birth)을 씁니다. `start`의 대기 루프가 그 hook process의 종료를 보고, run이 `ready`도 `start_error`도 아니면 window를 한 번 더 읽은 뒤 `registration_failed`(`hook_error.code = registration_hook_ended`)로 끝냅니다. 새 tmux option·state 필드·JSON 필드는 없습니다(run 디렉터리 파일은 `ended.json`과 같은 종류의 진단 기록). 형식 버전은 올리지 않습니다.
+3. hook deadline을 hook process의 생성 시각부터 셉니다(`process.age`, 시동에 쓴 시간은 최대 10초까지만 뺍니다).
+4. binding 확인(`verify_binding`)은 MCP client를 닫을 때 1초를 기다리지 않고 바로 종료 신호를 보냅니다. `send`는 이전과 같습니다. Claude CLI와의 계약(`claude mcp serve`, ListAgents)은 그대로입니다.
+5. 동작 명세의 해당 절(등록 deadline, `start_error`와 hook 종료 판정, run 디렉터리, MCP 종료)을 고쳤습니다.
+
+### 검증
+- `python -m pytest -q -n 8 tools/agent-session/tests` → **825 passed** (30분, `cfb0da4`). README 표의 `tools/agent-session/**` 행입니다. `api.py`·`state.py`·tmux option 이름은 바꾸지 않아 project-item·project-board·`install/tests`는 실행하지 않았습니다.
+- `python -m pytest -q tools/test_distribution_boundary.py` → 9 passed. `docs/project-team/spec.md`의 상대 link 검사 이상 없음. 원격 guidance 문서는 위 agent-session test(`test_remote.py`)에 포함됩니다.
+- 새 test (Verification 3·4):
+  - `test_start_reports_a_hook_that_ended_without_a_result_before_its_timeout`(hook을 SIGKILL로 죽임, `registration_failed`, 120초 timeout 안에 끝나고 60초 미만). **감지 조건을 끄면 실패합니다**(120초 뒤 `timeout`, 확인함). 재실행한 start가 같은 오류를 바로 반환함도 확인합니다.
+  - `test_a_hook_that_ends_after_it_published_is_not_a_failed_registration`(hook이 게시하고 끝나는 경합).
+  - `test_finding_the_run_of_a_hook_starts_two_tmux_processes_whatever_the_seats`(seat 2·6·16 모두 tmux ≤ 2; 수정 전은 2×(seat+1)). `test_a_registration_starts_the_same_tmux_processes_whatever_the_seats`(찾기·binding·게시 전체가 seat 2·6·16 모두 tmux 10번).
+  - `current_with_run`의 판정, hook 시작 기록·종료 판정, deadline, `process.age`, MCP `close`의 grace test.
+
+### A/B 측정 (Verification 1·2, 새 측정 도구 9d746d8)
+`perf_bench.py run --exe v040=<v0.4.0 트리> --exe cand=<이 checkout> --scales 4x4,16x16 --groups lifecycle --reps 3 --slow-reps 3 --cold-reps 0`. 가짜 `claude`. host load는 4×4에서 38~127, 16×16에서 45~80이었습니다(같은 host의 다른 작업 때문에 높음). 값은 median [95% 구간]이고 판정은 도구의 improved/same/worse입니다.
+
+| 규모 | start (Worker) wall 초 | start CPU 초 | start tmux(count) | hook의 tmux(count) |
+| --- | --- | --- | --- | --- |
+| 4×4 | 50.1 [40.3-66.8] → 42.8 [36.7-57.8] (same) | 3.59 → 2.96 (**improved**) | 198 → 118.5 | 54 → 20 |
+| 16×16 | 41.4 [35.6-49.0] → 29.5 [24.5-38.1] (**improved**, 0.71) | 4.75 → 3.43 (**improved**, 0.72) | - | 117 → 11(count pass가 실패해 부분 값) |
+
+- 4×4에서 restart·send·stop의 CPU도 모두 improved(0.76~0.89배)입니다.
+- **16×16에서 시작 실패**: v0.4.0은 start 시도 중 2번이 `registration_failed`("Claude MCP did not reply before the deadline")였습니다(load 65 count pass, load 79.6 timing pass). 후보는 timing pass 6번이 모두 성공했고(load 45~71, 그중 load 70.8에서도 성공), 실패는 count pass(tmux·git·ps shim을 PATH에 둬 느림) 1번(load 80)뿐입니다. 한도에 닿는 일이 사라진 것은 아닙니다(아래).
+- 16×16의 restart·send·stop·finish_ended는 v0.4.0의 start 실패로 일부 반복이 빠져 비교 구간이 없습니다(표본 2/3). 비교 가능한 행은 위 start뿐입니다.
+- 측정 환경이 없어졌으므로 hook 단계 시간(hooks.log)은 최종 비교에 없습니다. 위 "원인" 표는 수정 전 단계 시간입니다. 수정 후의 hook 시간은 직접 재지 못했습니다(16×16 환경 구축이 15분 걸림). 수정 후 hook의 tmux 수와 단계 비용은 호출 수 test와 4×4의 hook tmux 54→20으로 갈음합니다.
+
+### 한도 조정 제안 (5단계, Leader 판단 필요)
+1~4로 hook의 일은 줄었지만, 한도에 닿지 않는다고는 증명하지 못했습니다. 근거: (1) 후보도 load 80 count pass에서 MCP 응답을 기다리다 25초 deadline(binding은 deadline−6초까지)에 걸렸습니다. (2) 진짜 `claude mcp serve`의 시동만 load 약 75에서 8초, 최악 31.8초였습니다. 그래서 hook의 settings timeout(30초)과 `_HOOK_BUDGET`(25초)을 올리는 방안을 제안합니다. 예: timeout 60초, budget 50초(`_PUBLISH_RESERVE` 6초·`_BINDING_TIMEOUT` 20초도 함께 검토). 이 조정은 spec·settings·hook timeout test를 함께 바꾸는 변경이라 이 제출에는 넣지 않았습니다. 한도만 늘리는 것은 해법이 아니므로 위 1~4를 먼저 제출합니다.
+- 되풀이 확인에서 MCP client를 다시 띄우지 않는 개선(3단계 예시)은 하지 않았습니다. 수정 전 측정에서 재시도가 발생한 근거가 없었고(ListAgents가 pane을 못 찾는 경우만 반복), provider 인터페이스를 바꾸는 일이라 근거 없이 넣지 않았습니다.
+
+### 근거 재사용·재실행
+- 검증 명령은 모두 제출 commit `cfb0da4`(merge 뒤)에서 실행했습니다. merge가 가져온 변경은 측정 도구(`tools/tests/perf`)와 CR 문서라 agent-session test의 입력을 바꾸지 않습니다.
+- SESSION-012와 `lifecycle.py`·`providers/claude.py`가 겹칠 수 있다고 CR에 적혔습니다. 제출 시점 `origin/main`에는 SESSION-012의 코드가 들어오지 않았습니다.

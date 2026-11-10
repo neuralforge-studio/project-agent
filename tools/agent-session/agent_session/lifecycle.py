@@ -1,6 +1,6 @@
 """Project session commands, Git preparation, and confirmed slot release."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import datetime
 import os
 import shlex
@@ -847,38 +847,39 @@ class Manager(SuspendMixin, WatchMixin):
             if meta.get("control_pending") and expected_run is None:
                 raise SessionError("control_busy", "This run has an accepted control request.", 4)
             carried = self._require_handoff(meta) if operation == "restart" else None
-            if not meta.get("registered") and meta.get("provider_launch_attempted") is False and operation == "stop":
-                self.tmux.request_placeholder_stop(meta["window_id"])
-                exit_sent = True
-            else:
-                session = self._session(meta)
-                observed = self.provider.request_stop(session, meta, meta, timeout=self.remaining())
-                self._record_background_clear(meta, observed)
-                exit_sent = False
-            self.tmux.write_meta(meta["window_id"], {"stopping": True})
-            last = None
-            try:
-                while True:
-                    try:
-                        observed = self._observe(meta)
-                    except SessionError as error:
-                        # After the exit request, leaving the provider's listing is part of the end.
-                        # Keep watching the same CLI and pane until the wait limit expires.
-                        if not exit_sent or error.code != "session_not_bound":
-                            raise
-                        observed = None
-                    if observed is not None:
-                        last = observed
-                        if observed["stopped"]:
-                            break
-                        if observed.get("idle") and not exit_sent:
-                            self.provider.request_exit(meta, self.tmux)
-                            exit_sent = True
-                    time.sleep(min(0.1, self.remaining()))
-            except BaseException as error:
-                self._restore_stopping(meta, error)
-                _note_exit_wait(error, exit_sent, last)
-                raise
+            with self._reusing_provider_client():
+                if not meta.get("registered") and meta.get("provider_launch_attempted") is False and operation == "stop":
+                    self.tmux.request_placeholder_stop(meta["window_id"])
+                    exit_sent = True
+                else:
+                    session = self._session(meta)
+                    observed = self.provider.request_stop(session, meta, meta, timeout=self.remaining())
+                    self._record_background_clear(meta, observed)
+                    exit_sent = False
+                self.tmux.write_meta(meta["window_id"], {"stopping": True})
+                last = None
+                try:
+                    while True:
+                        try:
+                            observed = self._observe(meta)
+                        except SessionError as error:
+                            # After the exit request, leaving the provider's listing is part of the end.
+                            # Keep watching the same CLI and pane until the wait limit expires.
+                            if not exit_sent or error.code != "session_not_bound":
+                                raise
+                            observed = None
+                        if observed is not None:
+                            last = observed
+                            if observed["stopped"]:
+                                break
+                            if observed.get("idle") and not exit_sent:
+                                self.provider.request_exit(meta, self.tmux)
+                                exit_sent = True
+                        time.sleep(min(0.1, self.remaining()))
+                except BaseException as error:
+                    self._restore_stopping(meta, error)
+                    _note_exit_wait(error, exit_sent, last)
+                    raise
             self._retire_name(meta)
             if meta.get("remote_native"):
                 from .remote_lifecycle import detach
@@ -896,6 +897,11 @@ class Manager(SuspendMixin, WatchMixin):
                 # after it saved its result, when its own pending window may close.
                 return {**result, "deferred_cleanup": meta["target"]} if defer_cleanup else result
             return self._settle(meta, defer_cleanup)
+
+    def _reusing_provider_client(self):
+        """One provider connection for the observations of a wait loop, when the provider can share it."""
+        reusing = getattr(self.provider, "reusing_client", None)
+        return reusing(self.remaining()) if reusing else nullcontext()
 
     def _settle(self, meta, defer_cleanup=False):
         """What follows the confirmed end of a run, under its control lock: release or hold the slot, then clean up.

@@ -1265,6 +1265,57 @@ def test_claude_stop_signals_its_cli_and_types_nothing_in_the_pane(session_env, 
     assert "/exit" not in env.tmux.capture_pane(worker["pane_id"])
 
 
+def sharing_claude_project(env, monkeypatch):
+    """A Claude project whose provider shares one connection inside `reusing_client`; returns the event list."""
+    import contextlib
+    import agent_session.lifecycle as lifecycle
+    from agent_session_fake_provider import FakeClaudeProvider
+
+    events = []
+
+    class Sharing(FakeClaudeProvider):
+        @contextlib.contextmanager
+        def reusing_client(self, timeout):
+            events.append("open")
+            try:
+                yield
+            finally:
+                events.append("close")
+
+        def observe(self, session, context, meta=None, timeout=30):
+            events.append("observe")
+            return super().observe(session, context, meta, timeout)
+
+    claude_project(env, monkeypatch)
+    monkeypatch.setattr(lifecycle, "get_provider", lambda name: Sharing())
+    return events
+
+
+def test_stop_shares_one_provider_connection_for_all_its_observations(session_env, monkeypatch):
+    env = session_env
+    events = sharing_claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    del events[:]
+    result = env.manager().control("stop", job=worker["job_id"])
+    assert result["stopped"] is True
+    # Every observation of the stop (the idle wait, the exit wait) lies between one open and one close;
+    # the number of observations does not change the number of connections.
+    assert events[0] == "open" and events[-1] == "close" and events.count("open") == events.count("close") == 1
+    assert events.count("observe") >= 2 and "open" not in events[1:] and "close" not in events[:-1]
+
+
+def test_stop_that_times_out_still_closes_the_shared_provider_connection(session_env, monkeypatch):
+    env = session_env
+    events = sharing_claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    (env.base / "agent" / "fixture-shell-seat-0").write_text("")
+    del events[:]
+    with pytest.raises(SessionError) as error:
+        env.manager(timeout=3).control("stop", job=worker["job_id"])
+    assert error.value.code == "timeout"
+    assert events.count("open") == events.count("close") == 1 and events[-1] == "close"
+
+
 def test_claude_stop_that_times_out_on_a_background_shell_names_it_without_signalling(session_env, monkeypatch):
     env = session_env
     record = claude_project(env, monkeypatch)

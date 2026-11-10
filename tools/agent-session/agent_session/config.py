@@ -126,8 +126,9 @@ def _seat(value, base, provider):
     return RemoteSeat(host, PurePosixPath(path), python)
 
 
-def _overlap(first, second):
-    return first == second or first in second.parents or second in first.parents
+def _overlap(first, first_parents, second, second_parents):
+    """Whether two paths are equal or nested; the parents are each path's own `frozenset(path.parents)`."""
+    return first == second or second in first_parents or first in second_parents
 
 
 def _launch_args(value, base_key):
@@ -190,12 +191,13 @@ def load_registry(config_path=None):
             if not _text(entry[key]):
                 raise SessionError("registry_invalid", f"{key} must be a nonempty path.", 2, {"base": base_key})
             items[key] = _path(entry[key], base)
-            for other, owner, other_key in item_roots:
-                if _overlap(items[key], other):
+            parents = frozenset(items[key].parents)           # once per path: not again for every other root
+            for other, other_parents, owner, other_key in item_roots:
+                if _overlap(items[key], parents, other, other_parents):
                     raise SessionError("registry_invalid", "Item paths must not be equal or nested.", 2,
                                        {"path": str(items[key]), "other": str(other),
                                         "items": [f"{owner}.{other_key}", f"{name}.{key}"]})
-            item_roots.append((items[key], name, key))
+            item_roots.append((items[key], parents, name, key))
         launch = _launch_args(entry[LAUNCH_KEY], base_key) if LAUNCH_KEY in entry else {}
         names.add(name)
         projects.append(Project(base, base_key, name, provider, resolved_seats, path, **items,

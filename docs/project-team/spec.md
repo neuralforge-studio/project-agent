@@ -702,7 +702,7 @@ Managed 정책이나 기존 refuse/deny가 이를 막으면 오류로 알리며 
 수신 정책의 적용 범위는 [Claude 공식 문서](https://code.claude.com/docs/en/cross-session-messaging#control-inbound-messages)를 따릅니다.
 
 외부 script 전송은 요청마다 `claude mcp serve`를 시작합니다.
-MCP initialize → tools/list → ListAgents → SendMessage → host 종료 순서입니다. `claude mcp serve`는 입력이 닫혀도 대개 계속 실행하므로 입력을 닫은 뒤 종료를 기다리는 시간(1초)이 지나면 종료 신호를 보냅니다. 아무것도 보내지 않는 등록의 binding 확인은 기다리지 않고 바로 종료 신호를 보냅니다.
+MCP initialize → tools/list → ListAgents → SendMessage → host 종료 순서입니다.
 현재 도구의 inputSchema를 사용하며 직접 메시지 socket protocol을 구현하지 않습니다.
 ListAgents의 이름·ref는 UUID에서 계산하지 않습니다.
 SessionStart의 실제 UUID·cwd와 관리 pane·PID를 먼저 결합합니다.
