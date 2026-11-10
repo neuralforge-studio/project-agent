@@ -31,6 +31,20 @@ MOUSE_DEFAULT = r"select-pane -t = \; send-keys -M"
 
 pytestmark = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 
+# The user's cache and settings are not an input of these tests: tmux_decide_status.sh prints a valid view
+# file of the user's status line without running the interpreter. Every tmux server below runs with these
+# empty directories instead (set by the autouse fixture `empty_user_dirs`).
+USER_DIRS = {}
+
+
+@pytest.fixture(autouse=True)
+def empty_user_dirs(tmp_path, monkeypatch):
+    for name, variable in (("user-home", "HOME"), ("user-cache", "XDG_CACHE_HOME")):
+        (tmp_path / name).mkdir()
+        monkeypatch.setitem(USER_DIRS, variable, str(tmp_path / name))
+    for variable in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"):
+        monkeypatch.delenv(variable, raising=False)
+
 
 class Server:
     def __init__(self, binary="tmux"):
@@ -39,7 +53,7 @@ class Server:
         self.run("new-session", "-d", "-s", "home", "sleep", "300")
 
     def run(self, *args, check=True):
-        env = {key: value for key, value in os.environ.items() if key != "TMUX"}
+        env = {**{key: value for key, value in os.environ.items() if key != "TMUX"}, **USER_DIRS}
         proc = subprocess.run([self.binary, "-L", self.name, "-f", "/dev/null", *args], env=env,
                               capture_output=True, text=True, timeout=20)
         if check and proc.returncode:
@@ -552,7 +566,14 @@ def test_installed_link_is_kept_and_the_next_call_follows_an_upgrade(server, tmp
     wait_for(log, "r2 board sync --socket")
 
 
-def test_decide_status_entry_expands_to_the_decision_script(server, tmp_path):
+@pytest.mark.parametrize("user_view", [False, True], ids=["no-user-view", "valid-user-view"])
+def test_decide_status_entry_expands_to_the_decision_script(server, tmp_path, monkeypatch, user_view):
+    """A valid view in the user's cache (`$XDG_CACHE_HOME`) does not make the status line skip the interpreter."""
+    if user_view:
+        cache = tmp_path / "planted-cache"
+        cache.mkdir()
+        (cache / "tmux-decide-status.view").write_text("%d\nUSER-STATUS-LINE" % (time.time() + 3600))
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
     log = tmp_path / "log"
     release = make_release(tmp_path / "releases" / "r1", "r1", log)
     (tmp_path / "current").symlink_to(release)
