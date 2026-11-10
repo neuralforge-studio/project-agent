@@ -620,6 +620,7 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | caller(project, tmux=None, store=None) | 이 명령을 실행하는 쪽을 `(slot, session_id)`로 반환. slot은 `leader`·`seat-N`·`operator`(관리 실행 밖 CLI, session_id는 None)·`unmanaged-agent`(이 project의 구성원이 아닌 agent). 환경의 대화 ID를 state의 binding과 대조하고, 없으면 관리 실행의 tmux pane으로 판정. project 도구의 유일한 caller 규칙 |
 | require_live(project, slot, identity, tmux=None) | Leader·Worker caller의 slot이 아직 그 대화의 살아 있는 관리 CLI를 가졌는지 확인. 아니면 `caller_not_running` 오류. 반환값 없음 |
 | load_registry(config_path=None) | 등록 파일의 모든 project 튜플을 반환([2절](#2-등록과-프로젝트-선택)) |
+| registry_path(config_path=None) | 등록 파일 하나를 골라 절대 경로를 반환. 주면 그 파일, 없으면 표준 위치 후보([2절](#2-등록과-프로젝트-선택))에서 고름. 파일이 없으면 `registry_not_found`. 등록 파일의 변경을 stat으로 알아야 하는 consumer(Board)가 `load_registry`와 같은 파일을 가리키게 함 |
 | resolve_project(cwd=None, config_path=None) | 현재 디렉토리를 포함하는 가장 깊은 등록 base·seat의 project를 반환. 없거나 모호하면 `SessionError` |
 | RemoteSeat | 원격 Worker seat의 등록 항목 형식. `Project.seats`의 원소가 이 형식이면 원격 seat |
 | SessionError | 공통 오류. `code`·`message`·`exit_code`·`details` |
