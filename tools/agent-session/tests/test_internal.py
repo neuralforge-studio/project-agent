@@ -1,5 +1,6 @@
 """Registration regression tests across real tmux and canonical state."""
 
+import contextlib
 import io
 import json
 import os
@@ -454,6 +455,31 @@ def _not_listed():
                         {"retryable": True})
 
 
+def test_the_retries_of_the_binding_check_share_one_provider_connection(native_slot, monkeypatch):
+    """SESSION-013. Each look used to start `claude mcp serve` again (8-32 s under load); one block serves them all."""
+    events = []
+
+    class Provider:
+        @contextlib.contextmanager
+        def reusing_client(self, timeout):
+            events.append(("open", timeout))
+            try:
+                yield
+            finally:
+                events.append(("close",))
+
+        def verify_binding(self, session, context, metadata, timeout=20):
+            events.append(("look",))
+            if sum(event == ("look",) for event in events) <= 3:
+                raise _not_listed()
+            return session
+
+    pending, register = _registering(native_slot, monkeypatch, Provider())
+    register()
+    assert [event[0] for event in events] == ["open", "look", "look", "look", "look", "close"]
+    assert 0 < events[0][1] <= internal._BINDING_TIMEOUT
+
+
 def test_registration_waits_out_a_listing_that_misses_the_pane_at_first(native_slot, monkeypatch):
     calls = []
 
@@ -466,7 +492,7 @@ def test_registration_waits_out_a_listing_that_misses_the_pane_at_first(native_s
 
     pending, register = _registering(native_slot, monkeypatch, Provider())
     register()
-    assert len(calls) == 3 and all(0 < timeout <= 20 for timeout in calls)
+    assert len(calls) == 3 and all(0 < timeout <= internal._BINDING_TIMEOUT for timeout in calls)
     current = native_slot["tmux"].get_current("fixture", "seat-0")
     assert current["registered"] is True and not current.get("start_error")
 
@@ -604,13 +630,29 @@ def test_a_hook_record_says_ended_only_for_its_own_dead_process(tmp_path):
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the creation time is read from /proc")
 def test_the_hook_deadline_counts_from_the_creation_of_its_process(monkeypatch):
-    """The 30 second hook limit of Claude counts from the process start; a loaded host spends seconds in the
-    interpreter's start and imports, which the 25 second budget must include."""
+    """Claude's hook limit counts from the process start; a loaded host spends seconds in the interpreter's start
+    and imports, which the budget must include."""
     monkeypatch.setattr(process, "age", lambda pid: 7.0)
     now = time.monotonic()
-    assert 25 - 7 - 0.5 < internal._hook_deadline() - now <= 25 - 7 + 0.5
-    monkeypatch.setattr(process, "age", lambda pid: 600.0)                          # a wrong clock costs 10 s at most
-    assert internal._hook_deadline() - time.monotonic() > internal._HOOK_BUDGET - internal._STARTUP_CAP - 0.5
+    budget = internal._HOOK_BUDGET
+    assert budget - 7 - 0.5 < internal._hook_deadline() - now <= budget - 7 + 0.5
+    monkeypatch.setattr(process, "age", lambda pid: 600.0)                          # a wrong clock costs the cap at most
+    assert internal._hook_deadline() - time.monotonic() > budget - internal._STARTUP_CAP - 0.5
+
+
+def test_the_registration_deadline_is_shorter_than_the_hook_limit_claude_is_given():
+    """SESSION-013. The hook writes its own failure before Claude ends it: every step of the deadline fits inside
+    the settings `timeout`, and the settings `timeout` is the one the registration's budget derives from."""
+    from agent_session.providers.claude import ClaudeProvider
+
+    limit = hook_started.HOOK_TIMEOUT
+    assert limit == 60 and internal._HOOK_BUDGET < limit
+    assert internal._BINDING_TIMEOUT < internal._HOOK_BUDGET      # and it ends `_PUBLISH_RESERVE` before the deadline anyway
+    assert internal._STARTUP_CAP < internal._HOOK_BUDGET - internal._PUBLISH_RESERVE      # the binding keeps time
+    context = {"python": sys.executable, "library_path": "/lib", "run_id": "r", "config_path": "/c", "socket_path": "/s",
+               "expected_session_id": str(uuid.uuid4())}
+    hooks = ClaudeProvider().registration_hooks(context)
+    assert {entry["hooks"][0]["timeout"] for entries in hooks.values() for entry in entries} == {limit}
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the creation time is read from /proc")

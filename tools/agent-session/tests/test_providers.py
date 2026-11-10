@@ -116,6 +116,37 @@ def test_observations_in_a_reusing_block_share_one_mcp_server_however_many_there
     assert (counting.started, counting.closed, counting.calls) == (2, 2, 13)
 
 
+def test_binding_checks_inside_a_reusing_block_share_one_mcp_server(claude):
+    """SESSION-013. The retries of a registration's binding check start `claude mcp serve` once, not once each."""
+    provider, _, context, meta, _ = claude
+    counting = CountingMCP()
+    provider.mcp_factory = counting
+    session = {"session_id": IDENTITY}
+    counting.listing = listing(pane="%99")                                 # this pane is not listed yet: retryable
+    with provider.reusing_client(30):
+        for _ in range(3):
+            with pytest.raises(SessionError) as caught:
+                provider.verify_binding(session, context, meta)
+            assert caught.value.details["retryable"] is True
+        counting.listing = listing()
+        assert provider.verify_binding(session, context, meta)["session_id"] == IDENTITY
+        assert (counting.started, counting.closed, counting.calls) == (1, 0, 4)
+    assert (counting.started, counting.closed) == (1, 1)
+    provider.verify_binding(session, context, meta)                         # outside a block it has its own server
+    assert (counting.started, counting.closed) == (2, 2)
+
+
+def test_a_shared_server_that_ended_during_the_binding_retries_is_replaced_once(claude):
+    provider, _, context, meta, _ = claude
+    counting = CountingMCP(failures=[None, "provider_connection_closed"])
+    provider.mcp_factory = counting
+    with provider.reusing_client(30):
+        provider.verify_binding({"session_id": IDENTITY}, context, meta)
+        assert provider.verify_binding({"session_id": IDENTITY}, context, meta)["session_id"] == IDENTITY
+        assert (counting.started, counting.closed) == (2, 1)
+    assert (counting.started, counting.closed) == (2, 2)
+
+
 def test_a_reusing_block_inside_another_adds_no_server_and_an_unused_one_starts_none(claude):
     provider, _, context, meta, _ = claude
     counting = CountingMCP()
