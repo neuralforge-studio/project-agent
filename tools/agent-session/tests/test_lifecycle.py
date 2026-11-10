@@ -551,7 +551,8 @@ def test_start_reports_a_hook_that_ended_without_a_result_before_its_timeout(ses
     started = time.monotonic()
     with pytest.raises(SessionError) as error:      # waiting out the limit would raise "timeout" instead
         env.manager(timeout=120).start("leader")
-    assert time.monotonic() - started < 60
+    from agent_session import hook_started
+    assert time.monotonic() - started < hook_started.HOOK_TIMEOUT       # SESSION-013: within the raised hook limit too
     assert error.value.code == "registration_failed" and error.value.exit_code == 4
     assert error.value.details["hook_error"]["code"] == "registration_hook_ended"
     waiting = env.tmux.get_current("fixture", "leader")

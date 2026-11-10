@@ -22,6 +22,7 @@ from .launch_artifacts import run_directory
 from .util import write_json
 
 FILE = "hook-started.json"
+HOOK_TIMEOUT = 60          # seconds Claude lets any of our hooks run (the settings `timeout`); registration's deadline is derived from it
 
 
 def path(project, run_id):

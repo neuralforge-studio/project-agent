@@ -1,5 +1,6 @@
 """Internal launch and hook functions. These are not user CLI commands."""
 
+import contextlib
 import datetime as dt
 import json
 import os
@@ -13,10 +14,10 @@ from .state import StateStore, control_lock, publish_session
 from .tmux import control as tmux_control
 
 
-_HOOK_BUDGET = 25          # seconds from the hook process's creation to its deadline; the SessionStart hook limit is 30
-_STARTUP_CAP = 10          # seconds of that budget the interpreter's start and imports may already have used
-_PUBLISH_RESERVE = 6       # seconds of that budget kept for the control lock, the state lock and the writes
-_BINDING_TIMEOUT = 20      # seconds at most for the binding check, which ends before the reserve
+_HOOK_BUDGET = hook_started.HOOK_TIMEOUT - 10    # seconds from the hook process's creation to its deadline, 10 s short of Claude's hook limit
+_STARTUP_CAP = 20          # seconds of that budget the interpreter's start and imports may already have used
+_PUBLISH_RESERVE = 12      # seconds of that budget kept for the control lock, the state lock and the writes
+_BINDING_TIMEOUT = 40      # seconds at most for the binding check, which ends before the reserve
 _BINDING_INTERVAL = 1.0
 _FINISH_BUDGET = 120       # seconds for the wrap-up of a run that ended itself, lock wait and window cleanup included
 _HOST_TIMEOUT = 8          # seconds for the provider's background listing inside the hook
@@ -125,8 +126,11 @@ def _bind(project, control, context, session_id, endpoint, cwd, deadline):
         session["endpoint"] = endpoint
     provider = get_provider(project.provider)
     context["session_id"] = session_id
-    ends = min(time.monotonic() + _BINDING_TIMEOUT, deadline - _PUBLISH_RESERVE)
-    session = _verify_binding(provider, session, context, max(ends, time.monotonic() + 0.1)) or session
+    ends = max(min(time.monotonic() + _BINDING_TIMEOUT, deadline - _PUBLISH_RESERVE), time.monotonic() + 0.1)
+    # One provider connection serves every look of the retry loop, when the provider can share it.
+    reusing = getattr(provider, "reusing_client", None)
+    with reusing(ends - time.monotonic()) if reusing else contextlib.nullcontext():
+        session = _verify_binding(provider, session, context, ends) or session
     if project.provider == "claude" and not session.get("message_to"):
         raise SessionError("session_unbound", "The native Claude recipient is unverified.", 4)
     current = control.get_current(project.project_id, context["target"])

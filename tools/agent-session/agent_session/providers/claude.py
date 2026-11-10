@@ -11,6 +11,7 @@ import time
 import uuid
 
 from .. import process
+from ..hook_started import HOOK_TIMEOUT
 from ..errors import SessionError
 from .common import (TRANSCRIPT_TAIL, context_timeout, deadline, executable, json_result, last_record_time, run,
                      session_id, text_file)
@@ -122,7 +123,7 @@ def report_background(stopped, meta):
     return (tasks if adopt_disabled(meta) else tasks + crons), crons
 
 
-HOST_QUERY_SECONDS = 8                      # `claude agents` wait inside a hook's 30 seconds
+HOST_QUERY_SECONDS = 8                      # `claude agents` wait inside a hook (its own limit is HOOK_TIMEOUT)
 
 
 def transcript_files(cwds, conversation_id):
@@ -361,7 +362,7 @@ class ClaudeProvider:
                               str(context["socket_path"]), identity])
         hooks = {}
         for event in ("SessionStart", "Stop", "StopFailure", "SessionEnd"):
-            entry = {"hooks": [{"type": "command", "command": command, "timeout": 30}]}
+            entry = {"hooks": [{"type": "command", "command": command, "timeout": HOOK_TIMEOUT}]}
             if event == "SessionStart":
                 # A resumed conversation reports source "resume"; every other run starts a new one.
                 entry["matcher"] = "resume" if context.get("resume") else "startup"
@@ -468,9 +469,8 @@ class ClaudeProvider:
         return matches[0]
 
     def verify_binding(self, session, context, meta, timeout=30):
-        limit = deadline(timeout)
-        with self.mcp_factory([executable("claude", context), "mcp", "serve"], limit) as client:
-            peer = self._peer(client, session, context, meta)
+        """The binding of this pane; inside `reusing_client` the repeated checks of a registration share one server."""
+        peer = self._peer_of([executable("claude", context), "mcp", "serve"], session, context, meta, timeout)
         return {"session_id": session_id(session), "message_to": peer["message_to"]}
 
     def send(self, session, text, context, timeout=30):
