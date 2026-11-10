@@ -1,7 +1,10 @@
 #!/bin/bash
 # Entry point of project-item: CR and decision items of a registered project.
 # Source: project-agent repo tools/project-item. Install: ln -s <this file> ~/.local/bin/project-item
-ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+entry="${BASH_SOURCE[0]}"
+[[ ! -L "$entry" ]] || entry="$(readlink -f -- "$entry")"
+[[ "$entry" == */* ]] || entry="./$entry"
+ROOT="$(CDPATH= cd -P -- "${entry%/*}/.." && pwd -P)"
 source "$ROOT/../python-launcher.sh"
 project_agent_select_python
 if [ -z "$PY" ]; then
@@ -11,4 +14,4 @@ fi
 export PYTHONPATH="$ROOT"
 export PYTHONNOUSERSITE=1
 unset PYTHONHOME
-exec "$PY" -m project_item "$@"
+exec "$PY" -S -m project_item "$@"

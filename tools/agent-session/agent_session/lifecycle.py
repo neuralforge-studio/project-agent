@@ -6,7 +6,6 @@ import os
 import shlex
 import sys
 import time
-import uuid
 from pathlib import Path
 
 from . import api, background, ended, git_ops, handoff, jobs, launch_artifacts, process, windows, workspace
@@ -127,6 +126,7 @@ class Manager(SuspendMixin, WatchMixin):
         cwd = cwd if remote else cwd.resolve()
         if not cwd.is_relative_to(path) or (remote and ".." in cwd.parts):
             raise SessionError("cwd_unavailable", "The JOB directory must be inside its seat.", 2)
+        import uuid         # only a new run needs it (uuid is a large import)
         context = {
             "base": str(self.project.base), "project_id": self.project.project_id,
             "provider": self.project.provider, "config_path": str(self.project.config_path),
@@ -1033,19 +1033,7 @@ class Manager(SuspendMixin, WatchMixin):
 
     def pending_releases(self):
         """JOB ID -> {seat, since, reasons} for each assigned seat whose stopped run waits for release."""
-        state = self.store.read(missing_ok=True)
-        found = {}
-        for key, entry in state.items():
-            if key == "leader" or not entry["job_id"]:
-                continue
-            try:
-                meta = self.tmux.get_current(self.project.project_id, f"seat-{key}")
-            except SessionError:
-                continue                           # unknown evidence is not a pending release
-            pending = meta and meta.get("job_id") == entry["job_id"] and meta.get("release_pending")
-            if pending:
-                found[entry["job_id"]] = {"seat": int(key), **pending}
-        return found
+        return api.release_waits(self.project, self.store, self.tmux)
 
     def _restore_stopping(self, meta, error):
         """After a control that failed before the end, unblock the run only while its same CLI lives."""

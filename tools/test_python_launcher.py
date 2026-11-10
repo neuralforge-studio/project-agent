@@ -36,8 +36,9 @@ def test_installer_interpreter_is_the_only_candidate(name, fake_python):
     result = run(ENTRIES[name], "--help", env={"PROJECT_AGENT_PYTHON": str(fake_python)})
     assert result.returncode == 0
     assert result.stdout.startswith("ARGV1=")
-    # project-item and project-board run `python -m <package>`; agent-session runs `python -c <source>`.
-    assert ("ARGV1=-c" if name == "agent-session" else "ARGV1=-m") in result.stdout
+    # agent-session and project-item (standard library only) skip the site step: `-S` first. project-board
+    # needs the interpreter's site-packages for textual: `python -m <package>`.
+    assert result.stdout.startswith("ARGV1=-m" if name == "project-board" else "ARGV1=-S")
 
 
 def test_missing_interpreter_is_a_json_error_for_agent_session(tmp_path):
@@ -64,6 +65,14 @@ def test_project_board_adds_package_paths_after_its_own_root(fake_python, tmp_pa
     assert "NOUSERSITE=1" in result.stdout
 
 
+@pytest.mark.parametrize("command,site_flag", [("sync", True), ("click", True), ("toggle", True),
+                                                ("sidebar", False), ("popup", False), (None, False)])
+def test_project_board_skips_site_only_for_the_commands_without_textual(command, site_flag, fake_python):
+    """The tmux hooks and keys run at every window change and import no textual; the TUI needs site-packages."""
+    result = run(ENTRIES["project-board"], *([command] if command else []), env={"PROJECT_AGENT_PYTHON": str(fake_python)})
+    assert result.stdout.startswith("ARGV1=-S" if site_flag else "ARGV1=-m")
+
+
 def test_project_board_without_package_paths_keeps_only_its_root(fake_python):
     result = run(ENTRIES["project-board"], env={"PROJECT_AGENT_PYTHON": str(fake_python)})
     assert f"PYTHONPATH={ENTRIES['project-board'].parents[1]} " in result.stdout
@@ -73,6 +82,27 @@ def test_project_item_ignores_package_paths(fake_python, tmp_path):
     result = run(ENTRIES["project-item"], env={"PROJECT_AGENT_PYTHON": str(fake_python),
                                                "PROJECT_AGENT_PYTHONPATH": str(tmp_path)})
     assert f"PYTHONPATH={ENTRIES['project-item'].parents[1]} " in result.stdout
+
+
+@pytest.mark.parametrize("name", ["agent-session", "project-item"])
+def test_standard_library_tools_do_not_run_the_site_step(name, tmp_path):
+    """`-S`: site-packages, `.pth` files and sitecustomize cost tens of milliseconds on NFS and are not needed."""
+    (tmp_path / "sitecustomize.py").write_text(f"open({str(tmp_path / 'ran')!r}, 'w').close()\n")
+    result = run(ENTRIES[name], "--help", env={"PYTHONPATH": str(tmp_path)})
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "ran").exists()
+
+
+@pytest.mark.parametrize("name", sorted(ENTRIES))
+def test_entry_point_runs_from_its_own_directory_and_through_a_linked_directory(name, tmp_path):
+    """The directory of the entry point and of the launcher is found without `dirname`."""
+    entry = ENTRIES[name]
+    result = subprocess.run(["bash", entry.name, "--help"], cwd=entry.parent, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    (tmp_path / "tools").symlink_to(TOOLS)
+    linked = tmp_path / "tools" / name / "bin" / name
+    result = subprocess.run([str(linked), "--help"], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("name", sorted(ENTRIES))
@@ -164,7 +194,7 @@ def test_python_env_is_parsed_not_executed(release, fake_python, tmp_path):
     write_env(release, f"$(touch {marks[0]})", f"touch {marks[1]}", f"OTHER=$(touch {marks[2]})",
               f"PROJECT_AGENT_PYTHON={fake_python}", f"`touch {marks[3]}`")
     result = run(release_entry(release, "project-item"))
-    assert result.stdout.startswith("ARGV1=-m")
+    assert result.stdout.startswith("ARGV1=-S")
     assert not any(mark.exists() for mark in marks)
 
 

@@ -1,13 +1,10 @@
 """SSH transport for a registered Codex seat. Assignment and CR ownership stay local."""
 
-import base64
-import io
 import json
 from pathlib import Path
 import re
 import shlex
 import subprocess
-import zipfile
 
 from .errors import SessionError
 
@@ -51,6 +48,7 @@ GUIDANCE_FILES = (
 
 def source_archive():
     """Ship only maintained Python helpers, never project files or user credentials."""
+    import base64, io, zipfile      # only a remote call needs them: zipfile is a large import
     root = Path(__file__).resolve().parents[2]
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:

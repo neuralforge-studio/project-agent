@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import sys
-import traceback
 
 from .errors import SessionError
 
@@ -140,6 +139,7 @@ def _emit(ok, data=None, error=None):
 def _diagnostic(manager, operation):
     """Write the current traceback to a private file of the selected project. Return None on any failure."""
     try:
+        import traceback
         directory = manager.project.runtime_path / "diagnostics"
         directory.mkdir(parents=True, exist_ok=True)
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
