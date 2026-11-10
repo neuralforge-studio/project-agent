@@ -115,3 +115,44 @@ async def wait_until(pilot, condition, timeout=10.0):
     while not condition():
         assert asyncio.get_running_loop().time() < deadline, "timed out waiting for the screen state"
         await pilot.pause(0.01)
+
+
+class Frames:
+    """Every frame Textual displays for an app, as the compositor's screen text followed by its styles.
+
+    A frame is one `App._display` call outside `batch_update` (a headless run never reaches the terminal,
+    so this is the point where a real terminal would be written)."""
+
+    def __init__(self, app):
+        self.app, self.shown, self.recording = app, [], False
+        display = app._display
+
+        def record(screen, renderable):
+            if self.recording and renderable is not None and not app._batch_count:
+                self.shown.append(self.screen())
+            return display(screen, renderable)
+        app._display = record
+
+    def screen(self) -> str:
+        strips = self.app.screen._compositor.render_strips()
+        return ("\n".join(strip.text.rstrip() for strip in strips) + "\n--- styles\n"
+                + "\n".join("|".join(str(segment.style) for segment in strip) for strip in strips))
+
+    async def during(self, pilot, action):
+        """Run `action` and let the screen settle. Returns the screen before, the frames drawn, the screen after."""
+        await pilot.pause(0.05)
+        before = self.screen()
+        self.shown.clear()
+        self.recording = True
+        await action()
+        await pilot.pause(0.2)
+        self.recording = False
+        return before, list(self.shown), self.screen()
+
+    async def assert_only_before_or_after(self, pilot, action, what):
+        """The contract of BOARD-017: no frame between the screen before the change and the one after it."""
+        before, frames, after = await self.during(pilot, action)
+        assert before != after, f"{what}: the change is not visible"
+        assert frames, f"{what}: nothing was drawn"
+        for frame in frames:
+            assert frame in (before, after), f"{what}: an intermediate frame was drawn:\n{frame}\n--- before:\n{before}\n--- after:\n{after}"

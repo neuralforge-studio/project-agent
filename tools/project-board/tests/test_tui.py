@@ -10,7 +10,7 @@ import threading
 
 import pytest
 
-from board_testing import Board, click_socket, leader, session, wait_until
+from board_testing import Board, Frames, WORKER_IDS, click_socket, leader, session, wait_until
 from project_board import model
 from project_board.tui import CRPopupApp, CSVScreen, PopupApp, SidebarApp, _seat_text, format_elapsed
 from textual.widgets import Button, DataTable, Markdown, Static, TextArea
@@ -1476,42 +1476,48 @@ def test_cr_popup_row_marks_review_wait(tmp_path):
     asyncio.run(check())
 
 
-def _count_blocks(monkeypatch):
-    built = []
-    original = SidebarApp._project_block
+def _count_draws(monkeypatch):
+    """`built`: blocks created (a new block is mounted); `written`: blocks updated in the widgets already mounted."""
+    built, written = [], []
+    block, update = SidebarApp._project_block, SidebarApp._update_block
 
-    def counted(self, number, project):
+    def counted_block(self, number, project):
         built.append(number)
-        return original(self, number, project)
-    monkeypatch.setattr(SidebarApp, "_project_block", counted)
-    return built
+        return block(self, number, project)
+
+    def counted_update(self, number, project):
+        written.append(number)
+        return update(self, number, project)
+    monkeypatch.setattr(SidebarApp, "_project_block", counted_block)
+    monkeypatch.setattr(SidebarApp, "_update_block", counted_update)
+    return built, written
 
 
-def test_a_refresh_that_changes_nothing_shown_draws_nothing_and_a_change_draws_only_its_project(tmp_path, monkeypatch):
+def test_a_refresh_that_changes_nothing_shown_draws_nothing_and_a_change_writes_only_its_project(tmp_path, monkeypatch):
     board = _make_sidebar_board(tmp_path)                       # Falcon2 has a Worker and a Leader; ProjectB is folded
     app = SidebarApp(str(board.config), poll=False)
-    built = _count_blocks(monkeypatch)
+    built, written = _count_draws(monkeypatch)
 
     async def check():
         async with app.run_test(size=(40, 25)) as pilot:
             await app.apply_snapshot(model.snapshot(board.config, now=NOW))
             await pilot.pause()
-            assert built == [0, 1]
+            assert built == [0, 1] and written == []
             built.clear()
             names = [app.query_one(f"#project-{n}-name", Button) for n in (0, 1)]
             # The same state again, and a later minute: the seats are folded, so no minute counter is on screen.
             await app.apply_snapshot(model.snapshot(board.config, now=NOW))
             await app.apply_snapshot(model.snapshot(board.config, now=NOW + dt.timedelta(minutes=5)))
             await pilot.pause()
-            assert built == []
-            # A CR is added to ProjectB only: its block alone is drawn again, and Falcon2's widgets stay.
+            assert built == [] and written == []
+            # A CR is added to ProjectB only: its widgets are written, no widget is replaced, Falcon2 is not touched.
             board.cr(tmp_path / "ProjectB" / "main", "open", "OTH-001")
             await app.apply_snapshot(model.snapshot(board.config, now=NOW))
             await pilot.pause()
-            assert built == [1]
-            assert app.query_one("#project-0-name", Button) is names[0]
-            assert app.query_one("#project-1-name", Button) is not names[1]
+            assert built == [] and written == [1]
+            assert [app.query_one(f"#project-{n}-name", Button) for n in (0, 1)] == names
             assert str(app.query_one("#project-1-O", Button).label) == "O:1"
+            assert not app.query_one("#project-1-O", Button).disabled
             assert [str(button.label) for button in app.query(".project-name")] == ["Falcon2", "ProjectB"]
             # A project that appears changes the list: everything is drawn again, in order.
             built.clear()
@@ -1524,10 +1530,10 @@ def test_a_refresh_that_changes_nothing_shown_draws_nothing_and_a_change_draws_o
     asyncio.run(check())
 
 
-def test_the_minute_of_an_expanded_project_redraws_that_project_only(tmp_path, monkeypatch):
+def test_the_minute_of_an_expanded_project_is_written_into_its_widgets(tmp_path, monkeypatch):
     board = _make_sidebar_board(tmp_path)
     app = SidebarApp(str(board.config), poll=False)
-    built = _count_blocks(monkeypatch)
+    built, written = _count_draws(monkeypatch)
 
     async def check():
         async with app.run_test(size=(40, 25)) as pilot:
@@ -1536,11 +1542,120 @@ def test_the_minute_of_an_expanded_project_redraws_that_project_only(tmp_path, m
             await pilot.click("#project-0-seats")
             await wait_until(pilot, lambda: app.query(".leader"))
             other = app.query_one("#project-1-name", Button)
+            leader_row = app.query_one(".leader", Static)
+            seat = app.query_one("#project-0-seat-0", Button)
             built.clear()
+            written.clear()
             await app.apply_snapshot(model.snapshot(board.config, now=NOW + dt.timedelta(seconds=60)))
             await pilot.pause()
-            assert built == [0]
+            assert built == [] and written == [0]
             assert _leader_rows(app) == ["  Leader 1d 01h 31m"]
+            assert str(seat.label) == "R 0 CPU-012 2h 31m"
+            assert app.query_one(".leader", Static) is leader_row
+            assert app.query_one("#project-0-seat-0", Button) is seat
             assert app.query_one("#project-1-name", Button) is other
+
+    asyncio.run(check())
+
+
+def _seat_state(base, *, second=None):
+    seats = {"0": {"job_id": "CPU-012", "git_hash": None, "session": session(0)},
+             "1": {"job_id": None, "git_hash": None, "session": None},
+             "2": {"job_id": None, "git_hash": None, "session": None}}
+    if second:
+        seats["1"] = {"job_id": second, "git_hash": None, "session": session(1)}
+    Board.state(base, {"leader": leader(), **seats})
+
+
+def test_the_sidebar_never_draws_a_state_between_the_one_before_a_change_and_the_one_after_it(tmp_path):
+    """BOARD-017 (a)(b)(c): opening, changing a value, and rows that appear or disappear. The screen is tall
+    enough for every row, so only the rows of the Board change (not Textual's scrollbar)."""
+    board = _make_sidebar_board(tmp_path)
+    falcon, other = tmp_path / "Falcon2" / "main", tmp_path / "ProjectB" / "main"
+    expanded, context = {"Falcon2"}, {"project_id": "Falcon2", "slot": "seat-0"}
+
+    def toggle(project_id):
+        expanded.symmetric_difference_update({project_id})
+        return set(expanded)
+
+    app = SidebarApp(str(board.config), poll=False, expanded_reader=lambda: set(expanded),
+                     expanded_toggler=toggle, context_reader=lambda: dict(context))
+    live = {"Falcon2": {"0": {"session_id": WORKER_IDS[0], "state": "running"}}}
+    snapshot = lambda seconds=0: model.snapshot(board.config, now=NOW + dt.timedelta(seconds=seconds))
+
+    async def check():
+        frames = Frames(app)
+        async with app.run_test(size=(30, 40)) as pilot:
+            # (a) opening: the snapshot, then liveness, then the managed window arrive one after another.
+            await frames.assert_only_before_or_after(pilot, lambda: app.apply_snapshot(snapshot()), "snapshot")
+            live["Falcon2"]["0"]["state"] = "stopped"
+            await frames.assert_only_before_or_after(pilot, lambda: app.apply_liveness(live), "liveness")
+            await frames.assert_only_before_or_after(pilot, app.refresh_context, "managed window")
+            # (b) values of the expanded project: its minute, a seat that gets a job, the shown window.
+            await frames.assert_only_before_or_after(pilot, lambda: app.apply_snapshot(snapshot(60)), "minute")
+            board.cr(falcon, "in-progress", "CPU-013")
+            _seat_state(falcon, second="CPU-013")
+            await frames.assert_only_before_or_after(pilot, lambda: app.apply_snapshot(snapshot(61)), "seat job")
+            context["slot"] = "leader"
+            await frames.assert_only_before_or_after(pilot, app.refresh_context, "shown window")
+            # (c) rows appear and disappear: fold, unfold, a project, an error row.
+            await frames.assert_only_before_or_after(pilot, lambda: app._toggle_expanded("Falcon2"), "fold")
+            await frames.assert_only_before_or_after(pilot, lambda: app._toggle_expanded("Falcon2"), "unfold")
+            board.project("ProjectC", seats=1)
+            await frames.assert_only_before_or_after(pilot, lambda: app.apply_snapshot(snapshot(62)), "project added")
+            (other / "agent/cr").rename(other / "agent/cr-gone")
+            await frames.assert_only_before_or_after(pilot, lambda: app.apply_snapshot(snapshot(63)), "error row added")
+            (other / "agent/cr-gone").rename(other / "agent/cr")
+            await frames.assert_only_before_or_after(pilot, lambda: app.apply_snapshot(snapshot(64)), "error row removed")
+
+    asyncio.run(check())
+
+
+def test_a_value_written_in_place_keeps_click_target_scroll_and_focus(tmp_path):
+    board = Board(tmp_path)
+    for number in range(8):
+        base = board.project(f"Project{number:02d}", seats=1)
+        board.cr(base, "open", f"P{number:02d}-001")
+    clicked = []
+    app = SidebarApp(str(board.config), poll=False,
+                     on_cr=lambda project_id, state, **kwargs: clicked.append((project_id, state)))
+
+    async def check():
+        async with app.run_test(size=(25, 12)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause(0.1)
+            scroll = app.query_one("#projects")
+            scroll.scroll_to(y=scroll.max_scroll_y, animate=False)
+            await pilot.pause()
+            app.query_one("#project-7-name", Button).focus()
+            await pilot.pause()
+            y = scroll.scroll_y
+            assert y > 0
+            counter = app.query_one("#project-7-O", Button)
+            board.cr(tmp_path / "Project07" / "main", "open", "P07-002")       # a value of the last project changes
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause(0.1)
+            assert app.query_one("#project-7-O", Button) is counter
+            assert str(counter.label) == "O:2"
+            assert scroll.scroll_y == y
+            assert app.focused is app.query_one("#project-7-name", Button)
+            await pilot.click("#project-7-O")
+            await pilot.pause()
+            assert clicked == [("Project07", "open")]
+
+    asyncio.run(check())
+
+
+def test_renders_that_overlap_leave_one_block_per_project(tmp_path):
+    board = _make_sidebar_board(tmp_path)
+    app = SidebarApp(str(board.config), poll=False)
+
+    async def check():
+        async with app.run_test(size=(40, 25)) as pilot:
+            await asyncio.gather(app.apply_snapshot(model.snapshot(board.config, now=NOW)),
+                                 app.apply_liveness({}), app.apply_snapshot(model.snapshot(board.config, now=NOW)))
+            await pilot.pause()
+            assert [str(button.label) for button in app.query(".project-name")] == ["Falcon2", "ProjectB"]
+            assert len(app.query(".project")) == 2
 
     asyncio.run(check())
