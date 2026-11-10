@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Related: PERF-001, PERF-002, RUST-001, D-20261110-02
+- Base: 0eb2e262e2a939ae4497cd541a1d456db4e36108 2026-11-10T13:05:25+09:00
 
 ## Symptom
 짧은 명령(`agent-session review`·`send`, `project-item ls`, `--help`)의 시간 대부분이 Python 시동과 NFS에서의 import입니다. 같은 명령이 NFS 상태와 유휴 시간에 따라 0.3초에서 3초까지 걸립니다. 반복 tmux 조회를 고친 뒤(SESSION-010) 명령 자체의 일은 수십 ms인데, 시동이 그 몇 배에서 수십 배입니다.
