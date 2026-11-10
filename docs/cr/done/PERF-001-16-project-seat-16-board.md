@@ -6,6 +6,7 @@
 - Related: RUST-001
 - Mode: write
 - Base: 2fd273983ce67607b63b3ae1c44be5b90d751c45 2026-11-10T08:01:10+09:00
+- Outcome: fixed
 
 ## Symptom
 사용자 평가(2026-11-10 대화): "정말 너무 느려서 쓸 수가 없는데... 속도가 느리다는 평가등은 다 한거야? project가 굉장히 여러개 일때도? 예를 들어 각 seat가 16개씩 project 16개?" 지금까지 어느 release도 속도를 재지 않았습니다. 0.2.0·0.3.0은 정확성 수정 release입니다. 이 workstation(등록 project 10개, slot 약 46개)에서도 Leader의 명령 하나가 수 초에서 수십 초 걸리고, project·seat 수가 늘면 얼마나 느려지는지 모릅니다.
@@ -47,6 +48,7 @@
 - 2026-11-10 Leader: 제출 3(265ef84, 도구 수정)을 검토했습니다. 명령별 자식 CPU 시간, 중앙값 95% bootstrap 구간과 ratio 구간 기준 판정(구간이 1을 벗어날 때만 improved/worse), 반복 9회, lifecycle 실패 내성을 인정합니다. 남은 것: merge(265ef84)로 들어온 BOARD-012가 바꾼 `tools/project-board`는 `tools/tests/perf` 통합 test의 입력(측정하는 제품 tree)입니다. README 표 `tools/tests/perf/**` 행의 명령 전체를 merge commit에서 다시 실행해야 하므로 통합은 그 결과를 받은 뒤에 합니다. 진행 중인 측정의 부하와 겹치지 않도록 현재 측정 단계 뒤에 실행해도 됩니다.
 - 2026-11-10 Leader: 제출 55a6313a25b796ee9145e203902c221c2cd7c135를 인수합니다. Leader review(제출 3·4, 도구 부분 인수·선통합): 자식 CPU 시간, 중앙값 95% bootstrap 구간과 ratio 구간 판정, 반복 9회, lifecycle 실패 내성, 가짜 claude의 hook 시간 기록을 인정합니다. README 표 tools/tests/perf/** 행 전체(통합 test 포함 8 passed, 배포 경계 9 passed, link 확인)를 BOARD-012가 들어간 tree에서 다시 실행했습니다. 이후 main은 CR 문서만 움직였습니다. CR은 in-progress로 둡니다. v0.3.0과 v0.4.0, PERF-002 후보의 측정표와 원인 분류 제출을 기다립니다.
 - 2026-11-11 Leader: 제출 7df707f6904a4d9dd037eed1df51a81dbe22634a를 인수합니다. 최종 제출 7df707f 검토. 도구 수정(start timeout 180초와 count pass 재시도, 실패 뒤 seat·CR 복구, unit 실패 내성, SIGTERM 처리, steady의 Board ready 대기, -S launcher 후보)과 측정 결과 A~D, 원인 분류(a~d)·연산별 목표 시간을 읽었습니다. 제출 뒤 main에 들어온 BOARD-013이 통합 test가 실행하는 project-board를 바꿨으므로 Leader가 merge commit(8055c85와 tree가 같은 395e3f9 clone)에서 tools/tests/perf를 다시 실행했습니다: 8 passed(780초). 결과 D의 board_popup·sidebar_ready 증가(n=2)는 BOARD-014가 n=5로 재현되지 않음을 확인했습니다. (c)의 MCP close 1초 대기와 stop의 observe마다 세션은 SESSION-012(v0.5.0)가 이미 고쳤습니다.
+- 2026-11-11 Leader: in-progress -> done, Outcome fixed. 통합 8055c85 (origin/main)
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증)(test tmux server 규칙), [동작 명세 5절 Python API](../../project-team/spec.md#프로젝트-consumer용-python-api), [project-team Worker 절](../../../skills/project-team/SKILL.md), [tmux 통합](../../../integrations/tmux/project-agent-main.conf).
 
