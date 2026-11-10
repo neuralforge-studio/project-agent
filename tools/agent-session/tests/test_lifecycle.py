@@ -323,8 +323,8 @@ def test_start_held_at_a_startup_dialog_needs_the_user_and_resumes(session_env, 
     env.tmux.command("send-keys", "-t", waiting["pane_id"], "Enter")
     # Answering the dialog registers and publishes; no second start is needed.
     published = (lambda: env.store.read()["leader"]) if target == "leader" else (lambda: env.store.read()["0"]["session"])
-    wait_until(published)
-    assert env.tmux.get_current("fixture", slot).get("ready") is True
+    # The state commit comes before the window's registered/ready update, so wait for both.
+    wait_until(lambda: published() and env.tmux.get_current("fixture", slot).get("ready") is True)
     session = published()
     if target == "leader":                 # a live Leader is never started again
         with pytest.raises(SessionError) as error:
