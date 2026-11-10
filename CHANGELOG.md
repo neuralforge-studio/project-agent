@@ -8,6 +8,7 @@
 - TEST-011
 - PERF-002
 - TEST-012
+- BOARD-012
 
 형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
 

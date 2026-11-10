@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: SESSION-010, PERF-001
 - Base: cc73ad69370bdd19ef5ef54426a4c9cb3d4b935b 2026-11-10T13:34:52+09:00
+- Outcome: fixed
 
 ## Symptom
 Board의 `sync`(창 전환·session 전환·client 연결 hook에서 실행)와 `toggle`은 tmux server의 창마다 tmux를 여러 번 부릅니다. 그래서 project·seat가 늘면 창 전환 한 번의 비용도 창 수에 비례해 늘어납니다. SESSION-010이 liveness의 같은 결함을 고친 뒤 남은 반복 조회입니다. 사용자 지시(2026-11-10): "반복 조회 수정은 측정 결과 기다리지 말고 바로 시작해줘. 너무 느려."
@@ -35,6 +36,7 @@ Board의 `sync`(창 전환·session 전환·client 연결 hook에서 실행)와 
 - 2026-11-10 Leader: 고친다. 재현 측정이 있는 결함이고, 사용자 지시가 있습니다(2026-11-10: "반복 조회 수정은 측정 결과 기다리지 말고 바로 시작해줘. 너무 느려.").
 - 2026-11-10 Leader: open -> todo. 사용자 지시: 반복 조회 수정 즉시
 - 2026-11-10 Leader: 제출 7d774be81073f16a8a89fa89c496e7b67405ad41를 인수합니다. Leader review: _snapshot은 tmux 한 번(display-message, list-clients, list-panes -a)으로 전역 Board option, 보이는 창, 모든 pane과 창·pane option을 읽습니다. _reconcile·_evict의 판정 함수 규칙은 그대로이고 입력만 바뀌었습니다. format의 option 상속(pane, window, session, global)은 기존 tmux 통합의 @project_agent_sync_needed가 쓰는 조회와 같고, 이 option들은 창·pane에만 써서 값이 같습니다. test_the_snapshot_reads_what_the_per_window_options_hold가 이를 고정합니다. 측정 도구로 v0.4.0과 비교한 16×16 호출 수는 sync 1124 -> 7, toggle on 1123 -> 16, off 853 -> 17이고 창 수와 무관합니다. warm 시간은 sync 39.4초 -> 2.0초입니다. 창 4개와 52개 server의 호출 수 test는 수정 전에 실패합니다. README 표 tools/project-board/** 행 163 passed. 제출 이후 main은 움직이지 않았습니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 4018f0c(Merge cr/BOARD-012, 제출 7d774be). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [project-board README](../../../tools/project-board/README.md), [tmux 통합](../../../integrations/tmux/project-agent-main.conf), SESSION-010의 `ServerView`(`tools/agent-session/agent_session/tmux.py`, [동작 명세 5절](../../project-team/spec.md#프로젝트-consumer용-python-api)), 측정 도구 `tools/tests/perf/perf_bench.py` 머리말, [project-team Worker 절](../../../skills/project-team/SKILL.md).
