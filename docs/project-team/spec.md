@@ -593,7 +593,8 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | project_state(project) | `read_state`와 같되 이미 `load_registry`로 얻은 project를 받음. 모든 project를 도는 consumer가 등록 파일을 project마다 다시 읽지 않게 함 |
 | check_binding(cwd, target, expected_session_id=None, config_path=None, socket=None) | Target은 leader 또는 현재 JOB ID. 현재 배정·실제 실행·선택적 예상 session_id를 대조하여 seat·작업 경로·run_id·session과 종료 관찰 결과 반환 |
 | liveness(cwd=None, config_path=None, socket=None) | Session이 있는 slot(`leader`, seat 번호)마다 판정한 `session_id`와 `state`(`alive`·`stopped`·`unknown`) 반환. tmux 실행 근거와 CLI process만 조회하고 provider를 호출하지 않음 |
-| project_liveness(project, socket=None) | `liveness`와 같되 이미 `load_registry`로 얻은 project를 받음 |
+| project_liveness(project, socket=None, view=None) | `liveness`와 같되 이미 `load_registry`로 얻은 project를 받음. `view`(`server_view`의 반환)를 주면 그 읽기로 판정하고 tmux를 다시 읽지 않음 |
+| server_view(projects, socket=None) | 이미 `load_registry`로 얻은 project들의 tmux 서버를 한 번 읽은 snapshot을 반환. `project_liveness`·`project_pending_releases`의 `view`로 넘김. 읽는 tmux process는 project·slot 수와 무관하게 둘입니다. 서버의 session·window·pane과 각 project의 현재 run window option을 읽고, owner·server identity·pointer 판정은 `get_current`와 같은 함수를 지남. 읽은 뒤의 변화는 보지 않으므로 다시 보려면 새로 만듦. 반환값은 불투명한 객체 |
 | pane_slot(pane, tmux=None) | tmux pane이 든 관리 window의 `(project_id, slot)`을 반환. slot은 `leader`·`seat-N`이고 target이 slot이 아니면 None. 관리 window가 아니면(project_id option이 없거나 JSON이 아님) None. window option만 한 번의 tmux 호출로 읽음. Board가 지금 보는 창의 project·slot을 알 때 씀 |
 | caller(project, tmux=None, store=None) | 이 명령을 실행하는 쪽을 `(slot, session_id)`로 반환. slot은 `leader`·`seat-N`·`operator`(관리 실행 밖 CLI, session_id는 None)·`unmanaged-agent`(이 project의 구성원이 아닌 agent). 환경의 대화 ID를 state의 binding과 대조하고, 없으면 관리 실행의 tmux pane으로 판정. project 도구의 유일한 caller 규칙 |
 | require_live(project, slot, identity, tmux=None) | Leader·Worker caller의 slot이 아직 그 대화의 살아 있는 관리 CLI를 가졌는지 확인. 아니면 `caller_not_running` 오류. 반환값 없음 |
@@ -602,7 +603,7 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | RemoteSeat | 원격 Worker seat의 등록 항목 형식. `Project.seats`의 원소가 이 형식이면 원격 seat |
 | SessionError | 공통 오류. `code`·`message`·`exit_code`·`details` |
 | pending_releases(cwd=None, config_path=None, socket=None) | 반납 대기인 seat를 `{JOB ID: {seat, since, reasons}}`로 반환. tmux 실행 근거만 읽고, 읽을 수 없는 run은 나열하지 않음 |
-| project_pending_releases(project, socket=None) | `pending_releases`와 같되 이미 `load_registry`로 얻은 project를 받음 |
+| project_pending_releases(project, socket=None, view=None) | `pending_releases`와 같되 이미 `load_registry`로 얻은 project를 받음. `view`(`server_view`의 반환)를 주면 그 읽기로 판정 |
 | finish_release(cwd, job_id, config_path=None, socket=None) | JOB의 반납 대기를 마침. CR이 in-progress를 떠난 뒤에 호출. 대기가 없으면 None, 있으면 `{job_id, seat, released, reasons}`. 반납 조건은 stop과 같고 맞지 않으면 배정을 보존하고 이유를 반환 |
 | Tmux | tmux control 클래스. 소비자는 socket 경로를 주어 만들고 option 조회·pane 조작에 씀 |
 | PANE_ID_OPTION | 관리 window의 pane을 가리키는 tmux window option 이름(`@agent_session_pane_id`). 정의는 `agent_session/tmux.py`. tmux 설정 파일은 import할 수 없어 같은 문자열을 주석과 함께 씀 |
@@ -610,7 +611,7 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 `PANE_ID_OPTION`·`RemoteSeat`·`SessionError`·`Tmux`는 이름과 형식을 제공하는 값이고, 나머지는 함수입니다.
 agent-session 내부 모듈은 서로의 밑줄 이름을 import하지 않습니다. 함께 쓰는 helper는 소유 모듈의 공개 이름입니다.
 
-`read_state`·`project_state`·`check_binding`·`liveness`·`project_liveness`·`pending_releases`·`project_pending_releases`·`caller`·`require_live`는 읽기 전용이고, `finish_release`는 반납 대기를 마치는 쓰기 호출입니다(project-item이 CR을 옮긴 직후 부름).
+`read_state`·`project_state`·`check_binding`·`liveness`·`project_liveness`·`server_view`·`pending_releases`·`project_pending_releases`·`caller`·`require_live`는 읽기 전용이고, `finish_release`는 반납 대기를 마치는 쓰기 호출입니다(project-item이 CR을 옮긴 직후 부름).
 호출자는 선택한 등록 파일과 socket을 전달할 수 있습니다.
 전달하지 않은 등록 경로는 CLI와 같은 표준 경로 규칙을 적용합니다.
 상태 손상·미등록·현재 소유자 불일치·관찰 불가를 구분해 공통 오류로 반환합니다.

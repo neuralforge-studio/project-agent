@@ -1031,15 +1031,22 @@ class Manager(SuspendMixin, WatchMixin):
             cleanup = self._sweep(slot)
             return {**result, "cleanup": {**cleanup, "kept": kept + cleanup["kept"]}}
 
-    def pending_releases(self):
-        """JOB ID -> {seat, since, reasons} for each assigned seat whose stopped run waits for release."""
+    def pending_releases(self, view=None):
+        """JOB ID -> {seat, since, reasons} for each assigned seat whose stopped run waits for release.
+
+        `view` is a `ServerView` to read the runs from; without one this reads the server itself, once."""
         state = self.store.read(missing_ok=True)
         found = {}
+        try:
+            view = view or self.tmux.server_view([self.project.project_id],
+                                                 [f"seat-{key}" for key in state if key != "leader"])
+        except SessionError:
+            return found                           # unknown evidence is not a pending release
         for key, entry in state.items():
             if key == "leader" or not entry["job_id"]:
                 continue
             try:
-                meta = self.tmux.get_current(self.project.project_id, f"seat-{key}")
+                meta = view.current(self.project.project_id, f"seat-{key}")
             except SessionError:
                 continue                           # unknown evidence is not a pending release
             pending = meta and meta.get("job_id") == entry["job_id"] and meta.get("release_pending")

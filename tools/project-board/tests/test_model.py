@@ -18,6 +18,12 @@ def board(tmp_path):
     return Board(tmp_path)
 
 
+@pytest.fixture(autouse=True)
+def no_tmux_server(tmp_path, monkeypatch):
+    """`model.liveness` reads the tmux server once; point it at a socket nobody listens on, not the user's server."""
+    monkeypatch.setenv("AGENT_SESSION_SOCKET", str(tmp_path / "no-tmux-server.sock"))
+
+
 # ------------------------------------------------------------ review wait (project-board README)
 @pytest.mark.parametrize("result, expected", [
     ("", None),
@@ -219,7 +225,7 @@ def test_liveness_is_collected_per_project_and_a_missing_state_has_none(board, m
     board.state(first, {"leader": leader(), "0": {"job_id": None, "git_hash": None, "session": None}})
     calls = []
 
-    def liveness(project, socket=None):
+    def liveness(project, socket=None, view=None):
         calls.append(project.base)
         if project.base != first:
             raise model.SessionError("state_not_found", "The project state has not been initialized.")
@@ -315,8 +321,8 @@ def test_a_seat_whose_stopped_worker_waits_for_release_shows_release_pending(boa
                        "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)},
                        "1": {"job_id": "TOOL-002", "git_hash": None, "session": session(1)}})
     hold = {"seat": 0, "since": "2026-11-05T10:00:00Z", "reasons": ["the CR is still in-progress"]}
-    monkeypatch.setattr(model.api, "project_pending_releases", lambda project, socket=None: {"TOOL-001": hold})
-    monkeypatch.setattr(model.api, "project_liveness", lambda project, socket=None: {"0": {}})
+    monkeypatch.setattr(model.api, "project_pending_releases", lambda project, socket=None, view=None: {"TOOL-001": hold})
+    monkeypatch.setattr(model.api, "project_liveness", lambda project, socket=None, view=None: {"0": {}})
     assert model.snapshot(board.config, now=NOW)["projects"][0]["seats"][0]["status"] == "working"   # not read on the file refresh
     model.liveness(board.config)                                   # the run-fact refresh reads it
     seats = model.snapshot(board.config, now=NOW)["projects"][0]["seats"]
@@ -329,11 +335,11 @@ def test_an_unreadable_release_record_does_not_hide_the_seats(board, monkeypatch
     board.cr(base, "in-progress", "TOOL-001")
     board.state(base, {"leader": leader(), "0": {"job_id": "TOOL-001", "git_hash": None, "session": session(0)}})
 
-    def unreadable(project, socket=None):
+    def unreadable(project, socket=None, view=None):
         raise model.SessionError("tmux_unknown", "tmux is unreadable")
 
     monkeypatch.setattr(model.api, "project_pending_releases", unreadable)
-    monkeypatch.setattr(model.api, "project_liveness", lambda project, socket=None: {"0": {}})
+    monkeypatch.setattr(model.api, "project_liveness", lambda project, socket=None, view=None: {"0": {}})
     model.liveness(board.config)
     project = model.snapshot(board.config, now=NOW)["projects"][0]
     assert project["errors"] == [] and project["seats"][0]["status"] == "working"
