@@ -1,5 +1,7 @@
 """Git preparation of a CR assignment and its retries (see prepare)."""
 
+import contextlib
+import contextvars
 import subprocess
 from pathlib import Path
 
@@ -53,7 +55,28 @@ def lock_reason(root):
             "clear it by the operator procedure for interrupted Git steps (spec section 7)")
 
 
+_steps = contextvars.ContextVar("git_steps", default=None)
+
+
+@contextlib.contextmanager
+def observing(observer):
+    """Run `observer(args)` before each Git command of the calling thread; it returns a context manager
+    that wraps the command. A caller with a deadline refuses the next step there: a Git command that has
+    started is never cut short by it (that would leave a half-applied work tree)."""
+    token = _steps.set(observer)
+    try:
+        yield
+    finally:
+        _steps.reset(token)
+
+
 def git(root, *args, timeout=GIT_TIMEOUT):
+    observer = _steps.get()
+    with observer(args) if observer else contextlib.nullcontext():
+        return _git(root, args, timeout)
+
+
+def _git(root, args, timeout):
     if isinstance(root, RemoteSeat):
         from . import remote
         return remote.call(root, "git", {"args": list(args)}, timeout=timeout)

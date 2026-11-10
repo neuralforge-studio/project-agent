@@ -467,6 +467,23 @@ Worker는 CR 본문을 지시 원본으로 사용하며 추가 prompt-file을 �
 
 `--prompt-file`을 Worker JOB에 주거나 `--seat`를 Leader에 주면 `invalid_arguments`·exit 2이며 어떤 효과도 생기기 전에 거절합니다. 이 검사는 `lifecycle.check_start_arguments` 한 곳이 소유합니다. `Manager.start`와 CLI(`Manager`를 만들기 전)가 부르므로, 등록 밖 cwd에서도 CLI와 Python 호출이 같은 오류를 받습니다.
 
+#### 한도를 넘긴 start
+
+`--timeout`의 전체 대기 제한을 넘기면 start는 `timeout`(exit 4)으로 끝나고 details에 멈춘 곳을 적습니다. 다른 명령의 `timeout`은 details가 비어 있습니다.
+
+| details | 뜻 |
+| --- | --- |
+| `stage` | 멈춘 단계. `assignment`(잠금 대기·seat 검사·배정·prompt 파일), `git`(배정한 seat의 Git 준비), `launch`(launch script와 provider 시작), `registration`(provider 등록 대기) |
+| `step` | `git` 단계에서 한도 때문에 시작하지 못한 Git 명령(인자). 다른 단계는 null |
+| `retry_safe` | 같은 start를 다시 실행해도 되는지. 항상 true입니다 |
+| `job_id`, `seat` | 대상 JOB과 seat(배정 전이면 요청한 seat 또는 null) |
+| `elapsed` | 단계별로 쓴 초. 지나간 단계만 적습니다 |
+| `git_steps` | 이 start가 끝낸 Git 명령과 각 명령의 초(`step`, `seconds`) |
+
+Git 준비의 명령은 각자 600초 한도로 돌지만, start는 Git 명령을 시작하기 전에 전체 한도를 확인합니다. 한도가 지났으면 다음 명령을 시작하지 않고 위 details로 끝냅니다. 이미 시작한 Git 명령은 끊지 않습니다(작업 tree가 반쯤 바뀌지 않게 하려는 것입니다). 그래서 한 명령이 한도를 넘겨 끝날 수는 있지만, 그 뒤 Git 단계가 이어서 도는 일은 없습니다.
+
+start가 한도를 넘겨도 배정·CR claim·대기 window(`sleep`만 도는 pane)는 그대로 남습니다. 같은 `agent-session start --job <CR-ID>`가 그 window를 이어받아 남은 단계를 합니다. Git 준비는 Base를 이미 적었으면 main을 다시 맞추지 않습니다(4절 "Git 준비"). 이어받지 않고 그만두려면 `stop`이 그 window를 종료하고 반납 조건을 확인합니다.
+
 ### Leader
 
 ```sh
@@ -564,6 +581,7 @@ CR의 `- Base: <commit> <ISO 시각>` header가 준비 이력입니다. 이 head
 
 공통 Git 명령은 `-c submodule.recurse=false`로 하위 저장소를 자동 갱신하지 않습니다.
 Git 준비와 seat 검사(배정·반납)의 Git 명령은 모두 timeout 600초를 씁니다. Seat 생성 clone만 3600초입니다.
+start의 Git 명령은 시작하기 전에 명령 전체 한도(`--timeout`)도 확인합니다(위 "한도를 넘긴 start").
 Timeout이 나면 git에 먼저 SIGTERM을 보내 최대 10초 기다립니다. git은 SIGTERM을 받으면 자기 `index.lock`을 지웁니다. 그래도 살아 있을 때만 SIGKILL을 보냅니다.
 중단한 명령의 작업 tree는 반쯤 바뀐 채 남을 수 있습니다. 도구는 lock이나 변경을 지우지 않습니다.
 Timeout은 `git_failed`(exit 5)로 보고하며 message에 중단 사실과 반쯤 적용됐을 수 있다는 점을 적습니다. details는 `operation`, `timeout_seconds`, `interrupted`(`SIGTERM` 또는 `SIGKILL`), `index_lock`(경로 또는 null), `index_lock_left`입니다. 경로는 `git rev-parse --git-path index.lock`으로 확인합니다.
