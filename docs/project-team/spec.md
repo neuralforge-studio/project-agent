@@ -589,6 +589,7 @@ Seat에 `index.lock`이 있으면 배정 검사·반납 검사의 reason에 "sea
 Start의 Git 준비(첫 준비·재시도·재배정·read-only)는 마지막에 한 번 `git submodule update --init --recursive`(timeout 600초)를 실행해 seat의 모든 submodule을 초기화하고 현재 HEAD의 gitlink에 맞춥니다. 실패하면 git_failed로 start가 멈추고 기록한 Git 기준과 배정은 유지합니다. 반납 검사는 바꾸지 않으며, Worker가 건드리지 않은 submodule은 깨끗하므로 반납됩니다. Submodule의 원격 접속·인증·protocol 허용은 사용자 Git 설정을 따릅니다.
 Main 갱신은 `fetch origin main` 뒤 local main을 origin/main으로 fast-forward하는 것과 같은 결과를 냅니다.
 Local main이 origin/main보다 앞서 있으면 그대로 두고 그 tip을 기준으로 삼으며, 갈라졌으면 `git_failed`로 거절합니다.
+Local main이 없으면 origin/main을 추적하는 main을 `branch --track main refs/remotes/origin/main`으로 만듭니다.
 작업 tree를 바꾸는 Git 명령은 파일 전체를 훑으므로 큰 NFS seat에서는 한 번에 수 분이 걸립니다(PERF-005). 그래서 작업 tree 갱신은
 `switch --quiet --no-overwrite-ignore --detach <기준 commit>` 한 번만 하고, 나머지는 ref 갱신입니다.
 Local main은 `branch --force main`으로 옮기고, write의 `cr/<ID>`는 `branch`로 만든 뒤 `symbolic-ref HEAD`로 붙입니다(read-only는 main에 붙입니다).

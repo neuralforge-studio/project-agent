@@ -125,16 +125,19 @@ def sync_main(root):
         raise SessionError("workspace_dirty", "Keep existing changes before preparing main.")
     git(root, "fetch", "origin", "main")
     upstream = git(root, "rev-parse", "--verify", "refs/remotes/origin/main^{commit}")
-    tip = git(root, "rev-parse", "--verify", "refs/heads/main^{commit}")
-    if _is_ancestor(root, upstream, tip):
-        target = tip                       # already up to date (or ahead): nothing to fast-forward
-    elif _is_ancestor(root, tip, upstream):
+    # A seat without a local main gets one from origin/main, tracking it, as `switch main` did.
+    tip = git(root, "rev-parse", "--verify", "refs/heads/main^{commit}") if git(root, "branch", "--list", "main") else None
+    if tip is None or _is_ancestor(root, tip, upstream):
         target = upstream
+    elif _is_ancestor(root, upstream, tip):
+        target = tip                       # already up to date (or ahead): nothing to fast-forward
     else:
         raise SessionError("git_failed", "Not possible to fast-forward main to origin/main.", 3,
                            {"operation": ["merge", "--ff-only", "origin/main"], "returncode": 128})
     git(root, "switch", "--quiet", "--no-overwrite-ignore", "--detach", target)
-    if target != tip:
+    if tip is None:
+        git(root, "branch", "--track", "main", "refs/remotes/origin/main")
+    elif target != tip:
         git(root, "branch", "--force", "main", target)
 
 

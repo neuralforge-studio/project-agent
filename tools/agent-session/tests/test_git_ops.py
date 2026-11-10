@@ -96,7 +96,8 @@ def old_first_preparation(tmp_path, seat, branch):
     git(oracle, "fetch", "origin", "main")
     git(oracle, "switch", "main")
     git(oracle, "merge", "--ff-only", "origin/main")
-    git(oracle, "switch", "-c", branch, git(oracle, "rev-parse", "HEAD"))
+    if branch:
+        git(oracle, "switch", "-c", branch, git(oracle, "rev-parse", "HEAD"))
     return oracle
 
 
@@ -118,6 +119,19 @@ def test_first_preparation_leaves_the_seat_as_the_main_switch_sequence_did(tmp_p
     git_ops.prepare(context, project, store)
     assert seat_result(seat) == seat_result(oracle)
     assert git(seat, "rev-parse", "main") == git(oracle, "rev-parse", "main") != initial
+
+
+@pytest.mark.parametrize("mode", ["write", "read-only"])
+def test_first_preparation_creates_a_missing_local_main_from_origin_as_before(tmp_path, repo, cr_bases, mode):
+    source, seat, _ = repo
+    git(seat, "switch", "-c", "cr/OLD-001")
+    git(seat, "branch", "-D", "main")
+    advance(source)
+    context, store, project = setup_job(tmp_path, seat, mode)
+    oracle = old_first_preparation(tmp_path, seat, "cr/TOOL-001" if mode == "write" else None)
+    git_ops.prepare(context, project, store)
+    assert seat_result(seat) == seat_result(oracle)
+    assert git(seat, "config", "branch.main.remote") == "origin"
 
 
 def test_first_preparation_with_a_main_ahead_of_origin_keeps_the_main_tip_as_before(tmp_path, repo, cr_bases):
