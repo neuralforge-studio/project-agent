@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: TEST-009
 - Base: 645e322aa2dd8b1116b70292dcbf42f458eeb27b 2026-11-10T11:14:00+09:00
+- Outcome: fixed
 
 ## Symptom
 `tools/agent-session/tests/test_tmux.py::test_launch_records_attempt_before_exec_and_exit_keeps_dead_pane`이 가끔 `assert observed.read_text().strip() == "true"`(`'' == 'true'`)로 실패합니다. 실패하면 release 검증의 agent-session 전체 실행이 깨집니다.
@@ -20,6 +21,7 @@
 - 2026-11-10 Leader: 고친다(Leader 판정). 재현과 원인 근거가 있는 test 결함이고 release 검증을 깨뜨립니다.
 - 2026-11-10 Leader: open -> todo. release 검증을 깨는 test 결함
 - 2026-11-10 Leader: 제출 24ec304b5ff7b674468d6cf85a48c895ffef35a1를 인수합니다. Leader review: launch.sh가 관찰 파일을 임시 이름으로 쓴 뒤 mv하므로 exists()가 내용 완성을 뜻합니다. 수정 전에는 16개 동시 실행 중 7개가 실패했고, 수정 뒤에는 32개 실행에서 실패가 0입니다. agent-session 전체 806 passed입니다. 같은 모양이 다른 곳에 없다는 판정도 확인했습니다. 이 제출 뒤 main의 변경(v0.4.0 release commit, TEST-010의 private_root.py)은 PERF-002가 main을 merge한 commit에서 다섯 명령을 다시 실행해 함께 확인합니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 bfe2d3e(Merge cr/TEST-011, 제출 24ec304). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [project-team Worker 절](../../../skills/project-team/SKILL.md).

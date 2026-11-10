@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Base: d66c2615f3aff4f6f161d1491949c2e2ec745777 2026-11-10T10:48:14+09:00
+- Outcome: fixed
 
 ## Symptom
 pytest 여러 개가 거의 동시에 시작하면 그중 하나가 `tools/conftest.py`의 `private_root.configure` → `prune()`에서 `FileNotFoundError`(INTERNALERROR)로 끝나고 test를 하나도 실행하지 않습니다. seat 여럿이 같은 host에서 동시에 검증하는 평소 상황(README 검증)에서 일어납니다.
@@ -27,6 +28,7 @@ pytest 여러 개가 거의 동시에 시작하면 그중 하나가 `tools/conft
 - 2026-11-10 Leader: 고친다(Leader 판정). 재현이 있는 test 기반 결함이며, seat 여럿이 동시에 검증하는 평소 운영에서 검증 실행을 통째로 실패시킵니다.
 - 2026-11-10 Leader: open -> todo. 동시 검증을 깨는 test 기반 결함
 - 2026-11-10 Leader: 제출 c0bbac67abf6f1412ecc8795e07dd65b29b40e27를 인수합니다. Leader review: prune()이 다른 pytest가 이미 지운 항목(lstat의 FileNotFoundError)을 정리 완료로 보고 건너뜁니다. 정리 규칙은 그대로입니다. _owner와 rmtree(ignore_errors)가 이미 같은 경합을 견딘다는 판정과, tmux_test_server 정리 경로에 같은 모양이 없다는 판정을 확인했습니다. 수정 전 실패하는 test가 있습니다. 검증은 1d754e8에서 다섯 명령, merge commit c0bbac6에서 agent-session 806 passed입니다. 이 제출 뒤 main에 들어온 v0.4.0 release commit(VERSION)과 TEST-011(test_tmux.py)의 입력 변경은 PERF-002가 main을 merge한 commit에서 다섯 명령을 다시 실행해 함께 확인합니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 bb89816(Merge cr/TEST-010, 제출 c0bbac6). origin/main 반영 확인. CHANGELOG Unreleased에 더했습니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증)(test 자원 규칙), [`tools/tests/private_root.py`](../../../tools/tests/private_root.py), [project-team Worker 절](../../../skills/project-team/SKILL.md).
