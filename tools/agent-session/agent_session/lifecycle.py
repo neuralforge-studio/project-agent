@@ -57,13 +57,56 @@ class Manager(SuspendMixin, WatchMixin):
         self.tmux = Tmux(**self.socket)
         self.provider = get_provider(self.project.provider)
         self._held = {}                            # slot -> the control lock this command holds
+        self._progress = None                      # where a start is, for a timeout's details (see `_at`)
 
     def remaining(self):
         value = self.end - time.monotonic()
         if value <= 0:
-            raise SessionError("timeout", "The command's total wait limit expired.", 4)
+            raise SessionError("timeout", "The command's total wait limit expired.", 4, self._where())
         self.store.timeout = value
         return value
+
+    def _at(self, stage):
+        """Record the stage that this start is in now. `assignment` is the lock waits, the seat checks and the
+        reservation; `git` is the Git preparation of the reserved seat; `launch` is the prompt, the script and
+        the provider's start; `registration` is the wait for the provider's registration. Only `start` keeps
+        a record; the other commands that reach these stages (restart) report a plain timeout."""
+        progress = self._progress
+        if progress is not None:
+            self._spend(progress, time.monotonic())
+            progress.update(stage=stage, step=None)
+
+    @staticmethod
+    def _spend(progress, now):
+        elapsed = progress["elapsed"]
+        elapsed[progress["stage"]] = elapsed.get(progress["stage"], 0.0) + now - progress["since"]
+        progress["since"] = now
+
+    def _where(self):
+        """The details of a start's timeout: the stage it stopped in, the Git step it was refused at, the time
+        each stage took, and that the same start may run again. A start that ran out of time leaves its
+        assignment, its CR claim and its waiting window, and the next start takes them over."""
+        progress = self._progress
+        if progress is None:
+            return {}
+        self._spend(progress, time.monotonic())
+        return {"stage": progress["stage"], "step": progress["step"], "retry_safe": True,
+                "job_id": progress["job"], "seat": progress["seat"],
+                "elapsed": {name: round(value, 1) for name, value in progress["elapsed"].items()},
+                "git_steps": progress["git_steps"]}
+
+    @contextmanager
+    def _git_step(self, args):
+        """Before each Git command of a start: refuse it when the deadline has passed, and time it."""
+        progress = self._progress
+        progress["step"] = " ".join(args)[:160]
+        self.remaining()
+        began = time.monotonic()
+        try:
+            yield
+        finally:
+            progress["git_steps"].append({"step": progress["step"], "seconds": round(time.monotonic() - began, 1)})
+            progress["step"] = None
 
     @contextmanager
     def _lock(self, slot, blocking=True):
@@ -354,6 +397,7 @@ class Manager(SuspendMixin, WatchMixin):
     def _require_handoff(self, meta):
         return handoff.require(self.project, meta, self.remaining())
     def _launch(self, context, request=None):
+        self._at("launch")
         if context.get("remote_seat"):
             from .remote_lifecycle import launch
             return launch(self, context)
@@ -396,6 +440,7 @@ class Manager(SuspendMixin, WatchMixin):
     def _wait_ready(self, context):
         """Wait until the run is published or fails, and report it. A local run is published by its own
         registration (`internal._register`), so this command holds no control lock while it waits."""
+        self._at("registration")
         if context.get("remote_seat"):
             return self._observe_ready(context)
         with self._unlocked(context["target"]):
@@ -517,6 +562,7 @@ class Manager(SuspendMixin, WatchMixin):
         if meta.get("job"):
             meta["job"] = jobs.claim(self.project, meta["job_id"])
             self._prepare_launch(meta)
+            self._at("git")
             git_ops.prepare(meta, self.project, self.store)
             self.tmux.write_meta(meta["window_id"], {"job": meta["job"]})
         else:
@@ -536,6 +582,14 @@ class Manager(SuspendMixin, WatchMixin):
         return self._launch(context)
 
     def start(self, job, prompt_file=None, seat=None):
+        """Start `job`. A timeout names the stage it stopped in (see `_where`); `_git_step` makes the Git
+        preparation stop at its next step instead of running on past the deadline."""
+        self._progress = {"stage": "assignment", "since": time.monotonic(), "elapsed": {}, "git_steps": [],
+                          "step": None, "job": job, "seat": seat}
+        with git_ops.observing(self._git_step):
+            return self._start(job, prompt_file, seat)
+
+    def _start(self, job, prompt_file, seat):
         leader = job == "leader"
         check_start_arguments(job, prompt_file, seat)
         self.tmux.require_version()
@@ -657,6 +711,7 @@ class Manager(SuspendMixin, WatchMixin):
                             candidate_guard.__exit__(*sys.exc_info())
                 if number is None:
                     raise SessionError("no_available_seat", "No seat passed the allocation checks.", details={"seats": reasons})
+        self._progress["seat"] = number
         if assigned and suspended:
             return self.start_suspended(slot, item)
         if assigned:
@@ -669,6 +724,7 @@ class Manager(SuspendMixin, WatchMixin):
                 return self._start_existing(current)
         try:
             self._prepare_launch(context)
+            self._at("git")
             git_ops.prepare(context, self.project, self.store)
             self.tmux.write_meta(context["window_id"], {"job": context["job"]})
             return self._launch(context)
