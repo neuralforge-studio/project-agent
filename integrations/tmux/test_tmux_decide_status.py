@@ -3,15 +3,19 @@
 import fcntl
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
+import subprocess
+import sys
 import time
 
 import pytest
 
 
 SCRIPT = Path(__file__).with_name("tmux_decide_status.py")
+LAUNCHER = Path(__file__).with_name("tmux_decide_status.sh")
 
 
 class FakeTmux:
@@ -265,3 +269,94 @@ def test_a_project_seen_for_the_first_time_is_a_baseline(status, tmp_path, capsy
     display(status, capsys)
     assert status.tmux.messages()[0][-1] == (
         "새 결정: alpha D-20261106-02 질문 / beta D-20261106-06 질문")
+
+
+# tmux_decide_status.sh: the cache is valid -> no Python (TMUX-003).
+
+COUNT_TWO = "#[fg=white,bg=red,bold] 결정 2 #[default]"   # the status line text, as before TMUX-003
+
+
+@pytest.fixture
+def launcher(status, tmp_path, monkeypatch):
+    """Run tmux_decide_status.sh. `python` picks the interpreter: the real one, or one that cannot run."""
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path / "no-tmux"))     # an alarm never reaches a real server
+    monkeypatch.delenv("TMUX", raising=False)
+
+    def run(python=sys.executable):
+        env = dict(os.environ, PROJECT_AGENT_PYTHON=str(python))
+        return subprocess.run([str(LAUNCHER)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              universal_newlines=True, timeout=60)
+
+    return run
+
+
+def expire_view(status):
+    """Make the cache and the stored status line older than CACHE_TTL, as the clock would."""
+    expire(status)
+    view = Path(status.cache_path()).with_name(status.VIEW_NAME)
+    view.write_text("0\n" + view.read_text(encoding="utf-8").partition("\n")[2], encoding="utf-8")
+
+
+BROKEN_PYTHON = "/nonexistent/python3"
+
+
+def test_a_valid_cache_prints_without_starting_python(status, tmp_path, launcher):
+    register(status, tmp_path, "alpha", "D-20261106-01", "D-20261106-02")
+    first = launcher()
+    assert (first.returncode, first.stdout, first.stderr) == (0, COUNT_TWO, "")
+    second = launcher(BROKEN_PYTHON)        # an interpreter that cannot run: only the stored line can answer
+    assert (second.returncode, second.stdout, second.stderr) == (0, COUNT_TWO, "")
+
+
+def test_a_valid_cache_without_decisions_prints_nothing_without_python(status, tmp_path, launcher):
+    register(status, tmp_path, "alpha")
+    assert launcher().stdout == ""
+    second = launcher(BROKEN_PYTHON)
+    assert (second.returncode, second.stdout, second.stderr) == (0, "", "")
+
+
+def test_an_expired_cache_reads_the_directories_again(status, tmp_path, launcher):
+    decide = register(status, tmp_path, "alpha", "D-20261106-01", "D-20261106-02")
+    assert launcher().stdout == COUNT_TWO
+    close_decision(decide, "D-20261106-02")
+    assert launcher(BROKEN_PYTHON).stdout == COUNT_TWO      # still valid: not read again
+    expire_view(status)
+    stale = launcher(BROKEN_PYTHON)
+    assert (stale.returncode, stale.stdout) == (5, "")      # expired: Python is needed
+    assert launcher().stdout == "#[fg=white,bg=red,bold] 결정 1 #[default]"
+    assert launcher(BROKEN_PYTHON).stdout == "#[fg=white,bg=red,bold] 결정 1 #[default]"
+
+
+def test_the_stored_line_expires_with_the_cache(status, tmp_path, launcher):
+    register(status, tmp_path, "alpha", "D-20261106-01")
+    launcher()
+    path = status.cache_path()
+    view = Path(path).with_name(status.VIEW_NAME)
+    expires, _, text = view.read_text(encoding="utf-8").partition("\n")
+    assert int(expires) == math.floor(os.stat(path).st_mtime + status.CACHE_TTL)
+    assert text == "#[fg=white,bg=red,bold] 결정 1 #[default]"
+
+
+@pytest.mark.parametrize("content", ["", "soon\n결정", "99999999999999"])
+def test_an_unusable_stored_line_is_not_printed(status, tmp_path, launcher, content):
+    register(status, tmp_path, "alpha", "D-20261106-01", "D-20261106-02")
+    launcher()
+    Path(status.cache_path()).with_name(status.VIEW_NAME).write_text(content, encoding="utf-8")
+    assert launcher(BROKEN_PYTHON).returncode == 5
+    assert launcher().stdout == COUNT_TWO
+
+
+def test_a_cache_that_cannot_be_read_stores_no_line(status, tmp_path, capsys):
+    (Path(os.environ["HOME"]) / ".claude" / "project.json").write_text("{", encoding="utf-8")
+    assert display(status, capsys) == ""
+    assert not Path(status.cache_path()).with_name(status.VIEW_NAME).exists()
+
+
+def test_a_failed_read_renews_the_stored_line(status, tmp_path, capsys, monkeypatch):
+    register(status, tmp_path, "alpha", "D-20261106-01")
+    display(status, capsys)
+    view = Path(status.cache_path()).with_name(status.VIEW_NAME)
+    expire_view(status)
+    monkeypatch.setattr(status, "read_open_decisions", lambda previous: None)
+    assert display(status, capsys).strip() == "결정 1"
+    assert int(view.read_text(encoding="utf-8").partition("\n")[0]) > time.time()
