@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S3
 - Related: PERF-004
+- Base: 05c57b137fa66c102731ae3646f1b2a883b51eda 2026-11-11T00:09:32+09:00
 
 ## Symptom
 process를 PID로만 멈추라는 규칙이 이제 global AGENTS.md "환경과 권한"에 있습니다(agent CONFIG-007, 2e6e17e). 그런데 project-team skill의 Worker 절에도 같은 규칙을 독립적으로 적은 문단이 남아 있습니다(`pgrep -f`·`pkill -f` 설명). 두 곳이 따로 관리되므로 SSOT가 깨집니다.
@@ -20,6 +21,7 @@ process를 PID로만 멈추라는 규칙이 이제 global AGENTS.md "환경과 �
 ## Disposition
 - 2026-11-11 Leader: 고친다(Leader 판정). 자기 산출물 정리이며 사용자 요청(2026-11-10 "agent leader session에 요청해~")으로 agent가 반영한 global 규칙의 후속입니다.
 - 2026-11-11 Leader: open -> todo. global PID 규칙의 후속 문서 정리
+- 2026-11-11 Leader: 제출 9ad4a6c635d3fe1b5b803898f8a7d7e4c1cee831를 인수합니다. 검토 9ad4a6c. SKILL.md 124행 한 문단만 global AGENTS.md를 가리키게 줄였고, 원격 seat가 global AGENTS.md를 받지 못한다는 확인(remote.py GUIDANCE_FILES)에 따라 핵심 한 문장을 남겼습니다. 122행 자식 확인과 대기 예시는 그대로입니다. skills/** 행: distribution boundary + test_remote 70 passed, link 변경 없음.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), `/primehome/swain/.claude/AGENTS.md`의 "환경과 권한"(읽기만 합니다), [project-team SKILL.md](../../../skills/project-team/SKILL.md)의 Worker 절과 [self-check.md](../../../skills/project-team/references/self-check.md).
@@ -35,3 +37,19 @@ process를 PID로만 멈추라는 규칙이 이제 global AGENTS.md "환경과 �
 ## Verification
 1. README 검증 표 `skills/**` 행을 실행합니다. 고친 문서의 상대 link 검사, `tools/test_distribution_boundary.py`, `tools/agent-session/tests/test_remote.py`가 해당합니다.
 2. 제출 전에 `origin/main`을 merge하고, merge가 입력을 바꾼 명령만 merge commit에서 다시 실행합니다.
+
+## Result
+
+- 제출 commit: 9ad4a6c635d3fe1b5b803898f8a7d7e4c1cee831
+
+변경: `skills/project-team/SKILL.md`의 process 종료 문단(124행) 1개를 줄였습니다.
+- global AGENTS.md "환경과 권한"을 따른다고 가리킵니다. `kill -0` loop 예시와 `pgrep -f` loop·`pkill -f`가 자기 shell과 맞는 이유 설명은 지웠습니다.
+- provider background 완료 알림 사용과 sub-agent에게 이 규칙을 지시한다는 것은 남겼습니다.
+- 원격 seat 확인(Implementation 3): `remote.py`의 `GUIDANCE_FILES`에 global AGENTS.md가 없어 원격 seat는 이 문서를 받지 못합니다. 그래서 "자기가 띄운 process만 PID로 멈추고 이름·pattern(`pgrep -f`·`pkill -f`)으로 고르지 않는다"는 한 문장만 남겼습니다.
+- Implementation 2: 122행(`ps --ppid $PPID` 확인), 111행, self-check.md 25행, `watch.py` 점검 문구의 "끝나지 않는 `pgrep -f` loop" 예시는 global 규칙과 충돌하지 않아 그대로 둡니다.
+
+검증:
+- `python -m pytest -q tools/test_distribution_boundary.py tools/agent-session/tests/test_remote.py` → 70 passed.
+- 상대 link 검사: 이번 변경은 link를 추가·수정하지 않았고 기존 link 줄도 건드리지 않았습니다.
+- `origin/main`은 base(05c57b1)에서 진행하지 않아(`git log HEAD..origin/main` 비어 있음) merge가 없고 재실행할 검증도 없습니다.
+- `origin/cr/TEAM-001`에 push해 hash 일치를 `git ls-remote`로 확인했습니다.
