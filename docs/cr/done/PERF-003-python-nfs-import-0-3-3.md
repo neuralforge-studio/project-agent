@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: PERF-001, PERF-002, RUST-001, D-20261110-02
 - Base: 0eb2e262e2a939ae4497cd541a1d456db4e36108 2026-11-10T13:05:25+09:00
+- Outcome: fixed
 
 ## Symptom
 짧은 명령(`agent-session review`·`send`, `project-item ls`, `--help`)의 시간 대부분이 Python 시동과 NFS에서의 import입니다. 같은 명령이 NFS 상태와 유휴 시간에 따라 0.3초에서 3초까지 걸립니다. 반복 tmux 조회를 고친 뒤(SESSION-010) 명령 자체의 일은 수십 ms인데, 시동이 그 몇 배에서 수십 배입니다.
@@ -28,6 +29,7 @@
 - 2026-11-10 Leader: 고친다(Leader 판정). 재현 측정이 있는 속도 결함입니다. 해법은 측정으로 고릅니다(D-20261110-02 A). Rust 진입점이 필요하다는 결론이 나오면 범위를 사용자 결정 항목으로 묻고, 그 전에는 Rust 코드를 저장소에 넣지 않습니다.
 - 2026-11-10 Leader: open -> todo. 재현 측정이 있는 속도 결함, 해법은 측정으로 선택
 - 2026-11-10 Leader: 제출 5088d52e048b467608d712c2e0711f93ea7e13ac를 인수합니다. 검토 5088d52(구현 07a0959 + main 9d746d8 merge). 번들 writer·reader, 세 진입점, launcher, 설치기 연결, 문서를 읽었습니다. agent_session.py → run_module('agent_session')은 같은 main을 부릅니다. 도구 package에 importlib.resources·pkgutil·__loader__ 사용이 없어 loader 차이의 영향이 없습니다. README 표의 명령은 모두 실행됐습니다(변경 경로: install·launcher·세 도구·문서). merge 뒤 board·네 번째 명령도 다시 실행됐습니다. 고친 문서 세 개의 상대 link는 Leader가 확인했습니다(0 broken). A/B 결과 v0.4.0 대비 warm wall 비 0.18~0.27(명령 시동), CPU 비 0.49~0.62입니다. 95% 구간이 모두 1에서 멀어 A/A는 판정에 필요 없다고 Leader가 판정하고 생략합니다(사용자가 진행 속도를 요구). 구현 commit 제목이 wip(perf)인 것은 이력에 남지만 rewrite로 시간을 쓰지 않습니다. hook·controller의 번들 사용은 SESSION-011이 들어온 뒤 측정으로 판단합니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 2e73d06 (origin/main)
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [설치 계약](../../project-team/install-contract.md)(6.1 interpreter 선택, release 구성), [실행 경로 계약](../../project-team/README.md#실행-경로-계약), 측정 도구 [`tools/tests/perf/perf_bench.py`](../../../tools/tests/perf/perf_bench.py) 머리말, [PERF-002 Result](PERF-002-python-nfs-library-package-import-1-3.md), [project-team Worker 절](../../../skills/project-team/SKILL.md).
