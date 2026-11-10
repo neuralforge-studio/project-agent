@@ -42,6 +42,7 @@
 - 2026-11-10 Leader: Mode를 read-only에서 write로 바꿉니다. 사용자 지시(2026-11-10 대화 원문: "측정은 필요해. 개선이 얼마나 된것인지 명확한 비교대상. 정량적 평가가 되어야 하니까.")로 측정 도구를 저장소에 남겨 v0.3.0을 기준으로 A/B 비교합니다. Base(2fd2739)는 그대로이고, Worker는 start가 write CR에 하는 것과 같이 `git switch --no-overwrite-ignore -c cr/PERF-001 2fd273983ce67607b63b3ae1c44be5b90d751c45`로 branch를 만듭니다.
 
 - 2026-11-10 Leader: 제출 1(0a77448, 측정 도구만)을 검토했고 수정을 요청합니다. 계측(`tools/tests/perf/site/sitecustomize.py`)이 측정 대상 interpreter의 site 처리와 `PYTHONPATH`에 기대고 있습니다. 그래서 PERF-002처럼 site 처리를 없앤 후보에서는 두 문제가 생깁니다. tmux·subprocess 수가 0으로 기록되고, 가짜 provider 치환이 빠집니다. 또 시간을 재는 실행에 계측 비용이 들어갑니다. 요구 사항은 넷입니다. (a) 시간을 재는 실행에는 측정 대상 process 안의 계측이 없어야 합니다. (b) 호출 수는 process 경계에서 셉니다. (c) 가짜 provider는 process 경계에서 넣습니다. (d) `-I -S` 후보로 같은 숫자가 나오는지 확인하는 test를 둡니다. README 검증 code block의 여섯 번째 명령은 release의 다섯 명령 규칙(release.md 5절)과 어긋나므로 표의 행에만 둡니다. 위치, ABAB 교대, warm/cold 분리, 격리, 산출물 형식은 인정합니다.
+- 2026-11-10 Leader: 제출 76ef704108fb1b14ae66427ece49cd6c1d682ae9를 인수합니다. Leader review(제출 2, 도구 부분 인수·선통합): 계측이 process 경계로 옮겨졌습니다. 시간을 재는 pass에는 shim이 없고 counting pass에서만 PATH shim으로 셉니다. 가짜 provider는 PATH 앞의 claude 실행 파일이라 제품의 실제 provider 코드와 hook·MCP client 비용이 측정에 들어갑니다. -I -S 후보 test가 있고, README code block은 release 다섯 명령으로 돌아왔습니다. 측정하지 못하는 것(실제 Claude CLI 시동·모델 turn)을 명시한 점도 인정합니다. CR은 in-progress로 둡니다. 기준선·A/B 표·원인 분류 제출을 기다립니다.
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증)(test tmux server 규칙), [동작 명세 5절 Python API](../../project-team/spec.md#프로젝트-consumer용-python-api), [project-team Worker 절](../../../skills/project-team/SKILL.md), [tmux 통합](../../../integrations/tmux/project-agent-main.conf).
 
@@ -155,3 +156,18 @@
   - 산출물: `results.jsonl`(명령 하나당 한 줄), `meta.json`, `summary.json`, `summary.md`(중앙값·p90·tmux 수·그 밖의 subprocess 수·ratio·host load).
 - 검증(이 commit에서): `python -m pytest -q tools/tests/perf` 5 passed(작은 규모 A/A 1회 실행과 출력 형식, 서버·socket 잔존 없음 확인 포함, host load 약 100에서 180초), `python -m pytest -q tools/test_distribution_boundary.py` 9 passed, README 상대 link 검사 이상 없음.
 - 아직 없는 것: v0.3.0 기준선 표, A/A 비교, 지속 비용, 원인 분류(5·6단계), Verification 2. 측정 중이며 다음 제출에 넣습니다.
+
+### 제출 2: 계측을 process 경계로 옮긴 도구 (제출 1에 대한 Leader 피드백 반영)
+- 제출 commit: 76ef704108fb1b14ae66427ece49cd6c1d682ae9
+- 바뀐 것:
+  - (a)(b) 측정 대상 interpreter 안의 계측을 없앴습니다(`sitecustomize`·`PYTHONPATH`·`PROJECT_AGENT_PYTHON` 제거). 호출 수는 `PATH` 앞의 `tmux`·`git`·`ps` shim(호출 기록만 남기고 진짜 프로그램을 exec)이 세고, shim은 별도 counting pass에서만 켭니다. 시간을 재는 warm·cold pass에는 shim이 없습니다. counting pass의 시간은 보고하지 않습니다(row의 `mode`가 `count`). 호출 수는 규모·실행본마다 1회입니다.
+  - (c) 가짜 provider를 process 경계에서 넣습니다. `tools/tests/perf/fake_claude.py`를 `claude` 이름으로 `PATH` 앞에 두고 제품의 실제 Claude provider 코드가 그것을 실행합니다. `claude --version`, `claude agents --json`, `claude mcp serve`(MCP: initialize·tools/list·ListAgents·SendMessage), 인터랙티브 CLI(settings의 SessionStart·Stop hook 실행, SIGTERM에 SessionEnd hook 후 143 종료)를 흉내 냅니다. 그래서 provider 코드(MCPClient 시동·종료 대기, ListAgents 조회)와 제품 hook의 비용이 측정에 들어갑니다. `mcp serve`는 실제처럼 stdin이 닫혀도 계속 살아 있어 MCPClient.close의 1초 대기가 그대로 재현됩니다.
+  - 경계에서 넣을 수 없는 것(그 연산이 재지 않는 것): 실제 Claude CLI의 시동 시간(node, 수 초), 모델 turn, 네트워크. 가짜 `claude`는 python(`-I -S`)이라 시동이 짧습니다. 그래서 `start`·`restart`·`stop`·`send` 숫자는 "제품 코드 + 제품이 띄우는 hook·MCP client + 가짜 provider"의 비용이고 실제 사용 시간보다 짧습니다. 실제 provider의 시동·종료 대기는 `provider_probe.py`(읽기 전용 실측)와 사용자 server의 run 기록으로 따로 추정합니다.
+  - tmux 안에서 PATH는 pane을 만든 tmux client의 PATH로 정해집니다(이 workstation에서 server 환경이나 `set-environment`로는 바뀌지 않음을 확인). 그래서 shim이 shim PATH로 진짜 프로그램을 exec해 shim PATH가 pane까지 전해집니다. server가 대신 일으키는 process(Worker 등록, hook)의 호출 수는 `pane_spawns`로 따로 세어 명령의 호출 수에 더합니다. counting pass에서는 fake CLI의 hook이 끝난 뒤(`busy-*` 파일) 다음 명령을 셉니다. 늦은 hook이 다음 명령의 tmux 읽기와 겹치면 읽기를 반복해 호출 수가 달라지기 때문입니다.
+  - `pane-died` hook의 `finish_ended`는 hook을 그대로 두고 CLI를 죽인 뒤 `finish-result.json`이 생길 때까지의 시간으로 잽니다(제품이 만든 hook 명령 그대로).
+  - 상태줄: main의 view 파일(`tmux-decide-status.view`) 변경에 맞춰 cache와 view를 함께 지우고 만료시킵니다.
+  - (d) `test_small_run_with_an_isolated_candidate_...`: launcher가 `-I -S`로 Python을 시작하는 실행본(agent-session·project-item)을 후보로 A/B를 돌려, 시간 측정 row에는 shim이 없고 후보의 tmux 호출 수가 기준과 같게(0이 아니게) 나옴을 확인합니다. 서버·socket·환경 디렉터리가 남지 않음도 확인합니다.
+  - README: code block의 여섯 번째 명령을 뺐습니다. `tools/tests/perf/**` 표 행에만 test 명령과 "release 검증 아님·host 부하에 따라 수 분~수십 분"을 적었습니다.
+- origin/main(SESSION-010 통합, 8d6365c까지)을 merge(c7e9052)한 뒤 그 merge 위에서 검증했습니다. 이 merge가 상태줄 view 파일과 tmux 읽기 횟수를 바꿔 도구 test가 두 번 실패했고(view 파일을 지우지 않아 cache가 안 생김, 후속 hook과 겹친 읽기 반복으로 호출 수 28 대 15), 위 두 가지를 고쳤습니다.
+- 검증(76ef704에서): `python -m pytest -q tools/tests/perf` 6 passed(host load 80~180에서 1695초), `python -m pytest -q tools/test_distribution_boundary.py` 9 passed, README 상대 link 검사 이상 없음. 제품 코드는 바꾸지 않았습니다.
+- 다음 제출: v0.3.0 대 Base(2fd2739) 기준선(A/A)과 연산 × 규모 표, 지속 비용, Verification 2, 원인 분류. 이전에 scratch harness로 잰 값은 계측 방식이 달라 쓰지 않고 이 도구로 다시 잽니다.
