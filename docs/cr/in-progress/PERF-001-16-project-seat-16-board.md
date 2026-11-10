@@ -44,6 +44,7 @@
 - 2026-11-10 Leader: 제출 1(0a77448, 측정 도구만)을 검토했고 수정을 요청합니다. 계측(`tools/tests/perf/site/sitecustomize.py`)이 측정 대상 interpreter의 site 처리와 `PYTHONPATH`에 기대고 있습니다. 그래서 PERF-002처럼 site 처리를 없앤 후보에서는 두 문제가 생깁니다. tmux·subprocess 수가 0으로 기록되고, 가짜 provider 치환이 빠집니다. 또 시간을 재는 실행에 계측 비용이 들어갑니다. 요구 사항은 넷입니다. (a) 시간을 재는 실행에는 측정 대상 process 안의 계측이 없어야 합니다. (b) 호출 수는 process 경계에서 셉니다. (c) 가짜 provider는 process 경계에서 넣습니다. (d) `-I -S` 후보로 같은 숫자가 나오는지 확인하는 test를 둡니다. README 검증 code block의 여섯 번째 명령은 release의 다섯 명령 규칙(release.md 5절)과 어긋나므로 표의 행에만 둡니다. 위치, ABAB 교대, warm/cold 분리, 격리, 산출물 형식은 인정합니다.
 - 2026-11-10 Leader: 제출 76ef704108fb1b14ae66427ece49cd6c1d682ae9를 인수합니다. Leader review(제출 2, 도구 부분 인수·선통합): 계측이 process 경계로 옮겨졌습니다. 시간을 재는 pass에는 shim이 없고 counting pass에서만 PATH shim으로 셉니다. 가짜 provider는 PATH 앞의 claude 실행 파일이라 제품의 실제 provider 코드와 hook·MCP client 비용이 측정에 들어갑니다. -I -S 후보 test가 있고, README code block은 release 다섯 명령으로 돌아왔습니다. 측정하지 못하는 것(실제 Claude CLI 시동·모델 turn)을 명시한 점도 인정합니다. CR은 in-progress로 둡니다. 기준선·A/B 표·원인 분류 제출을 기다립니다.
 - 2026-11-10 Leader: RUST-001은 D-20261110-02 A로 닫혔습니다(waived). 6단계의 "Rust로 바꾸면 얼마나 줄어드는지" 추정은 그대로 적습니다. 이 값은 남은 시동 비용을 다루는 PERF-003의 판단 근거가 됩니다.
+- 2026-11-10 Leader: 제출 3(265ef84, 도구 수정)을 검토했습니다. 명령별 자식 CPU 시간, 중앙값 95% bootstrap 구간과 ratio 구간 기준 판정(구간이 1을 벗어날 때만 improved/worse), 반복 9회, lifecycle 실패 내성을 인정합니다. 남은 것: merge(265ef84)로 들어온 BOARD-012가 바꾼 `tools/project-board`는 `tools/tests/perf` 통합 test의 입력(측정하는 제품 tree)입니다. README 표 `tools/tests/perf/**` 행의 명령 전체를 merge commit에서 다시 실행해야 하므로 통합은 그 결과를 받은 뒤에 합니다. 진행 중인 측정의 부하와 겹치지 않도록 현재 측정 단계 뒤에 실행해도 됩니다.
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증)(test tmux server 규칙), [동작 명세 5절 Python API](../../project-team/spec.md#프로젝트-consumer용-python-api), [project-team Worker 절](../../../skills/project-team/SKILL.md), [tmux 통합](../../../integrations/tmux/project-agent-main.conf).
 
@@ -323,3 +324,15 @@ steady(Board pane을 켜고 client 1개, status-interval 1초, 60초): 4×4에�
 steady 8×8: Board pane 1개는 v0.3.0 17.47 CPU초, v0.4.0 9.95(상태줄 5.99 대 2.19)입니다. pane 4개는 56.4 대 10.54(상태줄 9.75 대 2.22)입니다.
 
 **16×16: 진행 중.** 첫 시도에서 v0.3.0의 counting pass가 보인 값입니다(그 run은 도구 결함으로 중단돼 다시 재는 중입니다). `Board liveness` 한 번이 tmux 4,496번·340초, `project-item ls`가 128번·7.4초(main은 3번·2초)였습니다. v0.3.0의 `start`는 host load 82에서 92초 만에 `provider_exited`로 실패했습니다. 등록 hook이 slot 17개를 모두 조회해 pane의 tmux가 316번이었습니다. 원인은 등록 hook(예산 25초)의 시간 초과로 보이며, 재측정에서 확인합니다. 정식 표는 재측정 뒤에 적습니다.
+
+### 제출 3: 도구 수정 (CPU 시간·구간·반복·실패 내성, Leader 요청 반영)
+- 제출 commit: 265ef84403fd61647cc80dd527a71099ed64fb29
+- 바뀐 것(`tools/tests/perf`만, 제품 코드 변경 없음):
+  - 명령마다 자식 process의 CPU 시간(user+sys, `RUSAGE_CHILDREN`의 차)을 `cpu`로 기록하고 표에 wall과 함께 냅니다. 측정 대상 밖에서 재는 값이며, 측정 명령의 자손이 아닌 process(tmux server가 대신 하는 일, Worker 등록·hook)는 들어가지 않습니다. 이 한계를 보고서(`summary.md`) 머리에 적습니다. Board 읽기(`board_*`)는 probe process 안에서 lap별 CPU(RUSAGE_SELF+CHILDREN)를 잽니다.
+  - 중앙값마다 95% percentile-bootstrap 구간(3개 이상일 때)과 후보/기준 ratio의 구간을 냅니다. `improved`/`worse`는 ratio 구간 전체가 1의 한쪽에 있을 때만이고, 아니면 `same`(이 run의 오차를 넘는 차이 없음)입니다. 같은 값 두 묶음이 `same`이 되고 구간이 1을 포함함을 test합니다.
+  - 반복: `--reps` 기본 9, 분 단위로 걸리는 lifecycle·board_cli는 `--slow-reps`로 따로 줄입니다. 줄였으면 표 머리에 반복 수가 적힙니다.
+  - 실패 내성: lifecycle의 한 명령이 실패하면 그 row를 `rc != 0`(보고서의 `failed`)으로 남기고 나머지를 건너뛴 뒤 spare seat의 창·run 포인터·배정·CR을 되돌립니다. 가짜 `claude`는 hook 실패·시간 초과로 죽지 않고(실제 CLI와 같음) `start`가 `registration_failed`를 보고하게 둡니다.
+  - Board probe는 liveness를 한 번만 읽고(v0.3.0의 16×16 liveness가 340초라 세 번이면 timeout), Board pane의 steady 호출 수 계수가 PATH를 잘못 이어 0이던 결함을 고쳤습니다.
+  - 상태줄: main의 view 파일 변경에 맞춰 cache와 view를 함께 지우고 만료시킵니다. 병합된 main의 launcher(`-S`)가 바뀌어도 후보를 `-I -S`로 만드는 test가 깨지지 않게 정규식으로 바꿨습니다.
+- 검증: 5491579(= 이 commit의 앞 commit)에서 `python -m pytest -q tools/tests/perf` 8 passed(host load 55~100에서 1902초), `tools/test_distribution_boundary.py` 9 passed, README 상대 link 검사 이상 없음. 그 뒤 origin/main이 BOARD-012(`project_board/tmux_control.py`와 그 test, CHANGELOG, CR 문서)로 움직여 merge(265ef84)했고, merge 위에서 통합 test를 뺀 도구 test 7 passed와 `test_distribution_boundary.py` 9 passed만 다시 실행했습니다. 통합 test(약 30분)는 merge 위에서 다시 돌리지 않았습니다. merge가 바꾼 파일에 `tools/tests/perf`가 없고 통합 test의 입력(제품 tree)은 BOARD-012가 Board의 tmux 호출만 바꿨기 때문입니다. 필요하면 Leader가 지시하십시오.
+- 측정 진행: v0.3.0 대 main(v0.4.0)의 16×16(4회, lifecycle 2회)을 먼저 새 도구로 재는 중입니다(count pass 단계). 이어서 4×4(9회), A/A(9회), cold(16×16, 3회), PERF-002 후보(main d2326ce)의 4×4와 16×16, 8×8 순입니다. 16×16 등록 hook 시간 초과가 v0.4.0에서도 나는지는 이 run의 `start` row로 먼저 보고합니다.
