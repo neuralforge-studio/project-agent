@@ -5,11 +5,36 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import time
 
 import pytest
 
 TOOLS = Path(__file__).resolve().parent
 ENTRIES = {name: TOOLS / name / "bin" / name for name in ("agent-session", "project-item", "project-board")}
+
+# The user's cache and settings are not an input of these tests: tmux_decide_status.sh prints a valid view
+# file of the user's status line without running the interpreter. Every child below gets these empty
+# directories instead (set by the autouse fixture `empty_user_dirs`).
+USER_DIRS = {}
+USER_DIR_VARIABLES = ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME")
+
+
+@pytest.fixture(autouse=True)
+def empty_user_dirs(tmp_path, monkeypatch):
+    home = tmp_path / "user-home"
+    cache = tmp_path / "user-cache"
+    home.mkdir()
+    cache.mkdir()
+    monkeypatch.setitem(USER_DIRS, "HOME", str(home))
+    monkeypatch.setitem(USER_DIRS, "XDG_CACHE_HOME", str(cache))
+
+
+def child_env(env=None):
+    """The environment of an entry point: the caller's, with the interpreter selection removed and no user dirs."""
+    base = {key: value for key, value in os.environ.items()
+            if key not in ("PROJECT_AGENT_PYTHON", "PROJECT_AGENT_PYTHONPATH", "PROJECT_AGENT_LD_LIBRARY_PATH", "PYTHONPATH",
+                           *USER_DIR_VARIABLES)}
+    return {**base, **USER_DIRS, **(env or {})}
 
 
 def run(entry, *args, env=None, link_dir=None):
@@ -17,9 +42,7 @@ def run(entry, *args, env=None, link_dir=None):
     if link_dir is not None:
         path = link_dir / entry.name
         path.symlink_to(entry)
-    base = {key: value for key, value in os.environ.items()
-            if key not in ("PROJECT_AGENT_PYTHON", "PROJECT_AGENT_PYTHONPATH", "PROJECT_AGENT_LD_LIBRARY_PATH", "PYTHONPATH")}
-    return subprocess.run([str(path), *args], env={**base, **(env or {})}, capture_output=True, text=True, timeout=60)
+    return subprocess.run([str(path), *args], env=child_env(env), capture_output=True, text=True, timeout=60)
 
 
 @pytest.fixture
@@ -97,11 +120,11 @@ def test_standard_library_tools_do_not_run_the_site_step(name, tmp_path):
 def test_entry_point_runs_from_its_own_directory_and_through_a_linked_directory(name, tmp_path):
     """The directory of the entry point and of the launcher is found without `dirname`."""
     entry = ENTRIES[name]
-    result = subprocess.run(["bash", entry.name, "--help"], cwd=entry.parent, capture_output=True, text=True, timeout=60)
+    result = subprocess.run(["bash", entry.name, "--help"], cwd=entry.parent, env={**os.environ, **USER_DIRS}, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     (tmp_path / "tools").symlink_to(TOOLS)
     linked = tmp_path / "tools" / name / "bin" / name
-    result = subprocess.run([str(linked), "--help"], capture_output=True, text=True, timeout=60)
+    result = subprocess.run([str(linked), "--help"], env={**os.environ, **USER_DIRS}, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
 
 
@@ -230,7 +253,7 @@ def test_python_env_library_path_goes_in_front_of_ld_library_path(name, release,
 
 def test_library_path_alone_is_the_whole_value_without_a_user_value(release, ld_python):
     write_env(release, f"PROJECT_AGENT_PYTHON={ld_python}", "PROJECT_AGENT_LD_LIBRARY_PATH=/lib/installed")
-    env = {key: value for key, value in os.environ.items() if key != "LD_LIBRARY_PATH"}
+    env = {key: value for key, value in child_env().items() if key != "LD_LIBRARY_PATH"}
     result = subprocess.run([str(release_entry(release, "project-item"))], env=env, capture_output=True, text=True)
     assert result.stdout == "LD=/lib/installed\n"
 
@@ -247,3 +270,22 @@ def test_library_path_is_not_applied_without_the_installer_interpreter(release, 
     write_env(release, "PROJECT_AGENT_LD_LIBRARY_PATH=/lib/installed")
     result = run(release_entry(release, "project-item"), "--help", env={"LD_LIBRARY_PATH": "/lib/users"})
     assert "/lib/installed" not in result.stdout + result.stderr
+
+
+def test_valid_view_of_the_users_status_line_does_not_change_the_result(release, fake_python, tmp_path, monkeypatch):
+    """The user's cache (`$XDG_CACHE_HOME`, else `~/.cache`) holds a valid view: the launcher cases run as without it."""
+    view = f"{int(time.time()) + 3600}\nUSER-STATUS-LINE"
+    for variable in ("XDG_CACHE_HOME", "HOME"):
+        cache = tmp_path / f"planted-{variable}"
+        user_cache = cache if variable == "XDG_CACHE_HOME" else cache / ".cache"
+        user_cache.mkdir(parents=True)
+        (user_cache / "tmux-decide-status.view").write_text(view)
+        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        monkeypatch.setenv(variable, str(cache))
+        entry = release_entry(release, "tmux_decide_status.sh")
+        # The planted view is effective for an unisolated run, so the assertion below is not vacuous.
+        direct = subprocess.run([str(entry)], env={**os.environ, "PROJECT_AGENT_PYTHON": str(fake_python)},
+                                capture_output=True, text=True, timeout=60)
+        assert direct.stdout == "USER-STATUS-LINE"
+        result = run(entry, env={"PROJECT_AGENT_PYTHON": str(fake_python)})
+        assert result.stdout.startswith("ARGV1="), variable
