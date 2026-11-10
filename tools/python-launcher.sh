@@ -68,3 +68,12 @@ project_agent_select_python() {
         PY=$(command -v python3 || true)
     fi
 }
+
+# Reads the bundle reader (bundle_boot.py, install contract 6.1) into PROJECT_AGENT_BOOT, the first part of
+# the `-c` program of an entry point. `read` is a builtin: no process and no `cat`. Without that file the
+# program gets a reader that does nothing, and the modules are imported one by one.
+project_agent_read_boot() {
+    local code=
+    IFS= read -r -d '' code 2> /dev/null < "$PROJECT_AGENT_LAUNCHER_DIR/bundle_boot.py" || true
+    PROJECT_AGENT_BOOT="${code:-def _project_agent_bundle(tools_directory): pass}"
+}

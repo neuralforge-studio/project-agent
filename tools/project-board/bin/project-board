@@ -7,6 +7,7 @@ entry="${BASH_SOURCE[0]}"
 ROOT="$(CDPATH= cd -P -- "${entry%/*}/.." && pwd -P)"
 source "$ROOT/../python-launcher.sh"
 project_agent_select_python
+project_agent_read_boot
 if [ -z "$PY" ]; then
     echo "The configured Python interpreter is unavailable." >&2
     exit 5
@@ -15,7 +16,14 @@ export PYTHONPATH="$ROOT${PROJECT_AGENT_PYTHONPATH:+:$PROJECT_AGENT_PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 unset PYTHONHOME
 # Only the TUI commands import textual from the interpreter's site-packages. The tmux hooks and the
-# toggle/click keys (sync, click, toggle) are standard library only and run at every window change.
-site=()
-case "${1:-}" in sync|click|toggle) site=(-S) ;; esac
-exec "$PY" "${site[@]}" -m project_board "$@"
+# toggle/click keys (sync, click, toggle) are standard library only and run at every window change: they
+# skip the site step and start from the bundle (`-m project_board`, after the bundle reader).
+case "${1:-}" in
+    sync|click|toggle)
+        exec "$PY" -S -c "$PROJECT_AGENT_BOOT
+import sys
+_project_agent_bundle(sys.argv.pop(1))
+import runpy
+runpy.run_module('project_board', run_name='__main__', alter_sys=True)" "$PROJECT_AGENT_LAUNCHER_DIR" "$@" ;;
+esac
+exec "$PY" -m project_board "$@"
