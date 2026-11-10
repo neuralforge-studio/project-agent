@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: SESSION-011, SESSION-012, PERF-004
 - Base: 16fce569de54eec284550d1a6bb1a4b243f834b7 2026-11-10T19:54:37+09:00
+- Outcome: fixed
 
 ## Symptom
 host load가 높으면 등록 hook이 Claude MCP 서버를 띄우는 데만 8~32초가 걸립니다. 그래서 SESSION-011 뒤에도 hook 한도(Claude 30초, 우리 deadline 25초, binding 20초)에 닿아 Worker start가 `registration_failed`로 끝날 수 있습니다. binding을 다시 확인할 때마다 MCP 서버를 새로 띄웁니다.
@@ -22,6 +23,7 @@ host load가 높으면 등록 hook이 Claude MCP 서버를 띄우는 데만 8~32
 - 2026-11-10 Leader: 고친다(Leader 판정). SESSION-011 Result가 남긴 한도 조정 제안입니다. 우리 쪽 일을 줄인 뒤에도 Claude MCP 시동이 부하에서 8~32초라는 측정 근거가 있습니다.
 - 2026-11-10 Leader: open -> todo. 부하에서 hook 한도 초과, 측정 근거 있음
 - 2026-11-10 Leader: 제출 a6eda8bb6ee8e0328137d34499ea3cfa3eea5625를 인수합니다. 검토 a6eda8b(구현 b1766a9 + main 1b0ea72 merge). binding 재확인을 reusing_client 블록 하나에서 돌림(verify_binding이 _peer_of 경유), HOOK_TIMEOUT 60 한 상수에서 settings timeout과 deadline 50·binding 40·reserve 12·startup cap 20, 명세 문장을 읽었습니다. main(PERF-004)과의 merge에서 spec.md 한 곳이 충돌해 Leader가 두 문장을 모두 두어 풀었습니다(2fd84c7). merge commit에서 Leader가 tools/agent-session/tests 837 passed, 네 번째 명령 130 passed를 실행했습니다. 고친 문서의 상대 link 0 broken. 측정은 start 성공 BASE 4/5 대 후보 5/5, wall·CPU same(n=3)이며 이 CR은 부하에서의 실패를 막는 변경이라 속도 개선을 판정 기준으로 삼지 않습니다.
+- 2026-11-10 Leader: in-progress -> done, Outcome fixed. 통합 2fd84c7 (origin/main)
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [실행 경로 계약](../../project-team/README.md#실행-경로-계약), [동작 명세](../../project-team/spec.md)의 등록(5절), 측정 도구 [`tools/tests/perf/perf_bench.py`](../../../tools/tests/perf/perf_bench.py) 머리말(가짜 `claude`의 `hooks.log`), [project-team Worker 절](../../../skills/project-team/SKILL.md), `tools/agent-session/agent_session/internal.py`(`_bind`, `_verify_binding`, 한도 상수), `providers/claude.py`(`verify_binding`, `reusing_client`, `_peer_of`, `registration_hooks`), SESSION-011·SESSION-012 Result.
