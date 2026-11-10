@@ -1474,3 +1474,73 @@ def test_cr_popup_row_marks_review_wait(tmp_path):
                 "▶ CPU-001 검토 Submitted", "  CPU-002 Working"]
 
     asyncio.run(check())
+
+
+def _count_blocks(monkeypatch):
+    built = []
+    original = SidebarApp._project_block
+
+    def counted(self, number, project):
+        built.append(number)
+        return original(self, number, project)
+    monkeypatch.setattr(SidebarApp, "_project_block", counted)
+    return built
+
+
+def test_a_refresh_that_changes_nothing_shown_draws_nothing_and_a_change_draws_only_its_project(tmp_path, monkeypatch):
+    board = _make_sidebar_board(tmp_path)                       # Falcon2 has a Worker and a Leader; ProjectB is folded
+    app = SidebarApp(str(board.config), poll=False)
+    built = _count_blocks(monkeypatch)
+
+    async def check():
+        async with app.run_test(size=(40, 25)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await pilot.pause()
+            assert built == [0, 1]
+            built.clear()
+            names = [app.query_one(f"#project-{n}-name", Button) for n in (0, 1)]
+            # The same state again, and a later minute: the seats are folded, so no minute counter is on screen.
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW + dt.timedelta(minutes=5)))
+            await pilot.pause()
+            assert built == []
+            # A CR is added to ProjectB only: its block alone is drawn again, and Falcon2's widgets stay.
+            board.cr(tmp_path / "ProjectB" / "main", "open", "OTH-001")
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await pilot.pause()
+            assert built == [1]
+            assert app.query_one("#project-0-name", Button) is names[0]
+            assert app.query_one("#project-1-name", Button) is not names[1]
+            assert str(app.query_one("#project-1-O", Button).label) == "O:1"
+            assert [str(button.label) for button in app.query(".project-name")] == ["Falcon2", "ProjectB"]
+            # A project that appears changes the list: everything is drawn again, in order.
+            built.clear()
+            board.project("ProjectC", seats=1)
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await pilot.pause()
+            assert built == [0, 1, 2]
+            assert [str(button.label) for button in app.query(".project-name")] == ["Falcon2", "ProjectB", "ProjectC"]
+
+    asyncio.run(check())
+
+
+def test_the_minute_of_an_expanded_project_redraws_that_project_only(tmp_path, monkeypatch):
+    board = _make_sidebar_board(tmp_path)
+    app = SidebarApp(str(board.config), poll=False)
+    built = _count_blocks(monkeypatch)
+
+    async def check():
+        async with app.run_test(size=(40, 25)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await pilot.pause()
+            await pilot.click("#project-0-seats")
+            await wait_until(pilot, lambda: app.query(".leader"))
+            other = app.query_one("#project-1-name", Button)
+            built.clear()
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW + dt.timedelta(seconds=60)))
+            await pilot.pause()
+            assert built == [0]
+            assert _leader_rows(app) == ["  Leader 1d 01h 31m"]
+            assert app.query_one("#project-1-name", Button) is other
+
+    asyncio.run(check())

@@ -53,7 +53,9 @@ project-board cr --project PROJECT_ID --state open  # show a CR list
 ```
 
 The sidebar refreshes source files every 2 seconds and run liveness every 10 seconds. A refresh
-parses again only the CR and decision files whose size or modification time changed; a popup
+parses again only the CR and decision files whose size or modification time changed, and lists a
+directory tree again only when the modification time of one of its directories changed (the same
+for the registry file). It draws again only the projects whose shown content changed; a popup
 reads only its own project.
 The TUI keeps clicks and scrolling responsive during reads and answer delivery. Decision
 answers require the `operator` caller classification from `agent-session`; a managed or

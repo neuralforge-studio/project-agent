@@ -1076,3 +1076,21 @@ def test_the_snapshot_reads_what_the_per_window_options_hold(monkeypatch):
     finally:
         _release_clients(clients)
         tmux_test_server.release(name)
+
+
+def test_reading_the_folds_takes_no_lock_and_starts_one_tmux_command(monkeypatch):
+    """Every Board pane reads the folds on each refresh (BOARD-013): one `show-options`, no lock (which would add a
+    `display-message` and a `ps` per other tmux server)."""
+    calls = []
+
+    class Control:
+        def command(self, *args):
+            calls.append(args)
+            return '["one", "two"]'
+
+    def no_lock(control):
+        raise AssertionError("reading the folds must not take the lock")
+    monkeypatch.setattr(tmux_control, "_control", lambda socket=None: Control())
+    monkeypatch.setattr(tmux_control, "_locked", no_lock)
+    assert tmux_control.expanded_projects() == {"one", "two"}
+    assert len(calls) == 1 and calls[0][0] == "show-options"
