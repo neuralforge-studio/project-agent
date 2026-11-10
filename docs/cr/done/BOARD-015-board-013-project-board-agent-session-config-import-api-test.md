@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: BOARD-013
 - Base: c64f2728ca470b52fe2eb40c8e5f4fff25aab525 2026-11-11T00:32:59+09:00
+- Outcome: fixed
 
 ## Symptom
 0.7.0 release gate(e6ff6c0, 2026-11-11 00:41)의 `python -m pytest -q -n 8 tools/agent-session/tests`가 1개 실패했습니다. 실패한 test는 `tools/agent-session/tests/test_api_boundary.py::test_other_tools_import_only_the_public_api`입니다. BOARD-013이 `tools/project-board/project_board/model.py`에 `from agent_session.config import registry_path`를 더했습니다. 다른 도구는 `agent_session.api`만 import해야 합니다.
@@ -23,6 +24,7 @@
 - 2026-11-11 Leader: 고친다(Leader 판정). 승인한 작업(BOARD-013)에서 나온 결함이며 release gate가 재현했습니다.
 - 2026-11-11 Leader: open -> todo. release gate 재현, BOARD-013 하위 결함
 - 2026-11-11 Leader: 제출 517921f87852d78766ae0f6c62fdf591cba38911를 인수합니다. 검토 517921f(구현 920421f + main 1a14398 merge). api.py의 registry_path 공개(__all__), model.py의 api import, 명세 5절 행, README 표의 project-board·project-item 행에 test_api_boundary.py 추가를 읽었습니다. 수정 전 경계 test 실패 확인. api.py 행의 명령(agent-session 846, project-item 125, project-board 171, install/tests 280) 모두 통과, 문서는 distribution boundary와 link 검사. merge는 perf 도구·CR 문서만 들여와 입력이 바뀌지 않음.
+- 2026-11-11 Leader: in-progress -> done, Outcome fixed. 통합 5222e30 (origin/main)
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), `tools/agent-session/tests/test_api_boundary.py`, `tools/agent-session/agent_session/api.py`의 `__all__`, [명세 5절](../../project-team/spec.md#프로젝트-consumer용-python-api), [project-team Worker 절](../../../skills/project-team/SKILL.md).
