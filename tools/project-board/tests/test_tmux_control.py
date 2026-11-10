@@ -954,3 +954,125 @@ def test_a_failing_popup_never_covers_the_work_pane_and_the_client_is_told(bare)
                 process.wait(timeout=2)
             os.close(master)
         tmux_test_server.release(name)
+
+
+def _release_clients(clients):
+    for process, master, _client in clients:
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+        os.close(master)
+
+
+def _counting(monkeypatch):
+    """The argument vectors of the tmux processes the product starts from now on (the test's own are not counted)."""
+    calls = []
+    original = subprocess.run
+
+    def counted(argv, *args, **kwargs):
+        if argv and argv[0] == "tmux":
+            calls.append(list(argv))
+        return original(argv, *args, **kwargs)
+    monkeypatch.setattr(subprocess, "run", counted)
+    return calls
+
+
+def _tmux_processes_of_sync_and_toggle(monkeypatch, extra_windows):
+    """The tmux processes `toggle` (on, off) and `sync` (a window to fill, nothing to change) start on a server
+    with 2 + 2 * extra_windows windows, one client and no Board pane, with the Board panes they make."""
+    name = tmux_test_server.claim("board-test")
+    clients = []
+    try:
+        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "one", "sleep", "60")
+        _tmux(name, "new-window", "-d", "-t", "one", "sleep", "60")
+        for number in range(extra_windows):
+            _tmux(name, "new-session", "-d", "-s", f"s{number}", "sleep", "60")
+            _tmux(name, "new-window", "-d", "-t", f"s{number}", "sleep", "60")
+        clients.append(_attached(name, "one"))
+        socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
+        monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
+        calls = _counting(monkeypatch)
+        counts, made = {}, {}
+
+        def measure(label, action):
+            del calls[:]
+            result = action()
+            assert result["ok"] is True, result
+            counts[label] = len(calls)
+            made[label] = (len(result["data"]["created"]), len(result["data"]["removed"]))
+
+        measure("toggle_on", lambda: tmux_control.toggle_sidebar(socket=socket_path))
+        _tmux(name, "switch-client", "-c", clients[0][2], "-t", "one:1")
+        measure("sync_create", lambda: tmux_control.reconcile(socket=socket_path))
+        measure("sync_nochange", lambda: tmux_control.reconcile(socket=socket_path))
+        measure("toggle_off", lambda: tmux_control.toggle_sidebar(socket=socket_path))
+        assert made == {"toggle_on": (1, 0), "sync_create": (1, 0), "sync_nochange": (0, 0), "toggle_off": (0, 2)}
+        return counts
+    finally:
+        _release_clients(clients)
+        tmux_test_server.release(name)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_sync_and_toggle_start_the_same_tmux_processes_for_any_number_of_windows(monkeypatch):
+    """BOARD-012: the reads of `sync` and `toggle` do not grow with the windows of the server.
+
+    The panes made or removed (one or two here, the clients' windows) account for the writes and for the
+    layout reads that go with them; every other process is one read of the whole server."""
+    small = _tmux_processes_of_sync_and_toggle(monkeypatch, 0)
+    large = _tmux_processes_of_sync_and_toggle(monkeypatch, 24)
+    assert large == small, (small, large)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_the_snapshot_reads_what_the_per_window_options_hold(monkeypatch):
+    """BOARD-012: one format read gives the values `show-options` gave for each window and pane."""
+    name = tmux_test_server.claim("board-test")
+    clients = []
+    try:
+        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "one", "sleep", "60")
+        _tmux(name, "new-session", "-d", "-s", "two", "sleep", "60")
+        _tmux(name, "new-window", "-d", "-t", "two", "sleep", "60")
+        clients.append(_attached(name, "one"))
+        _tmux(name, "set-option", "-g", "remain-on-exit", "on")
+        dead = _tmux(name, "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "two:0", "true")
+        for _ in range(100):
+            if _tmux(name, "display-message", "-p", "-t", dead, "#{pane_dead}") == "1":
+                break
+            time.sleep(0.05)
+        socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
+        monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
+        assert tmux_control.toggle_sidebar(config=None, socket=socket_path)["ok"] is True
+        windows = _tmux(name, "list-windows", "-a", "-F", "#{window_id}").splitlines()
+        _tmux(name, "set-option", "-w", "-t", windows[-1], "@project_board_seen", "1234")
+        _tmux(name, "set-option", "-w", "-t", "two:0", tmux_control.PANE_ID_OPTION, json.dumps(dead))
+        _tmux(name, "set-option", "-g", "@project_board_config", "/tmp/a b/config.json")
+
+        snapshot = tmux_control._snapshot(Tmux(socket_path=socket_path))
+
+        assert snapshot.enabled is True and snapshot.config == "/tmp/a b/config.json"
+        assert snapshot.width == _tmux(name, "show-options", "-gqv", "@project_board_width") != ""
+        assert snapshot.visible == _tmux(name, "list-clients", "-F", "#{window_id}").splitlines()
+        assert list(snapshot.windows) == windows            # tmux's order, the order the panes are judged in
+        marked = 0
+        for window, record in snapshot.windows.items():
+            def option(*flags):
+                return _tmux(name, "show-options", "-qv", *flags)
+            assert record.board == option("-w", "-t", window, "@project_board_pane")
+            assert record.seen == option("-w", "-t", window, "@project_board_seen")
+            assert record.managed == option("-w", "-t", window, tmux_control.PANE_ID_OPTION)
+            assert record.panes == {
+                pane: dead_flag == "1" for pane, dead_flag in
+                (row.split("\t") for row in _tmux(name, "list-panes", "-t", window, "-F",
+                                                  "#{pane_id}\t#{pane_dead}").splitlines())}
+            for pane, mark in record.marks.items():
+                assert mark == option("-p", "-t", pane, "@project_board_managed")
+                marked += mark == "1"
+        assert marked == 1 and snapshot.windows[windows[0]].board
+        assert tmux_control._managed_pane_dead(snapshot.windows[_tmux(name, "display-message", "-p", "-t", "two:0", "#{window_id}")])
+    finally:
+        _release_clients(clients)
+        tmux_test_server.release(name)
