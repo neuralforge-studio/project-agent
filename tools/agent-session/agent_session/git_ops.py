@@ -116,11 +116,34 @@ def dirty(root):
 
 
 def sync_main(root):
+    """Bring the seat to the latest origin/main and leave HEAD detached on it, with local main there too.
+
+    A work tree update costs a walk of every file (a large NFS seat takes minutes per walk), so this does
+    exactly one: the detached switch. It is also the only guard against overwriting ignored files. Everything
+    else is a ref update. `merge --ff-only` semantics are kept: local main may only move forward."""
     if dirty(root):
         raise SessionError("workspace_dirty", "Keep existing changes before preparing main.")
-    git(root, "switch", "--no-overwrite-ignore", "main")
     git(root, "fetch", "origin", "main")
-    git(root, "merge", "--ff-only", "--no-overwrite-ignore", "origin/main")
+    upstream = git(root, "rev-parse", "--verify", "refs/remotes/origin/main^{commit}")
+    # A seat without a local main gets one from origin/main, tracking it, as `switch main` did.
+    tip = git(root, "rev-parse", "--verify", "refs/heads/main^{commit}") if git(root, "branch", "--list", "main") else None
+    if tip is None or _is_ancestor(root, tip, upstream):
+        target = upstream
+    elif _is_ancestor(root, upstream, tip):
+        target = tip                       # already up to date (or ahead): nothing to fast-forward
+    else:
+        raise SessionError("git_failed", "Not possible to fast-forward main to origin/main.", 3,
+                           {"operation": ["merge", "--ff-only", "origin/main"], "returncode": 128})
+    git(root, "switch", "--quiet", "--no-overwrite-ignore", "--detach", target)
+    if tip is None:
+        git(root, "branch", "--track", "main", "refs/remotes/origin/main")
+    elif target != tip:
+        git(root, "branch", "--force", "main", target)
+
+
+def _attach(root, branch):
+    """Put HEAD on `branch`, which is at HEAD's commit: the tree and index already match, so no walk."""
+    git(root, "symbolic-ref", "HEAD", f"refs/heads/{branch}")
 
 
 def _baseline(root):
@@ -133,12 +156,15 @@ def _first(context, project, store, root):
     from . import jobs
     job = context["job"]
     sync_main(root)
+    if job["mode"] == "read-only":
+        _attach(root, "main")
     baseline = _baseline(root)
     _save_hash(store, str(context["seat"]), job["job_id"], baseline["base_hash"])
     jobs.set_base(project, job["job_id"], baseline)
     if job["mode"] == "write":
         git(root, "check-ref-format", "--branch", job["branch"])
-        git(root, "switch", "--no-overwrite-ignore", "-c", job["branch"], baseline["base_hash"])
+        git(root, "branch", job["branch"], baseline["base_hash"])
+        _attach(root, job["branch"])
     return baseline
 
 
