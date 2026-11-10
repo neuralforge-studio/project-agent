@@ -23,6 +23,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import resource
 import shutil
 import stat
 import subprocess
@@ -335,15 +336,47 @@ class Environment:
             raise SystemExit(f"tmux {args}: {result.stderr}")
         return result.stdout.strip()
 
+    def reset_spare(self):
+        """After a failed lifecycle: remove the spare seat's windows, run pointer and assignment, and put its CRs aside,
+        so that the next repetition starts from the built state. Best effort; a failure here only shows in the next run."""
+        slot = f"seat-{self.spare}"
+        tmux = Tmux(socket_path=self.info["socket_path"])
+        try:
+            for window in tmux.managed_windows("p00", slot):
+                self.tmux("kill-window", "-t", window, check=False)
+        except Exception:
+            pass
+        self.tmux("set-option", "-u", "-t", "p00", f"@agent_session_current_seat_{self.spare}", check=False)
+        project = next(p for p in load_registry(self.info["config"]) if p.project_id == "p00")
+
+        def clear(value):
+            value[str(self.spare)] = {"job_id": None, "git_hash": None, "session": None}
+            if value["leader"]:
+                value["leader"]["reviewing"] = None
+        StateStore(project).update(clear)
+        done = Path(self.base) / "docs" / "cr" / "done"
+        for state in ("in-progress", "todo", "open"):
+            for path in (Path(self.base) / "docs" / "cr" / state).glob("PERF-*.md"):
+                path.rename(done / path.name)
+
     def worker_window(self):
         return Tmux(socket_path=self.info["socket_path"]).get_current("p00", f"seat-{self.spare}")
 
 
 def run_command(argv, env, cwd, stdin=None, timeout=900):
-    """One real subprocess: (seconds, return code, stdout, stderr)."""
+    """One real subprocess: (seconds, return code, stdout, stderr, cpu seconds).
+
+    `cpu` is user+sys time of the command and of the processes it started and waited for (the difference of
+    RUSAGE_CHILDREN around the call; this harness runs one command at a time). It is measured outside the command,
+    and it moves less with the host's load than the wall time. It does not include processes that are not the
+    command's descendants, such as the tmux server's work for it (a Worker's registration, a hook)."""
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
     start = time.perf_counter()
     result = subprocess.run(argv, env=env, cwd=cwd, input=stdin, capture_output=True, text=True, timeout=timeout)
-    return time.perf_counter() - start, result.returncode, result.stdout, result.stderr
+    wall = time.perf_counter() - start
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cpu = (after.ru_utime - before.ru_utime) + (after.ru_stime - before.ru_stime)
+    return wall, result.returncode, result.stdout, result.stderr, cpu
 
 
 def read_spawn_log(path):

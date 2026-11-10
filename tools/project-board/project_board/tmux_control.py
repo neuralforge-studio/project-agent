@@ -282,25 +282,80 @@ def _panes(control: Tmux, window: str) -> dict[str, bool]:
     return out
 
 
-def _managed_pane_dead(control: Tmux, window: str, panes: dict[str, bool]) -> bool:
-    raw = _options(control, "-w", "-t", window, PANE_ID_OPTION)
-    if not raw:
+class _Window:
+    """What one window tells `_snapshot`: its panes (id -> dead), the Board and managed-pane options of the
+    window, the time a client last showed it, and the Board mark of each of its panes."""
+
+    def __init__(self):
+        self.panes: dict[str, bool] = {}
+        self.board = ""
+        self.managed = ""
+        self.seen = ""
+        self.marks: dict[str, str] = {}
+
+
+class _Snapshot:
+    """The server state `_reconcile` and `_evict` judge, read by one tmux process.
+
+    A format reads an option through the pane, the window, the session and the global levels, where
+    `show-options -w` reads the window alone. The Board and agent-session write `@project_board_pane`,
+    `@project_board_seen` and the managed-pane option only on windows, and `@project_board_managed` only
+    on panes, never above, so the values are the ones the per-window reads gave.
+    """
+
+    def __init__(self, enabled: str, width: str, config: str, visible: list[str], windows: dict[str, _Window]):
+        self.enabled = enabled == "1"
+        self.width = width
+        self.config = config or None
+        self.visible = visible
+        self.windows = windows
+
+
+def _snapshot(control: Tmux) -> _Snapshot:
+    """Read the global Board options, the windows the clients show, and every window and pane at once."""
+    rows = _lines(
+        control,
+        "display-message", "-p", f"G\t#{{{ENABLED}}}\t#{{{WIDTH}}}\t#{{{CONFIG}}}",
+        ";", "list-clients", "-F", "C\t#{window_id}",
+        ";", "list-panes", "-a", "-F",
+        f"P\t#{{window_id}}\t#{{pane_id}}\t#{{pane_dead}}\t#{{{WINDOW_PANE}}}\t#{{{PANE_ID_OPTION}}}"
+        f"\t#{{{WINDOW_SEEN}}}\t#{{{PANE_MARK}}}")
+    enabled = width = config = ""
+    visible, windows = [], {}
+    for row in rows:
+        kind, _, rest = row.partition("\t")
+        if kind == "G":
+            enabled, width, config = rest.split("\t", 2)
+        elif kind == "C":
+            visible.append(rest)
+        elif kind == "P":
+            window, pane, dead, board, managed, seen, mark = rest.split("\t", 6)
+            record = windows.setdefault(window, _Window())
+            if not record.panes:
+                record.board, record.managed, record.seen = board, managed, seen
+            record.panes[pane] = dead == "1"
+            record.marks[pane] = mark
+    return _Snapshot(enabled, width, config, visible, windows)
+
+
+def _managed_pane_dead(window: _Window) -> bool:
+    if not window.managed:
         return False
     try:
-        pane = json.loads(raw)
+        pane = json.loads(window.managed)
     except ValueError:
         return False
-    return isinstance(pane, str) and panes.get(pane, False)
+    return isinstance(pane, str) and window.panes.get(pane, False)
 
 
-def _board_pane(control: Tmux, window: str, panes: dict[str, bool]) -> str | None:
-    pane = _options(control, "-w", "-t", window, WINDOW_PANE)
+def _board_pane(control: Tmux, window: str, record: _Window) -> str | None:
+    pane = record.board
     if not pane:
         return None
-    if pane in panes and _options(control, "-p", "-t", pane, PANE_MARK) == "1":
+    if pane in record.panes and record.marks.get(pane) == "1":
         return pane
     try:
-        if pane not in panes:
+        if pane not in record.panes:
             _restore(control, window)
     finally:
         control.command("set-option", "-wu", "-t", window, WINDOW_PANE)
@@ -395,11 +450,9 @@ def _evict(control: Tmux, shown_kept: list[str], created: list[str], failures: l
         control.command("set-option", "-w", "-t", window, WINDOW_SEEN, now)
     shown = set(shown_kept) | set(created)
     boards = []
-    for window in _lines(control, "list-windows", "-a", "-F", "#{window_id}"):
-        pane = _options(control, "-w", "-t", window, WINDOW_PANE)
-        if pane:
-            seen = _options(control, "-w", "-t", window, WINDOW_SEEN)
-            boards.append((window, pane, int(seen) if seen.isdecimal() else 0))
+    for window, record in _snapshot(control).windows.items():
+        if record.board:
+            boards.append((window, record.board, int(record.seen) if record.seen.isdecimal() else 0))
     evicted = []
     excess = len(boards) - MAX_KEPT
     for window, pane, _seen in sorted((b for b in boards if b[0] not in shown), key=lambda b: b[2]):
@@ -415,17 +468,17 @@ def _evict(control: Tmux, shown_kept: list[str], created: list[str], failures: l
 
 
 def _reconcile(control: Tmux) -> dict:
-    enabled = _options(control, "-g", ENABLED) == "1"
-    config = _options(control, "-g", CONFIG) or None
-    visible = set(_lines(control, "list-clients", "-F", "#{window_id}")) if enabled else set()
-    windows = dict.fromkeys(_lines(control, "list-windows", "-a", "-F", "#{window_id}"))
+    snapshot = _snapshot(control)
+    enabled, config = snapshot.enabled, snapshot.config
+    visible = set(snapshot.visible) if enabled else set()
+    windows = snapshot.windows
     created, removed, failures = [], [], []
     to_remove, to_create, to_keep = [], [], []
-    for window in windows:
+    for window, record in windows.items():
         try:
-            panes = _panes(control, window)
-            board = _board_pane(control, window, panes)
-            usable = enabled and not _managed_pane_dead(control, window, panes)
+            panes = record.panes
+            board = _board_pane(control, window, record)
+            usable = enabled and not _managed_pane_dead(record)
             # A Board pane stays in a window nobody watches: it is the process that costs seconds
             # to start, and the next client to arrive finds it already showing.
             if board and (not usable or panes[board]):
@@ -439,7 +492,7 @@ def _reconcile(control: Tmux) -> dict:
         except (SessionError, OSError, ValueError) as error:
             failures.append({"window": window, "reason": str(error)})
 
-    saved_width = _options(control, "-g", WIDTH)
+    saved_width = snapshot.width
     saved_width_valid = saved_width.isdecimal() and int(saved_width) > 0
     width = int(saved_width) if saved_width_valid else SIDEBAR_WIDTH
     if not saved_width_valid and (to_remove or to_create or to_keep):

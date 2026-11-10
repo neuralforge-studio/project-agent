@@ -88,8 +88,18 @@ def hook(settings, event, payload):
     try:
         for entry in settings.get("hooks", {}).get(event, []):
             for item in entry.get("hooks", []):
-                subprocess.run(item["command"], shell=True, input=json.dumps(payload), text=True, capture_output=True,
-                               timeout=item.get("timeout", 30))
+                started, outcome = time.time(), "ok"
+                try:
+                    done = subprocess.run(item["command"], shell=True, input=json.dumps(payload), text=True,
+                                          capture_output=True, timeout=item.get("timeout", 30))
+                    outcome = f"rc={done.returncode}"
+                except subprocess.TimeoutExpired:
+                    outcome = "timeout"     # a hook that fails or times out does not end the real CLI either
+                except (OSError, subprocess.SubprocessError):
+                    outcome = "error"
+                if PEERS:                   # how long each hook took: one line per run in the environment's hooks.log
+                    with open(os.path.join(PEERS, "..", "hooks.log"), "a", encoding="utf-8") as log:
+                        log.write(f"{event}\t{time.time() - started:.2f}\t{outcome}\n")
     finally:
         if marker:
             os.unlink(marker)
