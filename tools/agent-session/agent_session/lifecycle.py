@@ -1031,9 +1031,11 @@ class Manager(SuspendMixin, WatchMixin):
             cleanup = self._sweep(slot)
             return {**result, "cleanup": {**cleanup, "kept": kept + cleanup["kept"]}}
 
-    def pending_releases(self):
-        """JOB ID -> {seat, since, reasons} for each assigned seat whose stopped run waits for release."""
-        return api.release_waits(self.project, self.store, self.tmux)
+    def pending_releases(self, view=None):
+        """JOB ID -> {seat, since, reasons} for each assigned seat whose stopped run waits for release.
+
+        `view` is a `ServerView` to read the runs from; without one this reads the server itself, once."""
+        return api.release_waits(self.project, self.store, self.tmux, view)
 
     def _restore_stopping(self, meta, error):
         """After a control that failed before the end, unblock the run only while its same CLI lives."""

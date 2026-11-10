@@ -2,6 +2,7 @@
 
 import copy
 from pathlib import PurePosixPath
+from types import SimpleNamespace
 
 import pytest
 
@@ -41,6 +42,9 @@ def remote_slot(tmp_path, monkeypatch):
 
         def pane_info(self, pane_id):
             pytest.fail("a local SSH display is not remote process evidence")
+
+        def server_view(self, project_ids, targets):          # what the product asks once instead of get_current per slot
+            return SimpleNamespace(current=self.get_current, pane_info=self.pane_info)
 
     def local_process(*args):
         pytest.fail("remote PID values must not be inspected on the local host")

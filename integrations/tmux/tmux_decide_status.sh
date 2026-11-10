@@ -1,7 +1,22 @@
 #!/bin/bash
-# Run tmux_decide_status.py with the interpreter of the release (install contract 6.1).
-# The status line option @project_agent_decide_status calls this file, never the .py directly.
+# Print the decision status line for the tmux status line (@project_agent_decide_status).
+#
+# While the cache of tmux_decide_status.py is valid this prints the stored status line and starts no
+# Python. The view file (VIEW_NAME in the .py) has the epoch second until which it is valid on its
+# first line and the status line after it; the .py owns CACHE_TTL and writes that line. Otherwise
+# this runs tmux_decide_status.py with the interpreter of the release (install contract 6.1).
+# The status line option calls this file, never the .py directly.
 set -euo pipefail
+
+view="${XDG_CACHE_HOME:-$HOME/.cache}/tmux-decide-status.view"
+expires="" body=""
+if [[ -r "$view" ]]; then
+    { IFS= read -r expires && { IFS= read -r -d '' body || true; }; } < "$view" 2>/dev/null || expires=""
+    if [[ "$expires" =~ ^[0-9]+$ ]] && (( $(date +%s) <= expires )); then
+        printf '%s' "$body"
+        exit 0
+    fi
+fi
 
 script="${BASH_SOURCE[0]}"
 [[ "$script" == */* ]] || script="./$script"
