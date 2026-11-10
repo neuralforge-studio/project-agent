@@ -4,6 +4,7 @@
 - Scope: project-agent
 - Severity: S2
 - Related: PERF-001, SESSION-010, SESSION-012
+- Base: 78e6f77fb5e9bbc28d361fe8c9af9bdddfd0050b 2026-11-10T15:56:42+09:00
 
 ## Symptom
 project 16개 × seat 16개에서 Worker `start`의 등록 hook(SessionStart)이 seat 수와 host 부하에 비례해 길어져 한도(`_HOOK_BUDGET` 25초, settings의 hook timeout 30초)에 닿습니다. 부하가 높으면 `start`가 `registration_failed`로 실패합니다. hook이 timeout으로 강제 종료되면 실패 기록이 남지 않아 `start`가 약 600초를 기다린 뒤에야 끝납니다. 사용자가 물은 규모(2026-11-10: "project가 굉장히 여러개 일때도? 예를 들어 각 seat가 16개씩 project 16개?")에서 Worker를 시작할 수 없는 결함입니다.

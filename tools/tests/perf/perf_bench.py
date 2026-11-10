@@ -3,7 +3,7 @@
 
 usage:
   python perf_bench.py run --exe BASE=PATH --exe CANDIDATE=PATH --workdir DIR --out DIR
-                           [--scales 4x4,8x8,16x16] [--reps 3] [--groups startup,readonly,board_cli,lifecycle,steady]
+                           [--scales 4x4,8x8,16x16] [--reps 9] [--slow-reps 3] [--groups startup,readonly,board_cli,lifecycle,steady]
                            [--cold-reps 3] [--cold-seconds 61] [--cold-units agent_review_clear,...]
                            [--steady-seconds 60] [--steady-reps 1]
   python perf_bench.py report --out DIR
@@ -31,6 +31,7 @@ is being measured (the workstation's NFS home), never a path inside a seat or th
 import argparse
 import json
 import platform
+import random
 import signal
 import statistics
 import subprocess
@@ -86,9 +87,47 @@ def _counts(rows):
     return out
 
 
+BOOTSTRAP = 2000
+
+
+def _rng(*key):
+    return random.Random(repr(key))                 # the same rows always give the same interval
+
+
+def median_ci(values, rng, level=0.95):
+    """Percentile bootstrap interval of the median; None for fewer than 3 values."""
+    n = len(values)
+    if n < 3:
+        return None
+    medians = sorted(statistics.median(rng.choices(values, k=n)) for _ in range(BOOTSTRAP))
+    return [medians[int((1 - level) / 2 * BOOTSTRAP)], medians[int((1 + level) / 2 * BOOTSTRAP) - 1]]
+
+
+def ratio_ci(candidate, baseline, rng, level=0.95):
+    """Percentile bootstrap interval of median(candidate) / median(baseline) (independent resamples)."""
+    if len(candidate) < 3 or len(baseline) < 3:
+        return None
+    ratios = []
+    for _ in range(BOOTSTRAP):
+        base = statistics.median(rng.choices(baseline, k=len(baseline)))
+        if base > 0:
+            ratios.append(statistics.median(rng.choices(candidate, k=len(candidate))) / base)
+    if len(ratios) < BOOTSTRAP // 2:
+        return None
+    ratios.sort()
+    return [ratios[int((1 - level) / 2 * len(ratios))], ratios[int((1 + level) / 2 * len(ratios)) - 1]]
+
+
+def verdict(interval):
+    """`improved` or `worse` only when the whole interval of the ratio lies on one side of 1."""
+    if interval is None:
+        return "-"
+    return "improved" if interval[1] < 1 else "worse" if interval[0] > 1 else "same"
+
+
 def aggregate(rows):
     """{(scale, mode, op): {exe: stats}}: times of the warm and cold rows, counts of the counting pass.
-    A failed row only counts in `failed`."""
+    A failed row only counts in `failed`. `walls` and `cpus` keep the values for the intervals."""
     counts = _counts(rows)
     groups = {}
     for row in rows:
@@ -104,10 +143,14 @@ def aggregate(rows):
                 out[(scale, mode, op)][exe] = {"n": 0, "failed": len(items)}
                 continue
             walls = [r["wall"] for r in good]
+            cpus = [r["cpu"] for r in good if r.get("cpu") is not None]
             count = counts.get((scale, op, exe), {})
+            rng = _rng(scale, mode, op, exe)
             out[(scale, mode, op)][exe] = {
                 "n": len(good), "failed": len(items) - len(good), "median": statistics.median(walls),
-                "p90": percentile(walls, 0.9), "min": min(walls), "max": max(walls),
+                "ci": median_ci(walls, rng), "p90": percentile(walls, 0.9), "min": min(walls), "max": max(walls),
+                "cpu_median": statistics.median(cpus) if cpus else None, "cpu_ci": median_ci(cpus, rng) if cpus else None,
+                "walls": walls, "cpus": cpus,
                 "tmux": count.get("tmux"), "other": count.get("other"), "spawns_by_name": count.get("by_name", {}),
                 "load": statistics.median(r["load"] for r in good)}
     return out
@@ -118,14 +161,19 @@ def ratio(candidate, baseline):
 
 
 def summarize(rows, names):
-    """The JSON summary: every operation's stats per executable and the candidate/baseline ratios."""
+    """The JSON summary: every operation's stats per executable and the candidate/baseline ratios with intervals."""
     base, candidate = names[0], names[-1]
     summary = []
     for (scale, mode, op), per_exe in sorted(aggregate(rows).items()):
         entry = {"scale": scale, "mode": mode, "op": op, "exe": per_exe}
         if base in per_exe and candidate in per_exe and per_exe[base].get("n") and per_exe[candidate].get("n"):
             a, b = per_exe[base], per_exe[candidate]
+            rng = _rng(scale, mode, op, "ratio")
+            wall_ci = ratio_ci(b["walls"], a["walls"], rng)
+            cpu_ci = ratio_ci(b["cpus"], a["cpus"], rng) if a["cpus"] and b["cpus"] else None
             entry["ratio"] = {"median": ratio(b["median"], a["median"]), "p90": ratio(b["p90"], a["p90"]),
+                              "ci": wall_ci, "verdict": verdict(wall_ci),
+                              "cpu": ratio(b["cpu_median"], a["cpu_median"]), "cpu_ci": cpu_ci, "cpu_verdict": verdict(cpu_ci),
                               "tmux": ratio(b["tmux"], a["tmux"]), "other": ratio(b["other"], a["other"])}
         summary.append(entry)
     steady = []
@@ -146,6 +194,10 @@ def _number(value):
     return "-" if value is None else f"{value:g}"
 
 
+def _interval(interval, digits=2):
+    return "" if interval is None else f" [{interval[0]:.{digits}f}-{interval[1]:.{digits}f}]"
+
+
 def markdown(summary, meta):
     base, candidate = summary["baseline"], summary["candidate"]
     lines = [f"# project-agent benchmark: {candidate} against {base}", ""]
@@ -153,24 +205,35 @@ def markdown(summary, meta):
         if key in meta:
             lines.append(f"- {key}: {meta[key]}")
     lines += [f"- executables: " + ", ".join(f"{k} = {v}" for k, v in meta.get("executables", {}).items()),
-              f"- reps {meta.get('reps')}, cold reps {meta.get('cold_reps')} after {meta.get('cold_seconds')} s idle", ""]
+              f"- reps {meta.get('reps')} (lifecycle and board_cli {meta.get('slow_reps')}), cold reps {meta.get('cold_reps')} "
+              f"after {meta.get('cold_seconds')} s idle",
+              "- `wall` is elapsed seconds; `cpu` is user+sys seconds of the command and the processes it started and waited "
+              "for (outside the command; it excludes processes that are not its descendants, such as the tmux server's work "
+              "for it). Brackets are 95% percentile-bootstrap intervals of the median (shown from 3 values), and of the "
+              "candidate/baseline ratio of medians. A verdict is `improved` or `worse` only when the whole ratio interval lies "
+              "below or above 1; otherwise `same` (no difference beyond the noise of this run).", ""]
     modes = sorted({(e["scale"], e["mode"]) for e in summary["operations"]},
                    key=lambda item: (int(item[0].split("x")[0]) * int(item[0].split("x")[1]), item[1] != "warm"))
     for scale, mode in modes:
         lines += [f"## {scale} {mode}", "",
-                  f"| operation | {base} median s | p90 | {candidate} median s | p90 | ratio median | ratio p90 | "
-                  f"tmux {base} -> {candidate} | other {base} -> {candidate} | load |",
-                  "|---|---|---|---|---|---|---|---|---|---|"]
+                  f"| operation | n | {base} wall s | {candidate} wall s | wall ratio | wall verdict | {base} cpu s | {candidate} cpu s | "
+                  f"cpu ratio | cpu verdict | tmux {base} -> {candidate} | other {base} -> {candidate} | load |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for entry in summary["operations"]:
             if (entry["scale"], entry["mode"]) != (scale, mode):
                 continue
             a, b = entry["exe"].get(base, {}), entry["exe"].get(candidate, {})
             if not a.get("n") or not b.get("n"):
                 continue
-            ratios = entry.get("ratio", {})
-            lines.append(f"| {entry['op']} | {a['median']:.3f} | {a['p90']:.3f} | {b['median']:.3f} | {b['p90']:.3f} | "
-                         f"{_ratio(ratios.get('median'))} | {_ratio(ratios.get('p90'))} | {_number(a['tmux'])} -> {_number(b['tmux'])} | "
-                         f"{_number(a['other'])} -> {_number(b['other'])} | {a['load']:.0f}/{b['load']:.0f} |")
+            r = entry.get("ratio", {})
+            lines.append(
+                f"| {entry['op']} | {a['n']}/{b['n']} | {a['median']:.3f}{_interval(a['ci'], 3)} | {b['median']:.3f}{_interval(b['ci'], 3)} | "
+                f"{_ratio(r.get('median'))}{_interval(r.get('ci'))} | {r.get('verdict', '-')} | "
+                f"{_number(a['cpu_median'] and round(a['cpu_median'], 3))}{_interval(a['cpu_ci'], 3)} | "
+                f"{_number(b['cpu_median'] and round(b['cpu_median'], 3))}{_interval(b['cpu_ci'], 3)} | "
+                f"{_ratio(r.get('cpu'))}{_interval(r.get('cpu_ci'))} | {r.get('cpu_verdict', '-')} | "
+                f"{_number(a['tmux'])} -> {_number(b['tmux'])} | {_number(a['other'])} -> {_number(b['other'])} | "
+                f"{a['load']:.0f}/{b['load']:.0f} |")
         lines.append("")
     if summary["steady"]:
         lines += ["## steady cost (Board panes, one client, status-interval 1)", "",
@@ -199,7 +262,7 @@ def _meta(args, exes):
     tmux = subprocess.run(["tmux", "-V"], capture_output=True, text=True).stdout.strip()
     return {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "host": platform.node(), "python": sys.version.split()[0],
             "tmux": tmux, "workdir_mount": mount[:200], "executables": {e.name: str(e.root) for e in exes},
-            "scales": args.scales, "reps": args.reps, "cold_reps": args.cold_reps, "cold_seconds": args.cold_seconds,
+            "scales": args.scales, "reps": args.reps, "slow_reps": args.slow_reps or args.reps, "cold_reps": args.cold_reps, "cold_seconds": args.cold_seconds,
             "groups": args.groups, "load_at_start": load_average()}
 
 
@@ -210,6 +273,7 @@ def run(args):
     if exes[0].name == exes[1].name:
         raise SystemExit("the two executables need different names")
     out, workdir = Path(args.out), Path(args.workdir)
+    slow_reps = args.reps if args.slow_reps is None else args.slow_reps
     out.mkdir(parents=True, exist_ok=True)
     workdir.mkdir(parents=True, exist_ok=True)
     results = out / "results.jsonl"
@@ -244,6 +308,8 @@ def run(args):
             for rep in range(1, args.reps + 1):
                 bench.rep = rep
                 for unit in warm:
+                    if unit in ("lifecycle", "board_cli") and rep > slow_reps:
+                        continue
                     for exe in exes:                              # A B A B: one unit, both executables, then the next unit
                         units[unit](exe)
             cold = [u for u in args.cold_units if u in units]
@@ -287,7 +353,9 @@ def parse(argv=None):
     run_parser.add_argument("--workdir", required=True)
     run_parser.add_argument("--out", required=True)
     run_parser.add_argument("--scales", default="4x4,8x8,16x16", type=lambda s: [x for x in s.split(",") if x])
-    run_parser.add_argument("--reps", type=int, default=3)
+    run_parser.add_argument("--reps", type=int, default=9, help="repetitions of every unit (warm)")
+    run_parser.add_argument("--slow-reps", type=int, default=None,
+                            help="repetitions of the lifecycle and board_cli units, which take minutes each (default: --reps)")
     run_parser.add_argument("--groups", default="startup,readonly,board_cli,lifecycle,steady",
                             type=lambda s: [x for x in s.split(",") if x])
     run_parser.add_argument("--cold-reps", type=int, default=3)

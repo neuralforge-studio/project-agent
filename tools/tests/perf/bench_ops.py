@@ -52,10 +52,10 @@ class Bench:
     def pane_lines(self):
         return self.pane_log.read_text().splitlines() if self.pane_log.exists() else []
 
-    def row(self, exe, op, wall, rc, spawns=None, pane=None, **extra):
+    def row(self, exe, op, wall, rc, spawns=None, pane=None, cpu=None, **extra):
         self.recorder.add({"exe": exe.name, "scale": self.env.scale, "mode": self.mode, "rep": self.rep, "op": op,
-                           "wall": round(wall, 4), "rc": rc, "load": round(load_average(), 2), "spawns": spawns or {},
-                           "pane_spawns": pane or {}, **extra})
+                           "wall": round(wall, 4), "cpu": None if cpu is None else round(cpu, 4), "rc": rc,
+                           "load": round(load_average(), 2), "spawns": spawns or {}, "pane_spawns": pane or {}, **extra})
 
     def settle(self, quiet=0.4, limit=30.0):
         """Counting pass: wait until the fake CLIs' hooks (Stop, SessionEnd: files `busy-*` in the peers directory) and
@@ -85,8 +85,8 @@ class Bench:
         log = self.counting_log(spawn_log)
         env = self.env.command_env(exe, log, identity, extra_env)
         before = len(self.pane_lines())
-        wall, rc, out, err = run_command(argv, env, self.env.base, stdin=stdin)
-        self.row(exe, op, wall, rc, read_spawn_log(log) if log else {}, count_spawns(self.pane_lines()[before:]))
+        wall, rc, out, err, cpu = run_command(argv, env, self.env.base, stdin=stdin)
+        self.row(exe, op, wall, rc, read_spawn_log(log) if log else {}, count_spawns(self.pane_lines()[before:]), cpu)
         if expect_ok and rc != 0:
             raise SystemExit(f"{exe.name} {op} failed (rc {rc}): {(out + err)[:1500]}")
         return out, err
@@ -160,16 +160,16 @@ class Bench:
         pane = self.env.tmux("list-panes", "-t", "p00", "-F", "#{pane_id}").splitlines()[0]
         log = self.counting_log()
         env = self.env.command_env(exe, log, None, {"TMUX_PANE": pane, "PERF_TOOLS": str(exe.tools)})
-        wall, rc, out, err = run_command([self.env.python, str(HERE / "board_model_probe.py"), self.env.info["config"]],
-                                         env, self.env.base)
+        wall, rc, out, err, _ = run_command([self.env.python, str(HERE / "board_model_probe.py"), self.env.info["config"]],
+                                         env, self.env.base, timeout=3600)
         if rc:
             raise SystemExit(f"{exe.name} board_model failed: {err[-1500:]}")
         probe = json.loads(out.strip().splitlines()[-1])
-        self.row(exe, "board_import", probe["import"], 0)
+        self.row(exe, "board_import", probe["import"], 0, cpu=probe.get("import_cpu"))
         names = {"snapshot1": "board_snapshot_first", "snapshot2": "board_snapshot_warm", "liveness1": "board_liveness",
                  "context": "board_context", "visible": "board_visible"}
         for key, name in names.items():
-            self.row(exe, name, probe[key]["s"], 0, probe[key]["spawns"])
+            self.row(exe, name, probe[key]["s"], 0, probe[key]["spawns"], cpu=probe[key]["cpu"])
 
     # ------------------------------------------------------------------ board commands that need a client
     def attach(self, session="p00"):
@@ -252,6 +252,15 @@ class Bench:
         return next((Path(self.env.base) / "docs" / "cr" / state).glob(f"{cr_id}-*.md"))
 
     def lifecycle(self, exe):
+        """The Worker lifecycle. A command that fails is already a row with rc != 0 (counted as `failed` in the report);
+        the rest of the lifecycle is skipped and the spare seat is reset for the next repetition."""
+        try:
+            self._lifecycle(exe)
+        except SystemExit as error:
+            print(f"lifecycle of {exe.name} stopped: {str(error)[:300]}", flush=True)
+            self.env.reset_spare()
+
+    def _lifecycle(self, exe):
         env, spare = self.env, self.env.spare
         seed = env.info["seed_hash"]
         cr_id = self.new_cr(exe, f"perf {exe.name} {self.rep}")
@@ -307,7 +316,8 @@ class Bench:
         wrapper.chmod(0o755)
         env.tmux("set-option", "-g", "status-right", f"#({wrapper})")
         env.tmux("set-option", "-g", "@project_board_enabled", "0", check=False)
-        cmd_env = env.command_env(exe)
+        # The Board panes get their PATH from the client that creates them: in the counting pass that is the shim PATH.
+        cmd_env = env.command_env(exe, env.root / "steady-setup-spawns.log" if env.counting else None)
         subprocess.run([exe.bin("project-board"), "--config", config, "toggle", "--socket", socket], env=cmd_env,
                        capture_output=True, text=True)
         windows = env.tmux("list-windows", "-t", "p00", "-F", "#{window_id}").splitlines()
