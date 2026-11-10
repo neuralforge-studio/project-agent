@@ -5,6 +5,7 @@
 - Severity: S2
 - Related: BOARD-013, BOARD-014, PERF-001, PERF-003
 - Mode: read-only
+- Base: 60c89db899f102d8ca7d67b3fff033bd9ee907e2 2026-11-11T01:28:20+09:00
 
 ## Symptom
 Project Board를 열 때 이 workstation(project 10개)에서 2~3초가 걸립니다. 16×16에서는 sidebar가 약 4초, popup이 약 2초입니다. 열린 뒤의 갱신은 빠릅니다(2초마다 CPU 0.04초). 사용자는 느리다고 느끼고 Rust로 옮겨야 하는지 물었습니다. 화면 모양은 지금 수준이 유지되어야 합니다.
