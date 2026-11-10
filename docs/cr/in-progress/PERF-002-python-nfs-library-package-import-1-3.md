@@ -46,6 +46,7 @@
 ## Disposition
 - 2026-11-10 Leader: 고친다. 재현 측정이 있는 결함이고, 사용자 지시가 있습니다(2026-11-10 대화 원문: "Python 시동이 느린 것도 같이 고쳐줘."). PERF-001·SESSION-010과 동시에 진행합니다.
 - 2026-11-10 Leader: open -> todo. 사용자 지시로 즉시 수정
+- 2026-11-10 Leader: 제출 944ab5b0e87922df2079552859a8f97435fd56a7를 인수합니다. Leader review(ad974fe와 944ab5b): 다섯 가지를 확인했습니다. 고른 provider만 import합니다. 표준 library만 쓰는 진입점(agent-session, project-item, 상태줄, Board의 sync·click·toggle)은 -S로 시작합니다. -E·-I는 쓰지 않아 PYTHON* 환경과 PROJECT_AGENT_PYTHONPATH가 그대로입니다. pending_releases 본문을 api.release_waits로 옮겨 원본이 하나입니다. 진입 script는 #!/bin/bash와 builtin 경로 계산을 쓰고, symlink일 때만 readlink -f를 실행합니다. cd -P로 물리 경로를 구하므로 current link를 지나는 호출도 같은 release 경로가 됩니다. 설치 계약 6.1에 이를 적었습니다. 측정은 Worker 표입니다(warm CPU 14~27% 감소, --help·sync wall 20~25% 감소). review --clear·ls와 cold는 오차 안이라 확정하지 못했습니다. 공식 A/B는 PERF-001 도구로 잽니다. 검증은 merge commit 944ab5b에서 다섯 명령입니다. 네 번째 명령의 4건 실패는 TMUX-003 test 격리 결함으로 판정합니다(사용자 cache의 .view를 읽음, origin/main에서도 같음, XDG_CACHE_HOME을 격리하면 125 passed). TEST-012로 엽니다.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), [설치 계약](../../project-team/install-contract.md)(6.1 interpreter 선택), [실행 경로 계약](../../project-team/README.md#실행-경로-계약), [project-team Worker 절](../../../skills/project-team/SKILL.md).
@@ -158,3 +159,19 @@ cold(명령마다 65초 간격, 4회, load1 77→33):
   - `python -m pytest -q -n 8 install/tests`: 267 passed, 2 skipped
 - merge 판정(Verification 4): origin/main(SESSION-010, TMUX-003)이 `api.py`·`lifecycle.py`·`tmux_decide_status.sh`의 입력을 바꿨으므로 merge한 commit에서 위 다섯 명령을 모두 다시 실행했습니다. 충돌 세 곳(`pending_releases`의 `view` 인자, `project_pending_releases`, `tmux_decide_status.sh`의 view cache 앞 분기)은 upstream 동작을 그대로 두고 위 변경을 얹었습니다.
 - 알려진 한계: 설치본 확인(`install/project-agent-install check`)은 격리 HOME의 install/tests로만 했고, 이 workstation의 관리 run과 `~/.local/bin`은 동결 사본이라 건드리지 않았습니다.
+
+### 수정 제출 (origin/main 4de08e8 merge)
+- 제출 commit: 944ab5b0e87922df2079552859a8f97435fd56a7
+
+Leader 요청(v0.4.0 통합 뒤 `origin/main` 4de08e8을 `cr/PERF-002`에 merge)으로 merge commit `944ab5b`를 만들었습니다. 충돌은 없었고(PERF-001 `tools/tests/perf`, TEST-009·010·011, v0.4.0의 VERSION·CHANGELOG), 코드 변경은 추가하지 않았습니다. merge가 README 다섯 명령의 입력을 모두 바꿨으므로 merge commit에서 다섯 명령을 모두 다시 실행했습니다. 이 실행은 TEST-010·TEST-011 통합 뒤 main 조합의 확인을 겸합니다. 측정 표는 이번에 다시 재지 않았습니다(PERF-001이 v0.3.0 대 `cr/PERF-002`로 잽니다).
+
+- `python -m pytest -q -n 8 tools/agent-session/tests`: 810 passed
+- `python -m pytest -q tools/project-item/tests`: 125 passed
+- `python -m pytest -q tools/project-board/tests`: 161 passed
+- `python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py tools/test_release_files.py tools/test_tmux_test_server.py`: 처음 실행은 125건 중 4 failed(121 passed)였고, 4건은 모두 `tools/test_python_launcher.py`의 `tmux_decide_status.sh` 케이스입니다. `XDG_CACHE_HOME`을 빈 디렉터리로 격리해 같은 명령을 다시 실행하면 125 passed입니다.
+- `python -m pytest -q -n 8 install/tests`: 267 passed, 2 skipped
+
+### 네 번째 명령의 실패 4건: PERF-002 변경과 무관한 test 격리 문제
+- 원인(확인한 사실): TMUX-003이 추가한 `tmux_decide_status.sh`는 `~/.cache/tmux-decide-status.view`가 유효하면(첫 줄의 만료 epoch 이전) Python을 실행하지 않고 저장된 상태줄(`#[fg=white,bg=red,bold] 결정 3 #[default]`)을 출력합니다. `tools/test_python_launcher.py`의 `run()`은 환경에서 `PROJECT_AGENT_*`와 `PYTHONPATH`만 빼고 `XDG_CACHE_HOME`·`HOME`은 그대로 넘기므로, 이 test가 실제 사용자 cache를 읽습니다. v0.4.0 설치 뒤 이 host의 tmux 상태줄이 view 파일을 15초마다 갱신하므로 test가 그 순간에 걸리면 fake python이 실행되지 않아 `ARGV1=`·exit 5·`LD=` 기대가 어긋납니다. 앞선 제출 실행(ad974fe, 같은 test)에서는 유효한 view가 없어 통과했습니다.
+- 확인: `origin/main`(4de08e8)을 `git archive`로 풀어 같은 4건을 실행하면 기본 cache에서 같은 4건이 실패합니다. 내 merge commit에서 `XDG_CACHE_HOME`만 비운 디렉터리로 바꾸면 `tools/test_python_launcher.py` 46건이 모두 통과합니다.
+- 조치: 이 CR에서는 고치지 않았습니다(요청 범위 밖, TMUX-003의 test 결함). 고치려면 `test_python_launcher.py`의 `run()`이 `XDG_CACHE_HOME`을 `tmp_path`로 격리하면 됩니다. 별도 CR이 필요합니다. 그 전에는 이 test를 상태줄이 view를 갱신 중인 host에서 실행할 때 `XDG_CACHE_HOME`을 비우고 실행해야 결과가 안정합니다.
