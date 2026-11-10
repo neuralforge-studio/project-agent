@@ -5,6 +5,7 @@
 - Severity: S3
 - Related: PERF-004
 - Base: 05c57b137fa66c102731ae3646f1b2a883b51eda 2026-11-11T00:09:32+09:00
+- Outcome: fixed
 
 ## Symptom
 process를 PID로만 멈추라는 규칙이 이제 global AGENTS.md "환경과 권한"에 있습니다(agent CONFIG-007, 2e6e17e). 그런데 project-team skill의 Worker 절에도 같은 규칙을 독립적으로 적은 문단이 남아 있습니다(`pgrep -f`·`pkill -f` 설명). 두 곳이 따로 관리되므로 SSOT가 깨집니다.
@@ -22,6 +23,7 @@ process를 PID로만 멈추라는 규칙이 이제 global AGENTS.md "환경과 �
 - 2026-11-11 Leader: 고친다(Leader 판정). 자기 산출물 정리이며 사용자 요청(2026-11-10 "agent leader session에 요청해~")으로 agent가 반영한 global 규칙의 후속입니다.
 - 2026-11-11 Leader: open -> todo. global PID 규칙의 후속 문서 정리
 - 2026-11-11 Leader: 제출 9ad4a6c635d3fe1b5b803898f8a7d7e4c1cee831를 인수합니다. 검토 9ad4a6c. SKILL.md 124행 한 문단만 global AGENTS.md를 가리키게 줄였고, 원격 seat가 global AGENTS.md를 받지 못한다는 확인(remote.py GUIDANCE_FILES)에 따라 핵심 한 문장을 남겼습니다. 122행 자식 확인과 대기 예시는 그대로입니다. skills/** 행: distribution boundary + test_remote 70 passed, link 변경 없음.
+- 2026-11-11 Leader: in-progress -> done, Outcome fixed. 통합 ae30dbe (origin/main)
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증), `/primehome/swain/.claude/AGENTS.md`의 "환경과 권한"(읽기만 합니다), [project-team SKILL.md](../../../skills/project-team/SKILL.md)의 Worker 절과 [self-check.md](../../../skills/project-team/references/self-check.md).
