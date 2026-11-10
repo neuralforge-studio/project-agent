@@ -39,8 +39,8 @@ python -m pytest -q -n 8 install/tests
 | `install/**` | `install/tests` |
 | `integrations/tmux/**` | 네 번째 명령, `tools/project-board/tests/test_tmux_control.py`, `install/tests` |
 | `tools/python-launcher.sh`, `tools/bundle_boot.py`, `tools/formats.json`, `VERSION` | 네 번째 명령, `install/tests` |
-| `tools/project-board/**` | `tools/project-board/tests` |
-| `tools/project-item/**` | `tools/project-item/tests`. `project_item/api.py` 또는 CR·결정 형식(`cr.py`, `decide.py`, `kinds.py`)을 바꾸면 agent-session·project-board test와 네 번째 명령도 |
+| `tools/project-board/**` | `tools/project-board/tests`, `tools/agent-session/tests/test_api_boundary.py` |
+| `tools/project-item/**` | `tools/project-item/tests`, `tools/agent-session/tests/test_api_boundary.py`. `project_item/api.py` 또는 CR·결정 형식(`cr.py`, `decide.py`, `kinds.py`)을 바꾸면 agent-session·project-board test와 네 번째 명령도 |
 | `tools/agent-session/**` | `tools/agent-session/tests`. `agent_session/api.py`, state 형식(`state.py`), tmux option 이름을 바꾸면 project-item·project-board test와 `install/tests`도 |
 | `tools/tests/perf/**` | `python -m pytest -q tools/tests/perf`. 개발 도구의 test라 release 검증(위 다섯 명령)에 넣지 않습니다. 작은 규모에서 두 실행본을 한 번 번갈아 실행하므로 host 부하에 따라 수 분에서 수십 분이 걸립니다 |
 | `tools/conftest.py`, 여러 도구가 함께 쓰는 test helper | 다섯 명령 모두 |

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from . import config, process, providers, remote, tmux as tmux_module
-from .config import RemoteSeat, load_registry, resolve_project
+from .config import RemoteSeat, load_registry, registry_path, resolve_project
 from .errors import SessionError
 from .state import StateStore, binding_identity, select_target
 from .tmux import PANE_ID_OPTION, Tmux
@@ -14,7 +14,7 @@ __all__ = (
     "PANE_ID_OPTION", "RemoteSeat", "SessionError", "Tmux",
     "caller", "check_binding", "finish_release", "liveness", "load_registry", "pane_slot", "pending_releases",
     "project_liveness", "project_pending_releases", "project_state",
-    "read_state", "require_live", "resolve_project", "server_view",
+    "read_state", "registry_path", "require_live", "resolve_project", "server_view",
 )
 
 
