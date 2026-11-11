@@ -3,6 +3,7 @@
 - Opened: 2026-11-11
 - Scope: project-agent
 - Severity: S2
+- Base: 75e2891a6deb1fa620822778073cfbf2f76ab490 2026-11-11T14:21:39+09:00
 
 ## Symptom
 사용자 보고(2026-11-11, 0.8.0): "decision cr 내용 load하는 것도 엄청 느리네."
@@ -25,6 +26,7 @@
 - 2026-11-11 Leader: 고친다(Leader 판정). 사용자가 보고한 느림입니다. 먼저 단계를 나눠 원인을 확인하고, 줄일 수 있는 비용을 줄입니다.
 - 2026-11-11 Leader 판정(방향): 창이 이미 떠 있으면 process를 새로 띄우지 않고 떠 있는 창에 내용을 바꾸라고 알립니다(Contract 1). 처음 여는 비용은 시동 번들처럼 이미 있는 방식을 먼저 씁니다. 측정 결과가 다른 원인을 가리키면 Result에 근거를 적고 그에 맞게 고칩니다.
 - 2026-11-11 Leader: open -> todo. Leader 판정: 사용자 보고 느림
+- 2026-11-11 Leader: 떠 있는 창에 새 내용을 알리는 경로는 Python 밖의 client(BOARD-018 Rust sidebar)도 쓰는 규약으로 만듭니다. socket 위치는 pane option에 두고, 한 줄 JSON 메시지로 보냅니다. Board TUI 계획 문서에 적고 test로 지킵니다.
 
 ## Implementation
 읽을 문서:
