@@ -72,6 +72,7 @@ const KNOWN_KEYS: [&str; 37] = [
     "placeholder_process_group",
 ];
 const VALUES_MARK: &str = "agent-session-values";
+const CLIENT_MARK: &str = "agent-session-client";
 const ID_MARK: &str = "agent-session-server";
 const SESSION_MARK: &str = "agent-session-session";
 const WINDOW_MARK: &str = "agent-session-window";
@@ -133,6 +134,14 @@ fn current_option(target: &str) -> String {
     format!("{}current_{}", PREFIX, target.replace('-', "_"))
 }
 
+/// What one `observe` asks tmux for besides the identity and the sessions.
+#[derive(Clone, Copy)]
+pub struct Scope {
+    pub clients: bool,
+    pub windows: bool,
+    pub panes: bool,
+}
+
 #[derive(Clone)]
 pub struct Tmux {
     socket: Option<String>,
@@ -141,9 +150,12 @@ pub struct Tmux {
 impl Tmux {
     /// `tmux.control(socket)`: `socket` (default `AGENT_SESSION_SOCKET`) is a tmux socket path; none is the default server.
     pub fn control(socket: Option<String>) -> Res<Tmux> {
-        let socket = socket
-            .or_else(|| std::env::var("AGENT_SESSION_SOCKET").ok())
-            .filter(|s| !s.is_empty());
+        Tmux::from_socket(socket.or_else(|| std::env::var("AGENT_SESSION_SOCKET").ok()))
+    }
+
+    /// `Tmux(socket_path=...)`: no fallback to the environment; an empty or missing path is the default server.
+    pub fn from_socket(socket: Option<String>) -> Res<Tmux> {
+        let socket = socket.filter(|s| !s.is_empty());
         let Some(socket) = socket else {
             return Ok(Tmux { socket: None });
         };
@@ -197,8 +209,29 @@ impl Tmux {
         ))
     }
 
+    /// One tmux process that lists the attached clients and the sessions (and, when asked, the windows).
+    pub fn observe_clients(&self, windows: bool) -> Res<ServerView> {
+        self.observe(
+            &[],
+            Scope {
+                clients: true,
+                windows,
+                panes: false,
+            },
+        )
+    }
+
+    /// `switch-client -c CLIENT -t TARGET`.
+    pub fn switch_client(&self, client: &str, target: &str) -> Res<()> {
+        let arguments: Vec<String> = ["switch-client", "-c", client, "-t", target]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        self.run(&arguments, false).map(|_| ())
+    }
+
     /// `Tmux._observe` for every session, window and pane, with the current pointers of `targets`.
-    fn observe(&self, targets: &[String]) -> Res<ServerView> {
+    fn observe(&self, targets: &[String], scope: Scope) -> Res<ServerView> {
         let mut wanted: Vec<String> = Vec::new();
         for target in targets {
             if is_target(target) && !wanted.contains(target) {
@@ -210,7 +243,13 @@ impl Tmux {
             .map(|target| format!("\t#{{{}}}", current_option(target)))
             .collect();
         let words = |text: &[&str]| text.iter().map(|word| word.to_string()).collect::<Vec<_>>();
-        let mut arguments = words(&["display-message", "-p"]);
+        let mut arguments = Vec::new();
+        if scope.clients {
+            arguments.extend(words(&["list-clients", "-F"]));
+            arguments.push(format!("{CLIENT_MARK}\t#{{client_name}}"));
+            arguments.push(";".to_string());
+        }
+        arguments.extend(words(&["display-message", "-p"]));
         arguments.push(format!(
             "{ID_MARK}\t#{{pid}}\t#{{start_time}}\t#{{socket_path}}"
         ));
@@ -218,20 +257,27 @@ impl Tmux {
         arguments.push(format!(
             "{SESSION_MARK}\t#{{session_id}}\t#{{{PREFIX}owner}}{columns}\t#{{session_name}}"
         ));
-        arguments.extend(words(&[";", "list-windows", "-a", "-F"]));
-        arguments.push(format!("{WINDOW_MARK}\t#{{window_id}}\t#{{session_id}}"));
-        arguments.extend(words(&[";", "list-panes", "-a", "-F"]));
-        let fields: Vec<String> = PANE_FIELDS
-            .iter()
-            .map(|name| format!("#{{{name}}}"))
-            .collect();
-        arguments.push(format!("{PANE_MARK}\t{}", fields.join("\t")));
-        let raw = self.run(&arguments, true)?;
+        if scope.windows {
+            arguments.extend(words(&[";", "list-windows", "-a", "-F"]));
+            arguments.push(format!("{WINDOW_MARK}\t#{{window_id}}\t#{{session_id}}"));
+        }
+        if scope.panes {
+            arguments.extend(words(&[";", "list-panes", "-a", "-F"]));
+            let fields: Vec<String> = PANE_FIELDS
+                .iter()
+                .map(|name| format!("#{{{name}}}"))
+                .collect();
+            arguments.push(format!("{PANE_MARK}\t{}", fields.join("\t")));
+        }
+        // A caller that asks for the clients needs a server: `list-clients` failing is an error, not an empty server.
+        let raw = self.run(&arguments, !scope.clients)?;
         let mut view = ServerView {
             tmux: self.clone(),
             identity_raw: None,
             sessions: HashMap::new(),
             windows: HashMap::new(),
+            window_order: Vec::new(),
+            clients: Vec::new(),
             panes: HashMap::new(),
             identity: None,
             metas: HashMap::new(),
@@ -239,6 +285,7 @@ impl Tmux {
         for line in raw.as_deref().unwrap_or("").split('\n') {
             let (mark, rest) = line.split_once('\t').unwrap_or((line, ""));
             match mark {
+                CLIENT_MARK => view.clients.push(rest.to_string()),
                 ID_MARK => view.identity_raw = Some(rest.to_string()),
                 SESSION_MARK => {
                     let parts: Vec<&str> = rest.splitn(wanted.len() + 3, '\t').collect();
@@ -262,6 +309,7 @@ impl Tmux {
                 }
                 WINDOW_MARK => {
                     if let Some((window, session)) = rest.split_once('\t') {
+                        view.window_order.push(window.to_string());
                         view.windows.insert(window.to_string(), session.to_string());
                     }
                 }
@@ -278,7 +326,14 @@ impl Tmux {
 
     /// `Tmux.server_view`: two tmux processes in all.
     pub fn server_view(&self, project_ids: &[&str], targets: &[String]) -> Res<ServerView> {
-        let mut view = self.observe(targets)?;
+        let mut view = self.observe(
+            targets,
+            Scope {
+                clients: false,
+                windows: true,
+                panes: true,
+            },
+        )?;
         view.load(project_ids)?;
         Ok(view)
     }
@@ -446,6 +501,9 @@ pub struct ServerView {
     identity_raw: Option<String>,
     sessions: HashMap<String, SessionRec>,
     windows: HashMap<String, String>,
+    window_order: Vec<String>,
+    /// The attached clients (`list-clients`), when the read asked for them.
+    pub clients: Vec<String>,
     panes: HashMap<String, String>,
     identity: Option<Res<Identity>>,
     metas: HashMap<String, Res<Meta>>,
@@ -499,7 +557,7 @@ impl ServerView {
     }
 
     /// `ServerView.owner`: the session's owner marker when it is this server's and this project's.
-    fn check_owner_marker(&mut self, project_id: &str) -> Res<()> {
+    pub fn check_owner_marker(&mut self, project_id: &str) -> Res<Meta> {
         let Some(entry) = self.sessions.get(project_id) else {
             return Err(error(
                 "tmux_session_not_found",
@@ -542,7 +600,29 @@ impl ServerView {
                 "The tmux session was restored or its server identity changed.",
             ));
         }
-        Ok(())
+        Ok(owner)
+    }
+
+    /// The tmux handle (`$N`) of a session, by name.
+    pub fn session_handle(&self, name: &str) -> Option<&str> {
+        self.sessions.get(name).map(|entry| entry.handle.as_str())
+    }
+
+    /// `ServerView.windows_of`: the windows of the project's session, in tmux's order.
+    pub fn windows_of(&self, project_id: &str) -> Vec<String> {
+        let Some(handle) = self.session_handle(project_id) else {
+            return Vec::new();
+        };
+        self.window_order
+            .iter()
+            .filter(|window| self.windows.get(*window).map(String::as_str) == Some(handle))
+            .cloned()
+            .collect()
+    }
+
+    /// `Tmux._read_metas` for windows of this view: one tmux process, whatever the number of windows.
+    pub fn read_window_metas(&self, windows: &[String]) -> Res<HashMap<String, Res<Meta>>> {
+        self.tmux.read_metas(windows)
     }
 
     fn meta(&mut self, window_id: &str) -> Res<Meta> {

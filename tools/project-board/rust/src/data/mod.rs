@@ -10,6 +10,7 @@ mod err;
 mod exec;
 mod items;
 mod json;
+pub mod jump;
 mod live;
 mod par;
 mod process;

@@ -22,7 +22,7 @@ unset PYTHONHOME
 command_name="${1:-}"
 [[ "$command_name" != --config ]] || command_name="${3:-}"
 case "$command_name" in
-    sync|click|toggle|switch-project|switch-seat|open-decision|open-cr|toggle-fold|liveness)
+    sync|click|toggle|open-decision|open-cr|toggle-fold|liveness)
         exec "$PY" -S -c "$PROJECT_AGENT_BOOT
 import sys
 _project_agent_bundle(sys.argv.pop(1))

@@ -36,7 +36,8 @@ Sidebar는 파일 상태를 2초마다, 실행 상태와 지금 보는 창을 10
 - 첫 파일 읽기는 NFS의 파일 열기 지연이 지배하므로 파일을 여러 thread(기본 32, 환경 변수 `PROJECT_BOARD_THREADS`)로 동시에 엽니다. 이후 읽기는 `stat`으로 바뀐 것만 다시 읽습니다.
 - 실행 상태는 tmux 서버를 읽는 일입니다. project·slot 수와 무관하게 tmux process 둘로 모든 project를 판정합니다(`agent_session.api.server_view`의 규칙). 반납 대기(`release_pending`)도 이 10초 읽기가 갱신하고, 다음 파일 읽기의 seat 상태가 씁니다. SSH seat의 실행 판정만 Python의 `project-board liveness`에 맡깁니다(SSH가 필요하기 때문입니다).
 - 어느 client에도 보이지 않는 window의 sidebar는 두 읽기를 모두 멈추고, 보이게 되면 각각 곧바로 한 번 읽습니다. tmux hook이 보임 상태가 바뀐 pane에 SIGUSR1을 보내고, pane이 tmux에 자기 window가 보이는지 묻습니다(`tmuxio.rs`의 `visible`). 시작할 때는 SIGUSR1 handler를 설치한 뒤 `@project_board_ready`를 1로 씁니다(`mark_ready`).
-- 접힘 상태는 2초 읽기마다 `show-options` 한 번으로 읽습니다. tmux를 부르는 일은 이것과 10초 읽기의 한 번(지금 보는 창을 함께 읽습니다)뿐입니다.
+- 접힘 상태는 2초 읽기마다 `show-options` 한 번으로 읽습니다. tmux를 부르는 일은 이것과 10초 읽기(실행 상태는 process 둘, 지금 보는 창은 하나)와 가시성 확인(명령을 `;`로 묶어 process 하나)뿐입니다. load가 높으면 tmux process 하나가 70~100 ms이므로 읽기마다 process 수를 늘리지 않습니다(BOARD-022). [test](../tools/project-board/tests/test_sidebar_binary.py)가 호출 수를 셉니다.
+- project 이름과 seat 클릭은 sidebar가 직접 tmux로 client를 옮깁니다(client 확인·조회·전환, process 2~3개). CR·결정 창 열기와 접기·펴기는 `project-board`(시동 번들로 시작)를 실행합니다.
 - 파일 읽기의 규칙은 파일마다 크기·수정 시각·inode가 이전 읽기와 같으면 이전 결과를 쓰고, 목록은 디렉터리 트리(하위 디렉터리 포함)의 수정 시각이 같으면 이전 목록을 씁니다. 수정 시각이 방금(2초 안) 바뀐 것은 시계가 아직 넘어가지 않았을 수 있어 믿지 않고 다음 읽기에서 다시 읽습니다. 등록 파일도 같은 방식입니다. `state.json`은 매번 읽습니다.
 - 화면은 한 번에 받은 메시지를 모아 한 번 그립니다. 바뀐 칸만 터미널에 씁니다(ratatui의 buffer 비교). 그래서 변경 전이나 변경 후의 상태만 보이고, 중간 상태가 보이지 않습니다(BOARD-004·BOARD-017). 접힌 project의 좌석은 보이지 않으므로 바뀌어도 화면이 달라지지 않습니다.
 - 새 배정의 session ID와 맞지 않는 실행 결과는 버립니다.

@@ -4,6 +4,7 @@ mod data;
 mod golden;
 mod model;
 mod render_cmd;
+mod switch;
 mod tmuxio;
 mod ui;
 
@@ -12,6 +13,7 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("--version") => println!("project-board-sidebar {}", env!("CARGO_PKG_VERSION")),
         Some("dump") => std::process::exit(data::dump::run(&args[1..])),
+        Some("switch-project") | Some("switch-seat") => std::process::exit(switch::run(&args)),
         Some("render") => std::process::exit(render_cmd::run(&args[1..])),
         _ => {
             let config = args.iter().position(|a| a == "--config").and_then(|i| args.get(i + 1)).cloned();

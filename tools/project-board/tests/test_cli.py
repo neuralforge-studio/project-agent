@@ -23,31 +23,23 @@ def test_sidebar_actions_keep_the_client_identity(monkeypatch):
     called = []
     monkeypatch.setattr(tmux_control, "open_popup", lambda *args: called.append(("decision", args)) or {"ok": True})
     monkeypatch.setattr(tmux_control, "open_cr_popup", lambda *args: called.append(("cr", args)) or {"ok": True})
-    monkeypatch.setattr(tmux_control, "switch_seat", lambda *args: called.append(("seat", args)) or {"ok": True})
-    monkeypatch.setattr(tmux_control, "switch_project", lambda *args: called.append(("project", args)) or {"ok": True})
     monkeypatch.setattr(tmux_control, "toggle_expanded_project", lambda project_id: called.append(("fold", project_id)) or {"ProjectB"})
     config = ["--config", "/tmp/projects.json"]
-    assert cli.main([*config, "switch-project", "--project", "Falcon2", "--client", "/dev/ttys2"]) == 0
     assert cli.main([*config, "open-decision", "--project", "Falcon2", "--client", "/dev/ttys1"]) == 0
     assert cli.main([*config, "open-cr", "--project", "Falcon2", "--state", "open", "--client", "/dev/ttys2"]) == 0
-    assert cli.main([*config, "switch-seat", "--project", "Falcon2", "--seat", "0", "--client", "/dev/ttys1"]) == 0
-    assert cli.main([*config, "switch-seat", "--project", "Falcon2", "--seat", "1"]) == 0
     assert cli.main([*config, "toggle-fold", "--project", "ProjectB"]) == 0
     assert called == [
-        ("project", ("/tmp/projects.json", "Falcon2", "/dev/ttys2")),
         ("decision", ("/tmp/projects.json", "Falcon2", None, "/dev/ttys1")),
         ("cr", ("/tmp/projects.json", "Falcon2", "open", "/dev/ttys2")),
-        ("seat", ("/tmp/projects.json", "Falcon2", 0, "/dev/ttys1")),
-        ("seat", ("/tmp/projects.json", "Falcon2", 1, None)),
         ("fold", "ProjectB"),
     ]
 
 
 def test_a_failed_sidebar_action_reports_its_message_and_fails(monkeypatch, capsys):
-    monkeypatch.setattr(tmux_control, "switch_seat", lambda *args: {
-        "ok": False, "data": None, "error": {"code": "seat_not_running", "message": "The seat has no Worker session."}})
-    assert cli.main(["switch-seat", "--project", "Falcon2", "--seat", "0"]) == 1
-    assert capsys.readouterr().err == "project-board: The seat has no Worker session.\n"
+    monkeypatch.setattr(tmux_control, "open_cr_popup", lambda *args: {
+        "ok": False, "data": None, "error": {"code": "popup_unavailable", "message": "The tmux client is not attached"}})
+    assert cli.main(["open-cr", "--project", "Falcon2", "--state", "open"]) == 1
+    assert capsys.readouterr().err == "project-board: The tmux client is not attached\n"
 
     def broken(project_id):
         raise ValueError("Project Board's expanded project option is invalid")

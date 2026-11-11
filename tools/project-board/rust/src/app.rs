@@ -6,6 +6,7 @@
 //! writes only the cells that changed, so the screen never shows a state between two others.
 use crate::data::Reader;
 use crate::model::{Liveness, Snapshot};
+use crate::switch;
 use crate::tmuxio::{self, Tmux};
 use crate::ui::{self, Action, Active, Facts, Hit, Interaction, Key, Layout};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
@@ -42,7 +43,6 @@ enum Msg {
 
 struct Config {
     config: Option<String>,
-    click_socket: Option<String>,
 }
 
 struct App {
@@ -119,7 +119,7 @@ pub fn run(config: Option<String>) -> i32 {
     }
     let size = terminal.size().map(|s| (s.width, s.height)).unwrap_or((25, 24));
     let mut app = App {
-        config: Config { config, click_socket: click_socket.clone() },
+        config: Config { config },
         tx,
         kicks,
         snapshot: Snapshot::default(),
@@ -605,8 +605,30 @@ impl App {
     }
 
     fn activate(&mut self, action: Action, client: Option<&str>) {
+        let (tx, config) = (self.tx.clone(), self.config.config.clone());
+        let client = client.map(String::from);
+        // Switching a client is a few tmux commands: the sidebar does it itself (switch.rs). Opening a CR or decision
+        // window and folding run `project-board` (from the start bundle), which owns their rules.
         let mut args: Vec<String> = Vec::new();
         match &action {
+            Action::Project(project) => {
+                let project = project.clone();
+                std::thread::spawn(move || {
+                    if let Err(message) = switch::switch_project(config.as_deref(), &project, client.as_deref()) {
+                        let _ = tx.send(Msg::Toast(message));
+                    }
+                });
+                return;
+            }
+            Action::Seat(project, index) => {
+                let (project, index) = (project.clone(), *index);
+                std::thread::spawn(move || {
+                    if let Err(message) = switch::switch_seat(config.as_deref(), &project, index, client.as_deref()) {
+                        let _ = tx.send(Msg::Toast(message));
+                    }
+                });
+                return;
+            }
             Action::Fold(project) => {
                 // shown at once; the helper then writes the shared option and the real value is read back
                 if !self.expanded.remove(project) {
@@ -615,17 +637,15 @@ impl App {
                 self.folds_inflight += 1;
                 args.extend(["toggle-fold".into(), "--project".into(), project.clone()]);
             }
-            Action::Project(project) => args.extend(["switch-project".into(), "--project".into(), project.clone()]),
             Action::Cr(project, state) => args.extend(["open-cr".into(), "--project".into(), project.clone(), "--state".into(), (*state).into()]),
             Action::Decision(project) => args.extend(["open-decision".into(), "--project".into(), project.clone()]),
-            Action::Seat(project, index) => args.extend(["switch-seat".into(), "--project".into(), project.clone(), "--seat".into(), index.to_string()]),
         }
-        if !matches!(action, Action::Fold(_)) {
-            if let Some(client) = client {
-                args.extend(["--client".into(), client.to_string()]);
+        let folding = matches!(action, Action::Fold(_));
+        if !folding {
+            if let Some(client) = &client {
+                args.extend(["--client".into(), client.clone()]);
             }
         }
-        let (tx, config, folding) = (self.tx.clone(), self.config.config.clone(), matches!(action, Action::Fold(_)));
         std::thread::spawn(move || {
             let result = tmuxio::run_helper(config.as_deref(), &args);
             if folding {

@@ -72,9 +72,12 @@ within a second. A later refresh parses again only the CR and decision files who
 modification time changed, and lists a directory tree again only when the modification time of one
 of its directories changed (the same for the registry file). It writes to the terminal only the
 cells that changed; a popup reads only its own project.
-The sidebar keeps clicks and scrolling responsive during reads. Its clicks run `project-board`
-subcommands (`switch-project`, `open-decision`, `open-cr`, `switch-seat`, `toggle-fold`); the
-`liveness` subcommand judges the runs of SSH seats for it. Decision
+The sidebar keeps clicks and scrolling responsive during reads. It switches a client to a project or a
+Worker pane itself (`rust/src/switch.rs`, the same rules as `tmux_control.switch_project` and
+`switch_seat`, compared by `tests/test_rust_switch.py`). The other clicks run `project-board`
+subcommands from the start bundle (`open-decision`, `open-cr`, `toggle-fold`); the `liveness`
+subcommand judges the runs of SSH seats for it. Every periodic read starts one tmux process
+(the run liveness two). Decision
 answers require the `operator` caller classification from `agent-session`; a managed or
 unmanaged agent session cannot submit an approval.
 

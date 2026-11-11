@@ -52,19 +52,15 @@ def main(argv=None) -> int:
     click.add_argument("--x", type=int, required=True, help="pane-relative column")
     click.add_argument("--y", type=int, required=True, help="pane-relative row")
     click.add_argument("--socket", help="tmux socket path")
-    # The sidebar (the `project-board-sidebar` binary) runs these for its clicks; they are the actions the
-    # Textual sidebar called in process (BOARD-018).
-    for name, text in (("switch-project", "switch the client to a project's tmux session"),
-                       ("open-decision", "open a project's decision popup on the client"),
-                       ("open-cr", "open a project's CR list popup on the client"),
-                       ("switch-seat", "switch the client to a Worker pane")):
+    # The sidebar (the `project-board-sidebar` binary) runs these for its clicks. It switches a client to a project or a
+    # Worker pane itself (rust/src/switch.rs).
+    for name, text in (("open-decision", "open a project's decision window on the client"),
+                       ("open-cr", "open a project's CR window on the client")):
         action = commands.add_parser(name, help=text)
         action.add_argument("--project", required=True, help="registered project ID")
         action.add_argument("--client", help="tmux client that clicked")
         if name == "open-cr":
             action.add_argument("--state", required=True, choices=("open", "todo", "in-progress"))
-        if name == "switch-seat":
-            action.add_argument("--seat", type=int, required=True, help="seat index")
     fold = commands.add_parser("toggle-fold", help="fold or expand one project's seats in every Board pane")
     fold.add_argument("--project", required=True, help="registered project ID")
     liveness = commands.add_parser("liveness", help="print one project's run liveness as JSON (remote seats are judged here)")
@@ -96,17 +92,13 @@ def main(argv=None) -> int:
         from . import tmux_control
 
         return _result(tmux_control.route_click(args.client, args.pane, args.x, args.y, args.socket))
-    if args.command in ("switch-project", "open-decision", "open-cr", "switch-seat", "toggle-fold", "liveness"):
+    if args.command in ("open-decision", "open-cr", "toggle-fold", "liveness"):
         from . import tmux_control
 
-        if args.command == "switch-project":
-            return _result(tmux_control.switch_project(args.config, args.project, args.client))
         if args.command == "open-decision":
             return _result(tmux_control.open_popup(args.config, args.project, None, args.client))
         if args.command == "open-cr":
             return _result(tmux_control.open_cr_popup(args.config, args.project, args.state, args.client))
-        if args.command == "switch-seat":
-            return _result(tmux_control.switch_seat(args.config, args.project, args.seat, args.client))
         if args.command == "toggle-fold":
             try:
                 tmux_control.toggle_expanded_project(args.project)

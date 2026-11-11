@@ -38,7 +38,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 
 | 종류 | 진입점 |
 | --- | --- |
-| CLI | `agent-session`, `project-item`, `project-board`. 각 `bin/` 파일을 `~/.local/bin`에 link합니다. `project-board`의 하위 명령은 `popup`, `cr`, `toggle`, `sync`, `click`과 sidebar가 클릭으로 실행하는 `switch-project`, `open-decision`, `open-cr`, `switch-seat`, `toggle-fold`, `liveness`입니다. Sidebar는 `tools/project-board/bin/project-board-sidebar` binary이고 tmux가 pane에서 직접 실행합니다. 세 파일과 `tmux_decide_status.sh`는 `tools/python-launcher.sh`로 Python을 고릅니다. 설치본의 세 CLI는 `tools/bundle_boot.py`로 시동 번들(release의 모듈을 한 파일에 묶은 것)에서 import합니다. 설치본은 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`(환경 변수 또는 release의 `tools/python.env`)로 interpreter와 package 경로를 넘깁니다([설치 계약 6.1절](install-contract.md#61-python-선택)). |
+| CLI | `agent-session`, `project-item`, `project-board`. 각 `bin/` 파일을 `~/.local/bin`에 link합니다. `project-board`의 하위 명령은 `popup`, `cr`, `toggle`, `sync`, `click`과 sidebar가 클릭으로 실행하는 `open-decision`, `open-cr`, `toggle-fold`, `liveness`입니다(`sync`·`click`·`toggle`과 이 넷은 시동 번들로 시작합니다). Sidebar는 `tools/project-board/bin/project-board-sidebar` binary이고 tmux가 pane에서 직접 실행합니다. 세 파일과 `tmux_decide_status.sh`는 `tools/python-launcher.sh`로 Python을 고릅니다. 설치본의 세 CLI는 `tools/bundle_boot.py`로 시동 번들(release의 모듈을 한 파일에 묶은 것)에서 import합니다. 설치본은 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`(환경 변수 또는 release의 `tools/python.env`)로 interpreter와 package 경로를 넘깁니다([설치 계약 6.1절](install-contract.md#61-python-선택)). |
 | Python API | `agent_session.api`: 목록의 원본은 [api.py](../../tools/agent-session/agent_session/api.py)의 `__all__`이고 이름별 계약은 [명세 5절](spec.md#프로젝트-consumer용-python-api)이 기록합니다. `project_item.api`: 목록의 원본은 [api.py](../../tools/project-item/project_item/api.py)의 `__all__`이고 계층은 [project-item README](../../tools/project-item/README.md#layers-and-public-api)가 설명합니다. |
 | Hook·controller | `agent_session.internal`의 `register_from_hook`(Claude SessionStart hook), `register_current`(Codex 초기 도구), `mark_process`, `run_controller`([명세 5절](spec.md#provider-내부-등록)) |
 | 원격 seat | `python -m agent_session.remote_runtime`, `python -m agent_session.remote_bridge` |
@@ -114,9 +114,10 @@ Rust sidebar(`tools/project-board/rust`, BOARD-018)는 Python 도구와 같은 �
 | 실행 확인(liveness)과 반납 대기 | `agent_session.api`·`tmux`·`process` ([명세 5절](spec.md#5-내부-세션-등록과-실행-확인)) | `rust/src/data/live.rs`, `tmux.rs`, `process.rs` |
 | 지금 보는 창(project, slot) | `agent_session.api.pane_slot` | `rust/src/tmuxio.rs` |
 | 접힘 상태와 가시성의 tmux option | `project_board.tmux_control` | `rust/src/tmuxio.rs` |
+| project·seat 전환(client 확인, 검증한 Worker window) | `project_board.tmux_control.switch_project`·`switch_seat`, `agent_session.tmux.Tmux.find_by_session` | `rust/src/switch.rs`, `rust/src/data/jump.rs` |
 
   SSH seat의 실행 판정은 Python에 남깁니다. Rust는 `project-board liveness`를 실행해 그 결과를 씁니다.
-- **검증**: [`tools/project-board/tests/test_rust_equivalence.py`](../../tools/project-board/tests/test_rust_equivalence.py)가 같은 디스크 fixture에서 `model.snapshot`·`model.liveness`와 Rust의 결과를 비교합니다. 결정 단계, seat 상태 전부, 원격 seat, 등록·state·CR·결정 오류, path가 없는 project, liveness 판정을 다룹니다. Python의 규칙을 바꾸면 이 test가 Rust 쪽의 수정을 요구합니다. `tmuxio.rs`의 tmux option 규칙은 Rust 단위 test와 [`test_sidebar_binary.py`](../../tools/project-board/tests/test_sidebar_binary.py)가 확인합니다.
+- **검증**: [`tools/project-board/tests/test_rust_equivalence.py`](../../tools/project-board/tests/test_rust_equivalence.py)가 같은 디스크 fixture에서 `model.snapshot`·`model.liveness`와 Rust의 결과를 비교합니다. 결정 단계, seat 상태 전부, 원격 seat, 등록·state·CR·결정 오류, path가 없는 project, liveness 판정을 다룹니다. Python의 규칙을 바꾸면 이 test가 Rust 쪽의 수정을 요구합니다. `tmuxio.rs`의 tmux option 규칙은 Rust 단위 test와 [`test_sidebar_binary.py`](../../tools/project-board/tests/test_sidebar_binary.py)가 확인하고, 전환 규칙은 [`test_rust_switch.py`](../../tools/project-board/tests/test_rust_switch.py)가 Python과 같은 결과인지 비교합니다.
 - Python `model.snapshot`·`model.liveness`는 popup과 위 test의 기준 구현으로 남습니다.
 
 ### 목표

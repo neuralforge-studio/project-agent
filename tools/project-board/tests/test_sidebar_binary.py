@@ -67,6 +67,11 @@ class Pane:
             self.clients.append(attached(self.name, "main"))
             tmux(self.name, "resize-window", "-t", "main", "-x", str(size[0]), "-y", str(size[1]))
         self.pane = tmux(self.name, "display-message", "-p", "-t", "main", "#{pane_id}")
+        if attach:
+            # the sidebar may ask tmux before the client is attached; project_board_visibility.sh signals it when a
+            # client shows its window, so the test does the same
+            _wait(lambda: tmux(self.name, "show-options", "-pqv", "-t", self.pane, "@project_board_ready") == "1", what="mark_ready")
+            os.kill(int(tmux(self.name, "display-message", "-p", "-t", self.pane, "#{pane_pid}")), signal.SIGUSR1)
 
     def close(self):
         release_clients(self.clients)
@@ -210,17 +215,19 @@ def test_the_click_socket_answers_with_the_widget_and_runs_the_action_for_the_cl
     assert pane.send_click(8, 3)["data"] == {"widget": "project-0-T"}
     assert pane.send_click(14, 3)["data"] == {"widget": "project-0-I"}
     assert pane.send_click(5, 4)["data"] == {"widget": "project-0-seat-0"}
-    _wait(lambda: len(pane.helper_calls()) == 6, what="the six helper runs")
-    calls = sorted(pane.helper_calls())
+    # the CR and decision windows are opened by `project-board` (here a fake) for the clicking client; the switches are
+    # done by the sidebar itself (rust/src/switch.rs, compared with tmux_control by test_rust_switch.py): no helper run
+    _wait(lambda: len(pane.helper_calls()) == 4, what="the four helper runs")
+    time.sleep(0.5)
     client = "/dev/ttys-test"
-    assert calls == sorted([
-        f"--config {pane.board.config} switch-project --project Falcon2 --client {client}",
+    assert sorted(pane.helper_calls()) == sorted([
         f"--config {pane.board.config} open-decision --project Falcon2 --client {client}",
         f"--config {pane.board.config} open-cr --project Falcon2 --state open --client {client}",
         f"--config {pane.board.config} open-cr --project Falcon2 --state todo --client {client}",
         f"--config {pane.board.config} open-cr --project Falcon2 --state in-progress --client {client}",
-        f"--config {pane.board.config} switch-seat --project Falcon2 --seat 0 --client {client}",
     ])
+    # a client that is not attached: the switch fails and the sidebar says why
+    pane.wait_text("not attached", timeout=5)
 
 
 def test_a_click_on_something_that_cannot_act_is_refused_or_ignored_as_before(tmp_path, request):
