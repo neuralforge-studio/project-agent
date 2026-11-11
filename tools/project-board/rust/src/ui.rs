@@ -201,7 +201,8 @@ pub struct Layout {
 
 impl Layout {
     pub fn max_scroll(&self) -> (usize, usize) {
-        (self.virtual_w.saturating_sub(self.view_w), self.virtual_h.saturating_sub(self.view_h))
+        // without a horizontal bar Textual does not scroll sideways, even by the cell that overflows under the vertical bar
+        (if self.hbar { self.virtual_w.saturating_sub(self.view_w) } else { 0 }, self.virtual_h.saturating_sub(self.view_h))
     }
     pub fn top_height(&self) -> usize {
         self.top_lines.len()
