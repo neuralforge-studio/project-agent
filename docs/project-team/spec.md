@@ -616,7 +616,7 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | liveness(cwd=None, config_path=None, socket=None) | Session이 있는 slot(`leader`, seat 번호)마다 판정한 `session_id`와 `state`(`alive`·`stopped`·`unknown`) 반환. tmux 실행 근거와 CLI process만 조회하고 provider를 호출하지 않음 |
 | project_liveness(project, socket=None, view=None) | `liveness`와 같되 이미 `load_registry`로 얻은 project를 받음. `view`(`server_view`의 반환)를 주면 그 읽기로 판정하고 tmux를 다시 읽지 않음 |
 | server_view(projects, socket=None) | 이미 `load_registry`로 얻은 project들의 tmux 서버를 한 번 읽은 snapshot을 반환. `project_liveness`·`project_pending_releases`의 `view`로 넘김. 읽는 tmux process는 project·slot 수와 무관하게 둘입니다. 서버의 session·window·pane과 각 project의 현재 run window option을 읽고, owner·server identity·pointer 판정은 `get_current`와 같은 함수를 지남. 읽은 뒤의 변화는 보지 않으므로 다시 보려면 새로 만듦. 반환값은 불투명한 객체 |
-| pane_slot(pane, tmux=None) | tmux pane이 든 관리 window의 `(project_id, slot)`을 반환. slot은 `leader`·`seat-N`이고 target이 slot이 아니면 None. 관리 window가 아니면(project_id option이 없거나 JSON이 아님) None. window option만 한 번의 tmux 호출로 읽음. Board가 지금 보는 창의 project·slot을 알 때 씀 |
+| pane_slot(pane, tmux=None) | tmux pane이 든 관리 window의 `(project_id, slot)`을 반환. slot은 `leader`·`seat-N`이고 target이 slot이 아니면 None. 관리 window가 아니면(project_id option이 없거나 JSON이 아님) None. window option만 한 번의 tmux 호출로 읽음. Board가 지금 보는 창의 project·slot을 알 때 씀. Rust sidebar는 같은 option을 같은 규칙으로 읽습니다(제품 지도의 "Rust sidebar와 Python이 같은 규칙을 읽습니다" 절) |
 | caller(project, tmux=None, store=None) | 이 명령을 실행하는 쪽을 `(slot, session_id)`로 반환. slot은 `leader`·`seat-N`·`operator`(관리 실행 밖 CLI, session_id는 None)·`unmanaged-agent`(이 project의 구성원이 아닌 agent). 환경의 대화 ID를 state의 binding과 대조하고, 없으면 관리 실행의 tmux pane으로 판정. project 도구의 유일한 caller 규칙 |
 | require_live(project, slot, identity, tmux=None) | Leader·Worker caller의 slot이 아직 그 대화의 살아 있는 관리 CLI를 가졌는지 확인. 아니면 `caller_not_running` 오류. 반환값 없음 |
 | load_registry(config_path=None) | 등록 파일의 모든 project 튜플을 반환([2절](#2-등록과-프로젝트-선택)) |
@@ -644,6 +644,7 @@ Liveness의 `alive`는 현재 실행 pointer의 session이 state의 session과 �
 Liveness는 조회 실패를 오류로 올리지 않고 `unknown`으로 돌려줍니다. 주기적으로 상태를 보여 주는 consumer용입니다.
 호출자는 결과의 `session_id`가 현재 session과 다르면 그 판정을 버립니다.
 Liveness는 화면 표시용이며 stop·반납의 native 종료 확인을 대신하지 않습니다.
+Board의 Rust sidebar는 이 판정(`server_view`, `project_liveness`, `project_pending_releases`)을 같은 규칙으로 구현합니다. SSH seat(`remote_seat`가 있는 run)의 판정만 `project-board liveness`로 이 API를 부릅니다. 규칙을 바꾸면 Rust 구현과 일치 test(`tools/project-board/tests/test_rust_equivalence.py`)도 함께 바꿉니다(제품 지도의 "Rust sidebar와 Python이 같은 규칙을 읽습니다" 절).
 Provider 시작 전 기준 기록은 이 live 대조를 요구하지 않습니다.
 그 시점의 JOB·seat 예약 검사는 공통 start가 수행합니다.
 

@@ -64,6 +64,15 @@ class Executable:
     def bin(self, tool):
         return str(self.tools / tool / "bin" / tool)
 
+    def sidebar_argv(self, config):
+        """The command that runs the sidebar of this tree: the binary of its Board tool (an installed release or a checkout
+        built with cargo), or `project-board sidebar` for a tree of 0.7.1 and before, which had a Textual sidebar."""
+        board = self.tools / "project-board"
+        for path in (board / "bin" / "project-board-sidebar", board / "rust" / "target" / "release" / "project-board-sidebar"):
+            if path.is_file():
+                return [str(path), "--config", config]
+        return [self.bin("project-board"), "--config", config, "sidebar"]
+
     @property
     def status_script(self):
         return self.root / "integrations" / "tmux" / "tmux_decide_status.sh"

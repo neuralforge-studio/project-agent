@@ -19,3 +19,4 @@ regex = "1"
 opt-level = 3
 lto = false
 debug = false
+strip = true

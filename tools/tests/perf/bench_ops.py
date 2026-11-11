@@ -216,8 +216,7 @@ class Bench:
         self.board(exe, "board_sync_off", "sync", "--socket", socket, identity=None)
         self.pane_ready(exe, "board_popup_ready", [exe.bin("project-board"), "--config", self.env.info["config"], "popup",
                                                    "--project", "p00"])
-        self.pane_ready(exe, "board_sidebar_ready", [exe.bin("project-board"), "--config", self.env.info["config"],
-                                                     "sidebar"])
+        self.pane_ready(exe, "board_sidebar_ready", exe.sidebar_argv(self.env.info["config"]))
 
     def wait_board_panes_ready(self, count, seconds=240):
         """Until `count` Board panes have marked themselves ready (@project_board_ready), so that the steady window

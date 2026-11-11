@@ -21,7 +21,7 @@ project-agent는 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로
 
 ## 검증
 
-저장소 루트에서 실행합니다. `python`은 Python 3.10 이상이고 `pytest`가 있는 interpreter입니다. `project-board` test는 [requirements.txt](tools/project-board/requirements.txt)의 package가 필요합니다. `pytest-xdist`가 없으면 `-n 8`을 뺍니다.
+저장소 루트에서 실행합니다. `python`은 Python 3.10 이상이고 `pytest`가 있는 interpreter입니다. `project-board` test는 [requirements.txt](tools/project-board/requirements.txt)의 package가 필요합니다. `pytest-xdist`가 없으면 `-n 8`을 뺍니다. Rust test는 cargo와 vendored crate가 필요합니다. 찾는 규칙은 [설치 계약 2.1절](docs/project-team/install-contract.md#21-rust-sidebar의-build)이 소유합니다(`PROJECT_AGENT_CARGO`, `PROJECT_AGENT_RUST_VENDOR`).
 
 ```sh
 python -m pytest -q -n 8 tools/agent-session/tests
@@ -29,10 +29,12 @@ python -m pytest -q tools/project-item/tests
 python -m pytest -q tools/project-board/tests
 python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py tools/test_release_files.py tools/test_tmux_test_server.py
 python -m pytest -q -n 8 install/tests
+(cd tools/project-board/rust && cargo test --offline --locked)
 ```
 
-- 다섯 명령은 서로 독립이며 pytest 설정 파일 없이 각 디렉터리의 `conftest.py`로 동작합니다.
-- 다섯 명령을 모두 실행하는 것은 release를 낼 때 한 번입니다([버전 규칙 5절](docs/project-team/release.md#5-변경-기록과-release-절차)). 평소 변경은 아래 표에서 바꾼 경로에 해당하는 명령만 실행합니다(focused check와 직접 영향 회귀). 표의 의존은 [제품 지도의 의존 관계](docs/project-team/README.md#의존-관계)를 따릅니다. `origin/main`을 merge한 뒤에는 merge가 고른 명령의 입력을 바꿨을 때만 다시 실행합니다.
+- 여섯 명령은 서로 독립입니다. pytest 명령은 설정 파일 없이 각 디렉터리의 `conftest.py`로 동작합니다.
+- `tools/project-board/tests`의 `test_rust_equivalence.py`와 `test_sidebar_binary.py`는 Rust binary로 돕니다. binary가 없거나 소스보다 오래됐으면 `cargo build --release --offline --locked`로 만듭니다(`tests/rust_binary.py`). `PROJECT_BOARD_SIDEBAR_BIN`이 있으면 그 binary를 그대로 씁니다.
+- 여섯 명령을 모두 실행하는 것은 release를 낼 때 한 번입니다([버전 규칙 5절](docs/project-team/release.md#5-변경-기록과-release-절차)). 평소 변경은 아래 표에서 바꾼 경로에 해당하는 명령만 실행합니다(focused check와 직접 영향 회귀). 표의 의존은 [제품 지도의 의존 관계](docs/project-team/README.md#의존-관계)를 따릅니다. `origin/main`을 merge한 뒤에는 merge가 고른 명령의 입력을 바꿨을 때만 다시 실행합니다.
 
 | 바꾼 경로 | 실행할 명령 |
 | --- | --- |
@@ -40,10 +42,11 @@ python -m pytest -q -n 8 install/tests
 | `integrations/tmux/**` | 네 번째 명령, `tools/project-board/tests/test_tmux_control.py`, `install/tests` |
 | `tools/python-launcher.sh`, `tools/bundle_boot.py`, `tools/formats.json`, `VERSION` | 네 번째 명령, `install/tests` |
 | `tools/project-board/**` | `tools/project-board/tests`, `tools/agent-session/tests/test_api_boundary.py` |
+| `tools/project-board/rust/**` | `cargo test --offline --locked`(`tools/project-board/rust`에서), `tools/project-board/tests`(일치 test와 binary test는 바뀐 binary로 돕니다), 네 번째 명령(release 파일 검사). `Cargo.toml`·`Cargo.lock`·`.cargo/config.toml`을 바꾸면 `install/tests`도 |
 | `tools/project-item/**` | `tools/project-item/tests`, `tools/agent-session/tests/test_api_boundary.py`. `project_item/api.py` 또는 CR·결정 형식(`cr.py`, `decide.py`, `kinds.py`)을 바꾸면 agent-session·project-board test와 네 번째 명령도 |
 | `tools/agent-session/**` | `tools/agent-session/tests`. `agent_session/api.py`, state 형식(`state.py`), tmux option 이름을 바꾸면 project-item·project-board test와 `install/tests`도 |
-| `tools/tests/perf/**` | `python -m pytest -q tools/tests/perf`. 개발 도구의 test라 release 검증(위 다섯 명령)에 넣지 않습니다. 작은 규모에서 두 실행본을 한 번 번갈아 실행하므로 host 부하에 따라 수 분에서 수십 분이 걸립니다 |
-| `tools/conftest.py`, 여러 도구가 함께 쓰는 test helper | 다섯 명령 모두 |
+| `tools/tests/perf/**` | `python -m pytest -q tools/tests/perf`. 개발 도구의 test라 release 검증(위 여섯 명령)에 넣지 않습니다. 작은 규모에서 두 실행본을 한 번 번갈아 실행하므로 host 부하에 따라 수 분에서 수십 분이 걸립니다 |
+| `tools/conftest.py`, 여러 도구가 함께 쓰는 test helper | pytest 명령 다섯 개 모두 |
 | `skills/**`, `docs/**`, `README.md`, `AGENTS.md` | 고친 문서의 상대 link 검사, `tools/test_distribution_boundary.py`. `skills/project-item`의 형식 문서를 바꾸면 `tools/project-item/tests/test_doc_contract.py`, 원격 guidance 문서(`skills/**`, `docs/project-team/spec.md`)를 바꾸면 `tools/agent-session/tests/test_remote.py`도 |
 - Agent-session test는 seat 여럿이 같은 host에서 동시에 검증하는 평소 부하에서 같은 결과를 냅니다. 한도(`AGENT_SESSION_TEST_TIMEOUT`, 기본 120초)는 host가 이보다 심하게 느릴 때만 늘립니다. 자세한 사용법은 [agent-session README](tools/agent-session/README.md#프로젝트-api와-검사)가 설명합니다.
 - 설치기 test(`install/tests`)는 격리 HOME에서만 설치기를 실행합니다. 개발 중 설치기를 실제 HOME에 실행하지 않습니다. `tmux`와 `git`이 필요하고 계약 8절의 T1~T32을 구현합니다.

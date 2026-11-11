@@ -22,15 +22,25 @@ TUI는 답변 접수에만 `project_item`의 Decision 기록 경로를 사용합
 | 반영 진행 | Decision의 `Related`가 가리키는 `path_cr` 상태 | `반영 중`과 `완료`를 계산 |
 | Leader 알림 | `agent-session send --job leader` | 저장한 사용자 답을 알리고 결과를 표시 |
 
-기존 [`project_board.model`](../tools/project-board/project_board/model.py)의 `snapshot()`과 `liveness()`를 재사용합니다. TUI는 개수나 상태의 별도 원본을 만들지 않습니다. Sidebar의 켜짐 상태, 폭, 선택 위치를 tmux UI 상태로 유지합니다. 좌석 펼침 상태의 원본은 tmux server option 하나입니다. Board pane은 project별 상태를 공유하며 새 pane도 이를 읽습니다.
+Sidebar는 Rust binary `project-board-sidebar`입니다(BOARD-018, [소스](../tools/project-board/rust)). 위 표의 읽기 규칙은 binary의 `data` 모듈이 구현합니다. 같은 규칙이 Python의 [`project_board.model`](../tools/project-board/project_board/model.py)·`agent_session`·`project_item`에도 있으므로 [일치 test](../tools/project-board/tests/test_rust_equivalence.py)가 같은 파일에서 두 구현의 결과를 비교합니다. 예외의 이유와 범위는 [제품 지도](project-team/README.md#예외-rust-sidebar와-python이-같은-규칙을-읽습니다)가 소유합니다. Popup은 계속 Python의 `model.snapshot()`을 씁니다. Sidebar의 켜짐 상태, 폭, 선택 위치를 tmux UI 상태로 유지합니다. 좌석 펼침 상태의 원본은 tmux server option 하나입니다. Board pane은 project별 상태를 공유하며 새 pane도 이를 읽습니다.
 
 ### 갱신과 실행 단위
 
-TUI 프로세스를 새로 띄우는 비용은 Python·Textual 기동과 첫 읽기입니다. 이 host에서 수 초이므로 사용자의 조작(창 이동, 클릭)마다 프로세스를 새로 만들지 않습니다. 조작은 이미 떠 있는 프로세스에 도달하거나 읽기만 하는 짧은 명령이 되게 합니다(BOARD-002).
+TUI 프로세스를 새로 띄우는 비용은 기동과 첫 읽기입니다. Python·Textual sidebar(0.7.1)는 16×16 환경에서 열리는 데 2.8초가 걸렸고, Rust sidebar는 첫 읽기를 병렬로 해서 1초 안에 최신 데이터를 그립니다(BOARD-018). 그래도 사용자의 조작(창 이동, 클릭)마다 프로세스를 새로 만들지 않습니다. 조작은 이미 떠 있는 프로세스에 도달하거나 읽기만 하는 짧은 명령이 되게 합니다(BOARD-002).
 
-Sidebar를 한 번 표시한 tmux window마다 TUI 프로세스 하나를 둡니다. 이 프로세스는 Board를 끄거나 window가 닫힐 때까지, 동시에 8개까지 유지합니다(5절). 어느 client도 보지 않는 window의 프로세스는 읽지 않습니다. 같은 window를 보는 client는 같은 pane과 화면을 봅니다. 각 프로세스의 이벤트 루프가 화면과 마우스·키보드 입력을 처리합니다. 별도 상주 HTTP server나 project별 감시 프로세스를 두지 않습니다. 결정 popup을 열 때만 별도의 단기 TUI 프로세스를 실행합니다. Popup은 같은 파일 원본을 직접 읽습니다. 제출 경로는 Decision root 잠금 안에서 `open`을 다시 확인합니다.
+Sidebar를 한 번 표시한 tmux window마다 sidebar 프로세스 하나를 둡니다. 이 프로세스는 Board를 끄거나 window가 닫힐 때까지, 동시에 8개까지 유지합니다(5절). 어느 client도 보지 않는 window의 프로세스는 읽지 않습니다. 같은 window를 보는 client는 같은 pane과 화면을 봅니다. 프로세스의 main thread가 화면과 마우스·키보드 입력을 처리합니다. 별도 상주 HTTP server나 project별 감시 프로세스를 두지 않습니다. 결정 popup을 열 때만 별도의 단기 TUI 프로세스(Python·Textual)를 실행합니다. Popup은 같은 파일 원본을 직접 읽습니다. 제출 경로는 Decision root 잠금 안에서 `open`을 다시 확인합니다.
 
-Sidebar TUI는 파일 상태를 2초마다, 실행 상태를 10초마다 다시 읽습니다. 실행 상태는 tmux 서버를 읽는 일(project·slot 수와 무관하게 tmux process 둘, `agent_session.api.server_view`)이므로 2초 읽기에 넣지 않습니다. 반납 대기(`release_pending`)도 10초 읽기가 갱신합니다(`model.liveness`가 채우고 `snapshot`이 씁니다). 어느 client에도 보이지 않는 window의 TUI는 두 읽기를 모두 멈추고, 보이게 되면 각각 곧바로 한 번 읽습니다. tmux hook이 보임 상태가 바뀐 pane에 SIGUSR1을 보내고, pane이 tmux에 자기 window가 보이는지 묻습니다(`tmux_control.board_visible`). 2초마다 tmux를 새로 부르지 않습니다. 읽기는 바뀐 것만 다시 파싱합니다. CR·결정 파일은 크기와 수정 시각이 이전 읽기와 같으면 이전 결과를 씁니다(`project_board.model._cached`). 파일 목록은 그 디렉터리 트리(하위 디렉터리 포함)의 수정 시각이 이전 읽기와 같으면 이전 목록을 씁니다(`project_board.model._unchanged`, BOARD-013). 수정 시각이 방금(2초 안) 바뀐 디렉터리는 시계가 아직 넘어가지 않았을 수 있어 믿지 않고 다음 읽기에서 다시 읽습니다. `state.json`·실행 상태는 매번 읽습니다. 등록 파일은 크기·수정 시각·inode가 이전 읽기와 같으면 이전 결과를 쓰고(`model._registry`), 다르면 한 번 읽어 그 project 객체로 상태와 실행 상태를 읽으므로(`agent_session.api.project_state`·`project_liveness`) project마다 등록 파일을 다시 읽지 않습니다. 화면은 project마다 보이는 내용이 바뀐 project의 위젯만 다시 만듭니다(project 목록이나 순서가 바뀌면 전부). 접힌 project의 좌석과 Leader 시간은 보이지 않으므로 바뀌어도 다시 그리지 않습니다. 접힘 상태를 읽는 `tmux_control.expanded_projects`는 lock 없이 `show-options` 한 번입니다. Popup은 자기 project 하나만 읽습니다(`model.snapshot(project_id=…)`). 파일 조회와 `agent_session.api.liveness`처럼 대기할 수 있는 호출은 최대 2개의 조회 worker thread에서 실행합니다. 화면 갱신은 UI 이벤트 루프에서만 합니다. 이전 조회가 끝나지 않았으면 같은 조회를 중복 시작하지 않습니다. 새 배정의 session ID와 맞지 않는 실행 결과는 버립니다. 닫힌 popup이나 sidebar에 늦게 도착한 결과도 버립니다.
+Sidebar는 파일 상태를 2초마다, 실행 상태와 지금 보는 창을 10초마다 다시 읽습니다. 각 읽기는 자기 thread에서 실행합니다. 느린 실행 상태 읽기가 파일 읽기를 막지 않습니다.
+
+- 첫 그림은 첫 파일 읽기만 기다립니다. 실행 상태를 기다리지 않습니다. 읽기 전의 pane은 비어 있습니다.
+- 첫 파일 읽기는 NFS의 파일 열기 지연이 지배하므로 파일을 여러 thread(기본 8)로 동시에 엽니다. 이후 읽기는 `stat`으로 바뀐 것만 다시 읽습니다.
+- 실행 상태는 tmux 서버를 읽는 일입니다. project·slot 수와 무관하게 tmux process 둘로 모든 project를 판정합니다(`agent_session.api.server_view`의 규칙). 반납 대기(`release_pending`)도 이 10초 읽기가 갱신하고, 다음 파일 읽기의 seat 상태가 씁니다. SSH seat의 실행 판정만 Python의 `project-board liveness`에 맡깁니다(SSH가 필요하기 때문입니다).
+- 어느 client에도 보이지 않는 window의 sidebar는 두 읽기를 모두 멈추고, 보이게 되면 각각 곧바로 한 번 읽습니다. tmux hook이 보임 상태가 바뀐 pane에 SIGUSR1을 보내고, pane이 tmux에 자기 window가 보이는지 묻습니다(`tmuxio.rs`의 `visible`). 시작할 때는 SIGUSR1 handler를 설치한 뒤 `@project_board_ready`를 1로 씁니다(`mark_ready`).
+- 접힘 상태는 2초 읽기마다 `show-options` 한 번으로 읽습니다. tmux를 부르는 일은 이것과 10초 읽기의 한 번(지금 보는 창을 함께 읽습니다)뿐입니다.
+- 파일 읽기의 규칙은 파일마다 크기·수정 시각·inode가 이전 읽기와 같으면 이전 결과를 쓰고, 목록은 디렉터리 트리(하위 디렉터리 포함)의 수정 시각이 같으면 이전 목록을 씁니다. 수정 시각이 방금(2초 안) 바뀐 것은 시계가 아직 넘어가지 않았을 수 있어 믿지 않고 다음 읽기에서 다시 읽습니다. 등록 파일도 같은 방식입니다. `state.json`은 매번 읽습니다.
+- 화면은 한 번에 받은 메시지를 모아 한 번 그립니다. 바뀐 칸만 터미널에 씁니다(ratatui의 buffer 비교). 그래서 변경 전이나 변경 후의 상태만 보이고, 중간 상태가 보이지 않습니다(BOARD-004·BOARD-017). 접힌 project의 좌석과 Leader 시간은 보이지 않으므로 바뀌어도 화면이 달라지지 않습니다.
+- 새 배정의 session ID와 맞지 않는 실행 결과는 버립니다.
+- Popup은 자기 project 하나만 읽습니다(`model.snapshot(project_id=…)`).
 
 답변 알림의 `agent-session send`는 오래 걸릴 수 있습니다. Popup은 접수와 알림 중에도 화면과 스크롤이 멈추지 않게 이 동작을 백그라운드에서 실행합니다. 잠금 안에서 첫 답변만 접수하므로 다시 누르거나 다른 client에서 동시에 제출해도 중복 전송하지 않습니다.
 
@@ -58,14 +68,14 @@ R 0 GPU-007
 - `R`은 Leader의 `reviewing` 값이 그 seat의 CR ID와 같을 때만 붙입니다. Review 행을 별도로 만들거나 CR ID를 중복 표시하지 않습니다.
 - 제출 후 검토 대기(`review_wait`)는 `R`이 아닙니다. 필요하면 행의 색과 도움말로 구분합니다.
 - 지금 보는 창 강조(BOARD-009): sidebar가 보이는 client의 활성 window가 관리 window이면 그 project와 slot을 강조합니다. 관리 window는 window option으로 project ID와 target(`leader` 또는 `seat-N`)을 가집니다([명세 3절](project-team/spec.md#실행-근거와-잠금)).
-  - 기준 window는 Board pane 자신의 window입니다(`tmux_control.active_context`가 `TMUX_PANE`으로 `agent_session.api.pane_slot`을 불러 읽습니다. option 이름과 `leader`·`seat-N` 문법은 agent-session이 소유하며 Board는 반환값 `(project_id, slot)`만 씁니다). Board pane은 window마다 하나이고 같은 window를 보는 client는 그 pane을 공유하므로, 그 sidebar를 보는 client의 활성 window는 항상 이 window입니다. client가 여럿이어도 client마다 판정하지 않으며, 다른 window를 보는 client는 그 window의 Board pane이 자기 window를 기준으로 강조합니다.
+  - 기준 window는 Board pane 자신의 window입니다(sidebar가 `TMUX_PANE`의 window option 두 개를 읽습니다. option 이름과 `leader`·`seat-N` 문법은 agent-session의 `agent_session.api.pane_slot`이 소유하고, sidebar의 `tmuxio.rs`가 같은 규칙으로 읽습니다). Board pane은 window마다 하나이고 같은 window를 보는 client는 그 pane을 공유하므로, 그 sidebar를 보는 client의 활성 window는 항상 이 window입니다. client가 여럿이어도 client마다 판정하지 않으며, 다른 window를 보는 client는 그 window의 Board pane이 자기 window를 기준으로 강조합니다.
   - 강조 대상: project 이름 줄은 `▶ ` 표식과 파란 배경입니다. 좌석을 펼친 project에서는 그 slot의 줄(Leader 줄 또는 `target`의 seat 번호 줄)도 같은 파란 배경입니다. 접힌 project에서는 slot 줄이 없으므로 `▸` 버튼을 같은 배경으로 칠하고 도움말에 `현재 창: Leader` 또는 `현재 창: seat N`을 붙입니다. 좌석을 펼치거나 접는 상태(서버 option)는 강조 때문에 바꾸지 않습니다.
   - 강조하지 않는 경우: 관리 window가 아니거나(`pane_slot`이 None), 그 project가 등록 목록에 없거나, tmux 밖에서 실행한 경우. `target`이 `leader`·`seat-N`이 아니거나 그 seat 번호가 없으면 project만 강조합니다. Leader 줄은 Leader session이 게시된 때만 있으므로(위 동작 시간) 그 전에는 Leader slot의 줄이 없습니다.
   - 읽는 때: pane을 시작할 때, 창이 보이게 되어 SIGUSR1로 가시성을 다시 물을 때(창 이동 직후), 그리고 10초 실행 상태 읽기와 같은 주기입니다. 창을 바꾸면 이동한 window의 pane이 보이게 되는 그 읽기에서 곧바로 강조가 정해집니다. 2초 파일 읽기에는 tmux 호출을 넣지 않습니다. Board pane이 관리 window보다 먼저 만들어지는 경우(`window-created`) 관리 option은 10초 안에 반영됩니다. 읽기 실패와 보이지 않는 window는 이전 강조를 유지하며 읽지 않습니다. 강조가 바뀔 때만 다시 그립니다.
 - `path_cr` 또는 `path_decide`가 없는 project는 해당 개수를 `-`로 표시합니다. 읽기 오류도 `0`으로 바꾸지 않습니다.
-- 다시 그리기(BOARD-017): 글자·class·tooltip·disabled 값만 바뀌면 이미 mount한 widget에 그 값을 씁니다. widget을 다시 mount하지 않습니다. 행이 생기거나 없어지는 변경(펼치기·접기, Leader·seat·오류 행의 증감)과 project 목록의 변경(추가·삭제·순서·첫 그리기)은 Textual `App.batch_update()` 하나 안에서 적용합니다. 화면에는 변경 전이나 변경 후의 상태만 그려지고, 빈 목록·같은 project가 두 번 있는 목록·밀렸다 돌아오는 행은 그려지지 않습니다. 목록이 화면보다 길어지거나 짧아져 스크롤바가 생기고 없어질 때의 Textual 자체의 추가 layout 한 번은 이 규칙의 범위 밖입니다.
+- 다시 그리기(BOARD-004·BOARD-017): 위 "갱신과 실행 단위"의 한 번 그리기 규칙을 따릅니다. 행이 생기거나 없어지는 변경(펼치기·접기, Leader·seat·오류 행의 증감)과 project 목록의 변경(추가·삭제·순서·첫 그리기)도 한 번의 그리기에 담깁니다. 화면에는 변경 전이나 변경 후의 상태만 그려지고, 빈 목록·같은 project가 두 번 있는 목록·밀렸다 돌아오는 행은 그려지지 않습니다. 스크롤 위치와 초점은 갱신을 지나도 유지합니다. 초점은 위젯의 identity(project와 역할)로 찾으며, 사라지거나 비활성이 된 위젯의 초점은 지웁니다.
 - 화면은 등록 순서를 유지합니다. 긴 project 이름과 CR ID는 tooltip과 가로 스크롤로 전체 값을 볼 수 있게 합니다.
-- Tooltip은 pane이 focus를 잃으면(`AppBlur`) 곧바로, 그 밖에는 마지막 mouse motion 5초 뒤에 지웁니다(`SidebarApp.TOOLTIP_IDLE`). Mouse가 다른 pane으로 나가면 tmux는 이 pane에 아무 event도 보내지 않아 Textual이 tooltip을 지울 계기가 없습니다. 그래서 모든 경우에 tooltip이 남아 사용자가 따로 치울 일이 없게 시간으로 닫습니다. 5초는 표시 지연(0.5초) 뒤 가장 긴 tooltip(seat의 CR 제목·호스트·원격 경로)을 읽기에 충분하고, 움직이지 않는 mouse 때문에 오래 남지는 않는 값입니다. Motion이 이어지면 시간을 다시 잽니다. 닫은 tooltip은 mouse를 다시 움직여야 다시 뜹니다.
+- Tooltip은 pane이 focus를 잃으면(`FocusLost`) 곧바로, 그 밖에는 마지막 mouse motion 5초 뒤에 지웁니다(`app.rs`의 `TOOLTIP_IDLE`). Mouse가 다른 pane으로 나가면 tmux는 이 pane에 아무 event도 보내지 않아 sidebar가 tooltip을 지울 계기가 없습니다. 그래서 모든 경우에 tooltip이 남아 사용자가 따로 치울 일이 없게 시간으로 닫습니다. 5초는 표시 지연(0.5초) 뒤 가장 긴 tooltip(seat의 CR 제목·호스트·원격 경로)을 읽기에 충분하고, 움직이지 않는 mouse 때문에 오래 남지는 않는 값입니다. Motion이 이어지면 시간을 다시 잽니다. 닫은 tooltip은 mouse를 다시 움직여야 다시 뜹니다.
 
 마우스 클릭은 필수 조작입니다. tmux 설정은 이미 `mouse on`입니다. Sidebar pane 안의 클릭과 휠은 TUI가 처리합니다. tmux 상태줄의 별도 `Board` 영역은 기존 session·cswap 클릭 동작을 유지하면서 sidebar toggle에 사용합니다.
 
