@@ -43,13 +43,31 @@ def missing_programs(sections):
     return found
 
 
-def removal(section):
-    """The shell command that takes one section out of the crontab, or None when the section cannot be read
-    (a range delete on a section without its end line would cut to the end of the crontab).
+def _script(section):
+    return "/^%s$/,/^%s$/d" % (SPECIAL.sub(r"\\\1", section["begin"]), SPECIAL.sub(r"\\\1", section["end"]))
 
-    The crontab is read first and nothing is written when that fails. The blank line that separates the
-    section from the lines before it stays."""
+
+def by_hand(section):
+    """Why the section gets no printed command (it is removed by hand with `crontab -e`), or None.
+
+    A broken section (no end line, repeated) is refused because a range delete without its end line would cut to
+    the end of the crontab. A name with `'` or `!` is refused because csh changes `!` even inside single quotes
+    and the quoting of `'` differs between the shells, so one command could not mean the same in all of them."""
     if section["error"]:
+        return "incomplete or repeated (%s)" % section["error"]
+    if "'" in section["project"] or "!" in section["project"]:
+        return "the project name has a character (' or !) that the shells read differently"
+    return None
+
+
+def removal(section):
+    """The one-line command that takes one section out of the crontab, or None when `by_hand` says no.
+
+    It runs the same in csh and tcsh as in sh, bash and zsh (a login shell here is csh): the crontab goes to a
+    file in HOME named with the shell's PID, `sed` deletes the range from the start line to the end line, and
+    `crontab -` writes the result. Nothing is written when `crontab -l` fails (`&&`), and the file is removed at
+    the end either way. The blank line that separates the section from the lines before it stays."""
+    if by_hand(section):
         return None
-    script = "/^%s$/,/^%s$/d" % (SPECIAL.sub(r"\\\1", section["begin"]), SPECIAL.sub(r"\\\1", section["end"]))
-    return "text=$(crontab -l) && printf '%%s\\n' \"$text\" | sed %s | crontab -" % shlex.quote(script)
+    saved = "~/.project-agent-crontab.$$"
+    return "crontab -l > %s && sed '%s' %s | crontab - ; rm -f %s" % (saved, _script(section), saved, saved)

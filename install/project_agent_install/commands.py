@@ -517,8 +517,8 @@ def _crontab_notes(source_root, plan):
         jobs = ", ".join(job["id"] for job in section["jobs"]) or "no job"
         command = crontab.removal(section)
         if command is None:
-            plan.notes.append("The crontab section of project %s (%s) is incomplete or repeated (%s); remove it by "
-                              "hand with `crontab -e`." % (section["project"], jobs, section["error"]))
+            plan.notes.append("The crontab section of project %s (%s) gets no command: %s. Remove it by hand with "
+                              "`crontab -e`." % (section["project"], jobs, crontab.by_hand(section)))
             continue
         plan.notes.append("The crontab still has the project-agent section of project %s (%s). `uninstall` does not "
                           "change the crontab, and its jobs run files that `uninstall` removes, so they would fail "
