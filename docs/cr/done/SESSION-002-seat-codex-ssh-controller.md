@@ -3,6 +3,7 @@
 - Opened: 2026-11-09
 - Scope: project-agent
 - Severity: S3
+- Outcome: merged SESSION-001
 
 ## Symptom
 SESSION-001에서 확정한 결함(게시 책임이 호출자에 묶인 시작 controller에 있음)이 원격 seat 경로에도 있습니다. 원격 Codex의 등록은 원격 host에서 일어나고, Leader host의 window에 `registered`를 쓰고 state를 게시하는 것은 시작 controller의 poll뿐입니다. controller가 원격 시작 dialog(`needs_user_action`)나 signal로 먼저 끝나면, 원격 등록이 끝나도 Leader host에 게시할 주체가 없습니다.
@@ -19,3 +20,4 @@ SESSION-001에서 확정한 결함(게시 책임이 호출자에 묶인 시작 c
 ## Disposition
 - 2026-11-09 Leader: 판정 보류(open 유지). 같은 결함이지만 등록이 Leader host 밖에서 일어나므로 고치는 경로(원격 등록을 uplink로 Leader host의 등록 함수에 올리는 방법 등)를 SESSION-001의 새 계약이 통합된 뒤 그 계약에 맞춰 설계합니다. 지금 원격 seat를 쓰는 project가 없어 SESSION-001과 따로 진행합니다.
 - 2026-11-09 Leader: SESSION-001(통합 a825c04)이 공유 `_register`를 바꿔 원격 capsule에서도 등록이 cache를 직접 게시하고, `remote_runtime` poll의 게시 단계를 없앴습니다. 실제 원격 host 검증은 하지 않았습니다. 이 CR이 그 검증과 Leader host 쪽 게시 경로를 함께 다룹니다.
+- 2026-11-11 Leader: open -> done, Outcome merged SESSION-001. 사용자 결정 D-20261111-02. 사용자 원문: "이미 완료했어. done 처리해". 원격 capsule의 등록 게시는 SESSION-001(통합 a825c04)이 공유 _register로 직접 하게 바꿨습니다(위 Disposition).
