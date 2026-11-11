@@ -1005,6 +1005,18 @@ class CRPopupApp(App):
             self.remove_class("list-open")
 
 
+class AnswerArea(TextArea):
+    """The answer box: Ctrl+J (LF from the terminal) inserts a newline like Enter."""
+
+    async def _on_key(self, event) -> None:
+        if event.key == "ctrl+j" and not self.read_only:
+            event.stop()
+            event.prevent_default()
+            self._replace_via_keyboard("\n", *self.selection)
+            return
+        await super()._on_key(event)
+
+
 class PopupApp(App):
     """Focused decision reader with a multiline answer editor."""
 
@@ -1077,7 +1089,7 @@ class PopupApp(App):
             yield VerticalScroll(id="decision-list")
             yield VerticalScroll(id="decision-detail")
         yield Static("답변", id="answer-label")
-        yield TextArea(id="answer", placeholder="결정 내용을 읽고 답변을 입력하세요.")
+        yield AnswerArea(id="answer", placeholder="결정 내용을 읽고 답변을 입력하세요.")
         with Horizontal(id="popup-actions"):
             yield Button("목록", id="show-list")
             yield Button("전송", id="send")
