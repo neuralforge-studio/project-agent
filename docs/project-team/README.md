@@ -77,6 +77,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | `handoff` | slot의 인계 파일: 경로, 이번 run이 쓴 것인지(`launch.sh` 이후 갱신) 판단, restart의 `handoff_required`, 인계 문서 경로 검증. | `lifecycle`·`suspend`를 import하지 않습니다. `launch_artifacts.run_directory`를 씁니다. |
 | `suspend` | `SuspendStore`(shutdown 기록), `SuspendMixin`(한 대상의 shutdown·resume 단계), `Fleet`(운영자 명령). | `lifecycle`을 import하지 않습니다. `SuspendMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
 | `watch` | `WatchMixin`(한 seat·Leader의 대화 기록 정체 판정과 점검 전송), `Watch`(운영자 명령. `Fleet`을 확장). | `lifecycle`을 import하지 않습니다(`suspend`와 같은 방향). `WatchMixin`이 기대는 `Manager` 멤버는 그 docstring이 나열합니다. |
+| `self_check_gate` | Leader run의 Claude hook(`UserPromptSubmit`): 할 일이 없을 때 Leader 자기 점검 prompt를 session에 넣지 않습니다. 판정 계약은 [동작 명세 watch](spec.md#watch)가 소유합니다. | 표준 library만 먼저 import하고, 판정할 때 `config`·`jobs`(project-item api)·`launch_artifacts`를 지연 import합니다. `providers/claude`가 설치합니다. |
 
 ### `sys.path` 조작 위치
 
