@@ -26,11 +26,14 @@ from project_item.kinds import CR  # noqa: E402
 
 # The wait limit is a ceiling for a command that never finishes, so a hung test fails instead of
 # stalling the run; it asserts no speed. A fixture `start` runs a real tmux pane and a Python child that
-# imports agent_session, so its time follows the host's load. Measured on this workstation (TEST-003):
-# with three `-n 8` suites running at once on a host already at load 75-100 on 64 cores, one command
-# took p50 9.8 s, p90 21.4 s, p99 29.8 s and at most 38.0 s over 1350 commands, so 15 s failed about
-# 95 of 704 tests per run. 120 s is about three times that maximum.
-DEFAULT_TIMEOUT = 120
+# imports agent_session, so its time follows the host's load. Measured on this workstation:
+# - TEST-003: with three `-n 8` suites at once on a host at load 75-100 on 64 cores, one command took
+#   p50 9.8 s, p99 29.8 s and at most 38.0 s over 1350 commands, so 15 s failed about 95 of 704 tests.
+# - TEST-013: with `-n 8` agent-session and `-n 8` install tests at once at load 50-100, a `start` took
+#   p50 24.6 s, p99 61.0 s and at most 80.3 s over 386 starts, and a two-slot `resume` 43 s, which shares
+#   one limit across its slots. 120 s left 1.5 times the maximum, and the 0.9.0 gate (load 92-143) passed it.
+# 240 s is three times the TEST-013 maximum.
+DEFAULT_TIMEOUT = 240
 
 
 def command_timeout():
@@ -40,7 +43,7 @@ def command_timeout():
 
 def git(root, *args):
     result = subprocess.run(["git", "-c", "submodule.recurse=false", "-C", str(root), *args],
-                            capture_output=True, text=True, timeout=15)
+                            capture_output=True, text=True, timeout=command_timeout())
     if result.returncode:
         raise AssertionError(result.stderr or result.stdout)
     return result.stdout.strip()

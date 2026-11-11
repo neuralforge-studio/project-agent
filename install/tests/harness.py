@@ -23,6 +23,11 @@ import tmux_test_server  # noqa: E402
 # older one); by default it is the checkout's.
 INSTALLER = Path(os.environ.get("PROJECT_AGENT_INSTALLER") or REPO / "install" / "project-agent-install")
 LIB = ".local/lib/project-agent"
+# The wait limit of one installer command is a ceiling for a hung command; it asserts no speed. An `install`
+# copies and checks a whole release, so its time follows the host's load. Measured on this workstation
+# (TEST-013) at load 55-60: `install` 97 s and `check` 23 s alone; the 0.9.0 gate (load 90-140, two `-n 8`
+# suites at once) exceeded the earlier 300 s. 900 s is three times that 300 s.
+INSTALLER_TIMEOUT = 900
 # The names the contract gives (section 2). Written here, not imported from the installer.
 SHIMS = (".local/bin/agent-session", ".local/bin/project-item", ".local/bin/project-board")
 CLAUDE_LINKS = (".claude/skills/project-team", ".claude/skills/project-item")
@@ -127,7 +132,7 @@ class Home:
         command = [sys.executable, str(installer or INSTALLER), *args]
         if source is not None and args[0] in ("install", "upgrade"):
             command += ["--source", str(source)]
-        return subprocess.run(command, capture_output=True, text=True, timeout=300, cwd=cwd or self.root,
+        return subprocess.run(command, capture_output=True, text=True, timeout=INSTALLER_TIMEOUT, cwd=cwd or self.root,
                               env={**self.env, **(env or {})})
 
     def snapshot(self):
