@@ -31,7 +31,8 @@ const CLICK_LIMIT: usize = 4096;
 enum Msg {
     Snapshot(Snapshot, Option<Result<HashSet<String>, String>>),
     Live(Liveness, Option<Option<Active>>),
-    Expanded(Result<HashSet<String>, String>),
+    /// A fold helper ended: the shared value read after it.
+    FoldDone(Result<HashSet<String>, String>),
     Input(Event),
     Click { client: String, x: i64, y: i64, reply: Sender<Value> },
     Visible(bool),
@@ -65,6 +66,8 @@ struct App {
     tooltip_expires: Option<Instant>,
     toast: Option<(String, Instant)>,
     mouse_down: Option<Key>,
+    /// Fold helpers still running: until they end, a read of the shared value may be older than the click.
+    folds_inflight: usize,
     quit: bool,
 }
 
@@ -135,6 +138,7 @@ pub fn run(config: Option<String>) -> i32 {
         tooltip_expires: None,
         toast: None,
         mouse_down: None,
+        folds_inflight: 0,
         quit: false,
     };
     let _ = app.draw(&mut terminal, false);
@@ -351,7 +355,7 @@ impl App {
                 // A read that was under way when the window was hidden still shows (as the Python sidebar did).
                 self.loaded = true;
                 self.snapshot = snapshot;
-                if let Some(Ok(expanded)) = expanded {
+                if let (Some(Ok(expanded)), 0) = (expanded, self.folds_inflight) {
                     self.expanded = expanded;
                 }
                 true
@@ -363,12 +367,15 @@ impl App {
                 }
                 true
             }
-            Msg::Expanded(Ok(expanded)) => {
-                self.expanded = expanded;
-                true
-            }
-            Msg::Expanded(Err(error)) => {
-                self.toast = Some((error, Instant::now() + TOAST_TIME));
+            Msg::FoldDone(read) => {
+                self.folds_inflight = self.folds_inflight.saturating_sub(1);
+                if self.folds_inflight > 0 {
+                    return false;
+                }
+                match read {
+                    Ok(expanded) => self.expanded = expanded,
+                    Err(error) => self.toast = Some((error, Instant::now() + TOAST_TIME)),
+                }
                 true
             }
             Msg::Visible(visible) => {
@@ -605,6 +612,7 @@ impl App {
                 if !self.expanded.remove(project) {
                     self.expanded.insert(project.clone());
                 }
+                self.folds_inflight += 1;
                 args.extend(["toggle-fold".into(), "--project".into(), project.clone()]);
             }
             Action::Project(project) => args.extend(["switch-project".into(), "--project".into(), project.clone()]),
@@ -622,7 +630,7 @@ impl App {
             let result = tmuxio::run_helper(config.as_deref(), &args);
             if folding {
                 // the shared value, whatever the helper did
-                let _ = tx.send(Msg::Expanded(Tmux::from_env().refresh(false).0));
+                let _ = tx.send(Msg::FoldDone(Tmux::from_env().refresh(false).0));
             }
             if let Err(message) = result {
                 let _ = tx.send(Msg::Toast(message));

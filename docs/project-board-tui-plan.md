@@ -33,7 +33,7 @@ Sidebar를 한 번 표시한 tmux window마다 sidebar 프로세스 하나를 �
 Sidebar는 파일 상태를 2초마다, 실행 상태와 지금 보는 창을 10초마다 다시 읽습니다. 각 읽기는 자기 thread에서 실행합니다. 느린 실행 상태 읽기가 파일 읽기를 막지 않습니다.
 
 - 첫 그림은 첫 파일 읽기만 기다립니다. 실행 상태를 기다리지 않습니다. 읽기 전의 pane은 비어 있습니다.
-- 첫 파일 읽기는 NFS의 파일 열기 지연이 지배하므로 파일을 여러 thread(기본 8)로 동시에 엽니다. 이후 읽기는 `stat`으로 바뀐 것만 다시 읽습니다.
+- 첫 파일 읽기는 NFS의 파일 열기 지연이 지배하므로 파일을 여러 thread(기본 32, 환경 변수 `PROJECT_BOARD_THREADS`)로 동시에 엽니다. 이후 읽기는 `stat`으로 바뀐 것만 다시 읽습니다.
 - 실행 상태는 tmux 서버를 읽는 일입니다. project·slot 수와 무관하게 tmux process 둘로 모든 project를 판정합니다(`agent_session.api.server_view`의 규칙). 반납 대기(`release_pending`)도 이 10초 읽기가 갱신하고, 다음 파일 읽기의 seat 상태가 씁니다. SSH seat의 실행 판정만 Python의 `project-board liveness`에 맡깁니다(SSH가 필요하기 때문입니다).
 - 어느 client에도 보이지 않는 window의 sidebar는 두 읽기를 모두 멈추고, 보이게 되면 각각 곧바로 한 번 읽습니다. tmux hook이 보임 상태가 바뀐 pane에 SIGUSR1을 보내고, pane이 tmux에 자기 window가 보이는지 묻습니다(`tmuxio.rs`의 `visible`). 시작할 때는 SIGUSR1 handler를 설치한 뒤 `@project_board_ready`를 1로 씁니다(`mark_ready`).
 - 접힘 상태는 2초 읽기마다 `show-options` 한 번으로 읽습니다. tmux를 부르는 일은 이것과 10초 읽기의 한 번(지금 보는 창을 함께 읽습니다)뿐입니다.

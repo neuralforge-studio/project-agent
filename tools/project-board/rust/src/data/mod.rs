@@ -41,14 +41,14 @@ pub struct Reader {
 }
 
 impl Reader {
-    /// `config` is the registry file; None looks in the standard places. Files are opened on 8 threads on a first
+    /// `config` is the registry file; None looks in the standard places. Files are opened on 32 threads on a first
     /// read (`PROJECT_BOARD_THREADS` changes that).
     pub fn new(config: Option<PathBuf>) -> Self {
         let threads = std::env::var("PROJECT_BOARD_THREADS")
             .ok()
             .and_then(|n| n.parse().ok())
             .filter(|n| *n > 0)
-            .unwrap_or(8);
+            .unwrap_or(32);
         Reader {
             config,
             threads,
