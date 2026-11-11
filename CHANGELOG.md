@@ -5,6 +5,7 @@
 ## Unreleased
 
 - ITEM-001
+- INSTALL-008
 
 형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
 
