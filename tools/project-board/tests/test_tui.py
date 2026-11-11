@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from board_testing import Board, leader, session, wait_until
-from project_board import model
+from project_board import model, window_link
 from project_board.tui import CRPopupApp, CSVScreen, PopupApp
 from textual.widgets import Button, DataTable, Markdown, Static, TextArea
 
@@ -694,12 +694,16 @@ def test_cr_window_shows_four_groups_with_counts_for_any_pressed_state(tmp_path,
             await pilot.pause()
             assert str(app.query_one("#cr-title", Static).content) == "Open 2, Todo 1, In-Progress 2, Done 3"
             assert _group_headers(app) == ["Open ▼", "Todo ▼", "In-Progress ▼", "Done ▶"]
-            assert [str(row.label)[2:9] for row in app.query(".list-item")] == [
-                "CPU-001", "CPU-002", "CPU-101", "CPU-201", "CPU-202", "CPU-300", "CPU-301", "CPU-302"]
+            # only Done starts folded, and the rows of a folded group are not mounted until it is unfolded (BOARD-025)
+            assert [(str(row.label)[2:9], row.display) for row in app.query(".list-item")] == [
+                ("CPU-001", True), ("CPU-002", True), ("CPU-101", True), ("CPU-201", True), ("CPU-202", True)]
+            assert "CPU-400" not in str(app.query_one("#cr-items").children)      # deferred stays hidden
+            await pilot.click("#cr-group-done")
+            await wait_until(pilot, lambda: len(app.query(".list-item")) == 8)
             assert [(str(row.label)[2:9], row.display) for row in app.query(".list-item")] == [
                 ("CPU-001", True), ("CPU-002", True), ("CPU-101", True), ("CPU-201", True), ("CPU-202", True),
-                ("CPU-300", False), ("CPU-301", False), ("CPU-302", False)]       # only Done starts folded
-            assert "CPU-400" not in str(app.query_one("#cr-items").children)      # deferred stays hidden
+                ("CPU-300", True), ("CPU-301", True), ("CPU-302", True)]          # after its header, in list order
+            assert _group_headers(app) == ["Open ▼", "Todo ▼", "In-Progress ▼", "Done ▼"]
             first = {"open": "CPU-001", "todo": "CPU-101", "in-progress": "CPU-201"}[state]
             assert app.selected_id == first
 
@@ -718,7 +722,7 @@ def test_cr_window_scrolls_to_the_pressed_group_first(tmp_path):
             await pilot.pause()
             listing = app.query_one("#cr-items")
             header = app.query_one("#cr-group-in-progress")
-            assert listing.scroll_y > 0
+            await wait_until(pilot, lambda: listing.scroll_y > 0)    # the scroll follows the refresh
             assert header.region.y == listing.region.y            # the group starts at the top of the list
             assert app.selected_id == "CPU-201"
 
@@ -823,7 +827,7 @@ def test_cr_window_moves_between_every_project_in_the_same_window_and_wraps(tmp_
             await pilot.click("#cr-next")
             await wait_until(pilot, lambda: app.project_id == "Gamma" and app.selected_id == "GGG-001")
             assert str(app.query_one("#cr-title", Static).content) == "Open 0, Todo 0, In-Progress 1, Done 1"
-            assert [str(row.label)[2:9] for row in app.query(".list-item")] == ["GGG-001", "GGG-002"]
+            assert [str(row.label)[2:9] for row in app.query(".list-item")] == ["GGG-001"]    # its Done is folded
             await pilot.click("#cr-next")                                     # past the last project: the first
             await wait_until(pilot, lambda: app.project_id == "Alpha" and app.selected_id == "AAA-001")
             await pilot.click("#cr-prev")                                     # before the first: the last
@@ -933,5 +937,234 @@ def test_decision_window_learns_the_other_projects_after_it_is_up(tmp_path):
             await wait_until(pilot, lambda: str(app.query_one("#popup-next", Button).tooltip) == "다음 project: Gamma")
             assert reads == [str(board.config)]
             assert [item for item in app.eligible] and app.eligible == {"Alpha", "Gamma"}
+
+    asyncio.run(check())
+
+
+# BOARD-025: a click on an item while a Board window is open tells that window what to show.
+def _tell(link, **request):
+    return asyncio.to_thread(window_link.send, link, request)
+
+
+def test_an_open_cr_window_shows_another_project_and_state_when_told(tmp_path, request):
+    board = _three_projects(tmp_path)
+    link, marked = click_socket(request), []
+    app = CRPopupApp(str(board.config), "Alpha", "open", load=False, link=link, mark_link=marked.append)
+
+    async def check():
+        async with app.run_test(size=(90, 30)) as pilot:
+            await wait_until(pilot, lambda: marked == [link])             # it says it listens once it does
+            assert str(app.query_one("#cr-title", Static).content) == "읽는 중…"      # before the first read
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Alpha", True))
+            assert app.project_id == "Alpha" and app.selected_id == "AAA-001"
+            assert await _tell(link, kind="cr", project="Gamma", state="in-progress") == {"ok": True}
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and app.selected_id == "GGG-001")
+            assert str(app.query_one("#cr-project", Static).content) == "Gamma"
+            assert str(app.query_one("#cr-title", Static).content) == "Open 0, Todo 0, In-Progress 1, Done 1"
+            assert app.is_running
+            assert [str(row.label)[2:9] for row in app.query(".list-item")] == ["GGG-001"]    # its Done is folded
+
+    asyncio.run(check())
+    assert not os.path.exists(link)                                        # the socket goes with the window
+
+
+def test_an_open_cr_window_shows_that_it_is_reading_until_the_list_arrives(tmp_path, request, monkeypatch):
+    board = _three_projects(tmp_path)
+    link, release = click_socket(request), threading.Event()
+    app = CRPopupApp(str(board.config), "Alpha", "open", link=link)
+    read = model.popup_snapshot
+
+    def slow(*args):
+        release.wait(10)
+        return read(*args)
+
+    async def check():
+        async with app.run_test(size=(90, 30)) as pilot:
+            await wait_until(pilot, lambda: os.path.exists(link))
+            await _tell(link, kind="cr", project="Beta", state="todo")
+            await wait_until(pilot, lambda: app.project_id == "Beta")
+            await wait_until(pilot, lambda: str(app.query_one("#cr-title", Static).content) == "읽는 중…")
+            release.set()
+            await wait_until(pilot, lambda: app.selected_id == "BBB-001")
+
+    monkeypatch.setattr(model, "popup_snapshot", slow)
+    try:
+        asyncio.run(check())
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("request_", [
+    {"kind": "decision", "project": "Alpha", "decision": None},       # a decision request to a CR window
+    {"kind": "cr", "project": "Alpha", "state": "done"},              # not a state a click names
+    {"kind": "cr", "project": 3, "state": "open"},
+])
+def test_a_cr_window_refuses_what_it_cannot_show(tmp_path, request, request_):
+    board = _three_projects(tmp_path)
+    link = click_socket(request)
+    app = CRPopupApp(str(board.config), "Alpha", "open", load=False, link=link)
+
+    async def check():
+        async with app.run_test(size=(90, 30)) as pilot:
+            await wait_until(pilot, lambda: os.path.exists(link))
+            result = await _tell(link, **request_)
+            assert result["ok"] is False and result["code"] == "invalid"
+            assert app.project_id == "Alpha"
+
+    asyncio.run(check())
+
+
+def test_an_open_decision_window_shows_another_project_when_told_and_keeps_the_draft(tmp_path, request):
+    board = _three_projects(tmp_path)
+    link, marked = click_socket(request), []
+    app = PopupApp(str(board.config), "Alpha", load=False, link=link, mark_link=marked.append)
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await wait_until(pilot, lambda: marked == [link])
+            await app.apply_snapshot(model.snapshot(board.config))
+            editor = app.query_one("#answer", TextArea)
+            editor.text = "alpha 초안"
+            assert await _tell(link, kind="decision", project="Gamma", decision=None) == {"ok": True}
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and "D-20261107-03" in app.decisions)
+            assert str(app.query_one("#popup-project", Static).content) == "Gamma" and editor.text == ""
+            assert app.decide_id == "D-20261107-03"
+            await _tell(link, kind="decision", project="Alpha", decision="D-20261107-01")
+            await wait_until(pilot, lambda: app.project_id == "Alpha" and "D-20261107-01" in app.decisions)
+            assert editor.text == "alpha 초안"                           # an unsent answer stays with its decision
+            assert app.is_running
+
+    asyncio.run(check())
+    assert not os.path.exists(link)
+
+
+def test_a_decision_window_does_not_change_what_it_shows_while_an_answer_is_sent(tmp_path, request):
+    board = _three_projects(tmp_path)
+    link, release, sent = click_socket(request), threading.Event(), []
+
+    def sender(*args):
+        sent.append(args)
+        release.wait(10)
+        return {"ok": False, "error": {"message": "x"}}
+    app = PopupApp(str(board.config), "Alpha", load=False, link=link, answer_sender=sender)
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await wait_until(pilot, lambda: os.path.exists(link))
+            await app.apply_snapshot(model.snapshot(board.config))
+            app.query_one("#answer", TextArea).text = "A"
+            app.action_send()
+            await wait_until(pilot, lambda: bool(sent))
+            result = await _tell(link, kind="decision", project="Gamma", decision=None)
+            assert result["ok"] is False and result["code"] == "busy"
+            assert app.project_id == "Alpha"
+            release.set()
+
+    try:
+        asyncio.run(check())
+    finally:
+        release.set()
+    assert sent == [(str(board.config), "Alpha", "D-20261107-01", "A")]
+
+
+def test_a_decision_window_refuses_what_it_cannot_show(tmp_path, request):
+    board = _three_projects(tmp_path)
+    link = click_socket(request)
+    app = PopupApp(str(board.config), "Alpha", load=False, link=link)
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await wait_until(pilot, lambda: os.path.exists(link))
+            for bad in ({"kind": "cr", "project": "Alpha", "state": "open"},
+                        {"kind": "decision", "project": "Alpha", "decision": 7}):
+                result = await _tell(link, **bad)
+                assert result["ok"] is False and result["code"] == "invalid"
+            assert app.project_id == "Alpha"
+
+    asyncio.run(check())
+
+
+def test_a_cr_window_reads_the_other_projects_once_it_is_up_so_the_next_item_is_found_read(tmp_path, monkeypatch):
+    board = _three_projects(tmp_path)
+    calls, read = [], model.popup_snapshot
+
+    def record(config, project_id=None, done=False, only=None):
+        calls.append((project_id, done, only))
+        return read(config, project_id, done, only)
+    monkeypatch.setattr(model, "popup_snapshot", record)
+    app = CRPopupApp(str(board.config), "Alpha", "open")
+
+    async def check():
+        async with app.run_test(size=(90, 30)) as pilot:
+            await wait_until(pilot, lambda: len(calls) == 3)
+            await pilot.pause(0.2)
+            assert app.project_id == "Alpha" and app.selected_id == "AAA-001"
+
+    asyncio.run(check())
+    # the window's own project first (the list it shows), then the others once each; only the CRs, with done
+    assert calls == [("Alpha", True, model.ONLY_CRS), ("Beta", True, model.ONLY_CRS), ("Gamma", True, model.ONLY_CRS)]
+
+
+def test_cr_head_is_whole_sections_of_a_long_cr_and_none_for_a_short_one():
+    from project_board.tui import cr_head
+    section = "## Part\n\n" + "line\n\n" * 12
+    source = "# T\n\n- Opened: x\n\n" + section * 6
+    head = cr_head(source)
+    assert head is not None and head.startswith("# T") and source.startswith(head) and head.endswith("\n")
+    assert len(head.splitlines()) >= 29 and source[len(head):].lstrip("\n").startswith("## Part")
+    assert cr_head("# T\n\n## Part\n\ntext\n") is None
+    fenced = "# T\n\n" + "```\n" + "## not a heading\n" * 40 + "```\n\n" + "text\n" * 40
+    assert cr_head(fenced) is None                                    # a heading inside a fence is not a section
+
+
+def test_a_long_cr_shows_its_first_screen_before_the_whole_document(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Alpha", seats=0)
+    path = board.cr(base, "open", "AAA-001", "alpha open")
+    body = "".join(f"## Part {number}\n\n" + "line\n\n" * 12 for number in range(8))
+    path.write_text(path.read_text(encoding="utf-8") + "\n" + body, encoding="utf-8")
+    source = path.read_text(encoding="utf-8")
+    app = CRPopupApp(str(board.config), "Alpha", "open", load=False)
+    seen = []
+    painted = app._painted
+
+    async def record():
+        seen.append([widget.source for widget in app.query(Markdown)])
+        await painted()
+    app._painted = record
+
+    async def check():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Alpha", True))
+            await wait_until(pilot, lambda: [widget.source for widget in app.query(Markdown)] == [source])
+            assert len(seen) == 1 and len(seen[0]) == 1 and 0 < len(seen[0][0]) < len(source)
+            assert source.startswith(seen[0][0])                       # the first screen was the head of the document
+
+    asyncio.run(check())
+
+
+def test_done_rows_and_their_titles_are_not_made_until_the_done_group_is_unfolded(tmp_path, monkeypatch):
+    """BOARD-025: a folded group costs no widgets, and nobody reads the title of a done CR that nobody sees."""
+    board, base, done = _four_state_board(tmp_path)
+    read = []
+    original = model.done_title
+    monkeypatch.setattr(model, "done_title", lambda item: read.append(item["id"]) or original(item))
+    app = CRPopupApp(str(board.config), "Falcon2", "open", load=False)
+
+    async def check():
+        async with app.run_test(size=(90, 40)) as pilot:
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Falcon2", True))
+            await pilot.pause(0.3)
+            assert read == [] and len(app.query(".list-item")) == 5
+            await pilot.click("#cr-group-done")
+            await wait_until(pilot, lambda: sorted(read) == ["CPU-300", "CPU-301", "CPU-302"])
+            await pilot.click("#cr-item-5")                                    # a done row opens its CR
+            await wait_until(pilot, lambda: app.selected_id == "CPU-300")
+            await pilot.click("#cr-group-done")                                # fold again: the rows stay, hidden
+            await wait_until(pilot, lambda: [row.display for row in app.query(".list-item")][-3:] == [False, False, False])
+            await pilot.pause(0.6)                                             # not a double click of the header
+            await pilot.click("#cr-group-done")
+            await wait_until(pilot, lambda: [row.display for row in app.query(".list-item")][-3:] == [True, True, True])
+            assert sorted(read) == ["CPU-300", "CPU-301", "CPU-302"]            # each title was read once
 
     asyncio.run(check())

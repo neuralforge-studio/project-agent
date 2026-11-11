@@ -128,7 +128,9 @@ clicks, and the pane behind it (the Worker's Claude) takes input once you click 
 window stays on top. Drag its top border to move it (or hold Alt and drag inside it) and
 drag any other border to resize it. These are tmux's default mouse bindings and need
 `mouse on`. A window holds one Board window: clicking another item shows it in the same
-pane, where you moved it and as large as you made it. Press `Esc` or the close button to
+pane, where you moved it and as large as you made it. An open window of the same kind (CR or decision) is
+told what to show and starts no new process, so the item appears at once; the other kind starts again in the
+same pane. A window says `읽는 중…` while it reads (BOARD-025). Press `Esc` or the close button to
 close it; that closes only that pane.
 The CR popup is the same window whichever of `O`, `T` or `I` opened it: it lists the Open,
 Todo, In-Progress and Done CRs as groups headed `Open ▼` (click to fold or unfold; Done opens

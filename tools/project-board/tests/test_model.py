@@ -468,3 +468,46 @@ def test_a_registry_that_cannot_be_read_is_reported_each_time_and_not_kept(board
     board.config.write_text(json.dumps({}), encoding="utf-8")
     _bump(board.config)
     assert model.snapshot(board.config, now=NOW) == {"now": "2026-11-05T10:30:00Z", "projects": [], "error": None}
+
+
+def test_a_window_reads_only_the_part_of_a_project_it_shows(board, monkeypatch):
+    """BOARD-025: the CR window does not read decisions or run state, the decision window does not read CRs; every
+    file read is a round trip on a shared disk."""
+    base = board.project("Alpha", seats=1)
+    board.state(base, {"leader": None, "0": {"job_id": None, "git_hash": None, "session": None}})
+    board.cr(base, "open", "AAA-001", "alpha open")
+    board.cr(base, "done", "AAA-000", "alpha done")
+    board.decide(base, "open", "D-20261107-01", "alpha question")
+
+    def refuse(name):
+        def read(*args, **kwargs):
+            raise AssertionError(f"{name} was read")
+        return read
+    with monkeypatch.context() as patch:
+        patch.setattr(model, "decide_items", refuse("decisions"))
+        patch.setattr(model, "_read_state", refuse("state"))
+        data = model.popup_snapshot(board.config, "Alpha", True, model.ONLY_CRS)
+    (project,) = data["projects"]
+    assert [item["id"] for item in project["crs"]["open"]] == ["AAA-001"]
+    assert [item["id"] for item in project["crs"]["done"]] == ["AAA-000"]
+    assert project["decide"] is None and project["seats"] == [] and project["leader"] is None and project["errors"] == []
+    assert data["order"] == ["Alpha"]
+
+    with monkeypatch.context() as patch:
+        patch.setattr(model, "cr_items", refuse("CRs"))
+        patch.setattr(model, "_read_state", refuse("state"))
+        data = model.popup_snapshot(board.config, "Alpha", False, model.ONLY_DECISIONS)
+    (project,) = data["projects"]
+    assert [item["id"] for item in project["decide"]] == ["D-20261107-01"] and project["crs"] is None
+
+    full = model.snapshot(board.config)["projects"][0]                        # without `only` nothing changes
+    assert full["crs"] is not None and full["decide"] is not None and len(full["seats"]) == 1
+
+
+def test_the_decision_snapshot_has_every_projects_decisions_and_nothing_else(board):
+    first, second = board.project("Alpha", seats=0), board.project("Beta", seats=0)
+    board.decide(first, "open", "D-20261107-01", "alpha question")
+    board.cr(second, "open", "BBB-001", "beta open")
+    data = model.decision_snapshot(board.config)
+    assert [(item["id"], [d["id"] for d in item["decide"]], item["crs"]) for item in data["projects"]] == [
+        ("Alpha", ["D-20261107-01"], None), ("Beta", [], None)]

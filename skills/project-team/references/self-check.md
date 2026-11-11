@@ -4,6 +4,10 @@ Claude Leader와 Worker는 각자 자기 TUI의 session cron(`CronCreate`)으로
 
 이 문서가 cron 식과 점검 prompt의 원본입니다. 첫 prompt와 resume 메시지는 이 문서를 가리키기만 합니다([동작 명세 7절 watch](../../../docs/project-team/spec.md#watch)).
 
+## 할 일이 없을 때의 Leader 점검
+
+Leader의 점검 prompt는 Leader run의 `UserPromptSubmit` hook(`agent_session/self_check_gate.py`)이 먼저 봅니다. CR(open·todo·in-progress)과 결정 항목(open·answered)이 하나도 없으면 점검이 session에 들어가지 않습니다(화면에는 `Running scheduled task`와 한 줄의 알림만 남습니다). 하루에 한 번은 할 일이 없어도 점검이 실행되며, 그때 아래 Leader 점검의 마지막 항목이 등록 만료(7일)를 갱신합니다. 판정을 못 하면 점검이 실행됩니다. 계약은 [동작 명세 watch](../../../docs/project-team/spec.md#watch)가 소유합니다. 이 hook은 아래 Leader prompt의 첫 줄(`[자기 점검]`으로 시작하고 `Leader 자기 점검`을 담음)로 prompt를 알아보므로 그 첫 줄을 바꾸면 `tools/agent-session/tests/test_self_check_gate.py`가 실패합니다. Worker 점검은 gate가 없습니다.
+
 ## 등록
 
 - 등록이 끝난 뒤 첫 행동으로 `CronList`를 보고, 이 점검이 없으면 아래 자기 역할 절의 cron 식과 prompt를 그대로 `CronCreate`에 줍니다(`recurring: true`). 있으면 다시 등록하지 않습니다.

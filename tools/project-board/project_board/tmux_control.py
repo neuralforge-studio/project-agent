@@ -27,7 +27,7 @@ import subprocess
 import time
 import uuid
 
-from . import model
+from . import model, window_link
 from agent_session import api
 from agent_session.api import PANE_ID_OPTION, SessionError, Tmux
 
@@ -41,6 +41,8 @@ WINDOW_RESTORE = "@project_board_restore"
 PANE_MARK = "@project_board_managed"
 PANE_SOCKET = "@project_board_click_socket"
 PANE_WINDOW = "@project_board_window"
+PANE_WINDOW_KIND = "@project_board_window_kind"        # `cr` or `decision`: what the pane's process was started as
+PANE_WINDOW_LINK = "@project_board_window_link"        # the socket it listens on, set by the process once it does
 WINDOW_SEEN = "@project_board_seen"
 SIDEBAR_WIDTH = 25
 # The most Board panes kept at once. One Board process holds about 13 MB (RSS of the Rust sidebar with 10 projects; the Textual one held 50 MB) and reads
@@ -54,6 +56,9 @@ WINDOW_START = 3
 TOOL = Path(__file__).resolve().parents[1]
 LAUNCHER = TOOL / "bin" / "project-board"
 SIDEBAR_NAME = "project-board-sidebar"
+# How long a click waits for a Board window of the same kind that is still starting, before it starts the window again.
+WINDOW_REUSE_WAIT = 20
+STARTING = "Board 창을 시작하는 중…"
 
 
 def _ok(data=None) -> dict:
@@ -784,23 +789,66 @@ def _window_pane(control: Tmux, window: str) -> str | None:
     return None
 
 
-def _window_command(socket: str, args: list[str]) -> list[str]:
+def _window_command(socket: str, args: list[str], kind: str) -> list[str]:
     """The command of a Board window: it marks its own pane, then becomes `args`.
 
     The mark is made by the pane itself because `new-pane -W` returns only when the pane ends, so
     nothing can mark it from outside after it starts. `remain-on-exit` of the pane is off: a managed
     window has it on (agent-session), which would leave a closed Board window behind as a dead pane.
+    The pane says what it is starting (`STARTING`) at once: the Python process behind it needs seconds on a
+    loaded host and the pane is empty until its screen is drawn (BOARD-025).
     """
-    script = (f"tmux -S {shlex.quote(socket)} set-option -p -t \"$TMUX_PANE\" remain-on-exit off \\; "
-              f"set-option -p -t \"$TMUX_PANE\" {PANE_WINDOW} 1; exec \"$@\"")
+    pane = '"$TMUX_PANE"'
+    script = (f"tmux -S {shlex.quote(socket)} set-option -p -t {pane} remain-on-exit off \\; "
+              f"set-option -p -t {pane} {PANE_WINDOW} 1 \\; "
+              f"set-option -p -t {pane} {PANE_WINDOW_KIND} {kind} \\; "
+              f"set-option -pu -t {pane} {PANE_WINDOW_LINK}; "
+              f"printf '%s\\n' {shlex.quote(STARTING)}; exec \"$@\"")
     return ["sh", "-c", script, "sh", *args]
 
 
-def _popup(control: Tmux, client: str, args: list[str], title: str, size: str) -> dict:
+def _window_options(control: Tmux, pane: str) -> tuple[str, str]:
+    """The kind of the pane's window process and the socket it listens on ('' while it is starting)."""
+    row = control.command("display-message", "-p", "-t", pane,
+                          f"#{{{PANE_WINDOW_KIND}}}\t#{{{PANE_WINDOW_LINK}}}")
+    kind, _, link = row.partition("\t")
+    return kind, link
+
+
+def _reuse(control: Tmux, pane: str, kind: str, request: dict, title: str) -> dict | None:
+    """Tell the process of the window in `pane` what to show; None when the pane must be started again.
+
+    Only a window of the same `kind` is reused: its process is the one that can show that kind of item, and
+    it keeps what it has read, so the new item appears without starting Python and Textual again. A process
+    that is still starting is waited for (`WINDOW_REUSE_WAIT`); one that does not answer is replaced.
+    """
+    current, link = _window_options(control, pane)
+    if current != kind:
+        return None
+    deadline = time.monotonic() + WINDOW_REUSE_WAIT
+    while not link and time.monotonic() < deadline:
+        time.sleep(0.05)
+        current, link = _window_options(control, pane)
+    if not link or current != kind:
+        return None
+    try:
+        result = window_link.send(link, request)
+    except OSError:
+        return None
+    if result.get("ok"):
+        control.command("select-pane", "-t", pane, "-T", title)
+        return _ok({"pane": pane, "reused": True})
+    if result.get("code") == "busy":
+        return _fail("window_busy", result.get("message") or "The Board window is busy.")
+    return None
+
+
+def _popup(control: Tmux, client: str, args: list[str], title: str, size: str, kind: str, request: dict) -> dict:
     """Show `args` in the Board window of the client's window: a floating pane `size` large, centred.
 
-    A window has one Board window. When it exists the pane keeps its position and size and runs
-    `args` instead (`respawn-pane -k`). A new one is created by `new-pane -W`, which returns when the
+    A window has one Board window. When its process is of the same `kind` and listening it is told `request`
+    (`_reuse`, over `window_link`) and nothing is started. Otherwise the pane keeps its position and size
+    and runs `args` instead (`respawn-pane -k`). A new one is created by `new-pane -W`, which returns when the
     pane ends, so it runs as a tmux background job: the click socket and the sidebar stay responsive.
     A person opened it: a failure is recorded and shown on that client, never in a work pane (BOARD-011).
     """
@@ -811,13 +859,24 @@ def _popup(control: Tmux, client: str, args: list[str], title: str, size: str) -
     with _locked(control):
         pane = _window_pane(control, window)
         if pane is not None:
-            control.command("respawn-pane", "-k", "-t", pane, "-e", f"PROJECT_BOARD_CLIENT={client}",
-                            *_window_command(control.effective_socket(), args))
+            reused = _reuse(control, pane, kind, {**request, "client": client}, title)
+            if reused is not None:
+                return reused
+        link = str(_private_dir(control) / (uuid.uuid4().hex[:16] + ".win"))
+        environment = ["-e", f"PROJECT_BOARD_CLIENT={client}", "-e", f"{window_link.SOCKET_ENV}={link}"]
+        command_line = _window_command(control.effective_socket(), args, kind)
+        if pane is not None:
+            old = _window_options(control, pane)[1]
+            if old:                                     # the process that is replaced leaves its socket file behind
+                window_link.stop(None, old)
+            # the pane's options are the old process's until the new one's script writes its own
+            control.command("set-option", "-pu", "-t", pane, PANE_WINDOW_LINK)
+            control.command("set-option", "-p", "-t", pane, PANE_WINDOW_KIND, kind)
+            control.command("respawn-pane", "-k", "-t", pane, *environment, *command_line)
             control.command("select-pane", "-t", pane, "-T", title)
             return _ok({"client": client, "pane": pane})
         command = ["tmux", "-S", control.effective_socket(), "new-pane", "-W", "-t", window,
-                   "-x", size, "-y", size, "-X", margin, "-Y", margin, "-T", title,
-                   "-e", f"PROJECT_BOARD_CLIENT={client}", *_window_command(control.effective_socket(), args)]
+                   "-x", size, "-y", size, "-X", margin, "-Y", margin, "-T", title, *environment, *command_line]
         # tmux ends a pane it closes (the border's close button, `kill-window`) with SIGHUP, and `-W` then
         # returns 129. That is a person closing the window, not a failure, so BOARD-011 records none.
         control.run_quiet(shlex.join(command) + '; status=$?; [ "$status" -ne 129 ] || status=0; exit "$status"',
@@ -832,6 +891,15 @@ def _popup(control: Tmux, client: str, args: list[str], title: str, size: str) -
     return _ok({"client": client, "pane": pane})
 
 
+def mark_window_ready(link: str, socket=None) -> bool:
+    """Tell clicks that this Board window listens on `link` (the process is up and can be told what to show)."""
+    pane = os.environ.get("TMUX_PANE")
+    if not pane:
+        return False
+    _control(socket).command("set-option", "-p", "-t", pane, PANE_WINDOW_LINK, link)
+    return True
+
+
 def open_popup(config, project_id: str, decide_id: str | None = None, client: str | None = None, socket=None) -> dict:
     """Open one decision in the Board window of the specified tmux client's window."""
     try:
@@ -843,7 +911,8 @@ def open_popup(config, project_id: str, decide_id: str | None = None, client: st
         command.extend(("popup", "--project", project_id))
         if decide_id:
             command.extend(("--decision", decide_id))
-        return _popup(control, selected, command, f"Decision · {project_id}", "90%")
+        return _popup(control, selected, command, f"Decision · {project_id}", "90%", "decision",
+                      {"kind": "decision", "project": project_id, "decision": decide_id})
     except SessionError as error:
         return _session_error(error)
     except (OSError, ValueError) as error:
@@ -861,7 +930,8 @@ def open_cr_popup(config, project_id: str, state: str, client: str | None = None
         if config:
             command.extend(("--config", str(config)))
         command.extend(("cr", "--project", project_id, "--state", state))
-        return _popup(control, selected, command, f"CR · {project_id}", "80%")
+        return _popup(control, selected, command, f"CR · {project_id}", "80%", "cr",
+                      {"kind": "cr", "project": project_id, "state": state})
     except SessionError as error:
         return _session_error(error)
     except (OSError, ValueError) as error:

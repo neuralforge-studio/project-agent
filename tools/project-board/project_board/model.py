@@ -258,27 +258,33 @@ def _read_state(project):
         raise
 
 
-def project_view(project, now: dt.datetime) -> dict:
+def project_view(project, now: dt.datetime, only: frozenset | None = None) -> dict:
+    """One project's facts. `only` (a subset of `state`, `crs`, `decide`) reads just those: a window that shows
+    CRs or decisions has no use for the others, and every file read is a round trip on a shared disk. A part that
+    is not read is as if the project had none (`crs`, `decide` None; no seats, no Leader without `state`)."""
     view = {"id": project.project_id, "base": str(project.base), "base_display": _display(project.base),
             "cr_root": str(project.path_cr.resolve()) if project.path_cr is not None else None,
             "provider": project.provider,
             "seat_count": len(project.seats), "leader": None, "seats": [], "crs": None, "decide": None,
             "errors": []}
-    try:
-        state = _read_state(project)
-    except Exception as error:                          # one broken project must not hide the others
-        view["errors"].append({"source": "state", **_error(error)})
-        state = None
-    if project.path_cr is not None:
+    state = None
+    if only is None or "state" in only:
+        try:
+            state = _read_state(project)
+        except Exception as error:                      # one broken project must not hide the others
+            view["errors"].append({"source": "state", **_error(error)})
+    if project.path_cr is not None and (only is None or "crs" in only):
         try:
             view["crs"] = cr_items(project.path_cr)
         except Exception as error:
             view["errors"].append({"source": "cr", **_error(error)})
-    if project.path_decide is not None:
+    if project.path_decide is not None and (only is None or "decide" in only):
         try:
             view["decide"] = decide_items(project.path_decide, project.path_cr)
         except Exception as error:
             view["errors"].append({"source": "decide", **_error(error)})
+    if only is not None and "state" not in only:
+        return view
     waiting = _releases.get(project.project_id, {}) if state else {}
     in_progress = {item["id"]: item for item in (view["crs"] or {}).get("in-progress", [])}
     leader = state["leader"] if state else None
@@ -339,8 +345,9 @@ def _registry(config) -> list:
     return projects
 
 
-def snapshot(config=None, now: dt.datetime | None = None, project_id: str | None = None) -> dict:
-    """Every registered project, or only `project_id` (a popup shows one project)."""
+def snapshot(config=None, now: dt.datetime | None = None, project_id: str | None = None,
+             only: frozenset | None = None) -> dict:
+    """Every registered project, or only `project_id` (a popup shows one project); `only`: see `project_view`."""
     now = now or dt.datetime.now(dt.timezone.utc)
     try:
         projects = _registry(config)
@@ -349,16 +356,28 @@ def snapshot(config=None, now: dt.datetime | None = None, project_id: str | None
     if project_id is not None:
         projects = [project for project in projects if project.project_id == project_id]
     return {"now": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "projects": [project_view(project, now) for project in projects], "error": None}
+            "projects": [project_view(project, now, only) for project in projects], "error": None}
 
 
-def popup_snapshot(config=None, project_id: str | None = None, done: bool = False) -> dict:
+ONLY_CRS = frozenset({"crs"})                       # what the CR window reads of a project
+ONLY_DECISIONS = frozenset({"decide"})              # what the decision window reads of a project
+
+
+def decision_snapshot(config=None) -> dict:
+    """The decisions of every registered project and nothing else: what ◀▶ of the decision window needs to know
+    (which projects have a decision to show). It shares the cache of `decide_items`, so the window's own read of
+    a project reuses it."""
+    return snapshot(config, only=ONLY_DECISIONS)
+
+
+def popup_snapshot(config=None, project_id: str | None = None, done: bool = False,
+                   only: frozenset | None = None) -> dict:
     """What a popup shows: `project_id` only (as `snapshot` reads it) and `order`, the registered project IDs
     in registration order, for ◀▶. With `done`, the project's done CRs are under `crs["done"]`.
 
     A done list that cannot be read is reported as an `errors` entry (source `cr`), like the other lists.
     """
-    data = snapshot(config, project_id=project_id)
+    data = snapshot(config, project_id=project_id, only=only)
     try:
         data["order"] = [project.project_id for project in _registry(config)]
     except SessionError:

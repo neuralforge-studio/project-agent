@@ -167,7 +167,54 @@ tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합
 
 상태줄 `Board`와 prefix `B`는 전역 toggle을 실행합니다. 일반 pane의 클릭은 tmux에 전달합니다. Board pane의 클릭은 tmux binding이 클릭한 client 이름, pane ID, 좌표를 Unix socket으로 TUI에 전달합니다. 따라서 같은 Board pane을 공유하는 client도 자신의 창을 열거나 자신의 window를 이동합니다. 결정 창은 90%, CR 창은 80% 크기로 클릭한 client의 현재 window에 엽니다.
 
-결정·CR 창은 tmux `display-popup`이 아니라 그 window의 떠 있는 pane(`new-pane`, tmux 3.8)입니다(BOARD-020). popup은 떠 있는 동안 그 client의 입력을 모두 받아 sidebar 스크롤·클릭과 뒤 pane(Claude) 입력을 막기 때문입니다. 떠 있는 pane은 modal이 아니므로 sidebar와 뒤 pane을 그대로 쓰고, 창은 계속 위에 보입니다. 위쪽 경계를 끌면 옮기고(Alt를 누른 채 안쪽을 끌어도 됩니다) 다른 경계를 끌면 크기가 바뀝니다. 둘 다 tmux 기본 mouse binding이며 Board는 binding을 더하지 않습니다. 한 window에는 Board 창이 하나입니다. pane option `@project_board_window`가 그 창을 표시하고, 창이 떠 있을 때 다른 항목을 누르면 `respawn-pane -k`로 같은 pane의 내용만 바꿉니다. 그래서 옮긴 위치와 바꾼 크기가 남습니다. 창은 열 때 자기 pane에 이 표시를 하고(`new-pane -W`는 창이 끝날 때까지 돌아오지 않아 밖에서 표시할 수 없습니다), 동시에 두 번 눌러도 하나만 만들도록 열기는 Board의 잠금 안에서 표시를 기다립니다. pane의 `remain-on-exit`은 끕니다. 관리 window는 이 option이 켜져 있어 그대로 두면 닫은 창이 죽은 pane으로 남기 때문입니다. 창에서 `Esc`나 닫기 버튼으로 끝내면 그 pane만 닫힙니다. 창이 있는 window에서 sidebar를 끌 때(`_restore`)는 저장한 layout에 지금의 떠 있는 pane을 더해 복원합니다. `select-layout`은 window의 모든 pane을 이름으로 요구하기 때문입니다.
+결정·CR 창은 tmux `display-popup`이 아니라 그 window의 떠 있는 pane(`new-pane`, tmux 3.8)입니다(BOARD-020). popup은 떠 있는 동안 그 client의 입력을 모두 받아 sidebar 스크롤·클릭과 뒤 pane(Claude) 입력을 막기 때문입니다. 떠 있는 pane은 modal이 아니므로 sidebar와 뒤 pane을 그대로 쓰고, 창은 계속 위에 보입니다. 위쪽 경계를 끌면 옮기고(Alt를 누른 채 안쪽을 끌어도 됩니다) 다른 경계를 끌면 크기가 바뀝니다. 둘 다 tmux 기본 mouse binding이며 Board는 binding을 더하지 않습니다. 한 window에는 Board 창이 하나입니다. pane option `@project_board_window`가 그 창을 표시하고, 창이 떠 있을 때 다른 항목을 누르면 떠 있는 창 process에 새 내용을 알립니다([아래 규약](#열려-있는-창에-새-내용-알리기-board-025)). 알릴 수 없을 때만 `respawn-pane -k`로 같은 pane의 내용을 바꿉니다. 어느 쪽이든 옮긴 위치와 바꾼 크기가 남습니다. 창은 열 때 자기 pane에 이 표시를 하고(`new-pane -W`는 창이 끝날 때까지 돌아오지 않아 밖에서 표시할 수 없습니다), 동시에 두 번 눌러도 하나만 만들도록 열기는 Board의 잠금 안에서 표시를 기다립니다. pane의 `remain-on-exit`은 끕니다. 관리 window는 이 option이 켜져 있어 그대로 두면 닫은 창이 죽은 pane으로 남기 때문입니다. 창에서 `Esc`나 닫기 버튼으로 끝내면 그 pane만 닫힙니다. 창이 있는 window에서 sidebar를 끌 때(`_restore`)는 저장한 layout에 지금의 떠 있는 pane을 더해 복원합니다. `select-layout`은 window의 모든 pane을 이름으로 요구하기 때문입니다.
+
+### 열려 있는 창에 새 내용 알리기 (BOARD-025)
+
+창을 새로 시작하는 비용(Python과 Textual 시동)은 부하가 높은 host에서 수 초입니다(BOARD-025 Result의 측정). 그래서 창이 떠 있고 같은 종류(CR 또는 결정)이면 새 process를 시작하지 않고 떠 있는 창 process에 무엇을 보일지 알립니다. 이 규약은 언어와 무관합니다. Python sidebar(`tmux_control`)와 Rust sidebar(BOARD-018)가 같은 규약을 씁니다. 구현의 원본은 Python의 `window_link.py`(메시지)와 `tmux_control._popup`(client 쪽)이고, test가 이 절을 `window_link`를 쓰지 않고 raw socket·raw tmux 명령만으로 따라 해서 지킵니다(`tools/project-board/tests/test_window_protocol.py`는 창 쪽, `test_tmux_control.py`의 `test_a_client_that_follows_the_plan_...`는 client 쪽).
+
+**창 pane의 option.** 모두 pane option(`set-option -p`)입니다.
+
+| option | 값 | 쓰는 쪽 |
+| --- | --- | --- |
+| `@project_board_window` | `1`. Board 창의 pane 표시 | 창 pane의 시작 script |
+| `@project_board_window_kind` | `cr` 또는 `decision`. 이 process가 시작된 종류 | 시작 script (다시 시작하는 쪽도 먼저 씀) |
+| `@project_board_window_link` | 창 process가 듣는 unix socket의 절대 경로. process가 듣기 시작한 뒤에만 있고, 시작할 때마다 지워집니다 | 창 process |
+
+창은 `list-panes -t <window> -F '#{pane_id} #{@project_board_window}'`에서 `1`인 pane입니다. 한 window에 하나입니다.
+
+**client의 순서** (열기는 Board의 잠금 `control.lock` 안에서 합니다. 같은 server의 두 클릭이 창을 둘 만들지 않게 하기 위해서입니다):
+
+1. 창 pane이 없으면 새로 시작합니다(아래 시작).
+2. `kind` option이 요청한 종류와 다르면 그 pane에서 다시 시작합니다(`respawn-pane -k`). 한 process는 한 종류만 그립니다.
+3. 같은 종류인데 `link` option이 비어 있으면 process가 시작하는 중입니다. 20초까지 `link`가 생기기를 기다립니다. 그래도 없으면 다시 시작합니다. 시작하는 process를 죽이지 않으려고 기다립니다.
+4. `link`의 socket에 요청 한 줄을 보냅니다. 연결할 수 없거나(파일 없음, 연결 거부, socket이 아니거나 소유자가 다름) 응답이 JSON 한 줄이 아니거나 2초 안에 오지 않으면 죽은 process로 보고 다시 시작합니다.
+5. 응답이 `{"ok": true}`면 끝입니다. pane의 title(`select-pane -T`)만 바꿉니다. 창의 위치와 크기는 그대로입니다.
+
+**요청.** UTF-8 JSON object 한 줄(`\n`으로 끝, 4096바이트 이하):
+
+```json
+{"kind": "cr", "project": "falcon2", "state": "todo", "client": "/dev/pts/3"}
+{"kind": "decision", "project": "falcon2", "decision": "D-20261111-01", "client": "/dev/pts/3"}
+```
+
+- `kind`: `cr` 또는 `decision`. 창의 종류와 같아야 합니다.
+- `project`: 등록 project ID.
+- `state`(`cr`만): `open`, `todo`, `in-progress` 중 하나. 그 그룹을 먼저 보입니다.
+- `decision`(`decision`만): 결정 ID 또는 `null`(그 project의 첫 결정).
+- `client`: 누른 tmux client 이름. 창은 지금 쓰지 않습니다(알림용).
+
+**응답.** JSON object 한 줄: 성공 `{"ok": true}`, 실패 `{"ok": false, "code": ..., "message": ...}`. 창은 응답 뒤 연결을 닫습니다.
+
+| code | 뜻 | client의 처리 |
+| --- | --- | --- |
+| `busy` | 답변을 보내는 중이라 보이는 내용을 바꿀 수 없음 | 다시 시작하지 않고 실패로 알립니다(`window_busy`). 보내는 답변을 잃지 않으려는 것입니다 |
+| `invalid` | 요청을 이해하지 못함(종류·project·state가 맞지 않음) | 다시 시작합니다 |
+| `closing` | 창이 닫히는 중 | 다시 시작합니다 |
+
+**시작(창이 없거나 다시 시작할 때).** 새 창은 `new-pane -W -t <window> -x <크기> -y <크기> -X <여백> -Y <여백> -T <title> ...`(결정 90%, CR 80%, 가운데), 있는 pane은 `respawn-pane -k -t <pane>`에 같은 환경과 명령을 줍니다. 환경은 `-e PROJECT_BOARD_CLIENT=<client>`와 `-e PROJECT_BOARD_WINDOW_SOCKET=<새 socket 경로>`입니다. socket 경로는 Board의 runtime 디렉터리(`/tmp/project-board-<uid>-<server pid>`, 0700) 아래 `<16자리 hex>.win`입니다. 다시 시작하기 전에 옛 `link` option을 지우고(`set-option -pu`) `kind`를 새 종류로 쓰고, 옛 socket 파일을 지웁니다. 명령은 `sh -c`로 시작 script를 실행합니다. script는 자기 pane에 `remain-on-exit off`, `@project_board_window 1`, `@project_board_window_kind`를 쓰고 `link`를 지운 뒤, 창 화면이 그려지기 전의 빈 화면에 `Board 창을 시작하는 중…`을 출력하고, `project-board [--config PATH] cr --project P --state S` 또는 `popup --project P [--decision D]`로 `exec`합니다. 창 process는 `PROJECT_BOARD_WINDOW_SOCKET`에 socket을 열고(0600) 듣기 시작한 뒤 자기 pane의 `link` option에 그 경로를 씁니다. 끝나면 socket 파일을 지웁니다.
+
+**창이 보이는 동안 읽는 중.** 창은 시작하자마자(Python이 뜨기 전에는 시작 script의 문구로, 뜬 뒤에는 화면의 "읽는 중…"으로) 무엇을 읽는지 보입니다. 알림을 받으면 새 항목을 읽는 동안에도 같은 문구를 보인 뒤 바꿉니다.
 
 ## 6. 구현 단위와 완료 기준
 
