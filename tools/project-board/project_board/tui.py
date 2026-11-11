@@ -848,7 +848,7 @@ class CRPopupApp(App):
         self.order: list[str] = []
         self.items: list[dict] = []
         self.selected_id: str | None = None
-        self.collapsed: set[str] = set()
+        self.collapsed: set[str] = {"done"}      # BOARD-026: the many done CRs start folded
         self._targets: dict[int, str | None] = {}
         self._load_generation = 0
         self._title_task: asyncio.Task | None = None
