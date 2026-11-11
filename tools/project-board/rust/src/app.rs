@@ -6,7 +6,7 @@
 //! writes only the cells that changed, so the screen never shows a state between two others.
 use crate::data::Reader;
 use crate::model::{Liveness, Snapshot};
-use crate::switch;
+use crate::{switch, window};
 use crate::tmuxio::{self, Tmux};
 use crate::ui::{self, Action, Active, Facts, Hit, Interaction, Key, Layout};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
@@ -610,6 +610,8 @@ impl App {
         // Switching a client is a few tmux commands: the sidebar does it itself (switch.rs). Opening a CR or decision
         // window and folding run `project-board` (from the start bundle), which owns their rules.
         let mut args: Vec<String> = Vec::new();
+        // a CR or decision window that is open is told what to show; otherwise `project-board` starts it
+        let mut told: Option<(&'static str, Value, String)> = None;
         match &action {
             Action::Project(project) => {
                 let project = project.clone();
@@ -637,8 +639,14 @@ impl App {
                 self.folds_inflight += 1;
                 args.extend(["toggle-fold".into(), "--project".into(), project.clone()]);
             }
-            Action::Cr(project, state) => args.extend(["open-cr".into(), "--project".into(), project.clone(), "--state".into(), (*state).into()]),
-            Action::Decision(project) => args.extend(["open-decision".into(), "--project".into(), project.clone()]),
+            Action::Cr(project, state) => {
+                args.extend(["open-cr".into(), "--project".into(), project.clone(), "--state".into(), (*state).into()]);
+                told = Some(("cr", json!({"kind": "cr", "project": project, "state": state}), format!("CR · {project}")));
+            }
+            Action::Decision(project) => {
+                args.extend(["open-decision".into(), "--project".into(), project.clone()]);
+                told = Some(("decision", json!({"kind": "decision", "project": project, "decision": null}), format!("Decision · {project}")));
+            }
         }
         let folding = matches!(action, Action::Fold(_));
         if !folding {
@@ -647,6 +655,16 @@ impl App {
             }
         }
         std::thread::spawn(move || {
+            if let (Some((kind, request, title)), Some(client)) = (&told, &client) {
+                match window::tell(kind, request, client, title) {
+                    window::Outcome::Done => return,
+                    window::Outcome::Busy(message) => {
+                        let _ = tx.send(Msg::Toast(message));
+                        return;
+                    }
+                    window::Outcome::Fallback => {}
+                }
+            }
             let result = tmuxio::run_helper(config.as_deref(), &args);
             if folding {
                 // the shared value, whatever the helper did

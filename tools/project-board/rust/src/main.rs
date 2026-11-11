@@ -7,6 +7,7 @@ mod render_cmd;
 mod switch;
 mod tmuxio;
 mod ui;
+mod window;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

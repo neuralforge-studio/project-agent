@@ -9,6 +9,7 @@ import os
 import shutil
 import signal
 import socket as unix_socket
+import threading
 import stat
 import subprocess
 import time
@@ -384,3 +385,105 @@ def test_every_periodic_read_and_the_visibility_check_start_one_tmux_process(tmp
     time.sleep(0.8)
     visibility = [c for c in log.read_text().splitlines() if "list-clients" in c]
     assert len(visibility) == 1 and "display-message" in visibility[0], log.read_text()
+
+
+class FakeBoardWindow:
+    """What a Board window is to a click (docs/project-board-tui-plan.md, BOARD-025): a pane marked as a window, whose process
+    listens on a socket and answers one JSON line with one JSON line."""
+
+    def __init__(self, pane, tmp_path, kind="cr", reply=None, link=True):
+        self.requests = []
+        self.reply = reply if reply is not None else b'{"ok": true}\n'
+        self.path = f"/tmp/pb-win-{os.getpid()}-{id(self) % 100000}.win"
+        Path(self.path).unlink(missing_ok=True)
+        self.server = unix_socket.socket(unix_socket.AF_UNIX, unix_socket.SOCK_STREAM)
+        self.server.bind(self.path)
+        os.chmod(self.path, 0o600)
+        self.server.listen(4)
+        threading.Thread(target=self._serve, daemon=True).start()
+        self.window_pane = tmux(pane.name, "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "main", "sleep", "300")
+        tmux(pane.name, "set-option", "-p", "-t", self.window_pane, "@project_board_window", "1")
+        tmux(pane.name, "set-option", "-p", "-t", self.window_pane, "@project_board_window_kind", kind)
+        if link:
+            tmux(pane.name, "set-option", "-p", "-t", self.window_pane, "@project_board_window_link", self.path)
+
+    def _serve(self):
+        while True:
+            try:
+                connection, _ = self.server.accept()
+            except OSError:
+                return
+            with connection:
+                line = b""
+                while b"\n" not in line:
+                    block = connection.recv(4096)
+                    if not block:
+                        break
+                    line += block
+                self.requests.append(json.loads(line))
+                connection.sendall(self.reply)
+
+    def close(self):
+        self.server.close()
+        Path(self.path).unlink(missing_ok=True)
+
+
+def _window_pane_setup(tmp_path, request, **window):
+    pane = Pane(tmp_path, request, _board(tmp_path), launcher="fake")
+    pane.wait_text("Falcon2")
+    fake = FakeBoardWindow(pane, tmp_path, **window)
+    request.addfinalizer(fake.close)
+    return pane, fake, pane.clients[0][2]
+
+
+def test_a_click_on_an_open_window_of_the_same_kind_tells_it_and_starts_nothing(tmp_path, request):
+    pane, window, client = _window_pane_setup(tmp_path, request)
+    assert pane.send_click(2, 3, client)["data"] == {"widget": "project-0-O"}            # O: a CR window
+    _wait(lambda: len(window.requests) == 1, what="the request")
+    assert window.requests[0] == {"kind": "cr", "project": "Falcon2", "state": "open", "client": client}
+    _wait(lambda: tmux(pane.name, "display-message", "-p", "-t", window.window_pane, "#{pane_title}") == "CR · Falcon2", what="the title")
+    assert pane.send_click(14, 3, client)["data"] == {"widget": "project-0-I"}
+    _wait(lambda: len(window.requests) == 2, what="the second request")
+    assert window.requests[1]["state"] == "in-progress"
+    time.sleep(0.5)
+    assert pane.helper_calls() == []                                                    # nothing was started
+
+
+def test_a_decision_click_sends_a_decision_request_with_a_null_decision(tmp_path, request):
+    pane, window, client = _window_pane_setup(tmp_path, request, kind="decision")
+    assert pane.send_click(2, 2, client)["data"] == {"widget": "project-0-D"}
+    _wait(lambda: len(window.requests) == 1, what="the request")
+    assert window.requests[0] == {"kind": "decision", "project": "Falcon2", "decision": None, "client": client}
+    _wait(lambda: tmux(pane.name, "display-message", "-p", "-t", window.window_pane, "#{pane_title}") == "Decision · Falcon2", what="the title")
+    assert pane.helper_calls() == []
+
+
+def test_a_busy_window_is_not_replaced_and_the_user_is_told(tmp_path, request):
+    pane, window, client = _window_pane_setup(
+        tmp_path, request, reply=b'{"ok": false, "code": "busy", "message": "An answer is being sent."}\n')
+    pane.send_click(2, 3, client)
+    pane.wait_text("An answer is being", timeout=5)            # the message wraps in a 25 column pane
+    time.sleep(0.5)
+    assert pane.helper_calls() == []
+
+
+@pytest.mark.parametrize("situation", ["other kind", "still starting", "invalid", "closing", "not json"])
+def test_a_window_that_cannot_take_the_item_is_started_the_ordinary_way(tmp_path, request, situation):
+    options = {"other kind": {"kind": "decision"}, "still starting": {"link": False},
+               "invalid": {"reply": b'{"ok": false, "code": "invalid", "message": "no"}\n'},
+               "closing": {"reply": b'{"ok": false, "code": "closing"}\n'}, "not json": {"reply": b"hello\n"}}[situation]
+    pane, window, client = _window_pane_setup(tmp_path, request, **options)
+    pane.send_click(2, 3, client)
+    _wait(lambda: len(pane.helper_calls()) == 1, what="the helper run")
+    assert pane.helper_calls() == [f"--config {pane.board.config} open-cr --project Falcon2 --state open --client {client}"]
+
+
+def test_a_window_whose_process_is_gone_or_a_missing_window_is_started_the_ordinary_way(tmp_path, request):
+    pane, window, client = _window_pane_setup(tmp_path, request)
+    window.close()                                           # the socket file is gone: nothing listens
+    pane.send_click(2, 3, client)
+    _wait(lambda: len(pane.helper_calls()) == 1, what="the helper run after a dead window")
+    tmux(pane.name, "kill-pane", "-t", window.window_pane)  # no window at all
+    pane.send_click(8, 3, client)
+    _wait(lambda: len(pane.helper_calls()) == 2, what="the helper run without a window")
+    assert pane.helper_calls()[1].endswith(f"open-cr --project Falcon2 --state todo --client {client}")
