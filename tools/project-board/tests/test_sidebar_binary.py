@@ -352,13 +352,16 @@ def test_the_window_of_the_pane_is_marked_with_its_project_and_slot(tmp_path, re
     pane = Pane(tmp_path, request, board)
     pane.wait_text("Falcon2")
     assert "▶" not in pane.screen()
+    before = [line for line in pane.ansi().splitlines() if "Falcon2" in line][0]
+    assert "48;2;47;109;179" not in before.replace(":", ";")
     tmux(pane.name, "set-option", "-w", "-t", "main:0", "@agent_session_project_id", json.dumps("Falcon2"))
     tmux(pane.name, "set-option", "-w", "-t", "main:0", "@agent_session_target", json.dumps("leader"))
     tmux(pane.name, "set-option", "-s", "@project_board_expanded", json.dumps(["Falcon2"]))
-    pane.wait_text("▶ Falcon2", timeout=12)       # the managed window is read every 10 seconds
-    assert "Leader" not in pane.screen()
+    _wait(lambda: "48;2;47;109;179" in [line for line in pane.ansi().splitlines() if "Falcon2" in line][0].replace(":", ";"),
+          timeout=12, what="the highlight")   # the managed window is read every 10 seconds
+    assert "Leader" not in pane.screen() and "▶" not in pane.screen()
     ansi = pane.ansi().splitlines()
-    name_row = [line for line in ansi if "▶ Falcon2" in line][0]
+    name_row = [line for line in ansi if "Falcon2" in line][0]
     assert "48;2;47;109;179" in name_row.replace(":", ";")      # #2f6db3: a Leader window shows on the name row (BOARD-023)
 
 

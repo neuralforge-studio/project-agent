@@ -109,8 +109,8 @@ An SSH seat shows `number@host` before its CR ID. Its tooltip shows the register
 host and remote path. An unavailable execution check keeps the seat assigned and shows
 `실행 확인 불가` with the unknown-state color.
 When the window a client is viewing is a managed `agent-session` window (it has
-a project option), the sidebar highlights that project with a blue name row and a
-`▶` mark. For a Leader window that is all. For a seat window it marks the slot too: the seat's row when the seats are expanded, or
+a project option), the sidebar highlights that project with a blue name row (no mark
+before the name). For a Leader window that is all. For a seat window it marks the slot too: the seat's row when the seats are expanded, or
 the `▸` button (with `현재 창: seat N` in its tooltip) when they are folded. Each window's Board
 pane marks its own window, so the mark follows the client when it changes window. It reads the
 window options when the pane starts, when its window is shown again, and every 10 seconds. A
@@ -148,9 +148,10 @@ item's body. If a listed CR file moves, is deleted, or cannot be read, the
 popup shows an error for that row and stays open.
 
 `D` is red when one or more decisions are open. `D:0`, unconfigured `D:-`, and read-error
-`D:!` keep the yellow color. The count includes only open decisions. The decision popup
+`D:!` are always drawn faded, like a disabled button, whether or not a later-stage decision can still be opened
+by clicking. The count includes only open decisions. The decision popup
 shows decisions whose display stage is not `완료`, including answered decisions and decisions
-whose related CRs are still in progress. These items remain accessible at `D:0`. If all
+whose related CRs are still in progress. These items remain accessible at `D:0` (faded, but a click opens them). If all
 decisions are complete, `D:0` ignores clicks. A completed selection moves to the first
 remaining item, or an empty view when none remain. CR counts of `0`, `-`, or `!`, and
 decision counts of `-` or `!`, ignore clicks without opening a popup or showing an error.
