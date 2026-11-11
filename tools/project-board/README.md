@@ -148,10 +148,9 @@ item's body. If a listed CR file moves, is deleted, or cannot be read, the
 popup shows an error for that row and stays open.
 
 `D` is red when one or more decisions are open. `D:0`, unconfigured `D:-`, and read-error
-`D:!` are always drawn faded, like a disabled button, whether or not a later-stage decision can still be opened
-by clicking. The count includes only open decisions. The decision popup
+`D:!` keep the yellow color. The count includes only open decisions. The decision popup
 shows decisions whose display stage is not `완료`, including answered decisions and decisions
-whose related CRs are still in progress. These items remain accessible at `D:0` (faded, but a click opens them). If all
+whose related CRs are still in progress. These items remain accessible at `D:0`. If all
 decisions are complete, `D:0` ignores clicks. A completed selection moves to the first
 remaining item, or an empty view when none remain. CR counts of `0`, `-`, or `!`, and
 decision counts of `-` or `!`, ignore clicks without opening a popup or showing an error.

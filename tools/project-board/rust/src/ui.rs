@@ -179,8 +179,6 @@ pub struct Widget {
     pub bold: bool,
     pub active: bool,
     pub class_error: bool,
-    /// Drawn faded like a disabled button although it can be pressed (`D:0` and `D:-`).
-    pub dimmed: bool,
     pub tooltip: Option<String>,
     pub action: Option<Action>,
     pub project_index: usize,
@@ -264,7 +262,6 @@ fn button(project: &Project, number: usize, role: Role, id_suffix: String, label
         bold: true,
         active: false,
         class_error: false,
-        dimmed: false,
         tooltip: None,
         action: None,
         project_index: number,
@@ -294,8 +291,6 @@ fn project_widgets(facts: &Facts, number: usize, project: &Project, out: &mut Ve
     decision.fill = true;
     decision.enabled = project.decide.as_ref().map_or(false, |d| d.visible() > 0);
     decision.fg = if !matches!(label.as_str(), "-" | "!" | "0") { DECISION_OPEN } else { DECISION };
-    // Whatever the count says nothing about is faded, whether or not a decision of a later stage can still be opened.
-    decision.dimmed = matches!(label.as_str(), "-" | "!" | "0");
     let stages = project.decide.as_ref().map(|d| d.stages).unwrap_or([0; 4]);
     decision.tooltip = Some(
         ["결정 대기", "답변 접수", "반영 중", "완료"].iter().zip(stages)
@@ -441,7 +436,6 @@ fn place(per_project: &[Vec<Widget>], view_w: usize, view_h: usize, loaded: bool
             bold: false,
             active: false,
             class_error: false,
-        dimmed: false,
             tooltip: None,
             action: None,
             project_index: 0,
@@ -546,9 +540,9 @@ fn style_of(widget: &Widget, hovered: bool, focused: bool) -> Look {
             look.reverse = true;
         }
     }
-    if !widget.enabled || widget.dimmed {
+    if !widget.enabled {
         let faded = blend(look.fg.unwrap_or(STATIC_FG), BG, DISABLED_OPACITY);
-        if hovered && !widget.enabled {
+        if hovered {
             // measured on Textual: a disabled button under the pointer shows 213549, its text lifted by it
             let bg = Rgb(0x21, 0x35, 0x49);
             let lift = |text: u8, under: u8, screen: u8| (text as f32 + (under as f32 - screen as f32) * 0.4) as u8;
@@ -910,23 +904,6 @@ mod tests {
         assert_eq!(id(3, 7), "project-1-name");
         assert_eq!(id(25, 1), "outside");
         assert_eq!(id(3, 30), "outside");
-    }
-
-    #[test]
-    fn d_zero_is_faded_even_when_an_answered_decision_can_still_be_opened() {
-        let mut p = project("falcon");
-        p.decide = Some(Decide { open: 0, stages: [0, 1, 1, 3] });
-        let snapshot = Snapshot { error: None, projects: vec![p] };
-        let layout = laid_out(&snapshot, &[], 30, 20);
-        let d = layout.widgets.iter().find(|w| w.id == "project-0-D").unwrap();
-        assert_eq!((d.label.as_str(), d.enabled, d.dimmed), ("D:0", true, true));       // it still opens its window
-        let look = style_of(d, false, false);
-        assert_eq!(look.fg, Some(blend(DECISION, BG, DISABLED_OPACITY)));                  // the faded yellow, as a disabled D
-        let mut open = project("falcon");
-        open.decide = Some(Decide { open: 2, stages: [2, 0, 0, 0] });
-        let layout = laid_out(&Snapshot { error: None, projects: vec![open] }, &[], 30, 20);
-        let d = layout.widgets.iter().find(|w| w.id == "project-0-D").unwrap();
-        assert_eq!((d.enabled, d.dimmed, style_of(d, false, false).fg), (true, false, Some(DECISION_OPEN)));
     }
 
     #[test]
