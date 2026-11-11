@@ -97,7 +97,38 @@ def _elapsed_seconds(text: str) -> float | None:
         return None
 
 
-def _is_tmux_server_of(pid: int, created: float) -> bool:
+def _signalable(pid: int) -> bool:
+    """Whether `pid` is a live process this user could signal (the ones `ps` is asked about)."""
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    except OSError:
+        return False
+    return True
+
+
+def _process_rows(pids) -> dict[int, tuple[str, str]] | None:
+    """`ps` of every pid in one process: pid -> (`etime`, command name). None when ps cannot tell."""
+    try:
+        result = subprocess.run(["ps", "-o", "pid=,etime=,comm=", "-p", ",".join(map(str, pids))],
+                                capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode not in (0, 1):  # 1: ps found none of the processes
+        return None
+    rows = {}
+    for line in result.stdout.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) == 3 and fields[0].isdigit():
+            rows[int(fields[0])] = (fields[1], fields[2])
+    return rows
+
+
+_ASK = object()
+
+
+def _is_tmux_server_of(pid: int, created: float, rows=_ASK) -> bool:
     """Whether `pid` is a live tmux process old enough to have created a directory last changed at `created`.
 
     A directory name carries only a pid, and the OS reuses pids. A live pid therefore proves
@@ -105,6 +136,9 @@ def _is_tmux_server_of(pid: int, created: float) -> bool:
     is `tmux: server` on Linux and the executable path on macOS), and it started no later than the
     directory's last change. The directory is made by the server's own Board commands, so a process
     that started after that is a different one that inherited the pid.
+
+    `rows` is `_process_rows` of the pids of one sweep (None when ps could not tell), so that a sweep
+    starts one `ps` for all its directories; without it this pid is asked for alone.
     """
     try:
         os.kill(pid, 0)
@@ -114,18 +148,17 @@ def _is_tmux_server_of(pid: int, created: float) -> bool:
         return False  # a process of another user is never this user's tmux server
     except OSError:
         return True  # cannot tell: leave the directory
-    try:
-        result = subprocess.run(["ps", "-o", "etime=,comm=", "-p", str(pid)],
-                                capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
+    if rows is _ASK:
+        rows = _process_rows([pid])
+    if rows is None:
         return True
-    fields = result.stdout.split(None, 1)
-    if result.returncode != 0 or len(fields) != 2:
-        return result.returncode != 1  # 1: ps found no such process
-    elapsed = _elapsed_seconds(fields[0])
+    row = rows.get(pid)
+    if row is None:
+        return False  # ps does not know the process (it ended after the check above)
+    elapsed = _elapsed_seconds(row[0])
     if elapsed is None:
         return True
-    if not os.path.basename(fields[1].strip()).startswith("tmux"):
+    if not os.path.basename(row[1].strip()).startswith("tmux"):
         return False
     return time.time() - elapsed <= created + _START_SLACK
 
@@ -165,6 +198,7 @@ def reap_runtime_directories(root: Path | None = None) -> list[Path]:
         names = [entry.name for entry in os.scandir(root) if entry.name.startswith(f"project-board-{uid}-")]
     except OSError:
         return removed
+    candidates = []
     for name in names:
         match = _RUNTIME_NAME.fullmatch(name)
         if match is None or int(match.group(1)) != uid:
@@ -175,7 +209,14 @@ def reap_runtime_directories(root: Path | None = None) -> list[Path]:
             if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid
                     or stat.S_IMODE(info.st_mode) != 0o700):
                 continue
-            if _is_tmux_server_of(int(match.group(2)), info.st_mtime):
+        except OSError:
+            continue  # already removed by a concurrent sweep: leave it
+        candidates.append((directory, int(match.group(2)), info.st_mtime))
+    alive = [pid for _, pid, _ in candidates if _signalable(pid)]
+    rows = _process_rows(alive) if alive else {}  # None: ps could not tell, every live pid is left
+    for directory, pid, created in candidates:
+        try:
+            if _is_tmux_server_of(pid, created, rows):
                 continue
             if _remove_runtime_directory(directory):
                 removed.append(directory)
@@ -202,7 +243,9 @@ def _private_dir(control: Tmux) -> Path:
 
 @contextmanager
 def _locked(control: Tmux):
-    path = _private_dir(control) / "control.lock"
+    """Hold the Board lock of this tmux server; yields the server's private runtime directory."""
+    directory = _private_dir(control)
+    path = directory / "control.lock"
     flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags, 0o600)
     try:
@@ -210,7 +253,7 @@ def _locked(control: Tmux):
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
             raise ValueError("Project Board's tmux lock is not private")
         fcntl.flock(descriptor, fcntl.LOCK_EX)
-        yield
+        yield directory
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
@@ -295,7 +338,8 @@ def _panes(control: Tmux, window: str) -> dict[str, bool]:
 
 class _Window:
     """What one window tells `_snapshot`: its panes (id -> dead), the Board and managed-pane options of the
-    window, the time a client last showed it, and the Board mark of each of its panes."""
+    window, the time a client last showed it, the Board mark and width of each of its panes, the window's
+    width, layout and active pane, and the layout saved before its Board pane was added."""
 
     def __init__(self):
         self.panes: dict[str, bool] = {}
@@ -303,6 +347,11 @@ class _Window:
         self.managed = ""
         self.seen = ""
         self.marks: dict[str, str] = {}
+        self.widths: dict[str, int] = {}
+        self.width = 0
+        self.layout = ""
+        self.restore = ""
+        self.active = ""
 
 
 class _Snapshot:
@@ -310,16 +359,20 @@ class _Snapshot:
 
     A format reads an option through the pane, the window, the session and the global levels, where
     `show-options -w` reads the window alone. The Board and agent-session write `@project_board_pane`,
-    `@project_board_seen` and the managed-pane option only on windows, and `@project_board_managed` only
-    on panes, never above, so the values are the ones the per-window reads gave.
+    `@project_board_seen`, `@project_board_restore` and the managed-pane option only on windows, and
+    `@project_board_managed` only on panes, never above, so the values are the ones the per-window reads gave.
+    The widths, layout and active pane are what `display-message -t` gave for each window and pane: the
+    changes of `_reconcile` need none of them read again (BOARD-022).
     """
 
-    def __init__(self, enabled: str, width: str, config: str, visible: list[str], windows: dict[str, _Window]):
+    def __init__(self, enabled: str, width: str, config: str, visible: list[str], windows: dict[str, _Window],
+                 clients: list[str]):
         self.enabled = enabled == "1"
         self.width = width
         self.config = config or None
         self.visible = visible
         self.windows = windows
+        self.clients = clients
 
 
 def _snapshot(control: Tmux) -> _Snapshot:
@@ -327,26 +380,35 @@ def _snapshot(control: Tmux) -> _Snapshot:
     rows = _lines(
         control,
         "display-message", "-p", f"G\t#{{{ENABLED}}}\t#{{{WIDTH}}}\t#{{{CONFIG}}}",
-        ";", "list-clients", "-F", "C\t#{window_id}",
+        ";", "list-clients", "-F", "C\t#{window_id}\t#{client_name}",
         ";", "list-panes", "-a", "-F",
         f"P\t#{{window_id}}\t#{{pane_id}}\t#{{pane_dead}}\t#{{{WINDOW_PANE}}}\t#{{{PANE_ID_OPTION}}}"
-        f"\t#{{{WINDOW_SEEN}}}\t#{{{PANE_MARK}}}")
+        f"\t#{{{WINDOW_SEEN}}}\t#{{{PANE_MARK}}}\t#{{window_width}}\t#{{pane_width}}\t#{{pane_active}}"
+        f"\t#{{{WINDOW_RESTORE}}}\t#{{window_layout}}")
     enabled = width = config = ""
-    visible, windows = [], {}
+    visible, windows, clients = [], {}, []
     for row in rows:
         kind, _, rest = row.partition("\t")
         if kind == "G":
             enabled, width, config = rest.split("\t", 2)
         elif kind == "C":
-            visible.append(rest)
+            window, _, client = rest.partition("\t")
+            visible.append(window)
+            clients.append(client)
         elif kind == "P":
-            window, pane, dead, board, managed, seen, mark = rest.split("\t", 6)
+            window, pane, dead, board, managed, seen, mark, window_width, pane_width, active, restore, layout = \
+                rest.split("\t", 11)
             record = windows.setdefault(window, _Window())
             if not record.panes:
                 record.board, record.managed, record.seen = board, managed, seen
+                record.width = int(window_width) if window_width.isdecimal() else 0
+                record.restore, record.layout = restore, layout
             record.panes[pane] = dead == "1"
             record.marks[pane] = mark
-    return _Snapshot(enabled, width, config, visible, windows)
+            record.widths[pane] = int(pane_width) if pane_width.isdecimal() else 0
+            if active == "1":
+                record.active = pane
+    return _Snapshot(enabled, width, config, visible, windows, clients)
 
 
 def _managed_pane_dead(window: _Window) -> bool:
@@ -396,17 +458,16 @@ def _tiled(node: dict, active: bool) -> dict | None:
     return {**node, "c": children}
 
 
-def _layout_with_floating(control: Tmux, window: str, layout: str) -> tuple[str, bool]:
-    """`layout` (saved before the sidebar was added) with the window's floating panes of now, and whether
-    one of them is the active pane.
+def _layout_with_floating(current: str, layout: str) -> tuple[str, bool]:
+    """`layout` (saved before the sidebar was added) with the floating panes of `current` (the window's
+    `#{window_layout}` of now), and whether one of them is the active pane.
 
     `select-layout` needs a layout that names every pane of the window. A saved layout names the panes
     of its time, so a floating pane (the Board's CR or decision window) opened or closed since would
     make it fail.
     """
     try:
-        current = _floating(json.loads(control.command("display-message", "-p", "-t", window,
-                                                       "#{window_layout}"))["L"])
+        current = _floating(json.loads(current)["L"])
         saved = json.loads(layout)
         active = any(leaf.get("a") for leaf in current)
         root = _tiled(saved["L"], active)
@@ -421,32 +482,58 @@ def _layout_with_floating(control: Tmux, window: str, layout: str) -> tuple[str,
     return json.dumps({**saved, "L": root}, separators=(",", ":")), active
 
 
+def _restore_commands(window: str, saved: str, current_layout: str, panes) -> list[tuple]:
+    """The tmux commands that put `window` back as it was before its Board pane (saved in `saved`).
+
+    `panes` are the panes the window has once the Board pane is gone."""
+    if not saved:
+        return []
+    saved = json.loads(saved)
+    layout, floating_active = _layout_with_floating(current_layout, saved["layout"])
+    commands = [("select-layout", "-t", window, layout)]
+    if not floating_active and saved["focus"] in panes:
+        commands.append(("select-pane", "-t", saved["focus"]))
+    return commands
+
+
+def _chain(commands) -> list[str]:
+    """One tmux argument vector for `commands`: the server runs them in order, in one process."""
+    arguments: list[str] = []
+    for command in commands:
+        if arguments:
+            arguments.append(";")
+        arguments.extend(command)
+    return arguments
+
+
 def _restore(control: Tmux, window: str) -> None:
     raw = _options(control, "-w", "-t", window, WINDOW_RESTORE)
-    if not raw:
-        return
-    saved = json.loads(raw)
-    layout, floating_active = _layout_with_floating(control, window, saved["layout"])
-    control.command("select-layout", "-t", window, layout)
-    if not floating_active and saved["focus"] in _panes(control, window):
-        control.command("select-pane", "-t", saved["focus"])
+    commands = _restore_commands(window, raw, control.command("display-message", "-p", "-t", window,
+                                                                "#{window_layout}") if raw else "",
+                                 _panes(control, window) if raw else ())
+    if commands:
+        control.command(*_chain(commands))
 
 
-def _remove(control: Tmux, window: str, pane: str) -> None:
-    control.command("kill-pane", "-t", pane)
+def _remove(control: Tmux, window: str, pane: str, record: _Window, before=(), after=()) -> None:
+    """Kill a Board pane and put its window back as it was, in one tmux process.
+
+    `record` is what a snapshot said of the window while the pane was in it. The options are cleared
+    before the layout is restored, so a restore that fails still leaves the window without a Board pane.
+    `before` and `after` are further commands for the same process (a progress message).
+    """
+    commands = [*before, ("kill-pane", "-t", pane),
+                ("set-option", "-wu", "-t", window, WINDOW_PANE),
+                ("set-option", "-wu", "-t", window, WINDOW_RESTORE),
+                *_restore_commands(window, record.restore, record.layout,
+                                   [other for other in record.panes if other != pane]),
+                *after]
     try:
-        _restore(control, window)
+        control.command(*_chain(commands))
     except SessionError:
         # Killing a sole remaining pane can close its window as well.
         if window in _lines(control, "list-windows", "-a", "-F", "#{window_id}"):
             raise
-    finally:
-        try:
-            control.command("set-option", "-wu", "-t", window, WINDOW_PANE)
-            control.command("set-option", "-wu", "-t", window, WINDOW_RESTORE)
-        except SessionError:
-            if window in _lines(control, "list-windows", "-a", "-F", "#{window_id}"):
-                raise
 
 
 def _sidebar_command(config: str | None) -> list[str]:
@@ -457,10 +544,10 @@ def _sidebar_command(config: str | None) -> list[str]:
     return command
 
 
-def _create(control: Tmux, window: str, config: str | None, width: int) -> str:
-    click_path = _private_dir(control) / (uuid.uuid4().hex[:16] + ".sock")
-    layout = control.command("display-message", "-p", "-t", window, "#{window_layout}")
-    focus = control.command("display-message", "-p", "-t", window, "#{pane_id}")
+def _create(control: Tmux, window: str, config: str | None, width: int, directory: Path, record: _Window,
+            messages=()) -> str:
+    click_path = directory / (uuid.uuid4().hex[:16] + ".sock")
+    layout, focus = record.layout, record.active
     command = ["split-window", "-d", "-f", "-h", "-b", "-l", str(width),
                "-P", "-F", "#{pane_id}", "-t", window,
                "-e", f"PROJECT_BOARD_CLICK_SOCKET={click_path}", *_sidebar_command(config)]
@@ -468,11 +555,12 @@ def _create(control: Tmux, window: str, config: str | None, width: int) -> str:
     if not pane.startswith("%"):
         raise ValueError("tmux did not return the Board pane handle")
     try:
-        control.command("set-option", "-w", "-t", window, WINDOW_RESTORE,
-                        json.dumps({"layout": layout, "focus": focus}))
-        control.command("set-option", "-p", "-t", pane, PANE_MARK, "1")
-        control.command("set-option", "-p", "-t", pane, PANE_SOCKET, str(click_path))
-        control.command("set-option", "-w", "-t", window, WINDOW_PANE, pane)
+        control.command(*_chain([
+            ("set-option", "-w", "-t", window, WINDOW_RESTORE, json.dumps({"layout": layout, "focus": focus})),
+            ("set-option", "-p", "-t", pane, PANE_MARK, "1"),
+            ("set-option", "-p", "-t", pane, PANE_SOCKET, str(click_path)),
+            ("set-option", "-w", "-t", window, WINDOW_PANE, pane),
+            ("set-option", "-w", "-t", window, WINDOW_SEEN, str(int(time.time()))), *messages]))
     except Exception:
         try:
             control.command("kill-pane", "-t", pane)
@@ -492,33 +580,24 @@ def _create(control: Tmux, window: str, config: str | None, width: int) -> str:
     return pane
 
 
-def _can_fit_width(control: Tmux, window: str, width: int) -> bool:
-    window_width = int(control.command("display-message", "-p", "-t", window,
-                                       "#{window_width}"))
-    return window_width > width + 1
-
-
 def _evict(control: Tmux, shown_kept: list[str], created: list[str], failures: list) -> list[str]:
     """Remove Board panes beyond MAX_KEPT, from the windows that were shown longest ago.
 
     A window a client shows now is never removed. `@project_board_seen` is the time a client last
-    showed the window (project_board_visibility.sh writes it; a new pane starts at now).
+    showed the window (project_board_visibility.sh writes it; `_create` starts a new pane at now).
     """
-    now = str(int(time.time()))
-    for window in created:
-        control.command("set-option", "-w", "-t", window, WINDOW_SEEN, now)
     shown = set(shown_kept) | set(created)
     boards = []
     for window, record in _snapshot(control).windows.items():
         if record.board:
-            boards.append((window, record.board, int(record.seen) if record.seen.isdecimal() else 0))
+            boards.append((window, record.board, int(record.seen) if record.seen.isdecimal() else 0, record))
     evicted = []
     excess = len(boards) - MAX_KEPT
-    for window, pane, _seen in sorted((b for b in boards if b[0] not in shown), key=lambda b: b[2]):
+    for window, pane, _seen, record in sorted((b for b in boards if b[0] not in shown), key=lambda b: b[2]):
         if excess <= 0:
             break
         try:
-            _remove(control, window, pane)
+            _remove(control, window, pane, record)
             evicted.append(window)
             excess -= 1
         except (SessionError, OSError, ValueError) as error:
@@ -526,18 +605,58 @@ def _evict(control: Tmux, shown_kept: list[str], created: list[str], failures: l
     return evicted
 
 
-def _reconcile(control: Tmux) -> dict:
-    snapshot = _snapshot(control)
+# A person waits for the key to take effect: past this many seconds the Board says how far it is (BOARD-022).
+PROGRESS_AFTER = 0.5
+PROGRESS_SHOWN_MS = 3000
+
+
+class _Progress:
+    """The progress message of a toggle, once it has taken longer than PROGRESS_AFTER.
+
+    It is `display-message -c`, which covers no pane and leaves the user's status settings alone. The key
+    does not name its client, so every attached client is told, as a failed key is (project_agent_run.sh).
+    The message goes into the tmux process of the step it reports, so showing progress starts none.
+    """
+
+    def __init__(self, clients: list[str], verb: str, total: int, started: float):
+        self._clients, self._verb, self._total, self._started = clients, verb, total, started
+        self._done = 0
+
+    def _messages(self, text: str, milliseconds: int) -> list[tuple]:
+        return [("display-message", "-c", client, "-d", str(milliseconds), text) for client in self._clients]
+
+    def step(self) -> tuple[list[tuple], list[tuple]]:
+        """(commands before, commands after) of the next step: where it is now, or that all is done."""
+        self._done += 1
+        if time.monotonic() - self._started < PROGRESS_AFTER:
+            return [], []
+        if self._done == self._total:
+            return [], self._messages(f"Board {self._verb} 중 {self._done}/{self._total} 완료", 1000)
+        return self._messages(f"Board {self._verb} 중 {self._done}/{self._total}", PROGRESS_SHOWN_MS), []
+
+
+def _reconcile(control: Tmux, directory: Path, snapshot: _Snapshot | None = None,
+               started: float | None = None) -> dict:
+    """Match the Board panes to the windows the clients show, from one read of the server.
+
+    `snapshot` is a read made earlier under the same lock, with the Board option already changed in it;
+    `started` (a `time.monotonic()`) is when the person's key began, which turns on the progress message.
+    """
+    if snapshot is None:
+        snapshot = _snapshot(control)
     enabled, config = snapshot.enabled, snapshot.config
     visible = set(snapshot.visible) if enabled else set()
     windows = snapshot.windows
     created, removed, failures = [], [], []
     to_remove, to_create, to_keep = [], [], []
+    held = set()
     for window, record in windows.items():
         try:
             panes = record.panes
             board = _board_pane(control, window, record)
             usable = enabled and not _managed_pane_dead(record)
+            if board:
+                held.add(window)
             # A Board pane stays in a window nobody watches: it is the process that costs seconds
             # to start, and the next client to arrive finds it already showing.
             if board and (not usable or panes[board]):
@@ -556,40 +675,55 @@ def _reconcile(control: Tmux) -> dict:
     width = int(saved_width) if saved_width_valid else SIDEBAR_WIDTH
     if not saved_width_valid and (to_remove or to_create or to_keep):
         control.command("set-option", "-g", WIDTH, str(width))
+        saved_width = str(width)
+    progress = None
+    if started is not None and (to_remove or to_create):
+        progress = _Progress(snapshot.clients, "켜는" if enabled else "끄는", len(to_remove) + len(to_create), started)
+    # `after-resize-pane` writes the global width from the pane it resized: only a resize-pane here
+    # can leave the option other than what was read.
+    resized = False
     board_count = len(to_remove) + len(to_keep)
     for window, board in to_remove:
+        record = windows[window]
+        before, after = progress.step() if progress else ((), ())
         try:
-            pane_width = int(control.command("display-message", "-p", "-t", board, "#{pane_width}"))
+            pane_width = record.widths[board]
             capture_width = False
-            if board_count == 1 and pane_width != width and _can_fit_width(control, window, width):
+            if board_count == 1 and pane_width != width and record.width > width + 1:
                 control.command("resize-pane", "-t", board, "-x", str(width))
+                resized = True
                 fitted_width = int(control.command("display-message", "-p", "-t", board,
                                                    "#{pane_width}"))
                 capture_width = fitted_width == width
                 control.command("set-option", "-g", WIDTH, str(width))
-            _remove(control, window, board)
+            _remove(control, window, board, record, before, after)
             removed.append(window)
+            held.discard(window)
             if capture_width:
                 width = pane_width
                 control.command("set-option", "-g", WIDTH, str(width))
         except (SessionError, OSError, ValueError) as error:
             failures.append({"window": window, "reason": str(error)})
     for window, board in to_keep:
+        record = windows[window]
         try:
-            pane_width = int(control.command("display-message", "-p", "-t", board, "#{pane_width}"))
-            if pane_width != width and _can_fit_width(control, window, width):
+            if record.widths[board] != width and record.width > width + 1:
                 control.command("resize-pane", "-t", board, "-x", str(width))
+                resized = True
         except (SessionError, OSError, ValueError) as error:
             failures.append({"window": window, "reason": str(error)})
     for window in to_create:
+        before, after = progress.step() if progress else ((), ())
         try:
-            _create(control, window, config, width)
+            _create(control, window, config, width, directory, windows[window], [*before, *after])
             created.append(window)
         except (SessionError, OSError, ValueError) as error:
             failures.append({"window": window, "reason": str(error)})
-    for window in _evict(control, [w for w, _ in to_keep], created, failures):
-        removed.append(window)
-    if to_remove or to_keep or to_create:
+    # Only a window kept beyond the bound has to be found out, which takes a second read of the server.
+    if len(held) + len(created) > MAX_KEPT:
+        for window in _evict(control, [w for w, _ in to_keep], created, failures):
+            removed.append(window)
+    if (to_remove or to_keep or to_create) and (resized or saved_width != str(width)):
         control.command("set-option", "-g", WIDTH, str(width))
     return {"enabled": enabled, "visible_windows": sorted(visible),
             "created": created, "removed": removed, "failures": failures}
@@ -641,10 +775,10 @@ def reconcile(config=None, socket=None) -> dict:
     """Match Board panes to windows currently watched by attached clients."""
     try:
         control = _control(socket)
-        with _locked(control):
+        with _locked(control) as directory:
             if config is not None:
                 control.command("set-option", "-g", CONFIG, str(Path(config).expanduser().resolve()))
-            data = _reconcile(control)
+            data = _reconcile(control, directory)
         return _ok(data) if not data["failures"] else _fail("sidebar_partial", "Some tmux windows could not be updated.", data)
     except SessionError as error:
         return _session_error(error)
@@ -653,17 +787,25 @@ def reconcile(config=None, socket=None) -> dict:
 
 
 def toggle_sidebar(config=None, client=None, socket=None) -> dict:
-    """Toggle the server-wide Board, then update only visible windows."""
+    """Toggle the server-wide Board, then update only visible windows.
+
+    The state is read once, with the server, and the changed options are written in one tmux process; the
+    reconcile then works from that read (BOARD-022).
+    """
+    started = time.monotonic()
     try:
         control = _control(socket)
-        with _locked(control):
+        with _locked(control) as directory:
             if client is not None:
                 _client(control, client)
-            enabled = _options(control, "-g", ENABLED) == "1"
-            control.command("set-option", "-g", ENABLED, "0" if enabled else "1")
+            snapshot = _snapshot(control)
+            snapshot.enabled = not snapshot.enabled
+            writes = [("set-option", "-g", ENABLED, "1" if snapshot.enabled else "0")]
             if config is not None:
-                control.command("set-option", "-g", CONFIG, str(Path(config).expanduser().resolve()))
-            data = _reconcile(control)
+                snapshot.config = str(Path(config).expanduser().resolve())
+                writes.append(("set-option", "-g", CONFIG, snapshot.config))
+            control.command(*_chain(writes))
+            data = _reconcile(control, directory, snapshot, started)
         return _ok(data) if not data["failures"] else _fail("sidebar_partial", "Some tmux windows could not be updated.", data)
     except SessionError as error:
         return _session_error(error)
