@@ -841,6 +841,7 @@ class CRPopupApp(App):
         self._server: asyncio.AbstractServer | None = None
         self._tasks: set[asyncio.Task] = set()
         self._warmed = False                      # the other projects' CRs were read ahead (`_warm`)
+        self._unmounted: set[str] = set()         # folded groups whose rows are not mounted yet
         self.project_id = project_id
         self.focus_state: str | None = state      # the group to show first; only the first load uses it
         self.load = load
@@ -965,8 +966,15 @@ class CRPopupApp(App):
             await self._show_message("Project를 찾을 수 없습니다.")
             return
         widgets, index = [], 0
+        self._unmounted = set()
         for state, label in CR_GROUPS:
             widgets.append(Button(self._group_label(state), id=f"cr-group-{state}", classes="group-header"))
+            if state in self.collapsed and groups[state]:
+                # A folded group shows nothing, and each row is a widget to lay out: 1500 done CRs took 2.5 s
+                # (measured). Its rows are mounted when it is unfolded (`_mount_rows`).
+                self._unmounted.add(state)
+                index += len(groups[state])
+                continue
             for item in groups[state]:
                 row = Button(self._row_label(item), id=f"cr-item-{index}", classes="list-item")
                 row.display = state not in self.collapsed
@@ -985,9 +993,7 @@ class CRPopupApp(App):
             await self._show_cr()
         else:
             await self._show_message("CR이 없습니다.")
-        if self._title_task is not None:
-            self._title_task.cancel()
-        self._title_task = asyncio.create_task(self._fill_done_titles(self.items))
+        self._start_titles()
         focus, self.focus_state = self.focus_state, None
         if focus is not None:
             self.call_after_refresh(listing.scroll_to_widget, self.query_one(f"#cr-group-{focus}"),
@@ -995,10 +1001,19 @@ class CRPopupApp(App):
         else:
             listing.scroll_home(animate=False)
 
+    def _start_titles(self) -> None:
+        """Read the done titles of the list as it is now, once its Done rows are on the screen. Folded, nobody
+        sees them and each is a file read (1500 files took 19 s on a loaded host): unfolding starts it."""
+        if self._title_task is not None:
+            self._title_task.cancel()
+            self._title_task = None
+        if "done" not in self._unmounted and any(item["state"] == "done" for item in self.items):
+            self._title_task = asyncio.create_task(self._fill_done_titles(self.items))
+
     async def _fill_done_titles(self, items: list[dict]) -> None:
         """The done list shows file-name titles at once; the real titles replace them one file at a time."""
         for index, item in enumerate(items):
-            if item["state"] != "done":
+            if item["state"] != "done" or item.get("title_read"):
                 continue
             try:
                 title = await asyncio.to_thread(model.done_title, item)
@@ -1006,9 +1021,11 @@ class CRPopupApp(App):
                 continue
             if self._closing or items is not self.items:
                 return
+            item["title_read"] = True
             if title:
                 item["title"] = title
-                self.query_one(f"#cr-item-{index}", Button).label = self._row_label(item)
+                for row in self.query(f"#cr-item-{index}"):
+                    row.label = self._row_label(item)
 
     def _group_label(self, state: str) -> str:
         label = dict(CR_GROUPS)[state]
@@ -1017,20 +1034,44 @@ class CRPopupApp(App):
     def _row_label(self, item: dict) -> Content:
         return _item_label(item["id"] == self.selected_id, item["id"], _cr_status(item), item["title"])
 
+    def _rows(self) -> dict[str, Button]:
+        """The mounted list rows by id (one pass over the list: a query per row is quadratic in a long list)."""
+        return {row.id: row for row in self.query("#cr-items .list-item") if isinstance(row, Button)}
+
     def _mark_selected(self) -> None:
+        rows = self._rows()
         for index, item in enumerate(self.items):
-            button = self.query_one(f"#cr-item-{index}", Button)
+            button = rows.get(f"cr-item-{index}")
+            if button is None:                                       # the row of a folded group is not mounted yet
+                continue
             button.label = self._row_label(item)
             button.set_class(item["id"] == self.selected_id, "selected")
 
-    def _fold(self, state: str) -> None:
+    async def _fold(self, state: str) -> None:
         self.collapsed ^= {state}
-        self.query_one(f"#cr-group-{state}", Button).label = self._group_label(state)
-        for index, item in enumerate(self.items):
-            if item["state"] == state:
-                self.query_one(f"#cr-item-{index}", Button).display = state not in self.collapsed
+        header = self.query_one(f"#cr-group-{state}", Button)
+        header.label = self._group_label(state)
+        if state in self._unmounted and state not in self.collapsed:
+            await self._mount_rows(state, header)
+        else:
+            rows = self._rows()
+            for index, item in enumerate(self.items):
+                if item["state"] == state and f"cr-item-{index}" in rows:
+                    rows[f"cr-item-{index}"].display = state not in self.collapsed
         for empty in self.query(f"#cr-empty-{state}"):
             empty.display = state not in self.collapsed
+        if state == "done" and state not in self.collapsed:
+            self._start_titles()
+
+    async def _mount_rows(self, state: str, header: Button) -> None:
+        """Mount the rows of a group that was folded when the list was made, right after its header."""
+        rows = []
+        for index, item in enumerate(self.items):
+            if item["state"] == state:
+                rows.append(Button(self._row_label(item), id=f"cr-item-{index}", classes="list-item"))
+        self._unmounted.discard(state)
+        await self.query_one("#cr-items", VerticalScroll).mount(*rows, after=header)
+        self._mark_selected()
 
     async def _painted(self) -> None:
         """Return once the screen has been refreshed with what was mounted, so that it is drawn before the next
@@ -1093,7 +1134,7 @@ class CRPopupApp(App):
             await self._show_cr()
             self.remove_class("list-open")
         elif button_id.startswith("cr-group-"):
-            self._fold(button_id.removeprefix("cr-group-"))
+            await self._fold(button_id.removeprefix("cr-group-"))
         elif button_id in ("cr-prev", "cr-next"):
             await self._move(-1 if button_id == "cr-prev" else 1)
         elif button_id == "cr-show-list":
