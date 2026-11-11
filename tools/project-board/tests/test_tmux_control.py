@@ -140,7 +140,7 @@ def test_next_board_start_removes_the_directory_of_a_server_that_was_killed(runt
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
-def test_sweep_removes_directories_of_ended_servers_and_of_pids_tmux_no_longer_holds(runtime_root):
+def test_sweep_removes_directories_of_ended_servers_and_of_pids_tmux_no_longer_holds(runtime_root, monkeypatch):
     live, recycled = tmux_test_server.claim("board-test"), tmux_test_server.claim("board-test")
     stranger = subprocess.Popen(["sleep", "60"])
     try:
@@ -155,7 +155,12 @@ def test_sweep_removes_directories_of_ended_servers_and_of_pids_tmux_no_longer_h
         old = time.time() - 3600
         os.utime(gone[-1], (old, old))
 
+        asked = []
+        original = subprocess.run
+        monkeypatch.setattr(tmux_control.subprocess, "run",
+                            lambda argv, *a, **k: (asked.append(argv[0]), original(argv, *a, **k))[1])
         assert sorted(tmux_control.reap_runtime_directories(runtime_root)) == sorted(gone)
+        assert asked == ["ps"], "BOARD-022: one ps for every live pid of the sweep, not one per directory"
         assert [path.exists() for path in gone] == [False] * 4
         assert kept.is_dir() and (kept / SOCK).exists()
     finally:
@@ -1514,6 +1519,13 @@ def test_the_snapshot_reads_what_the_per_window_options_hold(monkeypatch):
             for pane, mark in record.marks.items():
                 assert mark == option("-p", "-t", pane, "@project_board_managed")
                 marked += mark == "1"
+            # BOARD-022: what `_reconcile` used to ask `display-message -t` for, window by window
+            assert record.restore == option("-w", "-t", window, "@project_board_restore")
+            assert record.layout == _tmux(name, "display-message", "-p", "-t", window, "#{window_layout}")
+            assert record.width == int(_tmux(name, "display-message", "-p", "-t", window, "#{window_width}"))
+            assert record.active == _tmux(name, "display-message", "-p", "-t", window, "#{pane_id}")
+            assert record.widths == {pane: int(_tmux(name, "display-message", "-p", "-t", pane, "#{pane_width}"))
+                                     for pane in record.panes}
         assert marked == 1 and snapshot.windows[windows[0]].board
         assert tmux_control._managed_pane_dead(snapshot.windows[_tmux(name, "display-message", "-p", "-t", "two:0", "#{window_id}")])
     finally:
@@ -1719,3 +1731,124 @@ def test_a_client_that_follows_the_plan_with_raw_tmux_and_a_socket_reaches_the_w
     assert _lines_of(server, "starts") == [first]
     # the other kind is not told: the plan says to start the window again
     assert _notify_as_the_plan_says(server, server.window, "decision", b"{}\n") is None
+
+def _boards_on(name, windows, monkeypatch):
+    """A server of one session with `windows` windows, one client and a stand-in Board TUI. The client visits
+    each window once with the Board on, so every window ends with a Board pane. Returns what a test needs."""
+    _tmux(name, "-f", "/dev/null", "new-session", "-d", "-x", "120", "-y", "30", "-s", "one", "sleep", "60")
+    ids = [_tmux(name, "display-message", "-p", "-t", "one:0", "#{window_id}")]
+    for _ in range(windows - 1):
+        ids.append(_tmux(name, "new-window", "-d", "-P", "-F", "#{window_id}", "-t", "one", "sleep", "60"))
+    original = {window: _pane_geometry(name, window) for window in ids}
+    client = _attached(name, "one")
+    socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
+    monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
+    assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+    for window in ids[1:]:
+        _tmux(name, "select-window", "-t", window)
+        assert tmux_control.reconcile(socket=socket_path)["ok"] is True
+    assert all(_tmux(name, "show-options", "-wqv", "-t", window, "@project_board_pane") for window in ids)
+    return ids, original, client, socket_path
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_turning_the_board_off_starts_one_tmux_process_per_board_pane(monkeypatch):
+    """BOARD-022: removing a Board pane and restoring its window is one tmux process, not ten, so the time
+    of `prefix B` grows by one process per window, and every window is as it was."""
+    counts = {}
+    for windows in (1, 4):
+        name = tmux_test_server.claim("board-test")
+        clients = []
+        try:
+            ids, original, client, socket_path = _boards_on(name, windows, monkeypatch)
+            clients.append(client)
+            calls = _counting(monkeypatch)
+            result = tmux_control.toggle_sidebar(socket=socket_path)
+            counts[windows] = len(calls)
+            assert result["ok"] is True and sorted(result["data"]["removed"]) == sorted(ids)
+            for window in ids:
+                assert _pane_geometry(name, window).keys() == original[window].keys()
+                assert _tmux(name, "show-options", "-wqv", "-t", window, "@project_board_pane") == ""
+                assert _tmux(name, "show-options", "-wqv", "-t", window, "@project_board_restore") == ""
+        finally:
+            _release_clients(clients)
+            tmux_test_server.release(name)
+    assert counts[4] - counts[1] == 3, counts
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_turning_the_board_on_makes_each_pane_with_two_tmux_processes(monkeypatch):
+    """BOARD-022: the layout and the focus come from the server read already made, the options of the new
+    pane are written in one process, and the runtime directory is looked up once for the whole toggle."""
+    counts = {}
+    for windows in (1, 3):
+        name = tmux_test_server.claim("board-test")
+        clients = []
+        try:
+            _tmux(name, "-f", "/dev/null", "new-session", "-d", "-x", "120", "-y", "30", "-s", "one", "sleep", "60")
+            for _ in range(windows - 1):
+                _tmux(name, "new-window", "-d", "-t", "one", "sleep", "60")
+            clients.append(_attached(name, "one"))
+            socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
+            monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
+            calls = _counting(monkeypatch)
+            result = tmux_control.toggle_sidebar(socket=socket_path)
+            counts[windows] = len(calls)
+            assert result["ok"] is True and len(result["data"]["created"]) == 1
+        finally:
+            _release_clients(clients)
+            tmux_test_server.release(name)
+    assert counts[1] == counts[3]                       # only the window a client shows gets a pane
+    assert counts[1] <= 6, counts   # pid, read, enabled, width (first time), split, options of the pane
+
+
+def _screen_text(master):
+    """What the client's terminal was sent so far, with the control sequences taken out."""
+    import select
+    data = b""
+    while select.select([master], [], [], 0.3)[0]:
+        try:
+            block = os.read(master, 65536)
+        except OSError:
+            break
+        if not block:
+            break
+        data += block
+    text = data.decode("utf-8", "replace")
+    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][A-Za-z0-9]|\x1b[=>]", "", text)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_slow_toggle_tells_the_clients_how_far_it_is_and_a_quick_one_says_nothing(monkeypatch):
+    """BOARD-022: past PROGRESS_AFTER the attached clients get `Board 끄는 중 n/N` from `display-message -c`
+    (no pane covered, no status option changed); a toggle that finishes sooner shows nothing."""
+    name = tmux_test_server.claim("board-test")
+    clients = []
+    try:
+        ids, _original, client, socket_path = _boards_on(name, 3, monkeypatch)
+        clients.append(client)
+        def status_options():
+            return [_tmux(name, "show-options", "-gv", option) for option in ("status", "status-left", "status-right")]
+        status = status_options()
+        _screen_text(client[1])
+        monkeypatch.setattr(tmux_control, "PROGRESS_AFTER", 3600)               # no toggle is that slow
+        calls = _counting(monkeypatch)
+        quick = tmux_control.toggle_sidebar(socket=socket_path)                 # off
+        assert quick["ok"] is True
+        quiet_calls = len(calls)
+        assert "Board 끄는 중" not in _screen_text(client[1])
+        assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True    # on again
+        for window in ids:
+            _tmux(name, "select-window", "-t", window)
+            assert tmux_control.reconcile(socket=socket_path)["ok"] is True
+        _screen_text(client[1])
+        monkeypatch.setattr(tmux_control, "PROGRESS_AFTER", 0)
+        del calls[:]
+        assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+        assert len(calls) == quiet_calls, "the message goes in the process of its step, it starts none"
+        screen = _screen_text(client[1])
+        assert "Board 끄는 중 1/3" in screen and "Board 끄는 중 3/3 완료" in screen, screen
+        assert status_options() == status
+    finally:
+        _release_clients(clients)
+        tmux_test_server.release(name)
