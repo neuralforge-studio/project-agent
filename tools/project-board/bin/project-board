@@ -15,11 +15,14 @@ fi
 export PYTHONPATH="$ROOT${PROJECT_AGENT_PYTHONPATH:+:$PROJECT_AGENT_PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 unset PYTHONHOME
-# Only the TUI commands import textual from the interpreter's site-packages. The tmux hooks and the
-# toggle/click keys (sync, click, toggle) are standard library only and run at every window change: they
-# skip the site step and start from the bundle (`-m project_board`, after the bundle reader).
-case "${1:-}" in
-    sync|click|toggle)
+# Only the popup TUI commands import textual from the interpreter's site-packages. The tmux hooks, the
+# toggle/click keys (sync, click, toggle) and the commands the sidebar runs for its clicks (BOARD-018) are
+# standard library only and run at every window change or click: they skip the site step and start from
+# the bundle (`-m project_board`, after the bundle reader).
+command_name="${1:-}"
+[[ "$command_name" != --config ]] || command_name="${3:-}"
+case "$command_name" in
+    sync|click|toggle|switch-project|switch-seat|open-decision|open-cr|toggle-fold|liveness)
         exec "$PY" -S -c "$PROJECT_AGENT_BOOT
 import sys
 _project_agent_bundle(sys.argv.pop(1))

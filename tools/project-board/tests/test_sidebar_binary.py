@@ -38,7 +38,7 @@ def _wait(condition, timeout=10.0, what="the screen"):
 class Pane:
     """The sidebar running as the only pane of the window a client shows."""
 
-    def __init__(self, tmp_path, request, board, size=(25, 30), launcher=None, attach=True, env=None):
+    def __init__(self, tmp_path, request, board, size=(25, 30), launcher=None, attach=True, env=None, path=None):
         self.name = tmux_test_server.claim("sidebar-test")
         request.addfinalizer(self.close)
         self.clients = []
@@ -59,7 +59,8 @@ class Pane:
         command = ["-f", "/dev/null", "new-session", "-d", "-x", str(size[0]), "-y", str(size[1]), "-s", "main"]
         for key, value in variables.items():
             command += ["-e", f"{key}={value}"]
-        command += [str(sidebar_binary()), "--config", str(board.config)]
+        # tmux ignores `-e PATH=`; a program that needs another PATH is run through env
+        command += (["env", f"PATH={path}"] if path else []) + [str(sidebar_binary()), "--config", str(board.config)]
         tmux(self.name, *command)
         tmux(self.name, "set-option", "-g", "window-size", "manual")
         if attach:
@@ -132,6 +133,17 @@ class Pane:
     def folds(self):
         raw = tmux(self.name, "show-options", "-sqv", "@project_board_expanded")
         return set(json.loads(raw)) if raw else set()
+
+
+def _tmux_shim(tmp_path):
+    """A `tmux` first on PATH that logs its arguments and runs the real one: one line is one tmux process."""
+    directory = tmp_path / "shim"
+    directory.mkdir()
+    log = tmp_path / "tmux-calls.log"
+    shim = directory / "tmux"
+    shim.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> {log}\nexec {shutil.which("tmux")} "$@"\n')
+    shim.chmod(0o755)
+    return str(directory), log
 
 
 def _board(tmp_path):
@@ -340,3 +352,28 @@ def test_the_window_of_the_pane_is_marked_with_its_project_and_slot(tmp_path, re
     ansi = pane.ansi().splitlines()
     name_row = [line for line in ansi if "▶ Falcon2" in line][0]
     assert "48;2;47;109;179" in name_row.replace(":", ";")      # #2f6db3: a Leader window shows on the name row (BOARD-023)
+
+
+def test_every_periodic_read_and_the_visibility_check_start_one_tmux_process(tmp_path, request):
+    """BOARD-022: under load one tmux process costs 70-100 ms. The folds are read by one process every 2 seconds;
+    the liveness read starts two (the server, then the options of the runs: spec section 5) and the managed window
+    one, every 10 seconds; the visibility check one, however many commands it holds."""
+    directory, log = _tmux_shim(tmp_path)
+    pane = Pane(tmp_path, request, _board(tmp_path), path=directory + os.pathsep + os.environ["PATH"])
+    pane.wait_text("Falcon2")
+    time.sleep(1.0)
+    started = len(log.read_text().splitlines())
+    assert started <= 1 + 1 + 3, log.read_text()          # mark_ready, the first fold read, the first 10-second reads
+    log.write_text("")
+    time.sleep(20.5)
+    calls = log.read_text().splitlines()
+    folds = [c for c in calls if "@project_board_expanded" in c and "display-message" not in c]
+    others = [c for c in calls if c not in folds]
+    assert 9 <= len(folds) <= 11, calls                   # one per 2 seconds
+    assert len(others) <= 2 * 3, calls                    # two 10-second cycles, three processes each at most
+    log.write_text("")
+    process_id = int(tmux(pane.name, "display-message", "-p", "-t", pane.pane, "#{pane_pid}"))
+    os.kill(process_id, signal.SIGUSR1)
+    time.sleep(0.8)
+    visibility = [c for c in log.read_text().splitlines() if "list-clients" in c]
+    assert len(visibility) == 1 and "display-message" in visibility[0], log.read_text()

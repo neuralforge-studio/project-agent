@@ -11,6 +11,7 @@ use std::process::Command;
 const EXPANDED: &str = "@project_board_expanded";
 const PANE_READY: &str = "@project_board_ready";
 const MARK: &str = "project-board-context";
+const WINDOW_MARK: &str = "project-board-window";
 
 pub struct Tmux {
     socket: Option<String>,
@@ -65,20 +66,31 @@ impl Tmux {
     }
 
     /// `mark_ready`: tell project_board_visibility.sh that this pane handles SIGUSR1, then return whether it is shown.
+    /// One tmux process: the mark comes first so that a change after the read is signalled.
     pub fn mark_ready(&self) -> bool {
-        if let Some(pane) = &self.pane {
-            let _ = self.run(&["set-option", "-p", "-t", pane, PANE_READY, "1"]);
-        }
-        self.visible()
+        self.shown(true)
     }
 
-    /// `board_visible`: whether a client shows the window of this pane. Unknown is not hidden.
+    /// `board_visible`: whether a client shows the window of this pane. Unknown is not hidden. One tmux process.
     pub fn visible(&self) -> bool {
+        self.shown(false)
+    }
+
+    fn shown(&self, mark: bool) -> bool {
         let Some(pane) = &self.pane else { return true };
-        let Ok(window) = self.run(&["display-message", "-p", "-t", pane, "#{window_id}"]) else { return true };
-        match self.run(&["list-clients", "-F", "#{window_id}"]) {
-            Ok(clients) => clients.lines().any(|line| line == window),
-            Err(_) => true,
+        let mut args: Vec<String> = Vec::new();
+        if mark {
+            args.extend(["set-option".into(), "-p".into(), "-t".into(), pane.clone(), PANE_READY.into(), "1".into(), ";".into()]);
+        }
+        args.extend(["display-message".into(), "-p".into(), "-t".into(), pane.clone(), format!("{WINDOW_MARK}\t#{{window_id}}"),
+                     ";".into(), "list-clients".into(), "-F".into(), "#{window_id}".into()]);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let Ok(text) = self.run(&refs) else { return true };
+        let mut lines = text.lines();
+        let window = lines.by_ref().find_map(|line| line.strip_prefix(WINDOW_MARK).and_then(|r| r.strip_prefix('\t')));
+        match window {
+            Some(window) => lines.any(|line| line == window),
+            None => true,
         }
     }
 }
