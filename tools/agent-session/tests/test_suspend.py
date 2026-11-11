@@ -686,7 +686,7 @@ def test_a_failed_lost_resume_keeps_its_evidence_and_start_takes_over(session_en
 
     monkeypatch.setattr(FakeClaudeProvider, "launch_spec", exits)
     with pytest.raises(SessionError) as error:
-        fleet(env, timeout=20).resume(project="fixture", lost=True)
+        fleet(env).resume(project="fixture", lost=True)
     assert {item["slot"] for item in error.value.details["projects"][0]["failed"]} == {"leader", "seat-0"}
     saved = records(env)["seat-0"]
     assert saved["forced"] is True and saved["session_id"] == worker["session"]["session_id"]
@@ -767,7 +767,7 @@ def test_a_failed_resume_leaves_the_record_and_start_can_take_over(session_env, 
 
     monkeypatch.setattr(Tmux, "clear_current", spy)
     with pytest.raises(SessionError) as error:
-        fleet(env, timeout=20).resume(project="fixture")
+        fleet(env).resume(project="fixture")
     assert locked_while_dropped and all(locked_while_dropped), "a failed launch was dropped without the lock"
     failed = {item["slot"]: item["error"]["code"] for item in error.value.details["projects"][0]["failed"]}
     assert failed == {"leader": "provider_exited", "seat-0": "provider_exited"}
