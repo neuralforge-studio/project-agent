@@ -173,7 +173,8 @@ class Bench:
         names = {"snapshot1": "board_snapshot_first", "snapshot2": "board_snapshot_warm", "liveness1": "board_liveness",
                  "context": "board_context", "visible": "board_visible"}
         for key, name in names.items():
-            self.row(exe, name, probe[key]["s"], 0, probe[key]["spawns"], cpu=probe[key]["cpu"])
+            if key in probe:
+                self.row(exe, name, probe[key]["s"], 0, probe[key]["spawns"], cpu=probe[key]["cpu"])
 
     # ------------------------------------------------------------------ board commands that need a client
     def attach(self, session="p00"):

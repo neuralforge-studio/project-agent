@@ -36,6 +36,8 @@ for i in (1, 2):                      # the first read parses every file, the se
     lap(f"snapshot{i}", model.snapshot, config)
 live = lap("liveness1", model.liveness, config)       # once: it takes minutes in a large environment
 out["slots_alive"] = sum(1 for p in live.values() for v in p.values() if isinstance(v, dict) and v.get("state") == "alive")
-lap("context", tmux_control.active_context)
-lap("visible", tmux_control.board_visible)
+for name in ("context", "visible"):   # the Textual sidebar (0.7.1 and before) read these in process; the Rust sidebar reads them itself
+    reader = getattr(tmux_control, {"context": "active_context", "visible": "board_visible"}[name], None)
+    if reader is not None:
+        lap(name, reader)
 print(json.dumps(out))

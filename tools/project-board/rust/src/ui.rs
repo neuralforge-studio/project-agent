@@ -731,7 +731,7 @@ pub fn paint(buf: &mut Buffer, layout: &Layout, ui: &Interaction) {
 pub enum Hit<'a> {
     Outside,
     Nothing,
-    Static,
+    Static(&'a Widget),
     Button(&'a Widget),
 }
 
@@ -747,7 +747,7 @@ pub fn hit<'a>(layout: &'a Layout, ui: &Interaction, x: usize, y: usize) -> Hit<
     for widget in &layout.widgets {
         let (wx, wy, width, height) = screen_rect(layout, widget, scroll);
         if (x as i64) >= wx && (x as i64) < wx + width as i64 && (y as i64) >= wy && (y as i64) < wy + height as i64 {
-            return if widget.button { Hit::Button(widget) } else { Hit::Static };
+            return if widget.button { Hit::Button(widget) } else { Hit::Static(widget) };
         }
     }
     Hit::Nothing
@@ -893,7 +893,7 @@ mod tests {
         let ui = Interaction::default();
         let id = |x: usize, y: usize| match hit(&layout, &ui, x, y) {
             Hit::Button(w) => w.id.clone(),
-            Hit::Static => "static".into(),
+            Hit::Static(_) => "static".into(),
             Hit::Nothing => "nothing".into(),
             Hit::Outside => "outside".into(),
         };

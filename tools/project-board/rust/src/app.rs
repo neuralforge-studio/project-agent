@@ -439,6 +439,15 @@ impl App {
         }
     }
 
+    /// The widget under the pointer for hover and tooltip: a text row with a tooltip (the Leader row) counts too.
+    fn hover_target(&self, x: u16, y: u16) -> Option<Key> {
+        match ui::hit(&self.layout, &self.ui, x as usize, y as usize) {
+            Hit::Button(widget) => Some(widget.key.clone()),
+            Hit::Static(widget) if widget.tooltip.is_some() => Some(widget.key.clone()),
+            _ => None,
+        }
+    }
+
     fn input(&mut self, event: Event) -> bool {
         match event {
             Event::Resize(width, height) => {
@@ -447,7 +456,10 @@ impl App {
             }
             Event::FocusLost => self.hide_tooltip(),
             Event::FocusGained => false,
-            Event::Key(key) if key.kind != KeyEventKind::Release => self.key(key.code, key.modifiers),
+            Event::Key(key) if key.kind != KeyEventKind::Release => {
+                let hidden = self.hide_tooltip();
+                self.key(key.code, key.modifiers) || hidden
+            }
             Event::Mouse(mouse) => {
                 let (x, y) = (mouse.column, mouse.row);
                 match mouse.kind {
@@ -486,7 +498,7 @@ impl App {
 
     fn hover(&mut self, x: u16, y: u16) -> bool {
         self.pointer = (x, y);
-        let hover = self.widget_at(x, y);
+        let hover = self.hover_target(x, y);
         self.tooltip_expires = Some(Instant::now() + TOOLTIP_IDLE);
         if hover == self.ui.hover {
             return false;
@@ -624,7 +636,7 @@ impl App {
         let (xu, yu) = (x as usize, y as usize);
         match ui::hit(&self.layout, &self.ui, xu, yu) {
             Hit::Outside => click_error("no_widget", "이 위치에는 조작할 항목이 없습니다."),
-            Hit::Nothing | Hit::Static => click_error("not_clickable", "이 항목은 클릭할 수 없습니다."),
+            Hit::Nothing | Hit::Static(_) => click_error("not_clickable", "이 항목은 클릭할 수 없습니다."),
             Hit::Button(widget) => {
                 let (id, enabled, action) = (widget.id.clone(), widget.enabled, widget.action.clone());
                 if !enabled {
