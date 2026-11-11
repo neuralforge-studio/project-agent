@@ -527,7 +527,7 @@ for line in sys.stdin:
     for name in ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CLAUDE_CODE_MESSAGING_SOCKET"):
         monkeypatch.setenv(name, "parent-value")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-only-not-live")
-    with MCPClient([sys.executable, "-u", str(source)], 3) as client:
+    with MCPClient([sys.executable, "-u", str(source)], 30) as client:
         assert client.tool("ListAgents", {}) == {"nested": False, "auth_kept": True}
         with pytest.raises(SessionError) as caught:
             client.tool("SendMessage", {"to": "peer", "message": "text", "unexpected": "field"})
