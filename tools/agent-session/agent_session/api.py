@@ -12,10 +12,21 @@ from .tmux import PANE_ID_OPTION, Tmux
 # The public names. spec 5 (docs/project-team/spec.md) records each one's input and result.
 __all__ = (
     "PANE_ID_OPTION", "RemoteSeat", "SessionError", "Tmux",
-    "caller", "check_binding", "finish_release", "liveness", "load_registry", "pane_slot", "pending_releases",
-    "project_liveness", "project_pending_releases", "project_state",
+    "caller", "check_binding", "crontab_sections", "finish_release", "liveness", "load_registry", "pane_slot",
+    "pending_releases", "project_liveness", "project_pending_releases", "project_state",
     "read_state", "registry_path", "require_live", "resolve_project", "server_view",
 )
+
+
+def crontab_sections():
+    """The project sections in the user's crontab, in order: `{project, begin, end, jobs: [{id, command}], error}`
+    (`begin` and `end` are the section's marker lines, exactly as they stand in the crontab).
+
+    `error` is None, or the code of a section that cannot be read (incomplete, repeated or with a line that is
+    not a job; its jobs are then empty). A crontab that cannot be read raises `SessionError`
+    (`crontab_unavailable`, `crontab_unreadable`); no crontab yet is an empty list. Read only."""
+    from . import cron              # only the installer calls this; other consumers do not import the cron modules
+    return cron.crontab_sections()
 
 
 def pane_slot(pane, tmux=None):

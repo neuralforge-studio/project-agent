@@ -106,6 +106,12 @@ class Home:
                         TMUX_TMPDIR=str(self.root / "tt"),          # no command of a test can reach the user's tmux server
                         PATH=str(self.home / ".local/bin") + os.pathsep + os.environ.get("PATH", ""),
                         **GIT_ENV)
+        # Every command that reads the user's crontab (`check`, `uninstall`, a Leader's start) meets a file outside
+        # HOME instead (tools/tests/fake_crontab.py): no test touches the real crontab. A missing file is no crontab.
+        self.crontab = self.root / "crontab.txt"
+        shim = fake_crontab.install(self.root / "cron-bin", self.crontab)
+        self.env.update(FAKE_CRONTAB=shim["FAKE_CRONTAB"],
+                        PATH=str(self.root / "cron-bin") + os.pathsep + self.env["PATH"])
 
     def close(self):
         for directory, _, _ in os.walk(self.root):          # releases are read-only
@@ -251,10 +257,7 @@ class Runs:
         self.interpreter.write_text('#!/bin/sh\n[ "$1" = -S ] && shift\nexec "%s" "$@"\n' % os.path.abspath(sys.executable))
         self.interpreter.chmod(0o755)
         home.env["TMUX_TMPDIR"] = str(self.socket_dir)          # even a missing option cannot reach the user's server
-        # A Leader's start keeps the project's check job in the user's crontab; here that crontab is a file outside
-        # HOME (tools/tests/fake_crontab.py), so no run touches the real one.
-        self.crontab = self.socket_dir / "crontab.txt"
-        home.env.update(fake_crontab.install(self.socket_dir / "bin", self.crontab))
+        self.crontab = home.crontab         # a Leader's start keeps the project's check job in it (5.4)
         tmux_test_server.watch_path(self.socket)
         self.tmux("new-session", "-d", "-s", "harness", "sleep", "86400")
 

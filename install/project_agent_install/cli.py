@@ -121,11 +121,11 @@ def main(argv=None):
             _emit(env, arguments, commands.Plan(arguments.command),
                   notices=["The interrupted %s was finished." % arguments.command] + left)
             return 0
+        root = Path(__file__).resolve().parents[2]
         if arguments.command == "check":
-            failures, notices = commands.run_check(env)
+            failures, notices = commands.run_check(env, root)
             _emit(env, arguments, failures=failures, notices=notices)
             return 1 if failures else 0
-        root = Path(__file__).resolve().parents[2]
         if arguments.command in ("install", "upgrade"):
             source = releases.load_source(arguments.source or root)
             python = releases.installer_python()

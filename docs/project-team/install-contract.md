@@ -229,7 +229,7 @@ set-option -ag status-right '#{E:@project_agent_decide_status}'
 | 위치 | 언제 | 무엇을 하는가 | 근거 |
 | --- | --- | --- | --- |
 | `/tmp/project-board-<uid>-<tmux pid>/` (mode 0700), `control.lock`, `<16자>.sock` | Board를 켤 때 | 잠금 파일과 클릭 전달용 unix socket. Board pane이 끝나면 socket을 지웁니다. 디렉터리는 그 pid의 tmux server가 살아 있는 동안만 둡니다. `kill-server`·crash로 끝난 server의 디렉터리는 다음 Board 명령(어느 server의 것이든)이 `_private_dir`에서 지웁니다. 지우는 것은 이름이 형식에 맞고 현재 사용자 소유의 mode 0700 디렉터리(symlink 아님)이며 안에 `control.lock`·`<16자>.sock`만 있는 것입니다. pid가 없거나 tmux가 아니거나, tmux라도 디렉터리의 마지막 변경보다 늦게 시작했으면(pid 재사용) 끝난 server로 봅니다. | [tmux_control.py:84-200, 338](../../tools/project-board/project_board/tmux_control.py), [tui.py:196-223](../../tools/project-board/project_board/tui.py) |
-| 사용자 crontab(`crontab -l`·`crontab -`) | Leader를 시작할 때 그 project의 `check` 작업이 없거나 명령이 다를 때, `agent-session cron add`·`rm` | 그 project의 구역(`# >>> project-agent: <project> >>>` … `# <<< project-agent: <project> <<<`) 하나만 고칩니다. 구역 밖의 줄(사용자 작업, 다른 project의 구역)은 바이트 그대로 둡니다. 읽지 못하면 쓰지 않고 실패합니다. 설치·갱신·제거는 crontab을 고치지 않습니다(`uninstall`도 구역을 지우지 않으므로 사용자가 `agent-session cron rm`으로 지웁니다). | [cron.py](../../tools/agent-session/agent_session/cron.py), 호출 [lifecycle.py `_ensure_check`](../../tools/agent-session/agent_session/lifecycle.py) |
+| 사용자 crontab(`crontab -l`·`crontab -`) | Leader를 시작할 때 그 project의 `check` 작업이 없거나 명령이 다를 때, `agent-session cron add`·`rm` | 그 project의 구역(`# >>> project-agent: <project> >>>` … `# <<< project-agent: <project> <<<`) 하나만 고칩니다. 구역 밖의 줄(사용자 작업, 다른 project의 구역)은 바이트 그대로 둡니다. 읽지 못하면 쓰지 않고 실패합니다. 설치·갱신·제거는 crontab을 고치지 않습니다. `uninstall`과 `check`는 읽기만 하고, 남은 구역을 알리며 지우는 명령을 출력합니다(7.3절). | [cron.py](../../tools/agent-session/agent_session/cron.py), 호출 [lifecycle.py `_ensure_check`](../../tools/agent-session/agent_session/lifecycle.py) |
 | `/tmp/as-u-<uid>-<run>.sock` | 원격 seat의 SSH 연결 | bridge socket | [remote_bridge.py:63-64](../../tools/agent-session/agent_session/remote_bridge.py) |
 | `/tmp/as-<uid>-<run>.sock` (원격 host) | 원격 seat run | 원격 tmux socket | [remote_runtime.py:212](../../tools/agent-session/agent_session/remote_runtime.py) |
 | 시스템 임시 디렉터리 `project-board-*` | Board에서 결정 답변을 보낼 때 | 답변 본문 파일. 끝나면 지웁니다. | [answer.py:36-38](../../tools/project-board/project_board/answer.py) |
@@ -312,6 +312,8 @@ release 이름 `<version>-<hash>`: `<version>`은 원본 root의 `VERSION` 첫 �
 | `uninstall` | 설치 기록에 있는 소유만 지웁니다(release 전체, `current`, `tmux.conf`, 설치 기록, `backup/`, shim, skill link). tmux 블록은 3절대로 지웁니다. 넘겨받은 개발 checkout link는 지우지 않고 이전 대상으로 되돌립니다(2절 규칙 8). 설치기가 만든 빈 디렉터리를 지웁니다. | 등록 파일, `<base>/agent/`, `~/.cache`의 잠금·cache, 5.1의 신뢰 기록. 지우지 않은 것은 경로를 출력합니다. |
 | `check` | 읽기만 합니다. | 모든 것 |
 
+`uninstall`은 사용자 crontab에 남은 project-agent 구역도 알리고 지우는 명령을 출력합니다. crontab은 고치지 않습니다(7.3절).
+
 `check`는 다음을 확인하고 실패하면 0이 아닌 코드로 끝납니다.
 
 - 설치 기록의 모든 소유 경로가 있고, 종류와 link 대상이 기록과 같습니다.
@@ -322,6 +324,7 @@ release 이름 `<version>-<hash>`: `<version>`은 원본 root의 `VERSION` 첫 �
 - 건너뛴 tmux binding이 있으면 "binding 건너뜀"으로 알립니다(3.1절). 실패가 아닙니다.
 - release의 launcher로 설치 interpreter를 빈 환경(`PATH`만 있음. 사용자의 `LD_LIBRARY_PATH`가 library 경로의 누락을 가리지 않습니다)에서 실행해 `sys.prefix`가 `PROJECT_AGENT_PYTHON_PREFIX`(설치 때의 값)와 같은지 확인합니다. 다르거나 뜨지 않으면 실패이고, 실제 `sys.prefix`와 설치 때의 값을 알립니다.
 - `project-board`가 쓰는 `textual`이 같은 방식으로 실행한 설치 interpreter에 `tools/project-board/requirements.txt`의 버전으로 있는지 안내합니다. 없거나 버전이 다르면 안내만 합니다(실패가 아닙니다).
+- 사용자 crontab의 project 구역 작업이 가리키는 프로그램(작업 명령의 첫 단어, 절대 경로)이 없으면 그 project와 작업 ID와 경로를 알립니다(7.3절). 실패가 아닙니다. crontab을 읽을 수 없으면 읽지 못했다고 알립니다(실패가 아닙니다). `crontab` 명령이 없으면 알리지 않습니다.
 - 사용자가 소유 경로를 다른 것으로 바꿨으면 그 경로를 알리고 `check`는 실패로 끝납니다(위 첫 항목). `upgrade`와 `uninstall`은 그런 경로를 바꾸거나 지우지 않고 알립니다. 원격 runtime의 skill link가 같은 규칙을 씁니다([remote_runtime.py:74-90](../../tools/agent-session/agent_session/remote_runtime.py)) .
 
 ### 7.1 떠 있는 run
@@ -373,6 +376,17 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 - `liveness`의 `unknown`은 server 재시작 뒤 남은 state에도 나옵니다([api.py:73-80](../../tools/agent-session/agent_session/api.py)). 이 경우도 거절합니다. 해소 방법은 `agent-session stop`으로 slot을 끝내거나 `resume`으로 재개한 뒤 끝내는 것입니다.
 
 사용자 등록 파일(6절)은 `uninstall`이 지우지 않습니다. 설치기가 만든 초안도 같습니다. 지우려면 사용자가 직접 지웁니다. 이 때문에 제거 뒤에는 등록 파일과 그 부모 디렉터리가 남습니다.
+
+### 7.3 crontab에 남은 project 구역
+
+Leader를 시작하면 `agent-session`이 사용자 crontab에 project 구역의 `check` 작업을 둡니다(5.4절). 이 작업의 명령은 Leader를 시작한 release의 `bin/agent-session`입니다. `uninstall`이 그 release를 지우면 작업은 30분마다 실패하고, 출력이 버려지므로 실패가 보이지 않습니다.
+
+- 구역을 찾는 쪽은 [`agent_session.api.crontab_sections`](spec.md)입니다. 구역의 형식(시작·끝 줄, 작업 쌍, 깨진 구역의 판정)은 [동작 명세의 cron](spec.md#cron)과 `cron.py`가 소유하고 설치기는 형식을 다시 적지 않습니다.
+- `uninstall`(`--dry-run` 포함)은 구역마다 project와 작업 ID를 알리고, 그 구역만 지우는 명령을 출력합니다. 구역이 하나도 없거나 crontab이 없으면 crontab에 대해 아무것도 출력하지 않습니다. `crontab`을 읽지 못하면 못 읽었다는 사실과 `# >>> project-agent:`로 시작하는 줄을 찾으라는 안내를 출력합니다. 종료 코드는 0입니다.
+- 출력하는 명령은 `crontab -l`로 읽고(읽기에 실패하면 쓰지 않습니다), `sed`로 그 구역의 시작 줄부터 끝 줄까지만 지운 뒤 `crontab -`로 씁니다. 구역 밖의 줄(사용자 작업, 다른 project의 구역)은 그대로입니다. 구역 앞의 빈 줄 하나(`agent-session`이 구역을 붙일 때 둔 것)는 남습니다. 깨진 구역(끝 줄이 없거나 중복)은 범위 삭제가 crontab의 끝까지 지울 수 있으므로 명령을 출력하지 않고, `crontab -e`로 손으로 고치라고 알립니다.
+- 명령은 `agent-session cron rm`이 아니라 `crontab`과 `sed`만 씁니다. `uninstall`이 `agent-session` shim과 release를 지우므로, 지운 뒤에는 `agent-session`을 부를 수 없기 때문입니다.
+- `uninstall`은 이 명령을 실행하지 않고 출력만 합니다. 근거: (1) crontab은 사용자의 파일이고 설치 기록의 소유가 아닙니다. 설치기가 고치는 기존 파일은 사용자 tmux 설정의 include 한 줄 하나로 한정합니다(결정 D-20261109-09). (2) crontab은 cron이 지금도 읽는 실행 중 상태이고, 3.1절의 binding·hook과 같이 `uninstall`은 실행 중 상태를 바꾸지 않습니다(3.1절 5항). tmux binding을 되돌리는 명령을 출력하는 방식과 같습니다.
+- `check`는 구역의 작업마다 명령의 첫 단어가 절대 경로이고 그 경로가 없으면 알립니다. 알림에 `agent-session cron rm --project <이름> --id <작업 ID>`와, Leader를 다시 시작하면 명령이 현재 release로 바뀐다는 점을 적습니다. `check`는 crontab을 읽기만 합니다.
 
 ## 8. 인수 test 명세
 
@@ -426,8 +440,10 @@ release는 run의 hook·script가 쓰는 코드입니다. run을 시작할 때 `
 | T31 | 설치·갱신을 두 번 한 상태(release 셋). 떠 있는 run이 첫 release에서 시작됨 / 없음 / `unknown` / 첫 release 디렉터리에 사용자의 파일 | `prune`(`--dry-run` 포함) | run이 떠 있거나 `unknown`이거나 사용자의 파일이 있으면 없음(이유를 알림). 아니면 첫 release의 삭제와 설치 기록 | `current`·`previous`는 남음(`rollback` 뒤에는 새 `previous`도 남음). dry-run 목록과 실제 삭제 목록이 같음. `check`가 통과함. Board가 켜져 있으면 알림 |
 | T32 | 위의 `prune`을 SIGKILL로 끊음(첫 step의 앞·뒤) | `check`, `upgrade`, `prune --dry-run`, `prune` | `prune`이 마침 | `check`는 실패, `upgrade`는 `prune_interrupted`, `--dry-run`은 거절. 마친 뒤 journal·임시 디렉터리가 없음 |
 | T33 | 설치 interpreter가 빈 환경에서 다른 `sys.prefix`로 뜸(INSTALL-006) | `install`, 빈 환경에서 진입점과 `check`, `python.env`의 `PROJECT_AGENT_PYTHON_PREFIX`·library 경로 변경 후 `check` | 2절의 경로 | `python.env`에 library 경로가 적히고, 빈 환경의 진입점이 설치 때와 같은 `sys.prefix`로 실행됨. 어느 경로로도 같아지지 않으면 `python_environment`로 거절함(종료 코드 3). 값을 틀리게 하거나 library 경로를 지우면 `check`가 실패함 |
+| T34 | 설치된 상태. crontab에 사용자 줄과 project 구역 둘(`--dry-run` 포함), 이름에 정규식 문자(`a.b`)가 있는 구역, 구역 없음·crontab 없음, 끝 줄이 없는 구역, 읽을 수 없는 crontab. 실제 crontab은 쓰지 않고 `fake_crontab`을 씀 | `uninstall` | 7.3절. crontab 파일 변경 없음 | 출력이 구역마다 project와 작업 ID, 지우는 명령 하나를 담음. 명령을 실행하면 그 구역만 사라지고 사용자 줄과 다른 구역은 그대로임(`a.b`가 `aXb`를 지우지 않음). 구역이 없거나 crontab이 없으면 crontab에 대한 출력이 없음. 끝 줄이 없는 구역은 명령 없이 손으로 고치라고 알림. 읽을 수 없으면 그 사실을 알리고 종료 코드 0. `--dry-run`의 출력이 같음 |
+| T35 | 설치된 상태. crontab에 지운 release를 가리키는 구역과 `current`의 진입점을 가리키는 구역, 구역 없음, 읽을 수 없는 crontab | `check` | 없음 | 지운 release를 가리키는 구역의 project·작업 ID·경로만 알리고 종료 코드 0. 구역이 없으면 알리지 않음. 읽을 수 없으면 그 사실을 알림. crontab은 변경 없음 |
 
-기대 변경 목록의 "정확히"는 T1~T18과 T20~T32에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding은 TMUX-001이 구현했습니다([test](../../integrations/tmux/test_project_agent_conf.py)).
+기대 변경 목록의 "정확히"는 T1~T18과 T20~T35에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding은 TMUX-001이 구현했습니다([test](../../integrations/tmux/test_project_agent_conf.py)).
 
 ## 9. 이 계약과 어긋나는 현재 동작
 
