@@ -74,8 +74,9 @@ of its directories changed (the same for the registry file). It writes to the te
 cells that changed; a popup reads only its own project.
 The sidebar keeps clicks and scrolling responsive during reads. It switches a client to a project or a
 Worker pane itself (`rust/src/switch.rs`, the same rules as `tmux_control.switch_project` and
-`switch_seat`, compared by `tests/test_rust_switch.py`). The other clicks run `project-board`
-subcommands from the start bundle (`open-decision`, `open-cr`, `toggle-fold`); the `liveness`
+`switch_seat`, compared by `tests/test_rust_switch.py`). A CR or decision click tells an open window of the same kind what to show over
+its socket (`rust/src/window.rs`, the BOARD-025 line); otherwise, and for the fold button, it runs a
+`project-board` subcommand from the start bundle (`open-decision`, `open-cr`, `toggle-fold`); the `liveness`
 subcommand judges the runs of SSH seats for it. Every periodic read starts one tmux process
 (the run liveness two). Decision
 answers require the `operator` caller classification from `agent-session`; a managed or

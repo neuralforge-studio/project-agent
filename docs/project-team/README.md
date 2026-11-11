@@ -115,10 +115,11 @@ Rust sidebar(`tools/project-board/rust`, BOARD-018)는 Python 도구와 같은 �
 | 실행 확인(liveness)과 반납 대기 | `agent_session.api`·`tmux`·`process` ([명세 5절](spec.md#5-내부-세션-등록과-실행-확인)) | `rust/src/data/live.rs`, `tmux.rs`, `process.rs` |
 | 지금 보는 창(project, slot) | `agent_session.api.pane_slot` | `rust/src/tmuxio.rs` |
 | 접힘 상태와 가시성의 tmux option | `project_board.tmux_control` | `rust/src/tmuxio.rs` |
+| 열려 있는 Board 창에 새 내용 알리기(client 쪽) | `project_board.tmux_control._reuse`·`window_link` (규약: TUI 계획 5절) | `rust/src/window.rs` |
 | project·seat 전환(client 확인, 검증한 Worker window) | `project_board.tmux_control.switch_project`·`switch_seat`, `agent_session.tmux.Tmux.find_by_session` | `rust/src/switch.rs`, `rust/src/data/jump.rs` |
 
   SSH seat의 실행 판정은 Python에 남깁니다. Rust는 `project-board liveness`를 실행해 그 결과를 씁니다.
-- **검증**: [`tools/project-board/tests/test_rust_equivalence.py`](../../tools/project-board/tests/test_rust_equivalence.py)가 같은 디스크 fixture에서 `model.snapshot`·`model.liveness`와 Rust의 결과를 비교합니다. 결정 단계, seat 상태 전부, 원격 seat, 등록·state·CR·결정 오류, path가 없는 project, liveness 판정을 다룹니다. Python의 규칙을 바꾸면 이 test가 Rust 쪽의 수정을 요구합니다. `tmuxio.rs`의 tmux option 규칙은 Rust 단위 test와 [`test_sidebar_binary.py`](../../tools/project-board/tests/test_sidebar_binary.py)가 확인하고, 전환 규칙은 [`test_rust_switch.py`](../../tools/project-board/tests/test_rust_switch.py)가 Python과 같은 결과인지 비교합니다.
+- **검증**: [`tools/project-board/tests/test_rust_equivalence.py`](../../tools/project-board/tests/test_rust_equivalence.py)가 같은 디스크 fixture에서 `model.snapshot`·`model.liveness`와 Rust의 결과를 비교합니다. 결정 단계, seat 상태 전부, 원격 seat, 등록·state·CR·결정 오류, path가 없는 project, liveness 판정을 다룹니다. Python의 규칙을 바꾸면 이 test가 Rust 쪽의 수정을 요구합니다. `tmuxio.rs`의 tmux option 규칙은 Rust 단위 test와 [`test_sidebar_binary.py`](../../tools/project-board/tests/test_sidebar_binary.py)가 확인하고, 창 알림은 `test_sidebar_binary.py`의 창 test와 `window.rs` 단위 test가 TUI 계획 5절의 순서와 응답 표대로 하는지 확인하고, 전환 규칙은 [`test_rust_switch.py`](../../tools/project-board/tests/test_rust_switch.py)가 Python과 같은 결과인지 비교합니다.
 - Python `model.snapshot`·`model.liveness`는 popup과 위 test의 기준 구현으로 남습니다.
 
 ### 목표
