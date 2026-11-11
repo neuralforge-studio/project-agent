@@ -204,6 +204,21 @@ def test_user_bindings_stay_and_are_reported(server, conf):
     assert tmux.option("@project_agent_board_skipped").split() == ["prefix:B", "root:MouseDown1Pane"]
 
 
+def test_the_drag_end_binding_saves_the_board_width_unless_the_user_bound_the_key(server, conf):
+    tmux = server()
+    assert tmux.key("root", "MouseDragEnd1Border") == ""
+    tmux.read(conf)
+    assert "@project_board_width" in tmux.key("root", "MouseDragEnd1Border")
+    assert tmux.option("@project_agent_board_skipped") == ""
+    tmux.read(conf)                                           # the product's own binding is replaced, not skipped
+    assert tmux.option("@project_agent_board_skipped") == ""
+    other = server()
+    other.run("bind-key", "-T", "root", "MouseDragEnd1Border", "display-message", "user-drag")
+    other.read(conf)
+    assert "user-drag" in other.key("root", "MouseDragEnd1Border")
+    assert other.option("@project_agent_board_skipped") == "root:MouseDragEnd1Border"
+
+
 def test_only_the_user_bound_key_is_skipped(server, conf):
     tmux = server()
     tmux.run("bind-key", "B", "display-message", "user-prefix")
