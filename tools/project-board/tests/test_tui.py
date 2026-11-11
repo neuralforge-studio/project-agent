@@ -2133,3 +2133,41 @@ def test_a_cr_window_reads_the_other_projects_once_it_is_up_so_the_next_item_is_
     asyncio.run(check())
     # the window's own project first (the list it shows), then the others once each; only the CRs, with done
     assert calls == [("Alpha", True, model.ONLY_CRS), ("Beta", True, model.ONLY_CRS), ("Gamma", True, model.ONLY_CRS)]
+
+
+def test_cr_head_is_whole_sections_of_a_long_cr_and_none_for_a_short_one():
+    from project_board.tui import cr_head
+    section = "## Part\n\n" + "line\n\n" * 12
+    source = "# T\n\n- Opened: x\n\n" + section * 6
+    head = cr_head(source)
+    assert head is not None and head.startswith("# T") and source.startswith(head) and head.endswith("\n")
+    assert len(head.splitlines()) >= 29 and source[len(head):].lstrip("\n").startswith("## Part")
+    assert cr_head("# T\n\n## Part\n\ntext\n") is None
+    fenced = "# T\n\n" + "```\n" + "## not a heading\n" * 40 + "```\n\n" + "text\n" * 40
+    assert cr_head(fenced) is None                                    # a heading inside a fence is not a section
+
+
+def test_a_long_cr_shows_its_first_screen_before_the_whole_document(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Alpha", seats=0)
+    path = board.cr(base, "open", "AAA-001", "alpha open")
+    body = "".join(f"## Part {number}\n\n" + "line\n\n" * 12 for number in range(8))
+    path.write_text(path.read_text(encoding="utf-8") + "\n" + body, encoding="utf-8")
+    source = path.read_text(encoding="utf-8")
+    app = CRPopupApp(str(board.config), "Alpha", "open", load=False)
+    seen = []
+    painted = app._painted
+
+    async def record():
+        seen.append([widget.source for widget in app.query(Markdown)])
+        await painted()
+    app._painted = record
+
+    async def check():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Alpha", True))
+            await wait_until(pilot, lambda: [widget.source for widget in app.query(Markdown)] == [source])
+            assert len(seen) == 1 and len(seen[0]) == 1 and 0 < len(seen[0][0]) < len(source)
+            assert source.startswith(seen[0][0])                       # the first screen was the head of the document
+
+    asyncio.run(check())

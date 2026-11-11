@@ -784,6 +784,22 @@ class CSVScreen(Screen):
         self.app.pop_screen()
 
 
+def cr_head(source: str, minimum: int = 30) -> str | None:
+    """The head of a long CR for a first screen: the lines before the first section heading (`## `) that
+    comes at or after line `minimum`, outside a code fence. None when the CR is short or has no such heading.
+    It ends where a section ends, so it is whole blocks and shows as the document does."""
+    lines = source.split("\n")
+    if len(lines) < minimum * 2:
+        return None
+    fenced = False
+    for number, line in enumerate(lines):
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+        elif not fenced and number >= minimum and line.startswith("## "):
+            return "\n".join(lines[:number]).rstrip("\n") + "\n"
+    return None
+
+
 READING = "읽는 중…"
 READING_DECISIONS = "결정 항목을 읽는 중…"
 READING_PROJECTS = "◀▶로 이동할 다른 project의 결정 항목을 읽는 중…"
@@ -1016,6 +1032,17 @@ class CRPopupApp(App):
         for empty in self.query(f"#cr-empty-{state}"):
             empty.display = state not in self.collapsed
 
+    async def _painted(self) -> None:
+        """Return once the screen has been refreshed with what was mounted, so that it is drawn before the next
+        long layout starts."""
+        done = asyncio.Event()
+        self.call_after_refresh(done.set)
+        try:
+            await asyncio.wait_for(done.wait(), 1)
+        except asyncio.TimeoutError:
+            pass
+        await asyncio.sleep(0.02)
+
     async def _show_message(self, message: str) -> None:
         self._load_generation += 1
         detail = self.query_one("#cr-detail", VerticalScroll)
@@ -1037,6 +1064,15 @@ class CRPopupApp(App):
             return
         detail = self.query_one("#cr-detail", VerticalScroll)
         await detail.remove_children()
+        head = cr_head(source) if source is not None else None
+        if head is not None:
+            # A long CR is a few hundred widgets and laying them out takes seconds on a loaded host (about 2 s
+            # for 180 lines, measured): the first screen is shown at once and the whole document replaces it.
+            await detail.mount(Markdown(head, open_links=False))
+            await self._painted()
+            if self._closing or generation != self._load_generation:
+                return
+            await detail.remove_children()
         await detail.mount(Markdown(source, open_links=False) if source is not None else Static(message))
         detail.scroll_home(animate=False)
 
