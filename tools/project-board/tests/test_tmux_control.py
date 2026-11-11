@@ -21,15 +21,17 @@ import uuid
 import pytest
 
 import board_testing  # noqa: F401  (adds the Board tool to sys.path)
+from board_testing import attached as _attached, release_clients as _release_clients, tmux as _tmux
 import tmux_test_server
 from project_board import tmux_control
 from board_testing import Board, session
 from agent_session.tmux import Tmux
 
 
-def _tmux(name, *args):
-    return subprocess.run(["tmux", "-L", name, *args], capture_output=True, text=True,
-                          check=True, timeout=5).stdout.strip()
+def _folds(name):
+    """The projects expanded in every Board pane of the test server (the sidebar reads the same option)."""
+    raw = _tmux(name, "show-options", "-sqv", "@project_board_expanded")
+    return set(json.loads(raw)) if raw else set()
 
 
 def _pane_geometry(name, window):
@@ -40,23 +42,6 @@ def _pane_geometry(name, window):
         parts = row.split("\t")
         geometry[parts[0]] = tuple(map(int, parts[1:]))
     return geometry
-
-
-def _attached(name, session):
-    master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-    client = os.ttyname(slave)
-    process = subprocess.Popen(["tmux", "-L", name, "attach-session", "-t", session],
-                               stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
-                               env={**os.environ, "TERM": "xterm-256color"})
-    os.close(slave)
-    for _ in range(50):
-        if client in _tmux(name, "list-clients", "-F", "#{client_name}").splitlines():
-            return process, master, client
-        time.sleep(0.05)
-    process.terminate()
-    os.close(master)
-    pytest.fail("tmux client did not attach")
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
@@ -275,7 +260,7 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
         result = tmux_control.toggle_sidebar(socket=socket_path)
         assert result["ok"] is True
         assert set(result["data"]["created"]) == {first_window, second_window}
-        assert tmux_control.expanded_projects(socket_path) == set()
+        assert _folds(name) == set()
         assert tmux_control.toggle_expanded_project("one", socket_path) == {"one"}
         assert tmux_control.toggle_expanded_project("two", socket_path) == {"one", "two"}
         assert tmux_control.toggle_expanded_project("two", socket_path) == {"one"}
@@ -299,7 +284,7 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
             worker.join(timeout=5)
         assert not failures
         assert not any(worker.is_alive() for worker in workers)
-        assert tmux_control.expanded_projects(socket_path) == {"one", "two", "three"}
+        assert _folds(name) == {"one", "two", "three"}
         tmux_control.toggle_expanded_project("two", socket_path)
         tmux_control.toggle_expanded_project("three", socket_path)
         assert len(_tmux(name, "list-panes", "-a", "-F", "#{pane_id}").splitlines()) == 4
@@ -329,21 +314,21 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
         assert _tmux(name, "show-options", "-wqv", "-t", first_window,
                      "@project_board_pane") == first_board
         assert first_board in _pane_geometry(name, first_window)
-        assert tmux_control.expanded_projects(socket_path) == {"one"}
+        assert _folds(name) == {"one"}
 
         _tmux(name, "switch-client", "-c", clients[0][2], "-t", "one")
         result = tmux_control.reconcile(socket=socket_path)
         assert result["ok"] is True and result["data"]["created"] == []
         assert _tmux(name, "show-options", "-wqv", "-t", first_window,
                      "@project_board_pane") == first_board
-        assert tmux_control.expanded_projects(socket_path) == {"one"}
+        assert _folds(name) == {"one"}
 
         result = tmux_control.toggle_sidebar(socket=socket_path)
         assert result["ok"] is True
         assert result["data"]["enabled"] is False
-        assert tmux_control.expanded_projects(socket_path) == {"one"}
+        assert _folds(name) == {"one"}
         assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
-        assert tmux_control.expanded_projects(socket_path) == {"one"}
+        assert _folds(name) == {"one"}
         assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
         assert set(_tmux(name, "list-panes", "-a", "-F", "#{pane_id}").splitlines()) == original
         assert _pane_geometry(name, first_window) == first_geometry
@@ -512,35 +497,6 @@ def test_kept_board_panes_are_bounded_and_the_longest_unseen_window_goes_first(m
         tmux_test_server.release(name)
 
 
-@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
-def test_a_board_pane_asks_tmux_whether_a_client_shows_its_window(monkeypatch):
-    name = tmux_test_server.claim("board-test")
-    clients = []
-    try:
-        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "one", "sleep", "60")
-        _tmux(name, "new-session", "-d", "-s", "two", "sleep", "60")
-        panes = {n: _tmux(name, "display-message", "-p", "-t", n, "#{pane_id}") for n in ("one", "two")}
-        socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
-        clients.append(_attached(name, "one"))
-        monkeypatch.setenv("TMUX_PANE", panes["one"])
-        assert tmux_control.mark_ready(socket_path) is True
-        assert _tmux(name, "show-options", "-pqv", "-t", panes["one"], "@project_board_ready") == "1"
-        monkeypatch.setenv("TMUX_PANE", panes["two"])
-        assert tmux_control.board_visible(socket_path) is False
-        _tmux(name, "switch-client", "-c", clients[0][2], "-t", "two")
-        assert tmux_control.board_visible(socket_path) is True
-        monkeypatch.delenv("TMUX_PANE")
-        assert tmux_control.board_visible(socket_path) is True      # outside tmux: keep reading
-    finally:
-        for process, master, _client in clients:
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=2)
-            os.close(master)
-        tmux_test_server.release(name)
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
@@ -801,111 +757,8 @@ def _managed(name, window, project, target):
     _tmux(name, "set-option", "-w", "-t", window, "@agent_session_target", json.dumps(target))
 
 
-@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
-def test_active_context_reads_the_managed_project_and_slot_of_the_pane_window(monkeypatch):
-    name = tmux_test_server.claim("board-test")
-    try:
-        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "Falcon2", "sleep", "60")
-        socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
-        cases = {"leader": ("Falcon2", "leader"), "seat": ("Falcon2", "seat-2"), "other": ("ProjectB", "seat-10"),
-                 "odd": ("Falcon2", "worker"), "nobody": None}
-        panes = {}
-        for label, managed in cases.items():
-            _tmux(name, "new-window", "-d", "-t", "Falcon2", "-n", label, "sleep", "60")
-            panes[label] = _tmux(name, "display-message", "-p", "-t", f"Falcon2:{label}", "#{pane_id}")
-            if managed:
-                _managed(name, f"Falcon2:{label}", *managed)
-        expected = {"leader": {"project_id": "Falcon2", "slot": "leader"},
-                    "seat": {"project_id": "Falcon2", "slot": "seat-2"},
-                    "other": {"project_id": "ProjectB", "slot": "seat-10"},
-                    "odd": {"project_id": "Falcon2", "slot": None},
-                    "nobody": None}
-        for label, want in expected.items():
-            monkeypatch.setenv("TMUX_PANE", panes[label])
-            assert tmux_control.active_context(socket_path) == want, label
-        monkeypatch.delenv("TMUX_PANE")
-        assert tmux_control.active_context(socket_path) is None          # outside tmux
-        # A value that is not JSON is not a managed window.
-        _tmux(name, "set-option", "-w", "-t", "Falcon2:nobody", "@agent_session_project_id", "Falcon2")
-        monkeypatch.setenv("TMUX_PANE", panes["nobody"])
-        assert tmux_control.active_context(socket_path) is None
-    finally:
-        tmux_test_server.release(name)
 
 
-@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
-def test_the_sidebar_highlight_follows_a_client_between_managed_and_plain_windows(tmp_path, monkeypatch):
-    """The sidebar of each window marks its own window; the client sees the pane of the window it shows."""
-    import asyncio
-    from board_testing import leader, wait_until
-    from project_board import model
-    from project_board.tui import SidebarApp
-
-    board = Board(tmp_path)
-    base = board.project("Falcon2", seats=3)
-    board.state(base, {"leader": leader(),
-                       **{str(n): {"job_id": None, "git_hash": None, "session": None} for n in range(3)}})
-    other = board.project("ProjectB", seats=1)
-    board.state(other, {"leader": None, "0": {"job_id": None, "git_hash": None, "session": None}})
-    name = tmux_test_server.claim("board-test")
-    clients = []
-    try:
-        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "Falcon2", "-n", "leader", "sleep", "60")
-        socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
-        for label in ("seat", "plain"):
-            _tmux(name, "new-window", "-d", "-t", "Falcon2", "-n", label, "sleep", "60")
-        panes = {n: _tmux(name, "display-message", "-p", "-t", f"Falcon2:{n}", "#{pane_id}")
-                 for n in ("leader", "seat", "plain")}
-        _managed(name, "Falcon2:leader", "Falcon2", "leader")
-        _managed(name, "Falcon2:seat", "Falcon2", "seat-1")
-        clients.append(_attached(name, "Falcon2"))
-
-        def marks(pane):
-            monkeypatch.setenv("TMUX_PANE", pane)
-            app = SidebarApp(str(board.config), poll=False,
-                             context_reader=lambda: tmux_control.active_context(socket_path))
-            found = {}
-
-            async def check():
-                async with app.run_test(size=(40, 25)) as pilot:
-                    await app.apply_snapshot(model.snapshot(board.config))
-                    await app.refresh_context()
-                    await wait_until(pilot, lambda: app.query("#project-0-seats"))
-                    await pilot.pause()
-                    await pilot.click("#project-0-seats")
-                    await wait_until(pilot, lambda: app.query("#project-0-seat-1"))
-                    found["names"] = [str(b.label) for b in app.query(".project-name")]
-                    found["slots"] = [w.has_class("slot-active") for w in app.query(".leader")] + \
-                                     [b.has_class("slot-active") for b in app.query("#project-0-seat-0, #project-0-seat-1")]
-
-            asyncio.run(check())
-            return found
-
-        want = {"leader": (["▶ Falcon2", "ProjectB"], [True, False, False]),
-                "seat": (["▶ Falcon2", "ProjectB"], [False, False, True]),
-                "plain": (["Falcon2", "ProjectB"], [False, False, False])}
-        for window in ("leader", "seat", "plain", "leader"):
-            _tmux(name, "select-window", "-t", f"Falcon2:{window}")
-            # The Board pane the client sees is the one of the window it shows (the BOARD-002 check).
-            shown = []
-            for label, pane in panes.items():
-                monkeypatch.setenv("TMUX_PANE", pane)
-                if tmux_control.board_visible(socket_path):
-                    shown.append(label)
-            assert shown == [window]
-            names, slots = want[window]
-            result = marks(panes[window])
-            assert (result["names"], result["slots"]) == (names, slots), window
-    finally:
-        for process, master, _client in clients:
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=2)
-            os.close(master)
-        tmux_test_server.release(name)
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
@@ -954,17 +807,6 @@ def test_a_failing_popup_never_covers_the_work_pane_and_the_client_is_told(bare)
                 process.wait(timeout=2)
             os.close(master)
         tmux_test_server.release(name)
-
-
-def _release_clients(clients):
-    for process, master, _client in clients:
-        process.terminate()
-        try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=2)
-        os.close(master)
 
 
 def _counting(monkeypatch):
@@ -1078,19 +920,3 @@ def test_the_snapshot_reads_what_the_per_window_options_hold(monkeypatch):
         tmux_test_server.release(name)
 
 
-def test_reading_the_folds_takes_no_lock_and_starts_one_tmux_command(monkeypatch):
-    """Every Board pane reads the folds on each refresh (BOARD-013): one `show-options`, no lock (which would add a
-    `display-message` and a `ps` per other tmux server)."""
-    calls = []
-
-    class Control:
-        def command(self, *args):
-            calls.append(args)
-            return '["one", "two"]'
-
-    def no_lock(control):
-        raise AssertionError("reading the folds must not take the lock")
-    monkeypatch.setattr(tmux_control, "_control", lambda socket=None: Control())
-    monkeypatch.setattr(tmux_control, "_locked", no_lock)
-    assert tmux_control.expanded_projects() == {"one", "two"}
-    assert len(calls) == 1 and calls[0][0] == "show-options"

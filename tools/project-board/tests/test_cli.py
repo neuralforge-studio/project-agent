@@ -17,46 +17,49 @@ def test_toggle_passes_the_registry_client_and_socket(monkeypatch):
     assert called == [("/tmp/projects.json", "/dev/ttys1", "/tmp/tmux.sock")]
 
 
-def test_sidebar_click_callbacks_keep_the_client_identity(monkeypatch):
+def test_sidebar_actions_keep_the_client_identity(monkeypatch):
+    """The sidebar binary runs these commands for its clicks (BOARD-018); each reaches the same controller function
+    the Textual sidebar called, with the clicking client."""
     called = []
-    expanded_calls = []
-    monkeypatch.setattr(tmux_control, "open_popup", lambda *args: called.append(("decision", args)))
-    monkeypatch.setattr(tmux_control, "open_cr_popup", lambda *args: called.append(("cr", args)))
-    monkeypatch.setattr(tmux_control, "switch_seat", lambda *args: called.append(("seat", args)))
-    monkeypatch.setattr(tmux_control, "switch_project", lambda *args: called.append(("project", args)))
-
-    def read_expanded():
-        expanded_calls.append(("read",))
-        return {"Falcon2"}
-
-    def toggle_expanded(project_id):
-        expanded_calls.append(("toggle", project_id))
-        return {"Falcon2", project_id}
-
-    monkeypatch.setattr(tmux_control, "expanded_projects", read_expanded)
-    monkeypatch.setattr(tmux_control, "toggle_expanded_project", toggle_expanded)
-
-    def sidebar(config, *, on_project, on_decision, on_cr, on_seat,
-                expanded_reader, expanded_toggler, mark_ready, visibility_reader, context_reader):
-        assert config == "/tmp/projects.json"
-        assert mark_ready is tmux_control.mark_ready and visibility_reader is tmux_control.board_visible
-        assert context_reader is tmux_control.active_context
-        assert expanded_reader() == {"Falcon2"}
-        assert expanded_toggler("ProjectB") == {"Falcon2", "ProjectB"}
-        on_project("Falcon2", client="/dev/ttys2")
-        on_decision("Falcon2", "D-1", client="/dev/ttys1")
-        on_cr("Falcon2", "open", client="/dev/ttys2")
-        on_seat("Falcon2", 0, client="/dev/ttys1")
-
-    monkeypatch.setattr(tui, "run_sidebar", sidebar)
-    assert cli.main(["--config", "/tmp/projects.json", "sidebar"]) == 0
+    monkeypatch.setattr(tmux_control, "open_popup", lambda *args: called.append(("decision", args)) or {"ok": True})
+    monkeypatch.setattr(tmux_control, "open_cr_popup", lambda *args: called.append(("cr", args)) or {"ok": True})
+    monkeypatch.setattr(tmux_control, "switch_seat", lambda *args: called.append(("seat", args)) or {"ok": True})
+    monkeypatch.setattr(tmux_control, "switch_project", lambda *args: called.append(("project", args)) or {"ok": True})
+    monkeypatch.setattr(tmux_control, "toggle_expanded_project", lambda project_id: called.append(("fold", project_id)) or {"ProjectB"})
+    config = ["--config", "/tmp/projects.json"]
+    assert cli.main([*config, "switch-project", "--project", "Falcon2", "--client", "/dev/ttys2"]) == 0
+    assert cli.main([*config, "open-decision", "--project", "Falcon2", "--client", "/dev/ttys1"]) == 0
+    assert cli.main([*config, "open-cr", "--project", "Falcon2", "--state", "open", "--client", "/dev/ttys2"]) == 0
+    assert cli.main([*config, "switch-seat", "--project", "Falcon2", "--seat", "0", "--client", "/dev/ttys1"]) == 0
+    assert cli.main([*config, "switch-seat", "--project", "Falcon2", "--seat", "1"]) == 0
+    assert cli.main([*config, "toggle-fold", "--project", "ProjectB"]) == 0
     assert called == [
         ("project", ("/tmp/projects.json", "Falcon2", "/dev/ttys2")),
-        ("decision", ("/tmp/projects.json", "Falcon2", "D-1", "/dev/ttys1")),
+        ("decision", ("/tmp/projects.json", "Falcon2", None, "/dev/ttys1")),
         ("cr", ("/tmp/projects.json", "Falcon2", "open", "/dev/ttys2")),
         ("seat", ("/tmp/projects.json", "Falcon2", 0, "/dev/ttys1")),
+        ("seat", ("/tmp/projects.json", "Falcon2", 1, None)),
+        ("fold", "ProjectB"),
     ]
-    assert expanded_calls == [("read",), ("toggle", "ProjectB")]
+
+
+def test_a_failed_sidebar_action_reports_its_message_and_fails(monkeypatch, capsys):
+    monkeypatch.setattr(tmux_control, "switch_seat", lambda *args: {
+        "ok": False, "data": None, "error": {"code": "seat_not_running", "message": "The seat has no Worker session."}})
+    assert cli.main(["switch-seat", "--project", "Falcon2", "--seat", "0"]) == 1
+    assert capsys.readouterr().err == "project-board: The seat has no Worker session.\n"
+
+    def broken(project_id):
+        raise ValueError("Project Board's expanded project option is invalid")
+
+    monkeypatch.setattr(tmux_control, "toggle_expanded_project", broken)
+    assert cli.main(["toggle-fold", "--project", "Falcon2"]) == 1
+    assert "expanded project option is invalid" in capsys.readouterr().err
+
+
+def test_the_command_without_a_name_prints_usage_instead_of_a_sidebar(capsys):
+    assert cli.main([]) == 2
+    assert "usage: project-board" in capsys.readouterr().err
 
 
 def test_popup_commands_run_the_matching_tui(monkeypatch):

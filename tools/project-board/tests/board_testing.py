@@ -1,10 +1,18 @@
 """Fixture builders for the project-board tests (a unique module name; conftest names collide across tools)."""
 import asyncio
+import fcntl
 import json
 import os
+import pty
+import struct
+import subprocess
 import sys
+import termios
+import time
 import uuid
 from pathlib import Path
+
+import pytest
 
 TOOL = Path(__file__).resolve().parents[1]
 if str(TOOL) not in sys.path:
@@ -12,6 +20,41 @@ if str(TOOL) not in sys.path:
 SHARED_TESTS = str(TOOL.parent / "tests")  # tmux_test_server, shared by every tool's tests
 if SHARED_TESTS not in sys.path:
     sys.path.insert(0, SHARED_TESTS)
+
+def tmux(name, *args):
+    """Run one tmux command on the test server `-L name`; its output without the final newline."""
+    return subprocess.run(["tmux", "-L", name, *args], capture_output=True, text=True,
+                          check=True, timeout=5).stdout.strip()
+
+
+def attached(name, session):
+    """A tmux client attached to `session` through a pty: (process, pty master, client name)."""
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    client = os.ttyname(slave)
+    process = subprocess.Popen(["tmux", "-L", name, "attach-session", "-t", session],
+                               stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
+                               env={**os.environ, "TERM": "xterm-256color"})
+    os.close(slave)
+    for _ in range(50):
+        if client in tmux(name, "list-clients", "-F", "#{client_name}").splitlines():
+            return process, master, client
+        time.sleep(0.05)
+    process.terminate()
+    os.close(master)
+    pytest.fail("tmux client did not attach")
+
+
+def release_clients(clients):
+    for process, master, _client in clients:
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+        os.close(master)
+
 
 def click_socket(request):
     """A unique path for a Board click socket, removed when the test ends however it ends.
@@ -115,44 +158,3 @@ async def wait_until(pilot, condition, timeout=10.0):
     while not condition():
         assert asyncio.get_running_loop().time() < deadline, "timed out waiting for the screen state"
         await pilot.pause(0.01)
-
-
-class Frames:
-    """Every frame Textual displays for an app, as the compositor's screen text followed by its styles.
-
-    A frame is one `App._display` call outside `batch_update` (a headless run never reaches the terminal,
-    so this is the point where a real terminal would be written)."""
-
-    def __init__(self, app):
-        self.app, self.shown, self.recording = app, [], False
-        display = app._display
-
-        def record(screen, renderable):
-            if self.recording and renderable is not None and not app._batch_count:
-                self.shown.append(self.screen())
-            return display(screen, renderable)
-        app._display = record
-
-    def screen(self) -> str:
-        strips = self.app.screen._compositor.render_strips()
-        return ("\n".join(strip.text.rstrip() for strip in strips) + "\n--- styles\n"
-                + "\n".join("|".join(str(segment.style) for segment in strip) for strip in strips))
-
-    async def during(self, pilot, action):
-        """Run `action` and let the screen settle. Returns the screen before, the frames drawn, the screen after."""
-        await pilot.pause(0.05)
-        before = self.screen()
-        self.shown.clear()
-        self.recording = True
-        await action()
-        await pilot.pause(0.2)
-        self.recording = False
-        return before, list(self.shown), self.screen()
-
-    async def assert_only_before_or_after(self, pilot, action, what):
-        """The contract of BOARD-017: no frame between the screen before the change and the one after it."""
-        before, frames, after = await self.during(pilot, action)
-        assert before != after, f"{what}: the change is not visible"
-        assert frames, f"{what}: nothing was drawn"
-        for frame in frames:
-            assert frame in (before, after), f"{what}: an intermediate frame was drawn:\n{frame}\n--- before:\n{before}\n--- after:\n{after}"

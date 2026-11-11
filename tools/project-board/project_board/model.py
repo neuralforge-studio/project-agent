@@ -338,6 +338,22 @@ def snapshot(config=None, now: dt.datetime | None = None, project_id: str | None
 _releases: dict[str, dict] = {}
 
 
+def _project_liveness(project, view) -> dict:
+    try:
+        return api.project_liveness(project, view=view)
+    except SessionError as error:
+        return {} if error.code == "state_not_found" else {"error": _error(error)}
+
+
+def liveness_of(project) -> dict:
+    """The `liveness` entry of one project, read from the tmux server for that project alone."""
+    try:
+        view = api.server_view([project])
+    except SessionError:
+        view = None
+    return _project_liveness(project, view)
+
+
 def liveness(config=None) -> dict:
     """Per project, `alive`, `stopped` or `unknown` for each bound slot.
 
@@ -351,10 +367,7 @@ def liveness(config=None) -> dict:
     except SessionError:
         view = None                                     # each project then reads (and fails) for itself
     for project in projects:
-        try:
-            out[project.project_id] = api.project_liveness(project, view=view)
-        except SessionError as error:
-            out[project.project_id] = {} if error.code == "state_not_found" else {"error": _error(error)}
+        out[project.project_id] = _project_liveness(project, view)
         try:
             _releases[project.project_id] = api.project_pending_releases(project, view=view)
         except SessionError:
