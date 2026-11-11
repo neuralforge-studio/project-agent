@@ -111,6 +111,7 @@ def test_uninstall_prints_the_commands_that_undo_the_server_state_and_they_work(
         server.run(*shlex.split(line)[1:])
     assert "display-message mine" in server.key("prefix", "B")
     assert MOUSE_DEFAULT in server.key("root", "MouseDown1Pane")
+    assert server.key("root", "MouseDragEnd1Border") == ""
     assert not server.run("show-hooks", "-g").count("[project-agent]")
     assert "[agent-session]" not in server.run("show-hooks", "-g", "pane-died")
     assert "project-agent" not in server.run("show-hooks", "-gw")

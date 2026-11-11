@@ -662,6 +662,88 @@ def test_resize_hook_records_only_board_pane_width():
         tmux_test_server.release(name)
 
 
+TMUX_INTEGRATION = Path(__file__).resolve().parents[3] / "integrations/tmux"
+
+
+def _drag_border(master, column, target, row=5):
+    """Press the border at 0-based `column`, move it to `target`, release (what the terminal sends tmux)."""
+    def send(sequence):
+        os.write(master, sequence.encode())
+        time.sleep(0.15)
+    send(f"\x1b[<0;{column + 1};{row}M")
+    step = 1 if target > column else -1
+    for x in range(column + step, target + step, step):
+        send(f"\x1b[<32;{x + 1};{row}M")
+    send(f"\x1b[<0;{target + 1};{row}m")
+
+
+def _resize_client(name, client, window, columns):
+    process, master, _tty = client
+    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, columns, 0, 0))
+    os.killpg(process.pid, signal.SIGWINCH)
+    for _ in range(100):
+        if _tmux(name, "display-message", "-p", "-t", window, "#{window_width}") == str(columns):
+            return
+        time.sleep(0.05)
+    pytest.fail("tmux did not take the new client size")
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_width_dragged_with_the_mouse_is_saved_after_the_terminal_was_resized(monkeypatch):
+    """BOARD-019: after-resize-pane runs once when a drag starts, so the drag's own width was lost."""
+    name = tmux_test_server.claim("board-test")
+    clients = []
+    try:
+        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "one", "sleep", "60")
+        _tmux(name, "new-session", "-d", "-s", "two", "sleep", "60")
+        first = _tmux(name, "display-message", "-p", "-t", "one", "#{window_id}")
+        second = _tmux(name, "display-message", "-p", "-t", "two", "#{window_id}")
+        clients.append(_attached(name, "two"))
+        socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
+        _tmux(name, "set-option", "-g", "mouse", "on")
+        _tmux(name, "set-option", "-g", "@project_agent_tmux_dir", str(TMUX_INTEGRATION))
+        _tmux(name, "run-shell", f"{TMUX_INTEGRATION}/project_agent_bind.sh --socket {socket_path}")
+        monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
+        assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+        board = _tmux(name, "show-options", "-wqv", "-t", second, "@project_board_pane")
+        # The Board pane keeps its marks the way tmux_control makes them; the hook reads the mark.
+        saved = lambda: _tmux(name, "show-options", "-gqv", "@project_board_width")  # noqa: E731
+        width = lambda window, pane: _pane_geometry(name, window)[pane][0]  # noqa: E731
+
+        # (a) a drag of the Board's border
+        start = width(second, board)
+        assert saved() == str(start)
+        _drag_border(clients[0][1], start, start + 12)
+        assert width(second, board) == start + 12
+        assert saved() == str(start + 12)
+
+        # (b) the terminal gets narrower and wider again, then the border is dragged again
+        _resize_client(name, clients[0], second, 50)
+        _resize_client(name, clients[0], second, 80)
+        assert saved() == str(start + 12), "a terminal resize is not a width the user chose"
+        current = width(second, board)
+        _drag_border(clients[0][1], current, 33)
+        assert width(second, board) == 33
+        assert saved() == "33"
+
+        # (c) the saved width is the width of the Board in another window
+        _tmux(name, "switch-client", "-c", clients[0][2], "-t", "one")
+        assert tmux_control.reconcile(socket=socket_path)["ok"] is True
+        other = _tmux(name, "show-options", "-wqv", "-t", first, "@project_board_pane")
+        assert width(first, other) == 33
+        assert saved() == "33"
+    finally:
+        for process, master, _client in clients:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+            os.close(master)
+        tmux_test_server.release(name)
+
+
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_managed_pane_death_removes_board_and_restore_state(monkeypatch):
     name = tmux_test_server.claim("board-test")
