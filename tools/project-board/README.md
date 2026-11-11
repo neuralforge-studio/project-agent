@@ -112,7 +112,8 @@ drag any other border to resize it. These are tmux's default mouse bindings and 
 pane, where you moved it and as large as you made it. Press `Esc` or the close button to
 close it; that closes only that pane.
 The CR popup is the same window whichever of `O`, `T` or `I` opened it: it lists the Open,
-Todo, In-Progress and Done CRs as groups headed `Open ▼` (click to fold or unfold), starts
+Todo, In-Progress and Done CRs as groups headed `Open ▼` (click to fold or unfold; Done opens
+folded as `Done ▶`, and stays as you leave it while you move between projects), starts
 at the group that was pressed, and shows `Open N, Todo N, In-Progress N, Done N` at the top.
 Click a CR row or focus it with Tab and press Enter to read its full Markdown, done CRs
 included. Select another row to change CRs. In both popups the `◀ project ▶` buttons at the
