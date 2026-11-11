@@ -12,9 +12,12 @@ owns this layout together with this file; a test builds a bundle and imports thr
     4 bytes  little-endian size of the header
     header   marshal of (MAGIC_NUMBER, sys.version, {module name: (offset, size, is_package, origin)})
     code     marshal of each module's code object; `offset` counts from the end of the header
-`origin` is the module's source file: an absolute path (standard library) or a path relative to `tools/`
-(the tools' own modules). The code objects name the same files. Only the header is read at the start; a
-module's code is read when the module is imported.
+`origin` is the module's source file: an absolute path (standard library, installed packages) or a path relative
+to `tools/` (the tools' own modules). The code objects name the same files. A module of an installed package
+(textual, for the TUI commands of project-board) has a fifth item, the absolute path of the package's metadata
+directory (`*.dist-info`): the module is served only while that directory exists, so a package that was
+upgraded or removed after the release was made is imported from where it is installed.
+Only the header is read at the start; a module's code is read when the module is imported.
 
 Anything that does not fit (no file, another interpreter build, `-O`, a damaged header) leaves the ordinary
 import in charge; a module that is not in the bundle is found where it always was.
@@ -59,6 +62,15 @@ def _project_agent_bundle(tools_directory):
         os.close(descriptor)
         return
     start = 4 + size
+    present = {}
+
+    def valid(entry):
+        # one `stat` per metadata directory, however many modules it guards
+        if len(entry) < 5:
+            return True
+        if entry[4] not in present:
+            present[entry[4]] = os.path.isdir(entry[4])
+        return present[entry[4]]
 
     class BundleFinder:
         project_agent_bundle = True
@@ -70,7 +82,7 @@ def _project_agent_bundle(tools_directory):
 
         def find_spec(self, name, path=None, target=None):
             entry = modules.get(name)
-            if entry is None:
+            if entry is None or not valid(entry):
                 return None
             origin = self._origin(name)
             spec = ModuleSpec(name, self, origin=origin, is_package=entry[2])

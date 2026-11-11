@@ -61,13 +61,14 @@ def test_sidebar_click_callbacks_keep_the_client_identity(monkeypatch):
 
 def test_popup_commands_run_the_matching_tui(monkeypatch):
     called = []
-    monkeypatch.setattr(tui, "run_popup", lambda *args: called.append(("decision", args)))
-    monkeypatch.setattr(tui, "run_cr_popup", lambda *args: called.append(("cr", args)))
+    monkeypatch.setattr(tui, "run_popup", lambda *args, **kwargs: called.append(("decision", args, kwargs)))
+    monkeypatch.setattr(tui, "run_cr_popup", lambda *args, **kwargs: called.append(("cr", args, kwargs)))
     assert cli.main(["--config", "/tmp/projects.json", "popup", "--project", "Falcon2",
                      "--decision", "D-1"]) == 0
     assert cli.main(["--config", "/tmp/projects.json", "cr", "--project", "Falcon2",
                      "--state", "todo"]) == 0
+    link = {"mark_link": tmux_control.mark_window_ready}          # how a window tells clicks it listens (BOARD-025)
     assert called == [
-        ("decision", ("/tmp/projects.json", "Falcon2", "D-1")),
-        ("cr", ("/tmp/projects.json", "Falcon2", "todo")),
+        ("decision", ("/tmp/projects.json", "Falcon2", "D-1"), link),
+        ("cr", ("/tmp/projects.json", "Falcon2", "todo"), link),
     ]

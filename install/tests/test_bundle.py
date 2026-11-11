@@ -11,6 +11,7 @@ import shutil
 from pathlib import Path
 import subprocess
 import sys
+import sysconfig
 
 import pytest
 
@@ -74,8 +75,8 @@ def test_the_bundle_holds_every_module_of_the_three_tools(release):
 
 def test_modules_come_from_the_bundle_and_keep_their_files(release):
     directory, home = release
-    program = ("import sys, json, agent_session.cli, project_item.cli, colorsys\n"
-               "for module in (json, agent_session.cli, project_item.cli, colorsys):\n"
+    program = ("import sys, json, agent_session.cli, project_item.cli, wave\n"
+               "for module in (json, agent_session.cli, project_item.cli, wave):\n"
                "    print(type(module.__spec__.loader).__name__, module.__file__)\n"
                "print(agent_session.cli.main.__code__.co_filename)\n")
     result = python_in(directory, home, program)
@@ -145,6 +146,46 @@ def test_optimized_interpreters_do_not_use_the_bundle(release):
     result = subprocess.run([sys.executable, "-S", "-O", "-c", "import sys\n" + program, str(directory / "tools")],
                             capture_output=True, text=True, timeout=60, env=home.env)
     assert result.stdout.split() == ["SourceFileLoader"], result.stderr
+
+
+# BOARD-025: the two windows of project-board (`cr`, `popup`) start `python -S` too and import textual and what it
+# imports from the bundle. Those modules belong to an installed package: each entry names the package's metadata
+# directory and is served only while that directory exists.
+SITE = "sys.path.append(%r)\n" % sysconfig.get_paths()["purelib"]
+TUI = "import project_board.tui, textual.app\nprint(*(type(m.__spec__.loader).__name__ for m in (textual.app, project_board.tui)))\n"
+
+
+def test_the_bundle_holds_the_modules_of_the_tui_with_the_metadata_directory_that_guards_each(release):
+    directory, _ = release
+    modules = index_of(bundle_path(directory))[2]
+    for name in ("textual.app", "textual.widgets", "rich.markup", "markdown_it", "project_board.tui"):
+        assert name in modules, name
+    guarded = {name: entry[4] for name, entry in modules.items() if len(entry) > 4}
+    assert guarded["textual.app"].endswith(".dist-info") and os.path.isdir(guarded["textual.app"])
+    assert guarded["rich.markup"].endswith(".dist-info")
+    assert not any(name.split(".")[0] in ("agent_session", "project_item", "project_board", "json") for name in guarded)
+
+
+def test_the_tui_imports_textual_from_the_bundle(release):
+    directory, home = release
+    result = python_in(directory, home, "import sys\n" + SITE + TUI)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["BundleFinder", "BundleFinder"]
+
+
+def test_a_package_that_was_upgraded_or_removed_is_imported_from_where_it_is_installed(release, tmp_path):
+    """The guard of every installed module names a directory that does not exist (the package changed after the
+    release was made): the bundle serves none of them."""
+    directory, home = release
+    tools = damaged(directory, tmp_path, lambda magic, version, modules: (
+        magic, version, {name: (*entry[:4], "/nonexistent.dist-info") if len(entry) > 4 else entry
+                         for name, entry in modules.items()}))
+    boot = (directory / "tools" / "bundle_boot.py").read_text()
+    result = subprocess.run([sys.executable, "-S", "-c", "import sys\n" + boot + "\n_project_agent_bundle(sys.argv[1])\n" + SITE
+                             + "import textual.app\nprint(type(textual.app.__spec__.loader).__name__)\n", str(tools)],
+                            capture_output=True, text=True, timeout=60, env=home.env)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["SourceFileLoader"]
 
 
 # PERF-004: the processes of the generated commands (registration hook, `mark_process`, controller) start as

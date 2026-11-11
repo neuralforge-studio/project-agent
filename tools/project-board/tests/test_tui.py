@@ -11,7 +11,7 @@ import threading
 import pytest
 
 from board_testing import Board, Frames, WORKER_IDS, click_socket, leader, session, wait_until
-from project_board import model
+from project_board import model, window_link
 from project_board.tui import CRPopupApp, CSVScreen, PopupApp, SidebarApp, _seat_text, format_elapsed
 from textual.widgets import Button, DataTable, Markdown, Static, TextArea
 
@@ -1969,3 +1969,167 @@ def test_decision_window_learns_the_other_projects_after_it_is_up(tmp_path):
             assert [item for item in app.eligible] and app.eligible == {"Alpha", "Gamma"}
 
     asyncio.run(check())
+
+
+# BOARD-025: a click on an item while a Board window is open tells that window what to show.
+def _tell(link, **request):
+    return asyncio.to_thread(window_link.send, link, request)
+
+
+def test_an_open_cr_window_shows_another_project_and_state_when_told(tmp_path, request):
+    board = _three_projects(tmp_path)
+    link, marked = click_socket(request), []
+    app = CRPopupApp(str(board.config), "Alpha", "open", load=False, link=link, mark_link=marked.append)
+
+    async def check():
+        async with app.run_test(size=(90, 30)) as pilot:
+            await wait_until(pilot, lambda: marked == [link])             # it says it listens once it does
+            assert str(app.query_one("#cr-title", Static).content) == "읽는 중…"      # before the first read
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Alpha", True))
+            assert app.project_id == "Alpha" and app.selected_id == "AAA-001"
+            assert await _tell(link, kind="cr", project="Gamma", state="in-progress") == {"ok": True}
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and app.selected_id == "GGG-001")
+            assert str(app.query_one("#cr-project", Static).content) == "Gamma"
+            assert str(app.query_one("#cr-title", Static).content) == "Open 0, Todo 0, In-Progress 1, Done 1"
+            assert app.is_running
+            assert [str(row.label)[2:9] for row in app.query(".list-item")] == ["GGG-001", "GGG-002"]
+
+    asyncio.run(check())
+    assert not os.path.exists(link)                                        # the socket goes with the window
+
+
+def test_an_open_cr_window_shows_that_it_is_reading_until_the_list_arrives(tmp_path, request, monkeypatch):
+    board = _three_projects(tmp_path)
+    link, release = click_socket(request), threading.Event()
+    app = CRPopupApp(str(board.config), "Alpha", "open", link=link)
+    read = model.popup_snapshot
+
+    def slow(*args):
+        release.wait(10)
+        return read(*args)
+
+    async def check():
+        async with app.run_test(size=(90, 30)) as pilot:
+            await wait_until(pilot, lambda: os.path.exists(link))
+            await _tell(link, kind="cr", project="Beta", state="todo")
+            await wait_until(pilot, lambda: app.project_id == "Beta")
+            await wait_until(pilot, lambda: str(app.query_one("#cr-title", Static).content) == "읽는 중…")
+            release.set()
+            await wait_until(pilot, lambda: app.selected_id == "BBB-001")
+
+    monkeypatch.setattr(model, "popup_snapshot", slow)
+    try:
+        asyncio.run(check())
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("request_", [
+    {"kind": "decision", "project": "Alpha", "decision": None},       # a decision request to a CR window
+    {"kind": "cr", "project": "Alpha", "state": "done"},              # not a state a click names
+    {"kind": "cr", "project": 3, "state": "open"},
+])
+def test_a_cr_window_refuses_what_it_cannot_show(tmp_path, request, request_):
+    board = _three_projects(tmp_path)
+    link = click_socket(request)
+    app = CRPopupApp(str(board.config), "Alpha", "open", load=False, link=link)
+
+    async def check():
+        async with app.run_test(size=(90, 30)) as pilot:
+            await wait_until(pilot, lambda: os.path.exists(link))
+            result = await _tell(link, **request_)
+            assert result["ok"] is False and result["code"] == "invalid"
+            assert app.project_id == "Alpha"
+
+    asyncio.run(check())
+
+
+def test_an_open_decision_window_shows_another_project_when_told_and_keeps_the_draft(tmp_path, request):
+    board = _three_projects(tmp_path)
+    link, marked = click_socket(request), []
+    app = PopupApp(str(board.config), "Alpha", load=False, link=link, mark_link=marked.append)
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await wait_until(pilot, lambda: marked == [link])
+            await app.apply_snapshot(model.snapshot(board.config))
+            editor = app.query_one("#answer", TextArea)
+            editor.text = "alpha 초안"
+            assert await _tell(link, kind="decision", project="Gamma", decision=None) == {"ok": True}
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and "D-20261107-03" in app.decisions)
+            assert str(app.query_one("#popup-project", Static).content) == "Gamma" and editor.text == ""
+            assert app.decide_id == "D-20261107-03"
+            await _tell(link, kind="decision", project="Alpha", decision="D-20261107-01")
+            await wait_until(pilot, lambda: app.project_id == "Alpha" and "D-20261107-01" in app.decisions)
+            assert editor.text == "alpha 초안"                           # an unsent answer stays with its decision
+            assert app.is_running
+
+    asyncio.run(check())
+    assert not os.path.exists(link)
+
+
+def test_a_decision_window_does_not_change_what_it_shows_while_an_answer_is_sent(tmp_path, request):
+    board = _three_projects(tmp_path)
+    link, release, sent = click_socket(request), threading.Event(), []
+
+    def sender(*args):
+        sent.append(args)
+        release.wait(10)
+        return {"ok": False, "error": {"message": "x"}}
+    app = PopupApp(str(board.config), "Alpha", load=False, link=link, answer_sender=sender)
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await wait_until(pilot, lambda: os.path.exists(link))
+            await app.apply_snapshot(model.snapshot(board.config))
+            app.query_one("#answer", TextArea).text = "A"
+            app.action_send()
+            await wait_until(pilot, lambda: bool(sent))
+            result = await _tell(link, kind="decision", project="Gamma", decision=None)
+            assert result["ok"] is False and result["code"] == "busy"
+            assert app.project_id == "Alpha"
+            release.set()
+
+    try:
+        asyncio.run(check())
+    finally:
+        release.set()
+    assert sent == [(str(board.config), "Alpha", "D-20261107-01", "A")]
+
+
+def test_a_decision_window_refuses_what_it_cannot_show(tmp_path, request):
+    board = _three_projects(tmp_path)
+    link = click_socket(request)
+    app = PopupApp(str(board.config), "Alpha", load=False, link=link)
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await wait_until(pilot, lambda: os.path.exists(link))
+            for bad in ({"kind": "cr", "project": "Alpha", "state": "open"},
+                        {"kind": "decision", "project": "Alpha", "decision": 7}):
+                result = await _tell(link, **bad)
+                assert result["ok"] is False and result["code"] == "invalid"
+            assert app.project_id == "Alpha"
+
+    asyncio.run(check())
+
+
+def test_a_cr_window_reads_the_other_projects_once_it_is_up_so_the_next_item_is_found_read(tmp_path, monkeypatch):
+    board = _three_projects(tmp_path)
+    calls, read = [], model.popup_snapshot
+
+    def record(config, project_id=None, done=False, only=None):
+        calls.append((project_id, done, only))
+        return read(config, project_id, done, only)
+    monkeypatch.setattr(model, "popup_snapshot", record)
+    app = CRPopupApp(str(board.config), "Alpha", "open")
+
+    async def check():
+        async with app.run_test(size=(90, 30)) as pilot:
+            await wait_until(pilot, lambda: len(calls) == 3)
+            await pilot.pause(0.2)
+            assert app.project_id == "Alpha" and app.selected_id == "AAA-001"
+
+    asyncio.run(check())
+    # the window's own project first (the list it shows), then the others once each; only the CRs, with done
+    assert calls == [("Alpha", True, model.ONLY_CRS), ("Beta", True, model.ONLY_CRS), ("Gamma", True, model.ONLY_CRS)]

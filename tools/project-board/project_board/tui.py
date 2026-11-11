@@ -25,7 +25,7 @@ from textual.errors import NoWidget
 from textual.screen import Screen
 from textual.widgets import Button, DataTable, Markdown, Static, TextArea
 
-from . import answer, model
+from . import answer, model, window_link
 
 SnapshotReader = Callable[[str | None], dict]
 LivenessReader = Callable[[str | None], dict]
@@ -36,6 +36,7 @@ ProjectCallback = Callable[..., object]
 ExpandedReader = Callable[[], set[str]]
 ExpandedToggler = Callable[[str], set[str]]
 ContextReader = Callable[[], "dict | None"]
+LinkMarker = Callable[[str], bool]
 
 CSV_FENCE = re.compile(r"(?ms)^\s*```csv\s*\n(.*?)^\s*```\s*$")
 
@@ -783,6 +784,10 @@ class CSVScreen(Screen):
         self.app.pop_screen()
 
 
+READING = "읽는 중…"
+READING_DECISIONS = "결정 항목을 읽는 중…"
+READING_PROJECTS = "◀▶로 이동할 다른 project의 결정 항목을 읽는 중…"
+READING_CR = "CR 목록을 읽는 중…"
 CR_GROUPS = (("open", "Open"), ("todo", "Todo"), ("in-progress", "In-Progress"), ("done", "Done"))
 
 
@@ -811,9 +816,15 @@ class CRPopupApp(App):
     """ + NAV_CSS + LIST_ITEM_CSS
     BINDINGS = [("escape", "quit", "닫기")]
 
-    def __init__(self, config: str | None, project_id: str, state: str, *, load: bool = True):
+    def __init__(self, config: str | None, project_id: str, state: str, *, load: bool = True,
+                 link: str | None = None, mark_link: LinkMarker | None = None):
         super().__init__()
         self.config = config
+        self.link = link                          # the socket on which a click tells this window what to show next
+        self.mark_link = mark_link
+        self._server: asyncio.AbstractServer | None = None
+        self._tasks: set[asyncio.Task] = set()
+        self._warmed = False                      # the other projects' CRs were read ahead (`_warm`)
         self.project_id = project_id
         self.focus_state: str | None = state      # the group to show first; only the first load uses it
         self.load = load
@@ -832,33 +843,89 @@ class CRPopupApp(App):
             yield Button("◀", id="cr-prev", disabled=True)
             yield Static(self.project_id, id="cr-project")
             yield Button("▶", id="cr-next", disabled=True)
-        yield Static("", id="cr-title")
+        yield Static(READING, id="cr-title")
         with Horizontal(id="cr-main"):
             yield VerticalScroll(id="cr-items")
-            yield VerticalScroll(id="cr-detail")
+            with VerticalScroll(id="cr-detail"):
+                yield Static(READING_CR)
         with Horizontal(id="cr-actions"):
             yield Button("목록", id="cr-show-list")
             yield Button("닫기", id="cr-close")
 
     def on_mount(self) -> None:
+        if self.link:
+            self._queue(self._listen())
         if self.load:
-            asyncio.create_task(self.refresh_items())
+            self._queue(self.refresh_items())
 
     def on_unmount(self) -> None:
         self._closing = True
         self._load_generation += 1
         if self._title_task is not None:
             self._title_task.cancel()
+        window_link.stop(self._server, self.link)
+
+    def _queue(self, coroutine) -> None:
+        task = asyncio.create_task(coroutine)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _listen(self) -> None:
+        """Take what a click asks this window to show (BOARD-025), then say so: a click that finds no
+        listener, or one that fails, starts the window again."""
+        try:
+            self._server = await window_link.serve(self.link, self._on_request)
+        except OSError:
+            pass
+        if self.mark_link is not None:
+            await asyncio.to_thread(self.mark_link, self.link)
+
+    def _on_request(self, request: dict) -> dict:
+        project, state = request.get("project"), request.get("state")
+        if (request.get("kind") != "cr" or not isinstance(project, str) or state not in model.CR_STATES
+                or not isinstance(request.get("client", ""), str)):
+            return window_link.reply(False, "invalid", "CR 창이 받을 수 없는 요청입니다.")
+        if self._closing:
+            return window_link.reply(False, "closing", "CR 창이 닫히는 중입니다.")
+        self.project_id = project
+        self.focus_state = state
+        self.selected_id = None
+        self.query_one("#cr-project", Static).update(project)
+        self._queue(self._reload())
+        return window_link.reply()
+
+    async def _reload(self) -> None:
+        """Show that the list is being read, then read it."""
+        self.query_one("#cr-title", Static).update(READING)
+        await self._show_message(READING_CR)
+        await self.refresh_items()
 
     async def refresh_items(self) -> None:
         project_id = self.project_id
         try:
-            data = await asyncio.to_thread(model.popup_snapshot, self.config, project_id, True)
+            data = await asyncio.to_thread(model.popup_snapshot, self.config, project_id, True, model.ONLY_CRS)
             if not self._closing and project_id == self.project_id:
                 await self.apply_snapshot(data)
+                if not self._warmed:
+                    self._warmed = True
+                    self._queue(self._warm(data.get("order") or []))
         except Exception as error:
             if not self._closing:
                 await self._show_message(f"CR 목록을 읽을 수 없습니다: {error}")
+
+    async def _warm(self, order: list[str]) -> None:
+        """Read the other projects' CRs once the window is up, one project at a time. The files are kept by `model`
+        (`_cached`), so a click that shows another project later finds them read: reading a project of dozens of CRs
+        cold is seconds on a loaded host, and the new item must appear at once (BOARD-025)."""
+        for project_id in order:
+            if self._closing:
+                return
+            if project_id == self.project_id:
+                continue
+            try:
+                await asyncio.to_thread(model.popup_snapshot, self.config, project_id, True, model.ONLY_CRS)
+            except Exception:
+                pass                                  # the window reads it again, and reports it, when it is shown
 
     def _groups(self) -> dict[str, list[dict]]:
         crs = (self.project or {}).get("crs") or {}
@@ -1053,13 +1120,18 @@ class PopupApp(App):
         navigation_reader: SnapshotReader | None = None,
         answer_sender: Callable[[str | None, str, str, str], dict] | None = None,
         load: bool = True,
+        link: str | None = None,
+        mark_link: LinkMarker | None = None,
     ):
         super().__init__()
         self.config = config
+        self.link = link                                # the socket on which a click tells this window what to show next
+        self.mark_link = mark_link
+        self._server: asyncio.AbstractServer | None = None
         self.project_id = project_id
         self.decide_id = decide_id
         self.snapshot_reader = snapshot_reader or self._read_project
-        self.navigation_reader = navigation_reader or model.snapshot
+        self.navigation_reader = navigation_reader or model.decision_snapshot
         self.answer_sender = answer_sender or answer.submit_answer
         self.load = load
         self.project: dict | None = None
@@ -1077,17 +1149,18 @@ class PopupApp(App):
         self._tasks: set[asyncio.Task] = set()
 
     def _read_project(self, config: str | None) -> dict:
-        return model.popup_snapshot(config, self.project_id)
+        return model.popup_snapshot(config, self.project_id, only=model.ONLY_DECISIONS)
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="nav-row"):
             yield Button("◀", id="popup-prev", disabled=True)
             yield Static(self.project_id, id="popup-project")
             yield Button("▶", id="popup-next", disabled=True)
-        yield Static("결정 항목을 읽는 중…", id="popup-heading")
+        yield Static(READING_DECISIONS, id="popup-heading")
         with Horizontal(id="popup-main"):
             yield VerticalScroll(id="decision-list")
-            yield VerticalScroll(id="decision-detail")
+            with VerticalScroll(id="decision-detail"):
+                yield Static(READING)
         yield Static("답변", id="answer-label")
         yield AnswerArea(id="answer", placeholder="결정 내용을 읽고 답변을 입력하세요.")
         with Horizontal(id="popup-actions"):
@@ -1097,6 +1170,8 @@ class PopupApp(App):
         yield Static("", id="popup-message")
 
     def on_mount(self) -> None:
+        if self.link:
+            self._queue(self._listen())
         if self.load:
             self._queue(self.refresh_decisions())
 
@@ -1104,6 +1179,46 @@ class PopupApp(App):
         self._closing = True
         for task in self._tasks:
             task.cancel()
+        window_link.stop(self._server, self.link)
+
+    async def _listen(self) -> None:
+        """Take what a click asks this window to show (BOARD-025), then say so: a click that finds no
+        listener, or one that fails, starts the window again."""
+        try:
+            self._server = await window_link.serve(self.link, self._on_request)
+        except OSError:
+            pass
+        if self.mark_link is not None:
+            await asyncio.to_thread(self.mark_link, self.link)
+
+    def _on_request(self, request: dict) -> dict:
+        """Show another project's decisions (`decision` None: its first), as ◀▶ does. An unsent answer stays with its decision."""
+        project, decision = request.get("project"), request.get("decision")
+        if (request.get("kind") != "decision" or not isinstance(project, str)
+                or not (decision is None or isinstance(decision, str)) or not isinstance(request.get("client", ""), str)):
+            return window_link.reply(False, "invalid", "결정 창이 받을 수 없는 요청입니다.")
+        if self._closing:
+            return window_link.reply(False, "closing", "결정 창이 닫히는 중입니다.")
+        if self._sending:
+            return window_link.reply(False, "busy", "답변을 전송하는 중입니다. 끝난 뒤 다시 여십시오.")
+        if isinstance(self.screen, CSVScreen):
+            self.pop_screen()
+        self._keep_draft()
+        self.project_id = project
+        self.decide_id = decision
+        self.decisions = {}
+        self._switched = True
+        self.query_one("#popup-project", Static).update(project)
+        self._queue(self._reload())
+        return window_link.reply()
+
+    async def _reload(self) -> None:
+        """Show that the decisions are being read, then read them."""
+        self.query_one("#popup-heading", Static).update(READING_DECISIONS)
+        detail = self.query_one("#decision-detail", VerticalScroll)
+        await detail.remove_children()
+        await detail.mount(Static(READING))
+        await self.refresh_decisions()
 
     def _queue(self, coroutine) -> None:
         if self._closing:
@@ -1168,15 +1283,20 @@ class PopupApp(App):
                                  self.order, self.project_id, self.eligible)
 
     async def _load_navigation(self) -> None:
-        """The other projects are read after the window is up: reading every project is slow on a cold start."""
+        """The other projects are read after the window is up: reading every project is slow on a cold start.
+        Until it is done ◀▶ are off, and the window says why."""
+        message = self.query_one("#popup-message", Static)
+        message.update(READING_PROJECTS)
         try:
             data = await asyncio.to_thread(self.navigation_reader, self.config)
             if not self._closing:
                 self._learn_projects({"projects": data.get("projects", []), "order": self.order})
+                if str(message.content) == READING_PROJECTS:
+                    message.update("")
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            self.query_one("#popup-message", Static).update(f"project 이동 목록을 읽을 수 없습니다: {error}")
+            message.update(f"project 이동 목록을 읽을 수 없습니다: {error}")
 
     def _row_label(self, item: dict) -> Content:
         return _item_label(item["id"] == self.decide_id, item["id"], _decision_status(item), item["title"])
@@ -1383,11 +1503,12 @@ def run_sidebar(
     return 0
 
 
-def run_cr_popup(config: str | None, project_id: str, state: str) -> int:
-    CRPopupApp(config, project_id, state).run()
+def run_cr_popup(config: str | None, project_id: str, state: str, mark_link: LinkMarker | None = None) -> int:
+    CRPopupApp(config, project_id, state, link=os.environ.get(window_link.SOCKET_ENV), mark_link=mark_link).run()
     return 0
 
 
-def run_popup(config: str | None, project_id: str, decide_id: str | None = None) -> int:
-    PopupApp(config, project_id, decide_id).run()
+def run_popup(config: str | None, project_id: str, decide_id: str | None = None,
+              mark_link: LinkMarker | None = None) -> int:
+    PopupApp(config, project_id, decide_id, link=os.environ.get(window_link.SOCKET_ENV), mark_link=mark_link).run()
     return 0
