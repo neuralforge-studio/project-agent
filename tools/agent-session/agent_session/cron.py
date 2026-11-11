@@ -116,12 +116,16 @@ def next_run(schedule, after):
 
 # ---------------------------------------------------------------- crontab text
 
+_BEGIN = ("# >>> project-agent: ", " >>>")
+_END = ("# <<< project-agent: ", " <<<")
+
+
 def _begin(name):
-    return f"# >>> project-agent: {name} >>>"
+    return f"{_BEGIN[0]}{name}{_BEGIN[1]}"
 
 
 def _end(name):
-    return f"# <<< project-agent: {name} <<<"
+    return f"{_END[0]}{name}{_END[1]}"
 
 
 _JOB_COMMENT = re.compile(r"^# job ([a-z][a-z0-9-]*):[ ]?(.*)$")
@@ -180,6 +184,30 @@ def split(text, name):
     if len(starts) != 1 or len(stops) != 1 or stops[0] < starts[0]:
         raise _invalid("The project's crontab section is incomplete or repeated. Fix it by hand.", project=name)
     return lines[:starts[0]], _parse_section(name, lines[starts[0] + 1:stops[0]]), lines[stops[0] + 1:]
+
+
+def sections(text):
+    """Every project section in the crontab `text`, in order: `{"project", "begin", "end", "jobs": [{id, command}],
+    "error"}`; `begin` and `end` are the section's marker lines.
+
+    A section that `split` refuses (incomplete, repeated, a line that is not a job) is listed with its
+    error code and no jobs, so a reader can tell a person to fix it by hand."""
+    found = []
+    for line in _lines(text):
+        if line.startswith(_BEGIN[0]) and line.endswith(_BEGIN[1]) and len(line) > len("".join(_BEGIN)):
+            name = line[len(_BEGIN[0]):-len(_BEGIN[1])]
+            if name not in found:
+                found.append(name)
+    result = []
+    for name in found:
+        try:
+            jobs = split(text, name)[1] or []
+            result.append({"project": name, "begin": _begin(name), "end": _end(name), "error": None,
+                           "jobs": [{"id": job["id"], "command": job["command"]} for job in jobs]})
+        except SessionError as error:
+            result.append({"project": name, "begin": _begin(name), "end": _end(name), "error": error.code,
+                           "jobs": []})
+    return result
 
 
 def render(name, jobs):
@@ -263,6 +291,11 @@ class Crontab:
                 self.write(new)
                 return updated, True
         raise SessionError("crontab_busy", "The crontab kept changing; nothing was written.", 4)
+
+
+def crontab_sections(crontab=None):
+    """`sections` of the user's crontab (`crontab -l`). A crontab that cannot be read is an error, never an empty list."""
+    return sections((crontab or crontab_for()).read())
 
 
 def crontab_for(lock_path=None):

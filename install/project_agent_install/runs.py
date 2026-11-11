@@ -15,7 +15,8 @@ import sys
 from .layout import InstallerError
 
 
-def _api(source_root):
+def api_of(source_root):
+    """The product's `agent_session.api` (the only module of agent-session the installer imports)."""
     path = str(Path(source_root) / "tools" / "agent-session")
     if path not in sys.path:
         sys.path.insert(0, path)
@@ -38,7 +39,7 @@ def run_slots(env, source_root, socket=None):
     """Every slot with a recorded session, for every registered project:
     list of {project, slot, run_id, state}; state is alive, unknown, stopped, or "suspended" (a
     shutdown record names it). Raises InstallerError when a project cannot be judged."""
-    api = _api(source_root)
+    api = api_of(source_root)
     config_path = os.environ.get("AGENT_SESSION_CONFIG") or None
     socket = socket or os.environ.get("AGENT_SESSION_SOCKET") or None
     result = []

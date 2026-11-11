@@ -352,3 +352,38 @@ def test_an_agent_that_is_not_a_member_of_the_project_may_not_use_cron(projects,
         code, out = run(config, *arguments, capsys=capsys)
         assert code != 0 and out["error"]["code"] == "caller_unbound"
     assert not crontab_file.exists()
+
+
+# The sections as a reader outside agent-session (the installer) sees them: `api.crontab_sections`
+
+def test_the_sections_of_the_crontab_are_listed_with_their_jobs_and_marker_lines(projects, crontab, crontab_file):
+    from agent_session import api
+    _, found = projects
+    crontab_file.write_text(USER)
+    assert api.crontab_sections() == []
+    add_job(found["alpha"], crontab, command="/r/1/bin/agent-session check --project alpha")
+    cron.add(found["alpha"], crontab, "report", "0 8 * * *", "d", "/r/1/bin/report 50%")
+    add_job(found["beta"], crontab)
+    assert api.crontab_sections() == [
+        {"project": "alpha", "begin": "# >>> project-agent: alpha >>>", "end": "# <<< project-agent: alpha <<<",
+         "error": None, "jobs": [{"id": "check", "command": "/r/1/bin/agent-session check --project alpha"},
+                                 {"id": "report", "command": "/r/1/bin/report 50%"}]},
+        {"project": "beta", "begin": "# >>> project-agent: beta >>>", "end": "# <<< project-agent: beta <<<",
+         "error": None, "jobs": [{"id": "check", "command": "/bin/true"}]}]
+
+
+def test_a_damaged_section_is_listed_with_its_error_and_the_others_stay_readable(crontab_file):
+    from agent_session import api
+    crontab_file.write_text("# >>> project-agent: bad >>>\n" + USER + "# >>> project-agent: ok >>>\n"
+                            "# job check: d\n* * * * * /x\n# <<< project-agent: ok <<<\n")
+    listed = api.crontab_sections()
+    assert [(item["project"], item["error"]) for item in listed] == [("bad", "cron_invalid"), ("ok", None)]
+    assert listed[0]["jobs"] == [] and listed[1]["jobs"] == [{"id": "check", "command": "/x"}]
+
+
+def test_sections_of_a_crontab_that_cannot_be_read_are_an_error_not_an_empty_list(crontab_file, monkeypatch):
+    from agent_session import api
+    monkeypatch.setenv("FAKE_CRONTAB_FAIL", "read")
+    with pytest.raises(SessionError) as error:
+        api.crontab_sections()
+    assert error.value.code == "crontab_unreadable"
