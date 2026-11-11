@@ -387,3 +387,46 @@ def test_sections_of_a_crontab_that_cannot_be_read_are_an_error_not_an_empty_lis
     with pytest.raises(SessionError) as error:
         api.crontab_sections()
     assert error.value.code == "crontab_unreadable"
+
+
+# SESSION-016: the check job reaches the Leader's tmux under cron's PATH
+
+def fake_tmux_dir(tmp_path, name, body="exit 0"):
+    directory = tmp_path / name
+    directory.mkdir()
+    (directory / "tmux").write_text(f"#!/bin/sh\n{body}\n")
+    (directory / "tmux").chmod(0o755)
+    return directory
+
+
+def test_the_check_line_puts_the_tmux_of_the_leader_start_ahead_of_crons_path(projects, tmp_path, monkeypatch):
+    _, found = projects
+    directory = fake_tmux_dir(tmp_path, "in house")                      # a space: the line must still be one word
+    monkeypatch.setenv("PATH", f"{directory}:/usr/bin:/bin")
+    command = cron.check_command(found["alpha"], socket_path="/tmp/tmux-1/default")
+    assert command.startswith(f"env 'PATH={directory}:/usr/bin:/bin' ")
+    assert " --socket-path /tmp/tmux-1/default check --project alpha >/dev/null 2>&1" in command
+
+
+def test_the_check_line_has_no_env_without_a_tmux_or_when_cron_finds_it_anyway(projects, tmp_path, monkeypatch):
+    _, found = projects
+    monkeypatch.setenv("PATH", str(tmp_path))                            # no tmux in it
+    assert cron.check_command(found["alpha"]).startswith(str(Path(cron.__file__).resolve().parents[1] / "bin"))
+    monkeypatch.setattr(cron.shutil, "which", lambda name: "/usr/bin/tmux")
+    assert not cron.check_command(found["alpha"]).startswith("env ")
+
+
+def test_ensure_replaces_an_old_command_and_a_hand_written_path_prefix_and_keeps_the_users_jobs(
+        projects, crontab, tmp_path, monkeypatch):
+    _, found = projects
+    # In front of the PATH of the test, which holds the `crontab` shim: the real crontab is never reached.
+    monkeypatch.setenv("PATH", f"{fake_tmux_dir(tmp_path, 'mine')}:{os.environ['PATH']}")
+    cron.add(found["alpha"], crontab, "report", "0 9 * * *", "보고", "PATH=/keep/me:/bin /home/user/report.sh")
+    cron.add(found["alpha"], crontab, "check", "13,43 * * * *", "점검",
+             "PATH=/primehome/tools/Inhouse/tmux/latest/bin:/usr/bin:/bin /old/release/agent-session check")
+    assert cron.ensure_check(found["alpha"], crontab) == {"check": "updated"}
+    jobs = {job["id"]: job["command"] for job in cron.listing(found["alpha"], crontab)["jobs"]}
+    assert jobs["check"] == cron.check_command(found["alpha"]) and "/old/release" not in jobs["check"]
+    assert jobs["check"].startswith(f"env PATH={tmp_path / 'mine'}:/usr/bin:/bin ")
+    assert jobs["report"] == "PATH=/keep/me:/bin /home/user/report.sh"
+    assert cron.ensure_check(found["alpha"], crontab) == {"check": "present"}

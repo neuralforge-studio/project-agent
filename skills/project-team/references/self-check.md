@@ -24,4 +24,4 @@ Leader와 Worker는 점검을 스스로 등록하지 않습니다. 반복 점검
 
 `[agent-session watch]` 메시지는 Worker가 정체했다는 알림입니다. Worker를 강제로 끊었다는 뜻이 아닙니다. 제출 뒤 review를 기다리는 중일 수 있으니 review 대기 CR을 먼저 확인하고, 필요하면 Worker 화면과 CR을 보고 feedback을 보내거나 restart·stop을 판단합니다.
 
-점검 작업이 도는지는 `agent-session cron ls --project <이 project>`의 `last_run`(`ok`, `result`)으로 봅니다. `ok`가 false이면 점검이 실패한 것이니 운영자에게 알립니다.
+점검 작업이 도는지는 `agent-session cron ls --project <이 project>`의 `last_run`(`ok`, `result`, 실패 이유 `code`)으로 봅니다. `ok`가 false이면 점검이 실패한 것이니 `code`와 함께 운영자에게 알립니다.

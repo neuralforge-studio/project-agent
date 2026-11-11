@@ -316,8 +316,11 @@ class Watch(Fleet):
         failed = "error" in outcome or any(item.get("status") == "error" for item in targets)
         sent = sum(1 for item in targets for action in item.get("actions", []) if action.get("ok"))
         result = "error" if failed else "notified" if sent else "idle"
-        cron.record_run(project, cron.CHECK_ID, not failed, result)
-        return {"ok": not failed, "result": result}
+        reasons = [outcome.get("error")] + [item.get("error") for item in targets if item.get("status") == "error"]
+        code = next((reason["code"] for reason in reasons if isinstance(reason, dict) and reason.get("code")), None) \
+            if failed else None                         # the first failure names the run (SESSION-016)
+        cron.record_run(project, cron.CHECK_ID, not failed, result, code=code)
+        return {"ok": not failed, "result": result, **({"code": code} if code else {})}
 
     @staticmethod
     def _target(manager, slot, job_id, threshold, tell_leader, findings=None):
