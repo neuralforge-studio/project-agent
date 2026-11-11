@@ -1187,6 +1187,36 @@ def test_the_board_window_is_moved_and_resized_with_the_mouse_by_tmux_defaults(f
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+@pytest.mark.parametrize("focus", ["window", "behind"])
+def test_moving_or_resizing_the_board_window_never_changes_the_saved_sidebar_width(floating, focus):
+    """BOARD-020 with BOARD-019: the integration saves a width when a border drag ends on a pane whose
+    `@project_board_managed` is 1. The Board window is not that pane, so dragging its borders (move, resize)
+    leaves `@project_board_width` alone, whichever pane has the focus; dragging the sidebar's border still saves."""
+    server = floating()
+    server.tmux("source-file", str(Path(__file__).resolve().parents[3] / "integrations/tmux/project-agent.conf"))
+    assert tmux_control.toggle_sidebar(socket=server.socket, client=server.client)["ok"] is True
+    sidebar = server.tmux("show-options", "-wqv", "-t", server.window, tmux_control.WINDOW_PANE)
+    assert server.open()["ok"] is True
+    ((pane, (left, top, width, height)),) = server.floating().items()
+    assert server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_MARK) == ""
+    if focus == "behind":
+        server.tmux("select-pane", "-t", server.work)
+    saved = server.tmux("show-options", "-gqv", tmux_control.WIDTH)
+
+    server.drag((left + 5, top), (left + 11, top + 2))                                           # move
+    server.drag((left + 6 + width + 1, top + 2 + height + 1), (left + 6 + width - 5, top + 2 + height - 2))   # resize
+    time.sleep(0.5)
+    assert server.floating()[pane] == (left + 6, top + 2, width - 6, height - 3)
+    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == saved
+
+    border = int(server.tmux("display-message", "-p", "-t", sidebar, "#{pane_width}"))
+    row = top + 2 + height + 2                                                                   # below the window
+    server.drag((border + 1, row), (border + 4, row))                                            # the sidebar's own border
+    time.sleep(0.5)
+    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == str(border + 3) != saved
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_while_the_board_window_is_open_the_pane_behind_it_takes_input_and_the_sidebar_stays(floating):
     """BOARD-020 contract 3: a popup took every key of its client. The window stays on top when the pane behind
     it is selected, the pane behind gets what the client types, and the sidebar is not disturbed."""
