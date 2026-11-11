@@ -833,6 +833,7 @@ class CRPopupApp(App):
         self.collapsed: set[str] = set()
         self._targets: dict[int, str | None] = {}
         self._load_generation = 0
+        self._title_task: asyncio.Task | None = None
         self._closing = False
 
     def compose(self) -> ComposeResult:
@@ -855,11 +856,13 @@ class CRPopupApp(App):
     def on_unmount(self) -> None:
         self._closing = True
         self._load_generation += 1
+        if self._title_task is not None:
+            self._title_task.cancel()
 
     async def refresh_items(self) -> None:
         project_id = self.project_id
         try:
-            data = await asyncio.to_thread(model.cr_popup_snapshot, self.config, project_id)
+            data = await asyncio.to_thread(model.popup_snapshot, self.config, project_id, True)
             if not self._closing and project_id == self.project_id:
                 await self.apply_snapshot(data)
         except Exception as error:
@@ -872,7 +875,7 @@ class CRPopupApp(App):
 
     async def apply_snapshot(self, data: dict) -> None:
         projects = data.get("projects", [])
-        self.order = [item["id"] for item in projects]
+        self.order = data.get("order") or [item["id"] for item in projects]
         self.project = next((item for item in projects if item["id"] == self.project_id), None)
         self.query_one("#cr-project", Static).update(self.project_id)
         self._targets = _set_nav(self.query_one("#cr-prev", Button), self.query_one("#cr-next", Button),
@@ -908,12 +911,30 @@ class CRPopupApp(App):
             await self._show_cr()
         else:
             await self._show_message("CR이 없습니다.")
+        if self._title_task is not None:
+            self._title_task.cancel()
+        self._title_task = asyncio.create_task(self._fill_done_titles(self.items))
         focus, self.focus_state = self.focus_state, None
         if focus is not None:
             self.call_after_refresh(listing.scroll_to_widget, self.query_one(f"#cr-group-{focus}"),
                                     animate=False, top=True)
         else:
             listing.scroll_home(animate=False)
+
+    async def _fill_done_titles(self, items: list[dict]) -> None:
+        """The done list shows file-name titles at once; the real titles replace them one file at a time."""
+        for index, item in enumerate(items):
+            if item["state"] != "done":
+                continue
+            try:
+                title = await asyncio.to_thread(model.done_title, item)
+            except (OSError, UnicodeError):
+                continue
+            if self._closing or items is not self.items:
+                return
+            if title:
+                item["title"] = title
+                self.query_one(f"#cr-item-{index}", Button).label = self._row_label(item)
 
     def _group_label(self, state: str) -> str:
         label = dict(CR_GROUPS)[state]
@@ -1026,6 +1047,7 @@ class PopupApp(App):
         decide_id: str | None = None,
         *,
         snapshot_reader: SnapshotReader | None = None,
+        navigation_reader: SnapshotReader | None = None,
         answer_sender: Callable[[str | None, str, str, str], dict] | None = None,
         load: bool = True,
     ):
@@ -1034,6 +1056,7 @@ class PopupApp(App):
         self.project_id = project_id
         self.decide_id = decide_id
         self.snapshot_reader = snapshot_reader or self._read_project
+        self.navigation_reader = navigation_reader or model.snapshot
         self.answer_sender = answer_sender or answer.submit_answer
         self.load = load
         self.project: dict | None = None
@@ -1044,12 +1067,14 @@ class PopupApp(App):
         self._drafts: dict[tuple[str, str], str] = {}   # (project ID, decision ID) -> unsent answer
         self._last_selected: dict[str, str] = {}        # project ID -> the decision shown when it was left
         self.order: list[str] = []
+        self.eligible: set[str] = set()                 # projects whose decisions the popup shows (the sidebar's `D`)
+        self._navigation_loaded = False
         self._targets: dict[int, str | None] = {}
         self._switched = False                          # a project change waits for its decisions to load
         self._tasks: set[asyncio.Task] = set()
 
     def _read_project(self, config: str | None) -> dict:
-        return model.snapshot(config)
+        return model.popup_snapshot(config, self.project_id)
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="nav-row"):
@@ -1099,12 +1124,11 @@ class PopupApp(App):
     async def apply_snapshot(self, data: dict) -> None:
         projects = data.get("projects", [])
         self.project = next((item for item in projects if item["id"] == self.project_id), None)
-        self.order = [item["id"] for item in projects]
         self.query_one("#popup-project", Static).update(self.project_id)
-        # the projects the sidebar's `D` opens: the ones with a decision that is not complete
-        self._targets = _set_nav(self.query_one("#popup-prev", Button), self.query_one("#popup-next", Button),
-                                 self.order, self.project_id,
-                                 {item["id"] for item in projects if _visible_decisions(item)})
+        self._learn_projects(data)
+        if not self._navigation_loaded and len(projects) < 2:
+            self._navigation_loaded = True
+            self._queue(self._load_navigation())
         if self.project is None:
             self.query_one("#popup-heading", Static).update(f"{self.project_id}: project를 찾을 수 없습니다.")
             return
@@ -1126,6 +1150,30 @@ class PopupApp(App):
         else:
             await listing.mount(Static("결정 항목이 없습니다."))
         await self._show_decision()
+
+    def _learn_projects(self, data: dict) -> None:
+        """Take the project order and which projects have decisions to show from a snapshot. A snapshot of one
+        project only updates that project; the others are learned by `_load_navigation`."""
+        projects = data.get("projects", [])
+        self.order = data.get("order") or [item["id"] for item in projects] or self.order
+        for item in projects:
+            # the projects the sidebar's `D` opens: the ones with a decision that is not complete
+            (self.eligible.add if _visible_decisions(item) else self.eligible.discard)(item["id"])
+        if len(projects) > 1:
+            self._navigation_loaded = True
+        self._targets = _set_nav(self.query_one("#popup-prev", Button), self.query_one("#popup-next", Button),
+                                 self.order, self.project_id, self.eligible)
+
+    async def _load_navigation(self) -> None:
+        """The other projects are read after the window is up: reading every project is slow on a cold start."""
+        try:
+            data = await asyncio.to_thread(self.navigation_reader, self.config)
+            if not self._closing:
+                self._learn_projects({"projects": data.get("projects", []), "order": self.order})
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self.query_one("#popup-message", Static).update(f"project 이동 목록을 읽을 수 없습니다: {error}")
 
     def _row_label(self, item: dict) -> Content:
         return _item_label(item["id"] == self.decide_id, item["id"], _decision_status(item), item["title"])

@@ -186,8 +186,23 @@ def cr_items(root: Path) -> dict:
 
 
 def done_items(root: Path) -> list[dict]:
-    """done CRs, for the CR popup only. The sidebar snapshot does not carry them."""
-    return [dict(item) for item in _cached(("cr", str(root), "done"), _listing(CR, root, "done"), _cr_item("done"))]
+    """done CRs, for the CR popup only. The sidebar snapshot does not carry them.
+
+    A project keeps hundreds of done CRs and opening a file costs a round trip on a shared disk, so the list
+    does not open them: the title is first the file name without the ID, and `done_title` reads the real one."""
+    items = []
+    for path in _listing(CR, root, "done"):
+        cr_id = file_id(CR, path) or path.stem
+        title = path.stem.removeprefix(cr_id).strip("-_ ").replace("-", " ").replace("_", " ")
+        items.append({"id": cr_id, "title": title or cr_id, "state": "done", "path": str(path)})
+    return items
+
+
+def done_title(item: dict) -> str | None:
+    """The title of a listed done CR, from the first line of its file."""
+    path = Path(item["path"])
+    with path.open(encoding="utf-8") as handle:
+        return CR.fmt.parse_text(handle.readline(), path, "done").title
 
 
 def read_cr_markdown(project: dict, item: dict, state: str) -> str:
@@ -337,16 +352,21 @@ def snapshot(config=None, now: dt.datetime | None = None, project_id: str | None
             "projects": [project_view(project, now) for project in projects], "error": None}
 
 
-def cr_popup_snapshot(config=None, done_project: str | None = None) -> dict:
-    """`snapshot(config)` for every project, plus the done CRs of `done_project` under `crs["done"]`.
+def popup_snapshot(config=None, project_id: str | None = None, done: bool = False) -> dict:
+    """What a popup shows: `project_id` only (as `snapshot` reads it) and `order`, the registered project IDs
+    in registration order, for ◀▶. With `done`, the project's done CRs are under `crs["done"]`.
 
     A done list that cannot be read is reported as an `errors` entry (source `cr`), like the other lists.
     """
-    data = snapshot(config)
+    data = snapshot(config, project_id=project_id)
+    try:
+        data["order"] = [project.project_id for project in _registry(config)]
+    except SessionError:
+        data["order"] = []
     for project in data["projects"]:
-        if project["id"] == done_project and project["cr_root"] is not None:
+        if done and project["cr_root"] is not None and project["crs"] is not None:
             try:
-                (project["crs"] or {}).setdefault("done", done_items(Path(project["cr_root"])))
+                project["crs"]["done"] = done_items(Path(project["cr_root"]))
             except Exception as error:
                 project["errors"].append({"source": "cr", **_error(error)})
     return data

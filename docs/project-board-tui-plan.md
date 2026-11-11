@@ -86,7 +86,7 @@ SSH seat의 Worker window는 Leader 호스트의 SSH 표시 창입니다. 이 �
 `O/T/I`가 `0`, `-`, `!`이면 클릭해도 popup이나 오류 알림을 열지 않습니다. `D`는 표시 상태가 `완료`가 아닌 결정이 없거나 `-`, `!`일 때만 열지 않습니다.
 
 CR popup은 왼쪽 목록에서 선택한 항목의 전체 Markdown 원본을 오른쪽에 표시합니다.
-목록은 Open, Todo, In-Progress, Done 네 묶음입니다(BOARD-021). 묶음 제목은 `Open ▼` 모양이고 눌러 접고(`▶`) 펼칩니다. 처음에는 모두 펼쳐져 있고, `O/T/I` 중 누른 상태의 묶음이 목록 맨 위에 오도록 scroll하며 그 묶음의 첫 CR을 선택합니다(`cr --state`가 이 묶음을 정합니다. 묶음이 비면 첫 CR). 비어 있는 묶음은 `없음` 한 줄입니다. 맨 위에는 `Open {N}, Todo {N}, In-Progress {N}, Done {N}`을 표시하며 묶음을 접어도 바뀌지 않습니다. done CR도 같은 방식으로 본문을 읽습니다. deferred는 보이지 않습니다. done 목록은 popup이 읽을 때만 읽고(`model.cr_popup_snapshot`) sidebar의 snapshot과 개수에는 없습니다.
+목록은 Open, Todo, In-Progress, Done 네 묶음입니다(BOARD-021). 묶음 제목은 `Open ▼` 모양이고 눌러 접고(`▶`) 펼칩니다. 처음에는 모두 펼쳐져 있고, `O/T/I` 중 누른 상태의 묶음이 목록 맨 위에 오도록 scroll하며 그 묶음의 첫 CR을 선택합니다(`cr --state`가 이 묶음을 정합니다. 묶음이 비면 첫 CR). 비어 있는 묶음은 `없음` 한 줄입니다. 맨 위에는 `Open {N}, Todo {N}, In-Progress {N}, Done {N}`을 표시하며 묶음을 접어도 바뀌지 않습니다. done CR도 같은 방식으로 본문을 읽습니다. deferred는 보이지 않습니다. done 목록은 popup이 읽을 때만 읽고(`model.popup_snapshot(done=True)`) sidebar의 snapshot과 개수에는 없습니다. done CR은 project마다 수백 개이고 파일 하나를 여는 데 공유 disk에서 10 ms 넘게 걸리므로(balvian 1471개는 19초) 목록은 파일을 열지 않고 파일 이름의 제목으로 먼저 그린 뒤, 진짜 제목(첫 줄)을 한 파일씩 읽어 바꿉니다(`model.done_items`·`done_title`).
 마우스로 CR 행을 클릭하거나 키보드로 행에 초점을 맞춘 뒤 Enter를 눌러 선택합니다.
 CR·결정 popup의 너비가 70 column 미만이면 `목록` 버튼으로 목록과 본문을 전환합니다.
 70 column 이상이면 목록과 본문을 함께 표시하고 `목록` 버튼을 숨깁니다.
@@ -97,7 +97,7 @@ CR·결정 popup의 너비가 70 column 미만이면 `목록` 버튼으로 목�
 
 #### Project 이동 (BOARD-021)
 
-CR popup과 결정 popup은 맨 위에 `◀ project ▶`를 둡니다. 누르면 같은 창이 이전·다음 project의 내용으로 바뀝니다(창을 닫지 않습니다). 순서는 sidebar의 등록 순서이고 끝에서는 반대쪽 끝으로 돕니다. ◀▶ 위에 mouse를 올리면 갈 project를 tooltip(`이전 project: NAME`·`다음 project: NAME`)으로 보입니다. CR popup은 등록된 모든 project를 돕습니다. 결정 popup은 sidebar `D`가 켜지는 기준(`tui._visible_decisions`가 있음)인 project만 돕습니다. 갈 project가 없으면(하나뿐) 버튼은 꺼집니다. 결정 popup의 답변 초안은 (project, 결정 ID)마다 남아, project를 옮겼다 돌아와도 유지되고 돌아오면 떠날 때 보던 결정이 열립니다. 답변 전송 중에는 옮기지 않습니다. `project-board cr`·`popup`의 인자는 바뀌지 않습니다. `cr`의 `--state`는 처음 scroll할 묶음입니다.
+CR popup과 결정 popup은 맨 위에 `◀ project ▶`를 둡니다. 누르면 같은 창이 이전·다음 project의 내용으로 바뀝니다(창을 닫지 않습니다). 순서는 sidebar의 등록 순서이고 끝에서는 반대쪽 끝으로 돕니다. ◀▶ 위에 mouse를 올리면 갈 project를 tooltip(`이전 project: NAME`·`다음 project: NAME`)으로 보입니다. CR popup은 등록된 모든 project를 돕습니다. 결정 popup은 sidebar `D`가 켜지는 기준(`tui._visible_decisions`가 있음)인 project만 돕습니다. 갈 project가 없으면(하나뿐) 버튼은 꺼집니다. popup은 연 project 하나만 먼저 읽어 바로 열고(`model.popup_snapshot`, 등록 순서 `order` 포함), 결정 popup이 갈 project를 정하는 데 필요한 다른 project의 결정은 창이 뜬 뒤에 읽습니다(전체를 읽으면 실제 등록 10개에서 5초 안팎). 그동안 결정 창의 ◀▶는 꺼져 있습니다. 결정 popup의 답변 초안은 (project, 결정 ID)마다 남아, project를 옮겼다 돌아와도 유지되고 돌아오면 떠날 때 보던 결정이 열립니다. 답변 전송 중에는 옮기지 않습니다. `project-board cr`·`popup`의 인자는 바뀌지 않습니다. `cr`의 `--state`는 처음 scroll할 묶음입니다.
 
 #### Popup 목록 행과 선택 표시 (BOARD-007)
 
