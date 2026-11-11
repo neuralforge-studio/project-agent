@@ -99,8 +99,14 @@ connection to the remote Worker's tmux screen. The Board uses the same local win
 as for a local seat. A seat with a CR but no Worker session shows `대기` and ignores clicks,
 as does an empty seat. The decision popup uses 90% of that client's
 terminal; the CR popup uses 80%. Press `Esc` or the popup's close button to close it.
-In the CR popup, click a CR row or focus it with Tab and press Enter to read its full
-Markdown. Select another row to change CRs. In either popup, `목록` is shown only below
+The CR popup is the same window whichever of `O`, `T` or `I` opened it: it lists the Open,
+Todo, In-Progress and Done CRs as groups headed `Open ▼` (click to fold or unfold), starts
+at the group that was pressed, and shows `Open N, Todo N, In-Progress N, Done N` at the top.
+Click a CR row or focus it with Tab and press Enter to read its full Markdown, done CRs
+included. Select another row to change CRs. In both popups the `◀ project ▶` buttons at the
+top move the same window to the previous or next project (registration order, wrapping; the
+tooltip names the target). The CR popup visits every project; the decision popup visits only
+projects the sidebar's `D` can open, and keeps unsent answers per decision. In either popup, `목록` is shown only below
 70 columns. Use it to switch between the list and the selected item. Wider popups show
 both panes and hide the button. After a popup grows and shrinks again, it shows the selected
 item's body. If a listed CR file moves, is deleted, or cannot be read, the
