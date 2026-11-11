@@ -15,7 +15,7 @@ import shlex
 import threading
 import time
 
-from . import jobs, launch_artifacts, process
+from . import jobs, process
 from .config import RemoteSeat, load_registry
 from .errors import SessionError
 from .providers.claude import transcript_files
@@ -47,7 +47,6 @@ def resume_text(slot, forced, resumed=(), failed=(), lost=False):
     elif forced:
         text += (" shutdown이 제한 시간 안에 쉬지 않아 CLI를 강제 종료했습니다. 그때 실행 중이던 명령은 "
                  "중간에 끊겨 결과가 없으니 다시 확인하십시오.")
-    text += "\n" + launch_artifacts.self_check_text("Leader" if slot == "leader" else "Worker", resumed=True).rstrip()
     if slot == "leader":
         text += "\n재개한 Worker: " + (", ".join(resumed) or "없음")
         text += "\n재개하지 못한 대상: " + (", ".join(failed) or "없음")

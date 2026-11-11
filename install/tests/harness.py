@@ -17,6 +17,7 @@ import tempfile
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools" / "tests"))  # tmux_test_server, shared by every tool's tests
+import fake_crontab  # noqa: E402
 import tmux_test_server  # noqa: E402
 # PROJECT_AGENT_INSTALLER points the tests at another copy of the installer (to show that a test fails on an
 # older one); by default it is the checkout's.
@@ -245,6 +246,10 @@ class Runs:
         self.interpreter.write_text('#!/bin/sh\n[ "$1" = -S ] && shift\nexec "%s" "$@"\n' % os.path.abspath(sys.executable))
         self.interpreter.chmod(0o755)
         home.env["TMUX_TMPDIR"] = str(self.socket_dir)          # even a missing option cannot reach the user's server
+        # A Leader's start keeps the project's check job in the user's crontab; here that crontab is a file outside
+        # HOME (tools/tests/fake_crontab.py), so no run touches the real one.
+        self.crontab = self.socket_dir / "crontab.txt"
+        home.env.update(fake_crontab.install(self.socket_dir / "bin", self.crontab))
         tmux_test_server.watch_path(self.socket)
         self.tmux("new-session", "-d", "-s", "harness", "sleep", "86400")
 

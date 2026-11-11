@@ -450,9 +450,8 @@ def test_resume_reopens_the_same_conversations_leader_first(session_env, monkeyp
     assert all("재개" in item["text"] and "background" in item["text"] for item in sent)
     assert f"seat-0({cr})" in sent[1]["text"] and "강제 종료" not in sent[0]["text"]
     assert "로컬 operator 입력" in sent[0]["text"]
-    # A resumed conversation lost its session cron: each role is told to register its own check again.
-    assert "references/self-check.md" in sent[0]["text"] and "Worker 절" in sent[0]["text"]
-    assert "references/self-check.md" in sent[1]["text"] and "Leader 절" in sent[1]["text"]
+    # The periodic check is the project's crontab job: no resume message asks a conversation to register one.
+    assert all("CronCreate" not in item["text"] and "self-check" not in item["text"] for item in sent)
     names = env.tmux.command("list-windows", "-t", "fixture", "-F", "#{window_name}").splitlines()
     assert not [name for name in names if "-exited-" in name]
     windows_now = {slot: env.tmux.get_current("fixture", slot)["window_id"] for slot in ("leader", "seat-0")}
@@ -815,9 +814,9 @@ def test_concurrent_records_do_not_lose_each_other(session_env):
     assert set(store.read()) == {"leader", "seat-0", "seat-1", "seat-2", "seat-3"}
 
 
-def test_every_resume_message_asks_for_the_session_cron_again():
+def test_no_resume_message_asks_for_a_session_cron():
     for lost in (False, True):
         worker = suspend.resume_text("seat-0", False, lost=lost)
         leader = suspend.resume_text("leader", True, resumed=["seat-0(TOOL-001)"], failed=[], lost=lost)
-        assert "Worker 절" in worker and "Leader 절" not in worker and "session cron이 사라졌" in worker
-        assert "Leader 절" in leader and "CronList" in leader
+        for text in (worker, leader):
+            assert "CronCreate" not in text and "CronList" not in text and "self-check" not in text

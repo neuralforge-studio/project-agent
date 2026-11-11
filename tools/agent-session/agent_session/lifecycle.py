@@ -8,7 +8,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import api, background, ended, git_ops, handoff, hook_started, jobs, launch_artifacts, process, windows, workspace
+from . import api, background, cron, ended, git_ops, handoff, hook_started, jobs, launch_artifacts, process, windows, workspace
+from .check import CheckMixin
 from .config import RemoteSeat, current_project, load_registry, require_base
 from .errors import SessionError
 from .providers import get_provider
@@ -47,7 +48,7 @@ def check_start_arguments(job, prompt_file=None, seat=None):
         raise SessionError("invalid_arguments", "--seat is only valid for a Worker JOB.", 2)
 
 
-class Manager(SuspendMixin, WatchMixin):
+class Manager(SuspendMixin, WatchMixin, CheckMixin):
     def __init__(self, cwd=None, config_path=None, socket_name=None, socket_path=None, timeout=600, project=None):
         self.project = require_base(project) if project is not None else current_project(cwd, config_path)
         self.timeout = timeout
@@ -151,6 +152,8 @@ class Manager(SuspendMixin, WatchMixin):
             raise SessionError("role_denied", f"Only the operator may {operation} the project sessions.")
         if operation == "watch" and actor not in ("operator", "leader"):
             raise SessionError("role_denied", "Only the operator or this project's Leader may watch the project sessions.")
+        if operation == "cron" and actor not in ("operator", "leader"):
+            raise SessionError("role_denied", "Only the operator or this project's Leader may manage the project's cron jobs.")
         if operation == "send_project" and (actor != "leader" or not identity):
             raise SessionError("role_denied", "Only this project's Leader may send to another project.")
         if actor == "leader" or actor.startswith("seat-"):
@@ -414,9 +417,20 @@ class Manager(SuspendMixin, WatchMixin):
         # Before the CLI exists, so that even an immediate exit is seen. A path the hook command cannot carry
         # leaves the hook out (the dead pane then stays until `stop`); a tmux that refuses it is an error.
         self.tmux.install_exit_hook(context["python"], context["library_path"])
+        scheduled = self._ensure_check() if context["target"] == "leader" else None
         context = self.tmux.launch(context["window_id"], context["cwd"], script)
         result = self._wait_ready(context)
-        return {**result, "cleanup": self._sweep_regained(context["target"])}
+        return {**result, "cleanup": self._sweep_regained(context["target"]),
+                **({"cron": scheduled} if scheduled is not None else {})}
+
+    def _ensure_check(self):
+        """The project's check job exists in the crontab (SESSION-015). A Leader start, restart or resume ends
+        here, so nobody has to remember to register it. A crontab that cannot be read or written does not stop
+        the Leader: the result says so and the next start tries again."""
+        try:
+            return cron.ensure_check(self.project, cron.crontab_for(), **self.socket)
+        except SessionError as error:
+            return {"check": "failed", "error": error.as_dict()}
 
     def _sweep_regained(self, target):
         """Sweep under the control lock; a lock that cannot be had leaves the sweep to the next start."""

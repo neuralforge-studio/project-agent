@@ -73,3 +73,10 @@ def test_the_run_modules_do_not_import_the_manager_layer(module):
     # depend on the layer that calls it.
     assert module in _imports("lifecycle")
     assert not {"lifecycle", "suspend"} & _imports(module)
+
+
+@pytest.mark.parametrize("module", ["check", "cron"])
+def test_the_check_and_cron_modules_do_not_import_the_manager(module):
+    # SESSION-015: lifecycle inherits CheckMixin and calls cron.ensure_check; neither imports it back.
+    assert module in _imports("lifecycle")
+    assert "lifecycle" not in _imports(module)
