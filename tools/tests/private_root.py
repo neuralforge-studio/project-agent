@@ -14,6 +14,12 @@ starts next prunes the directories of runs that are over:
 - A directory with no readable ``owner`` (made before this rule) cannot be judged by its owner, so
   it is removed only when untouched for ``UNKNOWN_OWNER_AGE`` (24 hours), longer than any run.
 
+The run also gets a HOME of its own (TEST-014), ``<basetemp>-home`` next to the directory pytest uses, so the
+root removes it with everything else. ``Path.home()`` and every child process of the run (xdist workers
+included, which inherit the environment) then resolve ``~`` there, and no test can leave files such as
+``~/.cache/project-item/locks`` in the real HOME or share the lock directory of the real project items. A test
+that needs its own HOME still sets one with ``monkeypatch.setenv``.
+
 Runs that start together prune the same directories: one already removed by another run is pruned,
 not an error. ``_owner`` and ``rmtree(ignore_errors=True)`` already read it that way.
 
@@ -91,11 +97,22 @@ def prune(parent=None, keep=KEEP_ENDED, unknown_age=UNKNOWN_OWNER_AGE, now=None)
     return removed
 
 
-def configure(config, temp=False):
-    """The ``pytest_configure`` of a conftest: prune old roots and give this run a root of its own.
+def home(basetemp):
+    """The HOME of the run whose pytest directory is ``basetemp``."""
+    return f"{basetemp}-home"
 
-    An explicit ``--basetemp`` is kept as given. With ``temp``, ``tempfile`` of the run (and of its
-    xdist workers) also makes its directories inside the root (``m``), for tests that call
+
+def _isolate_home(basetemp):
+    directory = home(basetemp)
+    Path(directory).mkdir(parents=True, exist_ok=True)
+    os.environ["HOME"] = directory
+
+
+def configure(config, temp=False):
+    """The ``pytest_configure`` of a conftest: prune old roots and give this run a root and a HOME of its own.
+
+    An explicit ``--basetemp`` is kept as given (the HOME still goes next to it). With ``temp``,
+    ``tempfile`` of the run (and of its xdist workers) also makes its directories inside the root (``m``), for tests that call
     ``mkdtemp`` themselves and so would leave them behind when pytest is killed.
     """
     if hasattr(config, "workerinput"):
@@ -103,11 +120,13 @@ def configure(config, temp=False):
             _temp_inside(os.environ[ROOT_ENV])
         return
     if config.option.basetemp is not None:
+        _isolate_home(config.option.basetemp)
         return
     prune()
     root = create()
     config.option.basetemp = basetemp(root)
     config.stash[PRIVATE_ROOT] = root
+    _isolate_home(config.option.basetemp)
     if temp:
         os.environ[ROOT_ENV] = root
         _temp_inside(root)
@@ -118,6 +137,8 @@ def finish(session, exitstatus):
     root = session.config.stash.get(PRIVATE_ROOT, None)
     if root and exitstatus == 0:
         shutil.rmtree(root, ignore_errors=True)
+    elif exitstatus == 0 and not hasattr(session.config, "workerinput") and session.config.option.basetemp:
+        shutil.rmtree(home(session.config.option.basetemp), ignore_errors=True)  # next to an explicit --basetemp
 
 
 def _temp_inside(root):
