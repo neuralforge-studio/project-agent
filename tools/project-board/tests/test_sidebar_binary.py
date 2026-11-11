@@ -160,14 +160,15 @@ def _board(tmp_path):
 def test_it_shows_every_project_with_its_counts_and_folds_seats_until_expanded(tmp_path, request):
     pane = Pane(tmp_path, request, _board(tmp_path))
     pane.wait_text("ProjectB")
-    assert pane.lines()[:9] == ["", "Falcon2", " D:2", " O:2   T:1   I:1   ▸", "", "ProjectB", " D:1",
-                                " O:0   T:1   I:0   ▸", ""]
+    lines = pane.lines()
+    assert lines[1].startswith("Falcon2 ") and lines[1].endswith("m")           # the Leader's time (BOARD-023)
+    assert lines[:1] + lines[2:9] == ["", " D:2", " O:2   T:1   I:1   ▸", "", "ProjectB", " D:1", " O:0   T:1   I:0   ▸", ""]
     tmux(pane.name, "set-option", "-s", "@project_board_expanded", json.dumps(["Falcon2"]))
-    pane.wait_text("Leader")           # the next 2-second read shows the fold the tmux option holds
+    pane.wait_text("R 0 CPU-012")      # the next 2-second read shows the fold the tmux option holds
     lines = pane.lines()
     assert lines[3] == " O:2   T:1   I:1   ▾"
-    assert lines[4].startswith("  Leader ") and lines[5].startswith(" R 0 CPU-012 ")
-    assert lines[6] == "   1 -" and lines[7] == "   2 -"
+    assert lines[1].startswith("Falcon2 ") and lines[5] == "   1 -" and lines[6] == "   2 -"      # BOARD-023: the time is on the name row
+    assert lines[4].startswith(" R 0 CPU-012 ") and "Leader" not in pane.screen()
 
 
 def test_an_empty_registry_says_there_is_no_project_only_after_the_first_read(tmp_path, request):
@@ -189,14 +190,14 @@ def test_a_registry_error_is_shown_on_the_first_row(tmp_path, request):
 def test_the_click_socket_answers_with_the_widget_and_runs_the_action_for_the_clicking_client(tmp_path, request):
     pane = Pane(tmp_path, request, _board(tmp_path), launcher="fake")
     tmux(pane.name, "set-option", "-s", "@project_board_expanded", json.dumps(["Falcon2"]))
-    pane.wait_text("Leader")
-    # rows: 0 error, 1 name, 2 D, 3 counts, 4 Leader, 5 seat 0, 6 seat 1 (empty), 7 seat 2 (empty)
+    pane.wait_text("R 0 CPU-012")
+    # rows: 0 error, 1 name, 2 D, 3 counts, 4 seat 0, 5 seat 1 (empty), 6 seat 2 (empty)
     assert pane.send_click(2, 1) == {"ok": True, "data": {"widget": "project-0-name"}, "error": None}
     assert pane.send_click(2, 2)["data"] == {"widget": "project-0-D"}
     assert pane.send_click(2, 3)["data"] == {"widget": "project-0-O"}
     assert pane.send_click(8, 3)["data"] == {"widget": "project-0-T"}
     assert pane.send_click(14, 3)["data"] == {"widget": "project-0-I"}
-    assert pane.send_click(5, 5)["data"] == {"widget": "project-0-seat-0"}
+    assert pane.send_click(5, 4)["data"] == {"widget": "project-0-seat-0"}
     _wait(lambda: len(pane.helper_calls()) == 6, what="the six helper runs")
     calls = sorted(pane.helper_calls())
     client = "/dev/ttys-test"
@@ -213,14 +214,13 @@ def test_the_click_socket_answers_with_the_widget_and_runs_the_action_for_the_cl
 def test_a_click_on_something_that_cannot_act_is_refused_or_ignored_as_before(tmp_path, request):
     pane = Pane(tmp_path, request, _board(tmp_path), launcher="fake")
     tmux(pane.name, "set-option", "-s", "@project_board_expanded", json.dumps(["Falcon2"]))
-    pane.wait_text("Leader")
-    # ProjectB's O has no CR (disabled): ignored with ok; the blank margin row, the Leader row and the first row are not buttons
+    pane.wait_text("R 0 CPU-012")
+    # ProjectB's O has no CR (disabled): ignored with ok; the blank margin row and the first row are not buttons
     other = [n for n, line in enumerate(pane.lines()) if line == "ProjectB"][0]
     assert pane.send_click(2, other + 2)["data"] == {"widget": "project-1-O"}
-    assert pane.send_click(2, 8)["error"]["code"] == "not_clickable"      # the margin row
-    assert pane.send_click(2, 4)["error"]["code"] == "not_clickable"      # the Leader row
+    assert pane.send_click(2, 7)["error"]["code"] == "not_clickable"      # the margin row
     assert pane.send_click(2, 0)["error"]["code"] == "not_clickable"      # the error row
-    assert pane.send_click(5, 6)["data"] == {"widget": "project-0-seat-1"}   # an empty seat: ignored
+    assert pane.send_click(5, 5)["data"] == {"widget": "project-0-seat-1"}   # an empty seat: ignored
     assert pane.send_click(40, 2)["error"]["code"] == "no_widget"
     assert pane.send_click(2, 99)["error"]["code"] == "no_widget"
     time.sleep(0.3)
@@ -266,10 +266,10 @@ def test_folding_shows_at_once_and_is_kept_in_the_shared_tmux_option(tmp_path, r
     pane = Pane(tmp_path, request, _board(tmp_path), launcher=LAUNCHER)
     pane.wait_text("ProjectB")
     assert pane.send_click(19, 3)["data"] == {"widget": "project-0-seats"}
-    pane.wait_text("Leader", timeout=2)
+    pane.wait_text("R 0 CPU-012", timeout=2)
     _wait(lambda: pane.folds() == {"Falcon2"}, what="the shared option")
     assert pane.send_click(19, 3)["data"] == {"widget": "project-0-seats"}
-    pane.wait_gone("Leader", timeout=2)
+    pane.wait_gone("R 0 CPU-012", timeout=2)
     _wait(lambda: pane.folds() == set(), what="the shared option cleared")
 
 
@@ -278,13 +278,13 @@ def test_a_fold_another_pane_wrote_reaches_this_one_at_the_next_read(tmp_path, r
     pane.wait_text("ProjectB")
     tmux(pane.name, "set-option", "-s", "@project_board_expanded", json.dumps(["ProjectB"]))
     pane.wait_text("   0 -", timeout=5)
-    assert "Leader" not in pane.screen()
+    assert "R 0 CPU-012" not in pane.screen()
 
 
 def test_tab_enter_and_the_arrows_work_from_the_keyboard(tmp_path, request):
     pane = Pane(tmp_path, request, _board(tmp_path), size=(25, 7), launcher="fake")
     tmux(pane.name, "set-option", "-s", "@project_board_expanded", json.dumps(["Falcon2"]))
-    pane.wait_text("Leader")
+    pane.wait_text("R 0 CPU-012")
     assert pane.lines()[0] == "" and "ProjectB" not in pane.screen()       # 7 rows hold the first project only
     pane.keys("Tab")                    # name of Falcon2 (not visibly marked), Tab again: D
     pane.keys("Tab", "Enter")
@@ -295,7 +295,7 @@ def test_tab_enter_and_the_arrows_work_from_the_keyboard(tmp_path, request):
     pane.keys("PageDown")
     _wait(lambda: "ProjectB" in pane.screen(), what="the second project after scrolling")
     pane.keys("Home")
-    _wait(lambda: pane.lines()[1] == "Falcon2", what="the top again")
+    _wait(lambda: pane.lines()[1].startswith("Falcon2"), what="the top again")
 
 
 def test_the_pointer_shows_the_hover_background_and_a_tooltip_that_goes_away(tmp_path, request):
@@ -336,6 +336,7 @@ def test_the_window_of_the_pane_is_marked_with_its_project_and_slot(tmp_path, re
     tmux(pane.name, "set-option", "-w", "-t", "main:0", "@agent_session_target", json.dumps("leader"))
     tmux(pane.name, "set-option", "-s", "@project_board_expanded", json.dumps(["Falcon2"]))
     pane.wait_text("▶ Falcon2", timeout=12)       # the managed window is read every 10 seconds
+    assert "Leader" not in pane.screen()
     ansi = pane.ansi().splitlines()
-    leader_row = [line for line in ansi if "Leader" in line][0]
-    assert "48;2;47;109;179" in leader_row.replace(":", ";")     # #2f6db3, the slot's row
+    name_row = [line for line in ansi if "▶ Falcon2" in line][0]
+    assert "48;2;47;109;179" in name_row.replace(":", ";")      # #2f6db3: a Leader window shows on the name row (BOARD-023)

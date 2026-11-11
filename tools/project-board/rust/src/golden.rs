@@ -3,7 +3,8 @@
 //!
 //! Each file holds the scene (the facts, size, fold, active window, hover, focus and scroll) and the screen as
 //! rows of runs `[text, text colour, background, bold]` with a reverse-video run already swapped. A space has no
-//! text colour. A colour channel may differ by 1: Textual blends the text of a disabled button over the background
+//! text colour. The goldens of the scenes that show a Leader time were redrawn for BOARD-023 (no `Leader` row, the time on the name
+//! row): each was accepted only when it equalled the 0.7.1 Textual cells apart from that change. A colour channel may differ by 1: Textual blends the text of a disabled button over the background
 //! with its own rounding.
 use crate::render_cmd::{self, Scene};
 use crate::ui;

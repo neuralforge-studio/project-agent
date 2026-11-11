@@ -132,7 +132,6 @@ pub enum Role {
     /// 0 open, 1 todo, 2 in-progress
     Count(usize),
     Fold,
-    Leader,
     Seat(usize),
     Error(usize),
 }
@@ -274,11 +273,14 @@ fn project_widgets(facts: &Facts, number: usize, project: &Project, out: &mut Ve
     let is_active = facts.active.map_or(false, |a| a.project_id == project.id);
     let slot: Option<&str> = if is_active { facts.active.and_then(|a| a.slot.as_deref()) } else { None };
 
-    let mut name = button(project, number, Role::Name, "name".into(), format!("{}{}", if is_active { "▶ " } else { "" }, project.id), 0);
+    // `{project} {time}`: the time is the Leader's, folded or expanded; no time without a Leader session (BOARD-023).
+    let time = format_elapsed(project.leader.as_ref().and_then(|l| l.elapsed));
+    let label = format!("{}{}{}", if is_active { "▶ " } else { "" }, project.id, time.as_ref().map(|t| format!(" {t}")).unwrap_or_default());
+    let mut name = button(project, number, Role::Name, "name".into(), label, 0);
     name.fill = true;
     name.fg = NAME;
     name.active = is_active;
-    name.tooltip = Some(project.id.clone());
+    name.tooltip = Some(if time.is_some() { format!("{} · Leader session이 게시된 뒤 지난 시간", project.id) } else { project.id.clone() });
     name.action = Some(Action::Project(project.id.clone()));
     out.push(name);
 
@@ -304,13 +306,14 @@ fn project_widgets(facts: &Facts, number: usize, project: &Project, out: &mut Ve
         count.action = Some(Action::Cr(project.id.clone(), state));
         out.push(count);
     }
-    let slot_hidden = slot.is_some() && !expanded;
+    // A Leader window is shown by the name row (BOARD-023); only a seat slot hides behind the fold button.
+    let slot_hidden = slot.map_or(false, |slot| slot.starts_with("seat-")) && !expanded;
     let mut fold = button(project, number, Role::Fold, "seats".into(), (if expanded { "▾" } else { "▸" }).into(), 1);
     let mut tooltip = (if expanded { "좌석 접기" } else { "좌석 펼치기" }).to_string();
     if slot_hidden {
         let slot = slot.unwrap_or("");
         tooltip.push_str(" · 현재 창: ");
-        tooltip.push_str(&if slot == "leader" { "Leader".to_string() } else { slot.replace('-', " ") });
+        tooltip.push_str(&slot.replace('-', " "));
     }
     fold.tooltip = Some(tooltip);
     fold.active = slot_hidden;
@@ -318,19 +321,6 @@ fn project_widgets(facts: &Facts, number: usize, project: &Project, out: &mut Ve
     out.push(fold);
 
     if expanded {
-        if let Some(time) = format_elapsed(project.leader.as_ref().and_then(|l| l.elapsed)) {
-            let label = format!("  Leader {time}");
-            let mut leader = button(project, number, Role::Leader, "leader".into(), label.clone(), 0);
-            leader.button = false;
-            leader.enabled = true;
-            leader.auto_width = text_width(&label);
-            leader.fill = true;
-            leader.fg = SEAT;
-            leader.bold = false;
-            leader.active = slot == Some("leader");
-            leader.tooltip = Some("Leader session이 게시된 뒤 지난 시간".into());
-            out.push(leader);
-        }
         for seat in &project.seats {
             let label = seat_text(seat);
             let mut widget = button(project, number, Role::Seat(seat.index), format!("seat-{}", seat.index), label, 1);
@@ -897,17 +887,17 @@ mod tests {
             Hit::Nothing => "nothing".into(),
             Hit::Outside => "outside".into(),
         };
-        // 0 error row, 1 name, 2 decisions, 3 counts, 4 Leader, 5-6 seats, 7 margin, 8 the next project
+        // 0 error row, 1 name, 2 decisions, 3 counts, 4-5 seats, 6 margin, 7 the next project
         assert_eq!(id(0, 0), "nothing");
         assert_eq!(id(24, 1), "project-0-name");
         assert_eq!(id(0, 2), "project-0-D");
         assert_eq!([0, 5, 6, 11, 12, 17, 18, 20].map(|x| id(x, 3)),
                    ["project-0-O", "project-0-O", "project-0-T", "project-0-T", "project-0-I", "project-0-I", "project-0-seats", "project-0-seats"]);
         assert_eq!(id(21, 3), "nothing");
-        assert_eq!(id(3, 4), "static");
-        assert_eq!(id(3, 6), "project-0-seat-1");
-        assert_eq!(id(3, 7), "nothing");
-        assert_eq!(id(3, 8), "project-1-name");
+        assert_eq!(id(3, 4), "project-0-seat-0");
+        assert_eq!(id(3, 5), "project-0-seat-1");
+        assert_eq!(id(3, 6), "nothing");
+        assert_eq!(id(3, 7), "project-1-name");
         assert_eq!(id(25, 1), "outside");
         assert_eq!(id(3, 30), "outside");
     }
@@ -956,16 +946,59 @@ mod tests {
         assert_eq!(tooltip("project-0-O"), None);
     }
 
-    #[test]
-    fn the_fold_button_names_the_hidden_current_window() {
+    fn with_active(slot: &str, expanded: &[&str]) -> Layout {
         let snapshot = Snapshot { error: None, projects: vec![project("falcon")] };
         let live = Liveness::new();
-        let expanded = HashSet::new();
-        let active = Active { project_id: "falcon".into(), slot: Some("seat-3".into()) };
-        let layout = layout(&Facts { snapshot: &snapshot, liveness: &live, expanded: &expanded, active: Some(&active), notice: None, loaded: true }, 25, 20);
+        let expanded: HashSet<String> = expanded.iter().map(|s| s.to_string()).collect();
+        let active = Active { project_id: "falcon".into(), slot: Some(slot.into()) };
+        layout(&Facts { snapshot: &snapshot, liveness: &live, expanded: &expanded, active: Some(&active), notice: None, loaded: true }, 25, 20)
+    }
+
+    #[test]
+    fn the_fold_button_names_a_hidden_seat_window_and_only_a_seat() {
+        let layout = with_active("seat-3", &[]);
         let fold = layout.widgets.iter().find(|w| w.id == "project-0-seats").unwrap();
         assert_eq!(fold.tooltip.as_deref(), Some("좌석 펼치기 · 현재 창: seat 3"));
         assert!(fold.active);
+        // BOARD-023: a Leader window shows on the name row, never on the fold button
+        let layout = with_active("leader", &[]);
+        let fold = layout.widgets.iter().find(|w| w.id == "project-0-seats").unwrap();
+        assert_eq!(fold.tooltip.as_deref(), Some("좌석 펼치기"));
+        assert!(!fold.active);
+        assert!(layout.widgets.iter().find(|w| w.id == "project-0-name").unwrap().active);
+    }
+
+    #[test]
+    fn the_name_row_carries_the_leader_time_folded_or_expanded_and_there_is_no_leader_row() {
+        let snapshot = Snapshot { error: None, projects: vec![project("falcon")] };
+        let name = |expanded: &[&str]| {
+            let layout = laid_out(&snapshot, expanded, 40, 20);
+            assert!(!layout.widgets.iter().any(|w| w.label.contains("Leader")));
+            let widget = layout.widgets.iter().find(|w| w.id == "project-0-name").unwrap().clone();
+            (widget.label, widget.tooltip)
+        };
+        for expanded in [&[][..], &["falcon"][..]] {
+            let (label, tooltip) = name(expanded);
+            assert_eq!(label, "falcon 10m");
+            assert_eq!(tooltip.as_deref(), Some("falcon · Leader session이 게시된 뒤 지난 시간"));
+        }
+        let mut without = snapshot.clone();
+        without.projects[0].leader = None;
+        let layout = laid_out(&without, &[], 40, 20);
+        let widget = layout.widgets.iter().find(|w| w.id == "project-0-name").unwrap();
+        assert_eq!((widget.label.as_str(), widget.tooltip.as_deref()), ("falcon", Some("falcon")));
+        let mut no_time = snapshot.clone();
+        no_time.projects[0].leader = Some(Leader { elapsed: None });
+        assert_eq!(laid_out(&no_time, &[], 40, 20).widgets[0].label, "falcon");
+        let active = Active { project_id: "falcon".into(), slot: None };
+        let live = Liveness::new();
+        let none = HashSet::new();
+        let marked = layout_of(&snapshot, &live, &none, Some(&active));
+        assert_eq!(marked.widgets[0].label, "▶ falcon 10m");
+    }
+
+    fn layout_of(snapshot: &Snapshot, live: &Liveness, expanded: &HashSet<String>, active: Option<&Active>) -> Layout {
+        layout(&Facts { snapshot, liveness: live, expanded, active, notice: None, loaded: true }, 40, 20)
     }
 
     #[test]
