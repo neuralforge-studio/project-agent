@@ -5,6 +5,7 @@ import contextlib
 import datetime as dt
 import fcntl
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -95,22 +96,97 @@ def uncommitted(root: Path) -> set[Path]:
     return paths
 
 
-def history_high(root: Path, area: str) -> int:
-    """Highest <AREA>-<NNN> number named by any state-directory file in the git history of the root,
-    removed files included (a number is not reused). Other directories are not read. 0 outside git."""
-    if not in_git(root):
-        return 0
-    out = subprocess.run(["git", "-C", str(root), "log", "--all", "--name-only", "--format=", "-z",
-                          "--relative", "--", "."], capture_output=True)
-    pat = re.compile(rf"^{re.escape(area)}-(\d+)\b")
-    high = 0
+_NUMBER_RE = re.compile(r"^([A-Z][A-Z0-9]*)-(\d+)\b")
+_CACHE_VERSION = 1
+_OBJECT_ID_RE = re.compile(r"[0-9a-f]{40}([0-9a-f]{24})?")
+
+
+def number_cache_path(root: Path) -> Path:
+    return lock_path(root).parent.parent / "numbers" / lock_path(root).with_suffix(".json").name
+
+
+def _history_tips(root: Path) -> list[str] | None:
+    """Sorted commit IDs at the ends of every ref and HEAD (what `git log --all` starts from)."""
+    refs = _git(root, "for-each-ref", "--format=%(objecttype) %(objectname)")
+    if refs.returncode != 0:
+        return None
+    tips = {line.split()[1] for line in refs.stdout.splitlines() if line.split()[:1] in (["commit"], ["tag"])}
+    head = _git(root, "rev-parse", "--verify", "-q", "HEAD^{commit}")
+    if head.returncode == 0 and head.stdout.strip():
+        tips.add(head.stdout.strip())
+    return sorted(tips)
+
+
+def _history_numbers(root: Path, tips: list[str] | None, known: list[str]) -> dict[str, int] | None:
+    """Highest number per AREA among state-directory files that changed in the commits reachable
+    from `tips` and not from `known` (every ref when `tips` is None). None when git cannot read them."""
+    revs = "".join(f"{tip}\n" for tip in tips or []) + "".join(f"^{tip}\n" for tip in known)
+    args = ["--stdin"] if tips is not None else ["--all"]
+    out = subprocess.run(["git", "-C", str(root), "log", *args, "--name-only", "--format=", "-z",
+                          "--relative", "--", "."], input=revs.encode(), capture_output=True)
+    if out.returncode != 0:
+        return None
+    high: dict[str, int] = {}
     for name in out.stdout.decode("utf-8", "surrogateescape").split("\0"):
         parts = Path(name.strip("\n")).parts
         if len(parts) > 1 and parts[0] in CR.states:
-            m = pat.match(parts[-1])
+            m = _NUMBER_RE.match(parts[-1])
             if m:
-                high = max(high, int(m.group(1)))
+                high[m.group(1)] = max(high.get(m.group(1), 0), int(m.group(2)))
     return high
+
+
+def _read_number_cache(root: Path) -> tuple[list[str], dict[str, int]] | None:
+    try:
+        data = json.loads(number_cache_path(root).read_text(encoding="utf-8"))
+        tips, high = data["tips"], data["high"]
+        if (data["version"] != _CACHE_VERSION or data["root"] != str(root.resolve())
+                or not isinstance(tips, list) or not isinstance(high, dict)
+                or not all(isinstance(t, str) and _OBJECT_ID_RE.fullmatch(t) for t in tips)
+                or not all(isinstance(k, str) and type(v) is int and v >= 0 for k, v in high.items())):
+            return None
+        return tips, high
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _write_number_cache(root: Path, tips: list[str], high: dict[str, int]) -> None:
+    """Atomic replace; the caller holds root_lock(root). A cache that cannot be written is skipped."""
+    path = number_cache_path(root)
+    data = {"version": _CACHE_VERSION, "root": str(root.resolve()), "tips": tips, "high": high}
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+
+
+def history_high(root: Path, area: str) -> int:
+    """Highest <AREA>-<NNN> number named by any state-directory file in the git history of the root,
+    removed files included (a number is not reused). Other directories are not read. 0 outside git.
+
+    The caller holds root_lock(root). The result of earlier reads is cached per root with the commits
+    it covers; a call reads only the commits that are new since. No usable cache means a full read."""
+    if not in_git(root):
+        return 0
+    tips = _history_tips(root)
+    if tips is None:                                    # refs unreadable: read as before, remember nothing
+        return (_history_numbers(root, None, []) or {}).get(area, 0)
+    cached = _read_number_cache(root)
+    if cached and cached[0] == tips:
+        return cached[1].get(area, 0)
+    new = _history_numbers(root, tips, cached[0]) if cached else None
+    if new is None:                                     # no usable cache, or its commits are gone
+        high = _history_numbers(root, tips, [])
+    else:
+        high = {a: max(cached[1].get(a, 0), new.get(a, 0)) for a in cached[1].keys() | new.keys()}
+    if high is None:                                    # e.g. a ref that is not a commit
+        return (_history_numbers(root, None, []) or {}).get(area, 0)
+    _write_number_cache(root, tips, high)
+    return high.get(area, 0)
 
 
 def check_targets(kind: Kind, root: Path) -> list[tuple[str, Path]]:
