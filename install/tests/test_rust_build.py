@@ -1,8 +1,8 @@
-"""Acceptance tests T34~T40 of install-contract.md section 8.2: the release holds the Rust sidebar source and the
+"""Acceptance tests T36~T42 of install-contract.md section 8.2: the release holds the Rust sidebar source and the
 binary the installer built from it (BOARD-018).
 
 Most cases give the installer a fake cargo (harness.FAKE_CARGO), which makes the program a real cargo would
-make; T40 runs the real cargo once.
+make; T42 runs the real cargo once.
 """
 
 import json
@@ -40,9 +40,9 @@ def leftovers(home):
     return temporary + scratch
 
 
-# ---------------------------------------------------------------- T34: install
+# ---------------------------------------------------------------- T36: install
 
-def test_t34_install_builds_the_sidebar_into_the_release_and_installs_the_source(home, source, name):
+def test_t36_install_builds_the_sidebar_into_the_release_and_installs_the_source(home, source, name):
     before = home.snapshot()
     result = run_ok(home, "install", source=source)
     assert_changes(before, home.snapshot(), created=install_paths(name) | {".tmux.conf"}, trees=[tree(name)])
@@ -61,7 +61,7 @@ def test_t34_install_builds_the_sidebar_into_the_release_and_installs_the_source
     assert leftovers(home) == []                                               # no build directory is left
 
 
-def test_t34_the_build_runs_offline_and_locked_in_the_crate_of_the_release(home, source, name):
+def test_t36_the_build_runs_offline_and_locked_in_the_crate_of_the_release(home, source, name):
     run_ok(home, "install", source=source)
     calls = home.cargo_calls()
     assert len(calls) == 1
@@ -74,7 +74,7 @@ def test_t34_the_build_runs_offline_and_locked_in_the_crate_of_the_release(home,
     assert not home.path(".cargo").exists()
 
 
-def test_t34_a_failed_build_leaves_the_home_as_it_was(home, source):
+def test_t36_a_failed_build_leaves_the_home_as_it_was(home, source):
     before = home.snapshot()
     result = home.run("install", source=source, env={"FAKE_CARGO_MODE": "fail"})
     assert result.returncode == 4
@@ -83,10 +83,10 @@ def test_t34_a_failed_build_leaves_the_home_as_it_was(home, source):
     assert not home.path(LIB).exists()
 
 
-# ---------------------------------------------------------------- T35, T36: upgrade
+# ---------------------------------------------------------------- T37, T38: upgrade
 
 @pytest.mark.mutates
-def test_t35_upgrade_builds_the_new_release_and_then_switches_current(home, source):
+def test_t37_upgrade_builds_the_new_release_and_then_switches_current(home, source):
     run_ok(home, "install", source=source)
     first = release_name(source)
     commit_change(source, "1.1.0")
@@ -104,7 +104,7 @@ def test_t35_upgrade_builds_the_new_release_and_then_switches_current(home, sour
 
 
 @pytest.mark.mutates
-def test_t36_a_failed_build_on_upgrade_changes_nothing(home, source):
+def test_t38_a_failed_build_on_upgrade_changes_nothing(home, source):
     run_ok(home, "install", source=source)
     first = release_name(source)
     commit_change(source, "1.1.0")
@@ -122,7 +122,7 @@ def test_t36_a_failed_build_on_upgrade_changes_nothing(home, source):
 
 
 @pytest.mark.mutates
-def test_t36_a_build_that_makes_no_program_is_a_failure_too(home, source):
+def test_t38_a_build_that_makes_no_program_is_a_failure_too(home, source):
     run_ok(home, "install", source=source)
     commit_change(source, "1.1.0")
     before = home.snapshot()
@@ -132,7 +132,7 @@ def test_t36_a_build_that_makes_no_program_is_a_failure_too(home, source):
 
 
 @pytest.mark.mutates
-def test_t35_rollback_and_a_repeated_upgrade_do_not_build(home, source):
+def test_t37_rollback_and_a_repeated_upgrade_do_not_build(home, source):
     run_ok(home, "install", source=source)
     commit_change(source, "1.1.0")
     run_ok(home, "upgrade", source=source)
@@ -142,17 +142,17 @@ def test_t35_rollback_and_a_repeated_upgrade_do_not_build(home, source):
     assert len(home.cargo_calls()) == calls
 
 
-def test_t35_installing_the_current_release_again_needs_no_cargo(home, source):
+def test_t37_installing_the_current_release_again_needs_no_cargo(home, source):
     run_ok(home, "install", source=source)
     before = home.snapshot()
     result = run_ok(home, "install", source=source, env={"PROJECT_AGENT_CARGO": "/nonexistent/cargo"})
     assert "Nothing to change" in result.stdout and home.snapshot() == before
 
 
-# ---------------------------------------------------------------- T37: dry-run
+# ---------------------------------------------------------------- T39: dry-run
 
 @pytest.mark.mutates
-def test_t37_dry_run_does_not_build_and_says_what_it_would_build(home, source):
+def test_t39_dry_run_does_not_build_and_says_what_it_would_build(home, source):
     before = home.snapshot()
     result = run_ok(home, "install", "--dry-run", source=source)
     assert home.cargo_calls() == [] and home.snapshot() == before
@@ -166,17 +166,17 @@ def test_t37_dry_run_does_not_build_and_says_what_it_would_build(home, source):
     assert str(home.fake_cargo) in upgrade.stdout
 
 
-def test_t37_dry_run_lists_the_changes_of_the_real_run(home, source):
+def test_t39_dry_run_lists_the_changes_of_the_real_run(home, source):
     dry = json.loads(run_ok(home, "install", "--dry-run", "--json", source=source).stdout)["changes"]
     assert home.cargo_calls() == []
     real = json.loads(run_ok(home, "install", "--json", source=source).stdout)["changes"]
     assert dry == real
 
 
-# ---------------------------------------------------------------- T38: check
+# ---------------------------------------------------------------- T40: check
 
 @pytest.mark.parametrize("damage", ["missing", "not-runnable", "wrong-program"])
-def test_t38_check_reports_a_missing_or_unrunnable_sidebar(home, source, name, damage):
+def test_t40_check_reports_a_missing_or_unrunnable_sidebar(home, source, name, damage):
     run_ok(home, "install", source=source)
     assert home.run("check").returncode == 0
     binary = home.path(tree(name) + "/" + BINARY)
@@ -195,9 +195,9 @@ def test_t38_check_reports_a_missing_or_unrunnable_sidebar(home, source, name, d
     assert home.snapshot() == before                                         # `check` reads only
 
 
-# ---------------------------------------------------------------- T39: no toolchain
+# ---------------------------------------------------------------- T41: no toolchain
 
-def test_t39_without_cargo_nothing_is_changed_and_the_message_names_the_variable(home, source):
+def test_t41_without_cargo_nothing_is_changed_and_the_message_names_the_variable(home, source):
     before = home.snapshot()
     result = home.run("install", source=source, env={"PROJECT_AGENT_CARGO": str(home.root / "absent" / "cargo")})
     assert result.returncode == 3 and "cargo_missing" in result.stderr and "PROJECT_AGENT_CARGO" in result.stderr
@@ -206,7 +206,7 @@ def test_t39_without_cargo_nothing_is_changed_and_the_message_names_the_variable
     assert dry.returncode == 3 and "cargo_missing" in dry.stderr                 # dry-run checks the toolchain too
 
 
-def test_t39_cargo_is_looked_up_in_order_variable_then_inhouse_then_path(home, source, tmp_path):
+def test_t41_cargo_is_looked_up_in_order_variable_then_inhouse_then_path(home, source, tmp_path):
     """Without the variable the installer finds cargo in the in-house location or PATH; with the variable set to
     something unusable it does not fall back."""
     bin_dir = tmp_path / "bin"
@@ -220,7 +220,7 @@ def test_t39_cargo_is_looked_up_in_order_variable_then_inhouse_then_path(home, s
     assert (inhouse if os.access(inhouse, os.X_OK) else str(bin_dir / "cargo")) in notes   # an empty variable is not set
 
 
-def test_t39_a_missing_vendored_directory_refuses_and_names_it(home, source):
+def test_t41_a_missing_vendored_directory_refuses_and_names_it(home, source):
     before = home.snapshot()
     absent = home.root / "no-vendor"
     result = home.run("install", source=source, env={"PROJECT_AGENT_RUST_VENDOR": str(absent)})
@@ -229,7 +229,7 @@ def test_t39_a_missing_vendored_directory_refuses_and_names_it(home, source):
     assert home.cargo_calls() == []
 
 
-def test_t39_the_vendored_directory_comes_from_the_crate_config_unless_the_variable_overrides_it(home, source):
+def test_t41_the_vendored_directory_comes_from_the_crate_config_unless_the_variable_overrides_it(home, source):
     config = (REPO / "tools/project-board/rust/.cargo/config.toml").read_text()
     committed = [line.split('"')[1] for line in config.splitlines() if line.startswith("directory")][0]
     run_ok(home, "install", source=source)                                       # the variable: passed to cargo
@@ -243,12 +243,12 @@ def test_t39_the_vendored_directory_comes_from_the_crate_config_unless_the_varia
         assert "--config" not in home.cargo_calls()[1]                           # the crate's own config is used
 
 
-# ---------------------------------------------------------------- T40: the real cargo
+# ---------------------------------------------------------------- T42: the real cargo
 
 @pytest.mark.slow
 @pytest.mark.skipif(not (os.path.isfile(REAL_CARGO) and os.access(REAL_CARGO, os.X_OK)),
                     reason="the in-house cargo is not on this host")
-def test_t40_the_real_cargo_builds_a_sidebar_that_runs(home, source, name):
+def test_t42_the_real_cargo_builds_a_sidebar_that_runs(home, source, name):
     env = {"PROJECT_AGENT_CARGO": REAL_CARGO, "PROJECT_AGENT_RUST_VENDOR": ""}
     before = home.snapshot()
     # a real build takes 40 s on a quiet host and 5 minutes on a loaded one (host load above 60)

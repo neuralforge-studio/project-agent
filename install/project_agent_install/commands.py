@@ -8,7 +8,7 @@ import os
 import stat
 import subprocess
 
-from . import actions, journal, paths, record as records, release as releases, runs, rustbuild, tmuxconf
+from . import actions, crontab, journal, paths, record as records, release as releases, runs, rustbuild, tmuxconf
 from .layout import SKILLS, TOOLS, InstallerError
 
 
@@ -467,6 +467,7 @@ def plan_uninstall(env, source_root, socket=None):
     plan.steps.append(actions.drop_journal(plan.journal_path))
     plan.steps += [actions.remove_dir(places, places.dir_id(directory)) for directory in late]
     _kept_notes(env, plan)
+    _crontab_notes(source_root, plan)
     return plan
 
 
@@ -506,6 +507,30 @@ def _kept_notes(env, plan):
                           "key that is your own binding.")
 
 
+def _crontab_notes(source_root, plan):
+    """Contract 5.4: the crontab is not the installer's to change. A section that is left runs a release that
+    `uninstall` removes and fails without output, so the commands that remove the sections are printed."""
+    sections, problem = crontab.read(source_root)
+    if problem == "crontab_unavailable":
+        return                                          # no crontab command: no job can exist
+    if problem:
+        plan.notes.append("The crontab could not be read (%s), so project-agent sections in it were not looked for. "
+                          "Look for lines that start with `# >>> project-agent:` in `crontab -l`; the jobs in them "
+                          "run files that `uninstall` removes." % problem)
+        return
+    for section in sections:
+        jobs = ", ".join(job["id"] for job in section["jobs"]) or "no job"
+        command = crontab.removal(section)
+        if command is None:
+            plan.notes.append("The crontab section of project %s (%s) gets no command: %s. Remove it by hand with "
+                              "`crontab -e`." % (section["project"], jobs, crontab.by_hand(section)))
+            continue
+        plan.notes.append("The crontab still has the project-agent section of project %s (%s). `uninstall` does not "
+                          "change the crontab, and its jobs run files that `uninstall` removes, so they would fail "
+                          "without any output. To remove the section, run:\n    %s"
+                          % (section["project"], jobs, command))
+
+
 HOOKS = ("client-attached", "client-detached", "client-session-changed", "session-window-changed",
          "after-resize-pane")
 WINDOW_HOOKS = ("window-created", "window-closed", "pane-died")
@@ -533,7 +558,7 @@ def binding_undo(key, skipped):
 
 # ---------------------------------------------------------------- check
 
-def run_check(env):
+def run_check(env, source_root):
     """Read-only. Returns (failures, notices): any failure makes the command exit 1."""
     failures, notices = [], []
     pending = journal.find(env)
@@ -574,7 +599,17 @@ def run_check(env):
     if skipped:
         notices.append("Binding skipped (binding 건너뜀): %s are bound to something of yours; the Board keys are "
                        "not set there." % ", ".join(skipped.split()))
+    notices += _crontab_notices(source_root)
     return failures, notices
+
+
+def _crontab_notices(source_root):
+    sections, problem = crontab.read(source_root)
+    if problem and problem != "crontab_unavailable":
+        return ["The crontab could not be read (%s); the jobs of the project-agent sections were not checked." % problem]
+    return ["The crontab job %s of project %s runs %s, which does not exist, so it fails without any output. A Leader "
+            "start rewrites its command; to remove it run `agent-session cron rm --project %s --id %s`."
+            % (job, project, path, project, job) for project, job, path in crontab.missing_programs(sections)]
 
 
 def _release_python_env(release):

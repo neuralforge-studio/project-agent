@@ -49,10 +49,11 @@ python -m pytest -q -n 8 install/tests
 | `tools/conftest.py`, 여러 도구가 함께 쓰는 test helper | pytest 명령 다섯 개 모두 |
 | `skills/**`, `docs/**`, `README.md`, `AGENTS.md` | 고친 문서의 상대 link 검사, `tools/test_distribution_boundary.py`. `skills/project-item`의 형식 문서를 바꾸면 `tools/project-item/tests/test_doc_contract.py`, 원격 guidance 문서(`skills/**`, `docs/project-team/spec.md`)를 바꾸면 `tools/agent-session/tests/test_remote.py`도 |
 - Agent-session test는 seat 여럿이 같은 host에서 동시에 검증하는 평소 부하에서 같은 결과를 냅니다. 한도(`AGENT_SESSION_TEST_TIMEOUT`, 기본 240초)는 host가 이보다 심하게 느릴 때만 늘립니다. 자세한 사용법은 [agent-session README](tools/agent-session/README.md#프로젝트-api와-검사)가 설명합니다.
-- 설치기 test(`install/tests`)는 격리 HOME에서만 설치기를 실행합니다. 개발 중 설치기를 실제 HOME에 실행하지 않습니다. `tmux`와 `git`이 필요하고 계약 8절의 T1~T40을 구현합니다.
+- 설치기 test(`install/tests`)는 격리 HOME에서만 설치기를 실행합니다. 개발 중 설치기를 실제 HOME에 실행하지 않습니다. `tmux`와 `git`이 필요하고 계약 8절의 T1~T42을 구현합니다.
 - Test가 사용자 계정에 남기는 자원은 test가 끝나면(통과·실패·중단 모두) test 전 수준으로 돌아갑니다.
   - tmux server: 모든 test server는 [`tools/tests/tmux_test_server.py`](tools/tests/tmux_test_server.py)의 `claim`으로 이름을 받고 `release`로 끝냅니다. `release`는 server와 pane의 process, `/tmp/tmux-<uid>`의 socket 파일, Board가 server마다 만드는 `/tmp/project-board-<uid>-<server pid>`를 지웁니다. `claim`은 소유 pytest process가 사라지면(SIGKILL·SIGTERM 포함) 같은 정리를 하는 watchdog을 함께 띄웁니다. Test에서 `kill-server`를 직접 부르지 않습니다.
   - 임시 디렉터리: `tools/conftest.py`가 만드는 `TMPDIR/pt-*`는 통과한 run이 끝날 때 지웁니다. 실패·중단한 run의 것은 조사용으로 남고, 다음 run이 시작할 때 소유 run이 끝난 것 중 최근 5개만 남기고 지웁니다. 진행 중인 run의 것은 지우지 않습니다. 소유자 표시가 없는 옛 디렉터리는 24시간 넘게 손대지 않았을 때만 지웁니다. 규칙과 이유는 [`tools/tests/private_root.py`](tools/tests/private_root.py)가 소유합니다.
+  - 실제 HOME: `tools/conftest.py`와 `install/tests/conftest.py`가 run마다 HOME을 `<basetemp>-home`(보통 `TMPDIR/pt-*` 안)으로 바꿔 run과 자식 process(xdist worker 포함)의 `~`를 거기로 보냅니다. Test는 실제 HOME의 `~/.cache/project-item/locks` 같은 곳에 파일을 만들지 않고, 실제 운영 잠금과 디렉터리를 공유하지 않습니다. 통과한 run은 그 HOME을 지웁니다. 이 격리는 [`tools/test_private_root.py`](tools/test_private_root.py)가 검사합니다. HOME이 따로 필요한 test는 `monkeypatch.setenv`로 바꿉니다. HOME에서 위치를 정하는 읽기 전용 도구 위치(`PYTHONUSERBASE`: `pip install --user`한 pytest·xdist·textual, `RUSTUP_HOME`: rustup proxy의 toolchain)는 HOME을 바꾸기 전 값으로 고정합니다(이미 값이 있으면 그대로 둡니다). `CARGO_HOME`은 고정하지 않아 cargo cache는 run의 HOME에 생깁니다.
 - CLI smoke: `tools/<도구>/bin/<도구> --help`.
 
 ## 관련 문서

@@ -191,6 +191,7 @@ $PY ~/.local/lib/project-agent/current/install/project-agent-install uninstall
 - 설치기가 만든 것만 지웁니다. tmux 설정은 설치 전과 byte 단위로 같아집니다. 설치 전에 파일이 없었다면 제거 뒤에도 없습니다.
 - 등록 파일, base의 `agent/`, `~/.cache`의 잠금은 지우지 않습니다. 남은 경로를 출력합니다.
 - 설치가 tmux server에 넣은 binding과 hook은 server가 끝날 때까지 남습니다. `uninstall`이 되돌리는 명령을 출력합니다. 필요하면 사용자가 실행합니다.
+- Leader를 시작하면 `agent-session`이 crontab에 `check` 작업을 둡니다. `uninstall`은 crontab을 고치지 않습니다. 남은 구역을 알리고 지우는 명령을 출력하니, 남은 작업이 조용히 실패하지 않게 실행합니다([계약 7.3절](project-team/install-contract.md#73-crontab에-남은-project-구역)). 설치 뒤 `check`도 지운 release를 가리키는 작업을 알립니다.
 
 ### `uninstall`이 거절될 때
 

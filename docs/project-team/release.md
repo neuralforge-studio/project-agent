@@ -50,5 +50,5 @@ release가 함께 쓰는 형식은 셋이며, 각 버전은 [`tools/formats.json
 - 쌓는 때: Leader가 CR을 통합하고 done(`fixed`)으로 옮길 때 그 CR의 ID를 `Unreleased`에 더합니다. 같은 commit에서 형식 버전을 올렸으면 `Unreleased`의 `형식:` 줄도 고칩니다. 통합하지 않은 CR(waived·merged)은 적지 않습니다.
 - release 전 검증: Leader는 release를 내는 commit에서 [README의 검증](../../README.md#검증)의 명령을 모두 실행합니다. 거기에 Rust sidebar의 두 확인을 더합니다. cargo와 vendored crate는 [설치 계약 2.1절](install-contract.md#21-rust-sidebar의-build)이 정합니다.
   - Rust 단위 test: `tools/project-board/rust`에서 `CARGO_TARGET_DIR=<저장소 밖 디렉터리> cargo test --offline --locked`.
-  - build 성공: 같은 위치의 `cargo build --release --offline --locked`와 같은 설치기의 build를 진짜 cargo로 실행하는 `install/tests`의 T40(`slow`)입니다. T40은 진짜 cargo가 없는 host에서는 건너뛰므로, 그런 host에서 낸 release는 이 확인을 하지 않은 것입니다.
+  - build 성공: 같은 위치의 `cargo build --release --offline --locked`와 같은 설치기의 build를 진짜 cargo로 실행하는 `install/tests`의 T42(`slow`)입니다. T40은 진짜 cargo가 없는 host에서는 건너뛰므로, 그런 host에서 낸 release는 이 확인을 하지 않은 것입니다.
 - release를 내는 commit: Leader가 한 commit에서 (1) `Unreleased`의 항목을 `## <version> - <날짜>` 절로 옮기고 빈 `Unreleased`를 남기며, (2) 2절로 정한 새 값을 `VERSION`에 쓰고, (3) 그 commit에 4절의 tag를 만듭니다.
