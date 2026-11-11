@@ -365,12 +365,14 @@ class _Snapshot:
     changes of `_reconcile` need none of them read again (BOARD-022).
     """
 
-    def __init__(self, enabled: str, width: str, config: str, visible: list[str], windows: dict[str, _Window]):
+    def __init__(self, enabled: str, width: str, config: str, visible: list[str], windows: dict[str, _Window],
+                 clients: list[str]):
         self.enabled = enabled == "1"
         self.width = width
         self.config = config or None
         self.visible = visible
         self.windows = windows
+        self.clients = clients
 
 
 def _snapshot(control: Tmux) -> _Snapshot:
@@ -378,19 +380,21 @@ def _snapshot(control: Tmux) -> _Snapshot:
     rows = _lines(
         control,
         "display-message", "-p", f"G\t#{{{ENABLED}}}\t#{{{WIDTH}}}\t#{{{CONFIG}}}",
-        ";", "list-clients", "-F", "C\t#{window_id}",
+        ";", "list-clients", "-F", "C\t#{window_id}\t#{client_name}",
         ";", "list-panes", "-a", "-F",
         f"P\t#{{window_id}}\t#{{pane_id}}\t#{{pane_dead}}\t#{{{WINDOW_PANE}}}\t#{{{PANE_ID_OPTION}}}"
         f"\t#{{{WINDOW_SEEN}}}\t#{{{PANE_MARK}}}\t#{{window_width}}\t#{{pane_width}}\t#{{pane_active}}"
         f"\t#{{{WINDOW_RESTORE}}}\t#{{window_layout}}")
     enabled = width = config = ""
-    visible, windows = [], {}
+    visible, windows, clients = [], {}, []
     for row in rows:
         kind, _, rest = row.partition("\t")
         if kind == "G":
             enabled, width, config = rest.split("\t", 2)
         elif kind == "C":
-            visible.append(rest)
+            window, _, client = rest.partition("\t")
+            visible.append(window)
+            clients.append(client)
         elif kind == "P":
             window, pane, dead, board, managed, seen, mark, window_width, pane_width, active, restore, layout = \
                 rest.split("\t", 11)
@@ -404,7 +408,7 @@ def _snapshot(control: Tmux) -> _Snapshot:
             record.widths[pane] = int(pane_width) if pane_width.isdecimal() else 0
             if active == "1":
                 record.active = pane
-    return _Snapshot(enabled, width, config, visible, windows)
+    return _Snapshot(enabled, width, config, visible, windows, clients)
 
 
 def _managed_pane_dead(window: _Window) -> bool:
@@ -511,17 +515,19 @@ def _restore(control: Tmux, window: str) -> None:
         control.command(*_chain(commands))
 
 
-def _remove(control: Tmux, window: str, pane: str, record: _Window) -> None:
+def _remove(control: Tmux, window: str, pane: str, record: _Window, before=(), after=()) -> None:
     """Kill a Board pane and put its window back as it was, in one tmux process.
 
     `record` is what a snapshot said of the window while the pane was in it. The options are cleared
     before the layout is restored, so a restore that fails still leaves the window without a Board pane.
+    `before` and `after` are further commands for the same process (a progress message).
     """
-    commands = [("kill-pane", "-t", pane),
+    commands = [*before, ("kill-pane", "-t", pane),
                 ("set-option", "-wu", "-t", window, WINDOW_PANE),
                 ("set-option", "-wu", "-t", window, WINDOW_RESTORE),
                 *_restore_commands(window, record.restore, record.layout,
-                                   [other for other in record.panes if other != pane])]
+                                   [other for other in record.panes if other != pane]),
+                *after]
     try:
         control.command(*_chain(commands))
     except SessionError:
@@ -538,7 +544,8 @@ def _sidebar_command(config: str | None) -> list[str]:
     return command
 
 
-def _create(control: Tmux, window: str, config: str | None, width: int, directory: Path, record: _Window) -> str:
+def _create(control: Tmux, window: str, config: str | None, width: int, directory: Path, record: _Window,
+            messages=()) -> str:
     click_path = directory / (uuid.uuid4().hex[:16] + ".sock")
     layout, focus = record.layout, record.active
     command = ["split-window", "-d", "-f", "-h", "-b", "-l", str(width),
@@ -553,7 +560,7 @@ def _create(control: Tmux, window: str, config: str | None, width: int, director
             ("set-option", "-p", "-t", pane, PANE_MARK, "1"),
             ("set-option", "-p", "-t", pane, PANE_SOCKET, str(click_path)),
             ("set-option", "-w", "-t", window, WINDOW_PANE, pane),
-            ("set-option", "-w", "-t", window, WINDOW_SEEN, str(int(time.time())))]))
+            ("set-option", "-w", "-t", window, WINDOW_SEEN, str(int(time.time()))), *messages]))
     except Exception:
         try:
             control.command("kill-pane", "-t", pane)
@@ -604,38 +611,28 @@ PROGRESS_SHOWN_MS = 3000
 
 
 class _Progress:
-    """Shows how far a toggle is on the attached clients, once it has taken longer than PROGRESS_AFTER.
+    """The progress message of a toggle, once it has taken longer than PROGRESS_AFTER.
 
-    It uses `display-message -c`, which covers no pane and leaves the user's status settings alone. The key
+    It is `display-message -c`, which covers no pane and leaves the user's status settings alone. The key
     does not name its client, so every attached client is told, as a failed key is (project_agent_run.sh).
-    A message the tmux server cannot show is dropped: it is advice, never the toggle's result.
+    The message goes into the tmux process of the step it reports, so showing progress starts none.
     """
 
-    def __init__(self, control: Tmux, verb: str, total: int, started: float):
-        self._control, self._verb, self._total, self._started = control, verb, total, started
+    def __init__(self, clients: list[str], verb: str, total: int, started: float):
+        self._clients, self._verb, self._total, self._started = clients, verb, total, started
         self._done = 0
-        self._clients: tuple[str, ...] | None = None
-        self.shown = False
 
-    def _show(self, text: str, milliseconds: int) -> None:
-        try:
-            if self._clients is None:
-                self._clients = _clients(self._control)
-            if self._clients:
-                self._control.command(*_chain(("display-message", "-c", client, "-d", str(milliseconds), text)
-                                              for client in self._clients))
-                self.shown = True
-        except SessionError:
-            self._clients = ()
+    def _messages(self, text: str, milliseconds: int) -> list[tuple]:
+        return [("display-message", "-c", client, "-d", str(milliseconds), text) for client in self._clients]
 
-    def step(self) -> None:
+    def step(self) -> tuple[list[tuple], list[tuple]]:
+        """(commands before, commands after) of the next step: where it is now, or that all is done."""
         self._done += 1
-        if time.monotonic() - self._started >= PROGRESS_AFTER:
-            self._show(f"Board {self._verb} 중 {self._done}/{self._total}", PROGRESS_SHOWN_MS)
-
-    def finish(self) -> None:
-        if self.shown:
-            self._show(f"Board {self._verb} 중 {self._done}/{self._total} 완료", 1000)
+        if time.monotonic() - self._started < PROGRESS_AFTER:
+            return [], []
+        if self._done == self._total:
+            return [], self._messages(f"Board {self._verb} 중 {self._done}/{self._total} 완료", 1000)
+        return self._messages(f"Board {self._verb} 중 {self._done}/{self._total}", PROGRESS_SHOWN_MS), []
 
 
 def _reconcile(control: Tmux, directory: Path, snapshot: _Snapshot | None = None,
@@ -681,13 +678,14 @@ def _reconcile(control: Tmux, directory: Path, snapshot: _Snapshot | None = None
         saved_width = str(width)
     progress = None
     if started is not None and (to_remove or to_create):
-        progress = _Progress(control, "켜는" if enabled else "끄는", len(to_remove) + len(to_create), started)
+        progress = _Progress(snapshot.clients, "켜는" if enabled else "끄는", len(to_remove) + len(to_create), started)
     # `after-resize-pane` writes the global width from the pane it resized: only a resize-pane here
     # can leave the option other than what was read.
     resized = False
     board_count = len(to_remove) + len(to_keep)
     for window, board in to_remove:
         record = windows[window]
+        before, after = progress.step() if progress else ((), ())
         try:
             pane_width = record.widths[board]
             capture_width = False
@@ -698,7 +696,7 @@ def _reconcile(control: Tmux, directory: Path, snapshot: _Snapshot | None = None
                                                    "#{pane_width}"))
                 capture_width = fitted_width == width
                 control.command("set-option", "-g", WIDTH, str(width))
-            _remove(control, window, board, record)
+            _remove(control, window, board, record, before, after)
             removed.append(window)
             held.discard(window)
             if capture_width:
@@ -706,8 +704,6 @@ def _reconcile(control: Tmux, directory: Path, snapshot: _Snapshot | None = None
                 control.command("set-option", "-g", WIDTH, str(width))
         except (SessionError, OSError, ValueError) as error:
             failures.append({"window": window, "reason": str(error)})
-        if progress:
-            progress.step()
     for window, board in to_keep:
         record = windows[window]
         try:
@@ -717,21 +713,18 @@ def _reconcile(control: Tmux, directory: Path, snapshot: _Snapshot | None = None
         except (SessionError, OSError, ValueError) as error:
             failures.append({"window": window, "reason": str(error)})
     for window in to_create:
+        before, after = progress.step() if progress else ((), ())
         try:
-            _create(control, window, config, width, directory, windows[window])
+            _create(control, window, config, width, directory, windows[window], [*before, *after])
             created.append(window)
         except (SessionError, OSError, ValueError) as error:
             failures.append({"window": window, "reason": str(error)})
-        if progress:
-            progress.step()
     # Only a window kept beyond the bound has to be found out, which takes a second read of the server.
     if len(held) + len(created) > MAX_KEPT:
         for window in _evict(control, [w for w, _ in to_keep], created, failures):
             removed.append(window)
     if (to_remove or to_keep or to_create) and (resized or saved_width != str(width)):
         control.command("set-option", "-g", WIDTH, str(width))
-    if progress:
-        progress.finish()
     return {"enabled": enabled, "visible_windows": sorted(visible),
             "created": created, "removed": removed, "failures": failures}
 

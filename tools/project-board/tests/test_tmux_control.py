@@ -1647,8 +1647,11 @@ def test_a_slow_toggle_tells_the_clients_how_far_it_is_and_a_quick_one_says_noth
             return [_tmux(name, "show-options", "-gv", option) for option in ("status", "status-left", "status-right")]
         status = status_options()
         _screen_text(client[1])
-        quick = tmux_control.toggle_sidebar(socket=socket_path)                 # off, default threshold
+        monkeypatch.setattr(tmux_control, "PROGRESS_AFTER", 3600)               # no toggle is that slow
+        calls = _counting(monkeypatch)
+        quick = tmux_control.toggle_sidebar(socket=socket_path)                 # off
         assert quick["ok"] is True
+        quiet_calls = len(calls)
         assert "Board 끄는 중" not in _screen_text(client[1])
         assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True    # on again
         for window in ids:
@@ -1656,7 +1659,9 @@ def test_a_slow_toggle_tells_the_clients_how_far_it_is_and_a_quick_one_says_noth
             assert tmux_control.reconcile(socket=socket_path)["ok"] is True
         _screen_text(client[1])
         monkeypatch.setattr(tmux_control, "PROGRESS_AFTER", 0)
+        del calls[:]
         assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+        assert len(calls) == quiet_calls, "the message goes in the process of its step, it starts none"
         screen = _screen_text(client[1])
         assert "Board 끄는 중 1/3" in screen and "Board 끄는 중 3/3 완료" in screen, screen
         assert status_options() == status
