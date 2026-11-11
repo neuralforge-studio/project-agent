@@ -142,7 +142,9 @@ tmux `next-3.9`의 전체 높이 일반 pane을 사용합니다. Controller는 �
 
 tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합니다. Hook은 `sync`를 시작할 일이 있을 때만 시작합니다. 시작 조건은 tmux format(`@project_agent_sync_needed`)이며 "Board가 켜져 있고 이 window의 Board pane이 없거나 저장한 폭이 아님"입니다. 이미 Board pane이 있는 window로 옮긴 hook은 프로세스를 시작하지 않습니다. 조건이 참이면 Controller는 보이는 window와 Board pane을 동기화합니다. 관리된 `agent-session` pane이 종료되면 Board pane도 먼저 제거해 종료 window의 정리를 방해하지 않습니다. 이 구조에는 별도의 서버나 상주 감시 프로세스가 없습니다.
 
-상태줄 `Board`와 prefix `B`는 전역 toggle을 실행합니다. 일반 pane의 클릭은 tmux에 전달합니다. Board pane의 클릭은 tmux binding이 클릭한 client 이름, pane ID, 좌표를 Unix socket으로 TUI에 전달합니다. 따라서 같은 Board pane을 공유하는 client도 자신의 popup을 열거나 자신의 window를 이동합니다. 결정 popup은 90%, CR popup은 80% 크기로 해당 client에 엽니다.
+상태줄 `Board`와 prefix `B`는 전역 toggle을 실행합니다. 일반 pane의 클릭은 tmux에 전달합니다. Board pane의 클릭은 tmux binding이 클릭한 client 이름, pane ID, 좌표를 Unix socket으로 TUI에 전달합니다. 따라서 같은 Board pane을 공유하는 client도 자신의 창을 열거나 자신의 window를 이동합니다. 결정 창은 90%, CR 창은 80% 크기로 클릭한 client의 현재 window에 엽니다.
+
+결정·CR 창은 tmux `display-popup`이 아니라 그 window의 떠 있는 pane(`new-pane`, tmux 3.8)입니다(BOARD-020). popup은 떠 있는 동안 그 client의 입력을 모두 받아 sidebar 스크롤·클릭과 뒤 pane(Claude) 입력을 막기 때문입니다. 떠 있는 pane은 modal이 아니므로 sidebar와 뒤 pane을 그대로 쓰고, 창은 계속 위에 보입니다. 위쪽 경계를 끌면 옮기고(Alt를 누른 채 안쪽을 끌어도 됩니다) 다른 경계를 끌면 크기가 바뀝니다. 둘 다 tmux 기본 mouse binding이며 Board는 binding을 더하지 않습니다. 한 window에는 Board 창이 하나입니다. pane option `@project_board_window`가 그 창을 표시하고, 창이 떠 있을 때 다른 항목을 누르면 `respawn-pane -k`로 같은 pane의 내용만 바꿉니다. 그래서 옮긴 위치와 바꾼 크기가 남습니다. 창은 열 때 자기 pane에 이 표시를 하고(`new-pane -W`는 창이 끝날 때까지 돌아오지 않아 밖에서 표시할 수 없습니다), 동시에 두 번 눌러도 하나만 만들도록 열기는 Board의 잠금 안에서 표시를 기다립니다. pane의 `remain-on-exit`은 끕니다. 관리 window는 이 option이 켜져 있어 그대로 두면 닫은 창이 죽은 pane으로 남기 때문입니다. 창에서 `Esc`나 닫기 버튼으로 끝내면 그 pane만 닫힙니다. 창이 있는 window에서 sidebar를 끌 때(`_restore`)는 저장한 layout에 지금의 떠 있는 pane을 더해 복원합니다. `select-layout`은 window의 모든 pane을 이름으로 요구하기 때문입니다.
 
 ## 6. 구현 단위와 완료 기준
 
@@ -157,7 +159,7 @@ tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합
 
 `project-board` 테스트 61건과 `project-item` 테스트 83건이 통과했습니다. 실제 tmux 화면에서 두 project의 개수와 seat, 결정 Markdown 표와 CSV 표를 확인했습니다. 두 client의 다른 window에 같은 전체 목록이 표시됐습니다. 마우스 클릭은 해당 client의 CR popup을 열었고, seat 클릭은 해당 client만 Worker window로 이동했습니다. 느린 조회 중 클릭과 중복 조회 방지도 TUI 테스트로 확인했습니다. 실제 사용 중인 tmux server에는 테스트 동작을 적용하지 않았습니다.
 
-tmux popup을 열어 둔 상태에서 외부 명령으로 client의 window를 바꾸면 popup 프로세스는 기존 window에 남습니다. Popup에서 `Esc`나 닫기 버튼으로 종료합니다. 이번 구현은 사용 중인 popup을 창 이동 시 강제로 닫지 않습니다.
+결정·CR 창은 열린 window에 속합니다. client가 다른 window로 옮겨도 창은 그 window에 남고, 창에서 `Esc`나 닫기 버튼으로 종료합니다. 이번 구현은 창을 이동 시 강제로 닫지 않습니다(BOARD-020 이전에는 popup이 같은 방식이었습니다).
 
 관리된 pane이 종료된 뒤 같은 window에서 곧바로 `respawn-pane`되면 Board는 다음 client·window 동기화 때 다시 나타납니다. 즉시 갱신하려면 `project-board sync`를 실행합니다. tmux `next-3.9`에는 `after-respawn-pane` hook이 없습니다.
 
