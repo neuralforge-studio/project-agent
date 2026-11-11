@@ -9,9 +9,11 @@
 #
 #   prefix <board key>   the key is @project_agent_board_key, B when it is not set
 #   root MouseDown1Pane
+#   root MouseDragEnd1Border   saves the Board width a user dragged (BOARD-019)
 #
 # A key is bound when it has no binding, when it has tmux's default (MouseDown1Pane only), or when
-# its binding is this product's own (the command names tmux_project_board.sh). Any other binding
+# its binding is this product's own (the command names tmux_project_board.sh, or for
+# MouseDragEnd1Border the option @project_board_width). Any other binding
 # is the user's and stays. The skipped keys are written to the server option
 # @project_agent_board_skipped as space separated `<table>:<key>` words, empty when none.
 set -euo pipefail
@@ -24,6 +26,7 @@ KEY=$(tm show-options -gqv @project_agent_board_key)
 KEY=${KEY:-B}
 MOUSE_DEFAULT='select-pane -t = \; send-keys -M'
 OWN=tmux_project_board.sh
+WIDTH_OPTION=@project_board_width
 RUN='#{q:@project_agent_tmux_dir}/project_agent_run.sh'
 
 # The command of a key binding, empty when the key is not bound.
@@ -47,6 +50,13 @@ if [ -n "$mouse_command" ] && [ "$mouse_command" != "$MOUSE_DEFAULT" ] && [[ $mo
 else
     bind_mouse=1
 fi
+drag_command=$(binding root MouseDragEnd1Border)
+if [ -n "$drag_command" ] && [[ $drag_command != *"$WIDTH_OPTION"* ]]; then
+    skipped="${skipped:+$skipped }root:MouseDragEnd1Border"
+    bind_drag=0
+else
+    bind_drag=1
+fi
 
 {
     if [ "$bind_prefix" = 1 ]; then
@@ -64,6 +74,17 @@ bind-key -T root MouseDown1Pane if-shell -F '#{==:#{@project_board_pane},#{mouse
 } {
     select-pane -t =
     send-keys -M
+}
+BINDING
+    fi
+    if [ "$bind_drag" = 1 ]; then
+        # after-resize-pane runs once when a border drag starts, not for each step or at its end, so
+        # the width a drag leaves is recorded here. tmux has no hook for a user's drag alone:
+        # window-layout-changed also runs when the terminal is resized, and that is not a width the
+        # user chose. The mouse pane is the pane whose border was dragged.
+        cat <<BINDING
+bind-key -T root MouseDragEnd1Border if-shell -F '#{==:#{@project_board_managed},1}' {
+    set-option -gF $WIDTH_OPTION '#{pane_width}'
 }
 BINDING
     fi
