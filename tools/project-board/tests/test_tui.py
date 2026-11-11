@@ -76,7 +76,7 @@ def test_sidebar_shows_every_project_and_mouse_opens_the_right_project(tmp_path)
         async with app.run_test(size=(25, 25)) as pilot:
             await app.apply_snapshot(model.snapshot(board.config, now=NOW))
             await pilot.pause()
-            assert [str(item.label) for item in app.query(".project-name")] == ["Falcon2", "ProjectB"]
+            assert _names(app) == ["Falcon2 1d 01h 30m", "ProjectB"]
             svg = app.export_screenshot()
             assert _rendered_left_column(svg, "Falcon2") == 0
             for label in ("O:2", "D:2"):
@@ -107,7 +107,7 @@ def test_sidebar_shows_every_project_and_mouse_opens_the_right_project(tmp_path)
             await pilot.click("#project-0-O")
             await pilot.pause()
             assert crs == [("Falcon2", "open")]
-            assert [str(item.label) for item in app.query(".project-name")] == ["Falcon2", "ProjectB"]
+            assert _names(app) == ["Falcon2 1d 01h 30m", "ProjectB"]
 
     asyncio.run(check())
 
@@ -128,8 +128,8 @@ def test_seat_row_ends_with_the_session_time_only_when_known():
     assert _seat_text({"index": 1, "job_id": None, "elapsed": None}) == "  1 -"
 
 
-def _leader_rows(app):
-    return [str(row.render()) for row in app.query(".leader")]
+def _names(app):
+    return [str(button.label) for button in app.query(".project-name")]
 
 
 def test_sidebar_shows_leader_and_worker_time_and_redraws_only_when_the_minute_changes(tmp_path):
@@ -141,12 +141,15 @@ def test_sidebar_shows_leader_and_worker_time_and_redraws_only_when_the_minute_c
             await app.apply_snapshot(model.snapshot(board.config, now=NOW))
             await pilot.pause()
             await pilot.click("#project-0-seats")
-            await wait_until(pilot, lambda: app.query(".leader"))
-            assert _leader_rows(app) == ["  Leader 1d 01h 30m"]
+            await wait_until(pilot, lambda: app.query("#project-0-seat-0"))
+            # The Leader time is on the name line, and there is no Leader row.
+            assert _names(app) == ["Falcon2 1d 01h 30m", "ProjectB"]
+            assert not app.query(".leader")
+            assert not any("Leader" in str(button.label) for button in app.query(Button))
             assert str(app.query_one("#project-0-seat-0", Button).label) == "R 0 CPU-012 2h 30m"
             assert str(app.query_one("#project-0-seat-1", Button).label) == "  1 -"
             svg = app.export_screenshot()
-            assert _rendered_left_column(svg, "Leader 1d 01h 30m") <= 2
+            assert _rendered_left_column(svg, "Falcon2 1d 01h 30m") <= 1
             assert _rendered_left_column(svg, "CPU-012 2h 30m") <= 6
             worker = app.query_one("#project-0-seat-0", Button)
             # Another poll within the same minute keeps the same widgets (no redraw, no flicker).
@@ -156,8 +159,27 @@ def test_sidebar_shows_leader_and_worker_time_and_redraws_only_when_the_minute_c
             # The next minute redraws both rows.
             await app.apply_snapshot(model.snapshot(board.config, now=NOW + dt.timedelta(seconds=60)))
             await pilot.pause()
-            assert _leader_rows(app) == ["  Leader 1d 01h 31m"]
+            assert _names(app)[0] == "Falcon2 1d 01h 31m"
             assert str(app.query_one("#project-0-seat-0", Button).label) == "R 0 CPU-012 2h 31m"
+
+    asyncio.run(check())
+
+
+def test_sidebar_shows_the_leader_time_on_the_name_line_folded_or_expanded(tmp_path):
+    board = _make_sidebar_board(tmp_path)
+    app = SidebarApp(str(board.config), poll=False)
+
+    async def check():
+        async with app.run_test(size=(40, 25)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await pilot.pause()
+            assert _names(app) == ["Falcon2 1d 01h 30m", "ProjectB"]         # folded
+            assert "Leader session이 게시된 뒤 지난 시간" in str(app.query_one("#project-0-name", Button).tooltip)
+            assert "Leader" not in str(app.query_one("#project-1-name", Button).tooltip)
+            await pilot.click("#project-0-seats")
+            await wait_until(pilot, lambda: app.query("#project-0-seat-0"))
+            assert _names(app) == ["Falcon2 1d 01h 30m", "ProjectB"]         # expanded: same line, no extra row
+            assert not app.query(".leader")
 
     asyncio.run(check())
 
@@ -178,7 +200,7 @@ def test_sidebar_shows_no_time_for_old_state_without_connected_at_or_without_a_s
             await pilot.pause()
             await pilot.click("#project-0-seats")
             await wait_until(pilot, lambda: app.query("#project-0-seat-0"))
-            assert _leader_rows(app) == []
+            assert _names(app) == ["Falcon2"]
             assert str(app.query_one("#project-0-seat-0", Button).label) == "  0 CPU-012"
             assert str(app.query_one("#project-0-seat-1", Button).label) == "대기 1 CPU-013"
 
@@ -217,31 +239,35 @@ def test_sidebar_highlights_the_project_and_slot_of_the_managed_window_being_sho
             assert _marked(app) == []                       # nothing read yet: nothing marked
             await app.refresh_context()
             await pilot.pause()
-            # Folded: the project name and the fold button (no slot row to mark), never ProjectB.
-            assert str(app.query_one("#project-0-name", Button).label) == "▶ Falcon2"
+            # The Leader window is shown by the name line alone: no slot mark, folded or expanded.
+            assert str(app.query_one("#project-0-name", Button).label) == "▶ Falcon2 1d 01h 30m"
             assert str(app.query_one("#project-1-name", Button).label) == "ProjectB"
-            assert _marked(app) == ["▶ Falcon2", "project-0-seats"]
-            assert "현재 창: Leader" in str(app.query_one("#project-0-seats", Button).tooltip)
+            assert _marked(app) == ["▶ Falcon2 1d 01h 30m"]
+            assert "현재 창" not in str(app.query_one("#project-0-seats", Button).tooltip)
             await pilot.click("#project-0-seats")
-            await wait_until(pilot, lambda: app.query(".leader"))
-            # Expanded: the Leader row carries the slot mark and the fold button no longer does.
-            assert [w.has_class("slot-active") for w in app.query(".leader")] == [True]
-            assert not app.query_one("#project-0-seats", Button).has_class("slot-active")
+            await wait_until(pilot, lambda: app.query("#project-0-seat-0"))
+            assert _marked(app) == ["▶ Falcon2 1d 01h 30m"]
             assert not app.query_one("#project-0-seat-0", Button).has_class("slot-active")
-            # A seat window: only that seat's row is marked, and the Leader row is not.
+            # A seat window, folded: the fold button carries the slot mark and its tooltip names the seat.
+            await pilot.click("#project-0-seats")
             value["active"] = {"project_id": "Falcon2", "slot": "seat-0"}
             await app.refresh_context()
             await pilot.pause()
-            assert [w.has_class("slot-active") for w in app.query(".leader")] == [False]
+            assert _marked(app) == ["▶ Falcon2 1d 01h 30m", "project-0-seats"]
+            assert "현재 창: seat 0" in str(app.query_one("#project-0-seats", Button).tooltip)
+            # Expanded: only that seat's row is marked.
+            await pilot.click("#project-0-seats")
+            await wait_until(pilot, lambda: app.query("#project-0-seat-0"))
             assert app.query_one("#project-0-seat-0", Button).has_class("slot-active")
             assert not app.query_one("#project-0-seat-1", Button).has_class("slot-active")
+            assert not app.query_one("#project-0-seats", Button).has_class("slot-active")
             svg = app.export_screenshot()
-            assert "▶ Falcon2" in html.unescape(svg).replace("\xa0", " ")
+            assert "▶ Falcon2 1d 01h 30m" in html.unescape(svg).replace("\xa0", " ")
             # The other project's seat number does not match this project.
             value["active"] = {"project_id": "ProjectB", "slot": "seat-0"}
             await app.refresh_context()
             await pilot.pause()
-            assert str(app.query_one("#project-0-name", Button).label) == "Falcon2"
+            assert str(app.query_one("#project-0-name", Button).label) == "Falcon2 1d 01h 30m"
             assert str(app.query_one("#project-1-name", Button).label) == "▶ ProjectB"
             assert not app.query_one("#project-0-seat-0", Button).has_class("slot-active")
             # An unmanaged window, an unregistered project and a slot without a row.
@@ -256,11 +282,11 @@ def test_sidebar_highlights_the_project_and_slot_of_the_managed_window_being_sho
             value["active"] = {"project_id": "Falcon2", "slot": "seat-7"}
             await app.refresh_context()
             await pilot.pause()
-            assert _marked(app) == ["▶ Falcon2"]
+            assert _marked(app) == ["▶ Falcon2 1d 01h 30m"]
             value["active"] = {"project_id": "Falcon2", "slot": None}
             await app.refresh_context()
             await pilot.pause()
-            assert _marked(app) == ["▶ Falcon2"]
+            assert _marked(app) == ["▶ Falcon2 1d 01h 30m"]
 
     asyncio.run(check())
 
@@ -274,11 +300,11 @@ def test_the_highlight_is_kept_when_the_read_fails_and_not_read_while_hidden(tmp
             await app.apply_snapshot(model.snapshot(board.config, now=NOW))
             await app.refresh_context()
             await pilot.pause()
-            assert _marked(app) == ["▶ Falcon2"]
+            assert _marked(app) == ["▶ Falcon2 1d 01h 30m"]
             value["active"] = RuntimeError("tmux is busy")
             await app.refresh_context()
             await pilot.pause()
-            assert _marked(app) == ["▶ Falcon2"]            # unknown is not "no window"
+            assert _marked(app) == ["▶ Falcon2 1d 01h 30m"]            # unknown is not "no window"
             count = len(reads)
             value["active"] = None
             app.set_visible(False)
@@ -1290,6 +1316,32 @@ def test_unconfirmed_acceptance_response_keeps_the_draft(tmp_path):
     asyncio.run(check())
 
 
+def test_answer_box_ctrl_j_inserts_a_newline_like_enter_and_keeps_ctrl_s(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.decide(base, "open", "D-20261107-01")
+    sent = []
+    app = PopupApp(str(board.config), "Falcon2", load=False,
+                   answer_sender=lambda *args: sent.append(args) or {"ok": False, "error": {"message": "x"}})
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            editor = app.query_one("#answer", TextArea)
+            editor.focus()
+            await pilot.press("a", "ctrl+j", "b", "enter", "c")
+            assert editor.text == "a\nb\nc"
+            editor.move_cursor((0, 1))
+            await pilot.press("ctrl+j")
+            assert editor.text == "a\n\nb\nc" and editor.cursor_location == (1, 0)
+            await pilot.press("ctrl+s")
+            await wait_until(pilot, lambda: sent)
+            assert sent == [(str(board.config), "Falcon2", "D-20261107-01", "a\n\nb\nc")]
+            await pilot.press("escape")
+
+    asyncio.run(check())
+
+
 def test_percent_encoded_local_csv_link_opens_a_table(tmp_path):
     board = Board(tmp_path)
     base = board.project("Falcon2", seats=1)
@@ -1505,32 +1557,37 @@ def test_a_refresh_that_changes_nothing_shown_draws_nothing_and_a_change_writes_
             assert built == [0, 1] and written == []
             built.clear()
             names = [app.query_one(f"#project-{n}-name", Button) for n in (0, 1)]
-            # The same state again, and a later minute: the seats are folded, so no minute counter is on screen.
+            # The same state again draws nothing. A later minute writes only the Leader time on Falcon2's name
+            # line (the seats are folded, so no seat counter is on screen; ProjectB has no Leader time).
             await app.apply_snapshot(model.snapshot(board.config, now=NOW))
-            await app.apply_snapshot(model.snapshot(board.config, now=NOW + dt.timedelta(minutes=5)))
             await pilot.pause()
             assert built == [] and written == []
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW + dt.timedelta(minutes=5)))
+            await pilot.pause()
+            assert built == [] and written == [0]
+            assert _names(app) == ["Falcon2 1d 01h 35m", "ProjectB"]
+            written.clear()
             # A CR is added to ProjectB only: its widgets are written, no widget is replaced, Falcon2 is not touched.
             board.cr(tmp_path / "ProjectB" / "main", "open", "OTH-001")
-            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW + dt.timedelta(minutes=5)))
             await pilot.pause()
             assert built == [] and written == [1]
             assert [app.query_one(f"#project-{n}-name", Button) for n in (0, 1)] == names
             assert str(app.query_one("#project-1-O", Button).label) == "O:1"
             assert not app.query_one("#project-1-O", Button).disabled
-            assert [str(button.label) for button in app.query(".project-name")] == ["Falcon2", "ProjectB"]
+            assert _names(app) == ["Falcon2 1d 01h 35m", "ProjectB"]
             # A project that appears changes the list: everything is drawn again, in order.
             built.clear()
             board.project("ProjectC", seats=1)
-            await app.apply_snapshot(model.snapshot(board.config, now=NOW))
+            await app.apply_snapshot(model.snapshot(board.config, now=NOW + dt.timedelta(minutes=5)))
             await pilot.pause()
             assert built == [0, 1, 2]
-            assert [str(button.label) for button in app.query(".project-name")] == ["Falcon2", "ProjectB", "ProjectC"]
+            assert _names(app) == ["Falcon2 1d 01h 35m", "ProjectB", "ProjectC"]
 
     asyncio.run(check())
 
 
-def test_the_minute_of_an_expanded_project_is_written_into_its_widgets(tmp_path, monkeypatch):
+def test_the_minute_of_an_expanded_project_and_its_name_line_is_written_into_its_widgets(tmp_path, monkeypatch):
     board = _make_sidebar_board(tmp_path)
     app = SidebarApp(str(board.config), poll=False)
     built, written = _count_draws(monkeypatch)
@@ -1540,18 +1597,18 @@ def test_the_minute_of_an_expanded_project_is_written_into_its_widgets(tmp_path,
             await app.apply_snapshot(model.snapshot(board.config, now=NOW))
             await pilot.pause()
             await pilot.click("#project-0-seats")
-            await wait_until(pilot, lambda: app.query(".leader"))
+            await wait_until(pilot, lambda: app.query("#project-0-seat-0"))
             other = app.query_one("#project-1-name", Button)
-            leader_row = app.query_one(".leader", Static)
+            name = app.query_one("#project-0-name", Button)
             seat = app.query_one("#project-0-seat-0", Button)
             built.clear()
             written.clear()
             await app.apply_snapshot(model.snapshot(board.config, now=NOW + dt.timedelta(seconds=60)))
             await pilot.pause()
             assert built == [] and written == [0]
-            assert _leader_rows(app) == ["  Leader 1d 01h 31m"]
+            assert str(name.label) == "Falcon2 1d 01h 31m"
             assert str(seat.label) == "R 0 CPU-012 2h 31m"
-            assert app.query_one(".leader", Static) is leader_row
+            assert app.query_one("#project-0-name", Button) is name
             assert app.query_one("#project-0-seat-0", Button) is seat
             assert app.query_one("#project-1-name", Button) is other
 
@@ -1655,7 +1712,7 @@ def test_renders_that_overlap_leave_one_block_per_project(tmp_path):
             await asyncio.gather(app.apply_snapshot(model.snapshot(board.config, now=NOW)),
                                  app.apply_liveness({}), app.apply_snapshot(model.snapshot(board.config, now=NOW)))
             await pilot.pause()
-            assert [str(button.label) for button in app.query(".project-name")] == ["Falcon2", "ProjectB"]
+            assert [str(button.label) for button in app.query(".project-name")] == ["Falcon2 1d 01h 30m", "ProjectB"]
             assert len(app.query(".project")) == 2
 
     asyncio.run(check())

@@ -211,7 +211,6 @@ class SidebarApp(App):
     .decision { color: #ffd479; }
     .decision-open { color: #ff8f8f; }
     .seat { color: #c7dbf1; }
-    .leader { width: auto; min-width: 100%; height: 1; color: #c7dbf1; }
     .seat-empty { color: #778596; }
     .seat-pending, .seat-release-pending { color: #ffcb84; }
     .seat-stopped { color: #ff8f8f; }
@@ -509,15 +508,16 @@ class SidebarApp(App):
         return self._active.get("slot") if self._is_active(project) else None
 
     def _project_signature(self, project: dict) -> tuple:
-        """What `_project_block` shows of one project. The seat rows and the Leader row exist only while the
-        project is expanded, so a folded project's seats (and their minute counters) are not part of it."""
+        """What `_project_block` shows of one project. The seat rows exist only while the project is expanded,
+        so a folded project's seats (and their minute counters) are not part of it. The Leader time is on the
+        name line, so it is part of it folded or not."""
         expanded = project["id"] in self._expanded_projects
         seats = tuple((seat.get("index"), seat.get("job_id"), seat.get("status"),
                        seat.get("session_id"), seat.get("host"), seat.get("path"),
                        self._seat_liveness(project, seat), _seat_text(seat))
                       for seat in project.get("seats", [])) if expanded else ()
         errors = tuple((error.get("source"), error.get("message")) for error in project.get("errors", []))
-        leader = format_elapsed((project.get("leader") or {}).get("elapsed")) if expanded else None
+        leader = format_elapsed((project.get("leader") or {}).get("elapsed"))
         return (project["id"], expanded, self._is_active(project), self._active_slot(project),
                 tuple(_count(project, state) for state in model.CR_STATES),
                 _decide_count(project), _decide_stages(project), seats, errors, leader)
@@ -526,9 +526,8 @@ class SidebarApp(App):
         """Which rows `_project_block` has for one project. A change of shape replaces the block (inside one
         batch); any other change of what is shown is written into the widgets that are already mounted."""
         expanded = project["id"] in self._expanded_projects
-        leader = bool(format_elapsed((project.get("leader") or {}).get("elapsed"))) if expanded else False
         seats = tuple(seat["index"] for seat in project.get("seats", [])) if expanded else ()
-        return expanded, leader, seats, len(project.get("errors", []))
+        return expanded, seats, len(project.get("errors", []))
 
     def _register_actions(self, number: int, project: dict) -> None:
         """The click targets of one project's block, keyed by widget id (`project-<number>-...`)."""
@@ -571,27 +570,23 @@ class SidebarApp(App):
                                       zip(("결정 대기", "답변 접수", "반영 중", "완료"), stages)),
                    classes={"decision-open": decision_count not in ("-", "!", "0")})
         active, slot = self._is_active(project), self._active_slot(project)
-        self._show(widgets["name"], ("▶ " if active else "") + project["id"],
-                   tooltip=project["id"], classes={"project-active": active})
+        leader_time = format_elapsed((project.get("leader") or {}).get("elapsed"))
+        self._show(widgets["name"],
+                   ("▶ " if active else "") + project["id"] + (f" {leader_time}" if leader_time else ""),
+                   tooltip=project["id"] + (" · Leader session이 게시된 뒤 지난 시간" if leader_time else ""),
+                   classes={"project-active": active})
         expanded = project["id"] in self._expanded_projects
         tooltip = "좌석 접기" if expanded else "좌석 펼치기"
-        slot_hidden = slot is not None and not expanded      # the slot's own row is folded away
+        slot_hidden = slot not in (None, "leader") and not expanded      # the seat's own row is folded away
         if slot_hidden:
-            tooltip += " · 현재 창: " + ("Leader" if slot == "leader" else slot.replace("-", " "))
+            tooltip += " · 현재 창: " + slot.replace("-", " ")
         self._show(widgets["seats"], "▾" if expanded else "▸",
                    tooltip=tooltip, classes={"slot-active": slot_hidden})
 
     def _fill_rows(self, widgets: dict, project: dict) -> None:
-        """Leader row, seat rows and error rows of a project whose shape is the block's, in its widgets."""
+        """Seat rows and error rows of a project whose shape is the block's, in its widgets."""
         expanded = project["id"] in self._expanded_projects
         slot = self._active_slot(project)
-        leader_time = format_elapsed((project.get("leader") or {}).get("elapsed")) if expanded else None
-        if leader_time:
-            row = widgets["leader"]
-            text = f"  Leader {leader_time}"
-            if str(row.content) != text:
-                row.update(text)
-            row.set_class(slot == "leader", "slot-active")
         for seat in (project.get("seats", []) if expanded else []):
             button = widgets[f"seat-{seat['index']}"]
             live = self._seat_liveness(project, seat)
@@ -634,10 +629,6 @@ class SidebarApp(App):
         children = [name, widgets["D"],
                     Horizontal(*(widgets[key] for key in ("O", "T", "I", "seats")), classes="counts")]
         expanded = project["id"] in self._expanded_projects
-        if expanded and format_elapsed((project.get("leader") or {}).get("elapsed")):
-            widgets["leader"] = leader_row = Static("", classes="leader")
-            leader_row.tooltip = "Leader session이 게시된 뒤 지난 시간"
-            children.append(leader_row)
         for seat in (project.get("seats", []) if expanded else []):
             widgets[f"seat-{seat['index']}"] = button = Button("", id=f"{prefix}seat-{seat['index']}", classes="seat")
             children.append(button)
@@ -1014,6 +1005,18 @@ class CRPopupApp(App):
             self.remove_class("list-open")
 
 
+class AnswerArea(TextArea):
+    """The answer box: Ctrl+J (LF from the terminal) inserts a newline like Enter."""
+
+    async def _on_key(self, event) -> None:
+        if event.key == "ctrl+j" and not self.read_only:
+            event.stop()
+            event.prevent_default()
+            self._replace_via_keyboard("\n", *self.selection)
+            return
+        await super()._on_key(event)
+
+
 class PopupApp(App):
     """Focused decision reader with a multiline answer editor."""
 
@@ -1086,7 +1089,7 @@ class PopupApp(App):
             yield VerticalScroll(id="decision-list")
             yield VerticalScroll(id="decision-detail")
         yield Static("답변", id="answer-label")
-        yield TextArea(id="answer", placeholder="결정 내용을 읽고 답변을 입력하세요.")
+        yield AnswerArea(id="answer", placeholder="결정 내용을 읽고 답변을 입력하세요.")
         with Horizontal(id="popup-actions"):
             yield Button("목록", id="show-list")
             yield Button("전송", id="send")

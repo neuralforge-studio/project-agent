@@ -961,16 +961,16 @@ def test_the_sidebar_highlight_follows_a_client_between_managed_and_plain_window
                     await pilot.pause()
                     await pilot.click("#project-0-seats")
                     await wait_until(pilot, lambda: app.query("#project-0-seat-1"))
-                    found["names"] = [str(b.label) for b in app.query(".project-name")]
-                    found["slots"] = [w.has_class("slot-active") for w in app.query(".leader")] + \
-                                     [b.has_class("slot-active") for b in app.query("#project-0-seat-0, #project-0-seat-1")]
+                    # The Leader time after the name depends on the clock; the highlight does not.
+                    found["names"] = [re.sub(r" (\d+d )?(\d+h )?\d+m$", "", str(b.label)) for b in app.query(".project-name")]
+                    found["slots"] = [b.has_class("slot-active") for b in app.query("#project-0-seat-0, #project-0-seat-1")]
 
             asyncio.run(check())
             return found
 
-        want = {"leader": (["▶ Falcon2", "ProjectB"], [True, False, False]),
-                "seat": (["▶ Falcon2", "ProjectB"], [False, False, True]),
-                "plain": (["Falcon2", "ProjectB"], [False, False, False])}
+        want = {"leader": (["▶ Falcon2", "ProjectB"], [False, False]),
+                "seat": (["▶ Falcon2", "ProjectB"], [False, True]),
+                "plain": (["Falcon2", "ProjectB"], [False, False])}
         for window in ("leader", "seat", "plain", "leader"):
             _tmux(name, "select-window", "-t", f"Falcon2:{window}")
             # The Board pane the client sees is the one of the window it shows (the BOARD-002 check).

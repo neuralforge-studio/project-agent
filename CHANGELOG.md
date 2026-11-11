@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- BOARD-023
+- BOARD-024
+
 형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
 
 ## 0.8.0 - 2026-11-11
