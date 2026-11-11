@@ -710,7 +710,7 @@ resume의 run은 `--fork-session`과 위치 인자 prompt를 쓰지 않습니다
 프로젝트의 provider_name이 있으면 현재 CLI의 이름 옵션 `-n`에 전달합니다.
 CLI의 환경에 `CLAUDE_DISABLE_ADOPT=1`을 넣어 CLI가 끝날 때 대화가 background session으로 넘어가지 않게 합니다(3절 "Background로 옮겨진 대화와 등록되지 않은 run의 종료 판정").
 SessionStart·Stop·StopFailure·SessionEnd hook의 session_id가 기대값과 다르면 `owner_mismatch`이지만, 옛 transcript가 그 ID로의 이동을 보여 주면 이동을 기록하고 `conversation_backgrounded`입니다.
-최종 --settings에는 프로젝트 guard와 공통 SessionStart·Stop·StopFailure·SessionEnd hook을 합칩니다.
+최종 --settings에는 프로젝트 guard와 공통 SessionStart·Stop·StopFailure·SessionEnd hook을 합칩니다. Claude Leader의 run에는 `UserPromptSubmit` hook(7절 watch의 "Leader 자기 점검의 gate")을 더합니다. Worker의 run에는 없습니다.
 이 파일의 writer는 prepare-session 하나입니다.
 공통 코드는 hook 조각을 제공하며 같은 파일을 다시 쓰지 않습니다.
 `crossSessionInbound: "accept"`도 이 --settings 파일에 넣습니다.
@@ -1334,6 +1334,13 @@ agent-session watch --project NAME --minutes 30
 - 등록 시점: Claude Leader·Worker의 최초 prompt(등록 뒤 첫 행동), resume 메시지(재개한 대화는 session cron을 잃습니다). restart는 새 대화이므로 최초 prompt로 다시 등록합니다. Codex에는 session cron이 없어 Codex의 prompt에는 넣지 않습니다. Codex Worker의 멈춤은 운영자의 수동 `watch`로만 점검합니다(지금 등록된 project는 모두 Claude).
 - Worker 점검은 자기 CR·자식 process를 스스로 보고 풀며, 제출해서 Leader 회신을 30분 넘게 기다렸으면 Leader에게 제출 hash와 함께 짧게 다시 알립니다(점검마다 한 번). Leader 점검은 자기 project에 `watch`를 실행하고, review 대기 CR(제출 행의 hash가 Disposition에 없는 것)을 먼저 처리한 뒤 반납 대기·빈 seat·사라진 Worker를 `project-item ls`·state로 봅니다.
 - 한계: session cron은 instance가 turn 중이면 실행되지 않고 주기의 최대 절반(최대 30분)까지 늦으며 7일 뒤 만료합니다. 점검이 만료 전에 자기 등록을 갱신합니다. instance 자체가 쉬지 못하게 막힌 경우(긴 turn)는 이 점검이 보지 못합니다.
+- **Leader 자기 점검의 gate**(TEAM-002): Leader의 session cron은 정해진 시각에 prompt를 무조건 넣고 조건을 걸 수 없습니다. 그래서 Claude Leader run의 settings에 `UserPromptSubmit` hook(`self_check_gate.py`)을 두고, Leader 자기 점검 prompt일 때만 판정합니다(첫 줄이 `[자기 점검]`으로 시작하고 `Leader 자기 점검`을 담은 prompt. Worker 점검·사용자 입력·동료 메시지는 판정하지 않고 통과). 실제 Claude Code 2.1.322에서 확인한 사실: session cron이 넣는 prompt도 `UserPromptSubmit` hook을 거치고, 막으면(`{"decision":"block"}` 또는 exit 2) 모델 호출·user 기록 없이 끝나며 cron은 다음 주기에도 계속 실행됩니다. 화면에는 `Running scheduled task` 줄과 block 알림 한 줄이 남고, 대화 기록에는 시각이 있는 `system` 기록(`scheduled_task_fire`, `informational`)이 남습니다. `suppressOutput`은 이 줄들을 숨기지 못합니다.
+  - 막는 조건: 그 project의 CR 중 open·todo·in-progress가 없고 결정 항목 중 open·answered가 없으며(상태 목록은 project-item의 `CR.listed`에서 `CR.terminal`을 뺀 것과 `DECIDE.listed`로, hook이 다시 적지 않습니다), 이 run의 마지막 통과가 24시간 안입니다.
+  - 통과하는 경우: 항목이 하나라도 있음, 판정할 수 없음(registry·item 경로·디렉터리를 읽지 못함, 예상 밖의 입력, 어떤 오류든), hook이 제한 시간(10초) 안에 끝나지 않음(Claude는 시간을 넘긴 hook의 prompt를 통과시킵니다). 판정이 불확실하면 점검을 통과시킵니다.
+  - 24시간에 한 번 통과: 할 일이 없어도 마지막 통과 뒤 24시간이 지나면 점검 한 번을 통과시킵니다. session cron은 등록 7일 뒤 만료하고 점검 prompt의 마지막 항목이 6일 뒤부터 다시 등록하므로, 모든 점검을 막으면 cron이 사람의 기억 없이 사라집니다. 하루 한 번 통과하면 등록 뒤 6~7일 사이에 점검이 한 번 실행되어 갱신이 끊기지 않습니다. 통과 시각은 `<base>/agent/runs/<run_id>/self-check-gate.json`(`passed_at`)에 쓰고, 없거나 읽을 수 없거나 쓸 수 없으면 통과합니다. run마다 첫 점검은 통과합니다.
+  - 할 일이 생기면 다음 주기(30분 이내)의 점검이 그대로 실행됩니다. 등록하는 쪽의 기억에 기대지 않습니다.
+  - 막은 점검도 대화 기록에 시각 있는 기록을 남기므로 Leader의 가장 새 기록이 갱신됩니다. 이 시각을 쓰는 정체 판정은 in-progress CR이 있을 때만 Leader를 판정하고, 그 CR이 있으면 gate가 점검을 통과시키므로 판정과 맞부딪히지 않습니다.
+  - 이미 떠 있는 Leader run에는 없습니다(settings는 run을 시작할 때 쓰므로 restart 뒤부터).
 - Leader가 호출한 `watch`는 정체한 Worker를 깨우는 판정은 같지만 Leader에게 메시지를 보내지 않고 Leader 자신은 판정하지 않습니다(호출하고 있다는 것이 정체가 아니라는 뜻입니다). 대신 `resting` target 결과에 `evidence`(운영자 호출이면 Leader 메시지에 담기는 근거)를 담고, Leader 알림 기록(`notified_at`)은 남기지 않습니다.
 
 **정체**: 다음이 모두 맞는 instance입니다. 원인(자식 process를 기다림, 제출 뒤 Leader 회신을 기다림, 아무것도 안 함)은 묻지 않습니다. 정체한 instance는 깨워서 스스로 판단하게 합니다. 판정은 사용자 결정 D-20261110-01(대화 기록으로 판정)을 따릅니다.
@@ -1393,7 +1400,7 @@ Start와 restart는 다음 실행 입력을 만듭니다.
 | 항목 | 계약 |
 | --- | --- |
 | prompt_file | `agent/runs/<run_id>/prompt.md`. 공통 prompt, 인계 파일, CR 파일 경로와 그 파일을 읽으라는 지시를 포함 |
-| settings_file | Claude만. 공통 코드가 `agent/runs/<run_id>/settings.json`을 씁니다: `crossSessionInbound: accept`와 등록 hook. Codex는 null |
+| settings_file | Claude만. 공통 코드가 `agent/runs/<run_id>/settings.json`을 씁니다: `crossSessionInbound: accept`와 등록 hook(Leader는 자기 점검 gate hook도). Codex는 null |
 | provider_name | Claude만. Tmux window 이름 |
 | env | 공통 `AGENT_SESSION_*` |
 | unset_env | 없음 |
