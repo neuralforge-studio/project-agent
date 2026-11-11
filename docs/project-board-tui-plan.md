@@ -104,7 +104,7 @@ SSH seat의 Worker window는 Leader 호스트의 SSH 표시 창입니다. 이 �
 `O/T/I`가 `0`, `-`, `!`이면 클릭해도 popup이나 오류 알림을 열지 않습니다. `D`는 표시 상태가 `완료`가 아닌 결정이 없거나 `-`, `!`일 때만 열지 않습니다.
 
 CR popup은 왼쪽 목록에서 선택한 항목의 전체 Markdown 원본을 오른쪽에 표시합니다.
-목록은 Open, Todo, In-Progress, Done 네 묶음입니다(BOARD-021). 묶음 제목은 `Open ▼` 모양이고 눌러 접고(`▶`) 펼칩니다. 처음에는 모두 펼쳐져 있고, `O/T/I` 중 누른 상태의 묶음이 목록 맨 위에 오도록 scroll하며 그 묶음의 첫 CR을 선택합니다(`cr --state`가 이 묶음을 정합니다. 묶음이 비면 첫 CR). 비어 있는 묶음은 `없음` 한 줄입니다. 맨 위에는 `Open {N}, Todo {N}, In-Progress {N}, Done {N}`을 표시하며 묶음을 접어도 바뀌지 않습니다. done CR도 같은 방식으로 본문을 읽습니다. deferred는 보이지 않습니다. done 목록은 popup이 읽을 때만 읽고(`model.popup_snapshot(done=True)`) sidebar의 snapshot과 개수에는 없습니다. done CR은 project마다 수백 개이고 파일 하나를 여는 데 공유 disk에서 10 ms 넘게 걸리므로(balvian 1471개는 19초) 목록은 파일을 열지 않고 파일 이름의 제목으로 먼저 그린 뒤, 진짜 제목(첫 줄)을 한 파일씩 읽어 바꿉니다(`model.done_items`·`done_title`).
+목록은 Open, Todo, In-Progress, Done 네 묶음입니다(BOARD-021). 묶음 제목은 `Open ▼` 모양이고 눌러 접고(`▶`) 펼칩니다. 처음에는 Done만 접혀 있고(`Done ▶`, BOARD-026) Open·Todo·In-Progress는 펼쳐져 있습니다. 접고 펼친 상태는 창 단위라서 ◀▶로 project를 옮겨도 유지됩니다. `O/T/I` 중 누른 상태의 묶음이 목록 맨 위에 오도록 scroll하며 그 묶음의 첫 CR을 선택합니다(`cr --state`가 이 묶음을 정합니다. 묶음이 비면 첫 CR). 비어 있는 묶음은 `없음` 한 줄입니다. 맨 위에는 `Open {N}, Todo {N}, In-Progress {N}, Done {N}`을 표시하며 묶음을 접어도 바뀌지 않습니다. done CR도 같은 방식으로 본문을 읽습니다. deferred는 보이지 않습니다. done 목록은 popup이 읽을 때만 읽고(`model.popup_snapshot(done=True)`) sidebar의 snapshot과 개수에는 없습니다. done CR은 project마다 수백 개이고 파일 하나를 여는 데 공유 disk에서 10 ms 넘게 걸리므로(balvian 1471개는 19초) 목록은 파일을 열지 않고 파일 이름의 제목으로 먼저 그린 뒤, 진짜 제목(첫 줄)을 한 파일씩 읽어 바꿉니다(`model.done_items`·`done_title`).
 마우스로 CR 행을 클릭하거나 키보드로 행에 초점을 맞춘 뒤 Enter를 눌러 선택합니다.
 CR·결정 popup의 너비가 70 column 미만이면 `목록` 버튼으로 목록과 본문을 전환합니다.
 70 column 이상이면 목록과 본문을 함께 표시하고 `목록` 버튼을 숨깁니다.

@@ -3,6 +3,7 @@
 - Opened: 2026-11-11
 - Scope: project-agent
 - Severity: S2
+- Base: 65f601db83908a9067a8e8bd5bc03fe25769e7ca 2026-11-11T10:13:43+09:00
 
 ## Symptom
 Board sidebar를 여는 데 16×16에서 2.8초, 실제 등록 10개에서 2.2초가 걸립니다(0.7.0, BOARD-016 단계 분해). 사용자는 "rust로 옮겨야하는거 아니야? 왜 느린거야?"라고 물었습니다. BOARD-016 결과를 보고 결정 D-20261111-01에서 C(sidebar를 Rust로)를 골랐습니다.
@@ -48,6 +49,7 @@ Board sidebar를 여는 데 16×16에서 2.8초, 실제 등록 10개에서 2.2�
   - 설치할 때 build합니다. 실패하면 release를 바꾸지 않습니다. 저장소에 binary를 넣지 않고, 어느 경로로도 Board가 깨진 release로 넘어가지 않게 하려는 것입니다.
   - 두 언어에 생기는 읽기 규칙은 일치 test로 지킵니다.
 - 2026-11-11 Leader: open -> todo. 사용자 결정 D-20261111-01 decided C
+- 2026-11-11 Leader: 범위를 더합니다. 사용자 지시: "rust로 이미 수정하기로 결정된 상태라서, 원인 파악한 것을 rust 쪽에 반영할게 있다면 반영해서 rust용 side bar를 만들도록 하자." 더하는 것은 넷입니다. (1) 기준 화면은 0.8.1(BOARD-023 이름 줄 포함)입니다. (2) BOARD-022 결론에 따라 주기 읽기와 클릭 처리마다 tmux process는 하나이고, 호출 수를 test로 셉니다. (3) BOARD-022·025 결론에 따라 클릭이 Python 시동을 기다리지 않게 합니다. tmux 명령 하나로 끝나는 전환은 Rust가 직접 하고, 하위 명령은 시동 번들 경로로 부르고, CR·결정 창이 떠 있으면 BOARD-025의 규약 socket에 직접 알립니다. (4) prefix B 켜기·끄기와 sync는 Python에 남깁니다.
 
 ## Implementation
 읽을 문서:

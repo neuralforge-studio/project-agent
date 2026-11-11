@@ -664,6 +664,7 @@ def test_cr_popup_row_marks_review_wait(tmp_path):
 
 
 # BOARD-021: one CR window with four foldable groups, and ◀▶ between projects in the CR and decision windows.
+# BOARD-026: the window opens with the Done group folded.
 
 def _four_state_board(tmp_path, open_count=2):
     board = Board(tmp_path)
@@ -692,10 +693,12 @@ def test_cr_window_shows_four_groups_with_counts_for_any_pressed_state(tmp_path,
             await app.apply_snapshot(model.popup_snapshot(board.config, "Falcon2", True))
             await pilot.pause()
             assert str(app.query_one("#cr-title", Static).content) == "Open 2, Todo 1, In-Progress 2, Done 3"
-            assert _group_headers(app) == ["Open ▼", "Todo ▼", "In-Progress ▼", "Done ▼"]
+            assert _group_headers(app) == ["Open ▼", "Todo ▼", "In-Progress ▼", "Done ▶"]
             assert [str(row.label)[2:9] for row in app.query(".list-item")] == [
                 "CPU-001", "CPU-002", "CPU-101", "CPU-201", "CPU-202", "CPU-300", "CPU-301", "CPU-302"]
-            assert all(row.display for row in app.query(".list-item"))
+            assert [(str(row.label)[2:9], row.display) for row in app.query(".list-item")] == [
+                ("CPU-001", True), ("CPU-002", True), ("CPU-101", True), ("CPU-201", True), ("CPU-202", True),
+                ("CPU-300", False), ("CPU-301", False), ("CPU-302", False)]       # only Done starts folded
             assert "CPU-400" not in str(app.query_one("#cr-items").children)      # deferred stays hidden
             first = {"open": "CPU-001", "todo": "CPU-101", "in-progress": "CPU-201"}[state]
             assert app.selected_id == first
@@ -706,7 +709,7 @@ def test_cr_window_shows_four_groups_with_counts_for_any_pressed_state(tmp_path,
 def test_cr_window_scrolls_to_the_pressed_group_first(tmp_path):
     board, base, _ = _four_state_board(tmp_path, open_count=12)
     for number in range(10):
-        board.cr(base, "done", f"CPU-5{number:02d}", f"older done {number}")
+        board.cr(base, "in-progress", f"CPU-5{number:02d}", f"more working {number}")
     app = CRPopupApp(str(board.config), "Falcon2", "in-progress", load=False)
 
     async def check():
@@ -732,18 +735,17 @@ def test_cr_window_folds_and_unfolds_each_group_and_reads_done(tmp_path):
             await pilot.pause()
             await pilot.click("#cr-group-todo")
             await pilot.pause()
-            assert _group_headers(app) == ["Open ▼", "Todo ▶", "In-Progress ▼", "Done ▼"]
+            assert _group_headers(app) == ["Open ▼", "Todo ▶", "In-Progress ▼", "Done ▶"]
             assert [str(row.label)[2:9] for row in app.query(".list-item") if row.display] == [
-                "CPU-001", "CPU-002", "CPU-201", "CPU-202", "CPU-300", "CPU-301", "CPU-302"]
-            await pilot.click("#cr-group-done")
-            await pilot.pause()
-            assert not any(row.display for row in app.query(".list-item") if str(row.label)[2:7] == "CPU-3")
+                "CPU-001", "CPU-002", "CPU-201", "CPU-202"]
             # the counts line does not change when a group is folded
             assert str(app.query_one("#cr-title", Static).content) == "Open 2, Todo 1, In-Progress 2, Done 3"
             await pilot.pause(app.query_one("#cr-group-done", Button).active_effect_duration)
             await pilot.click("#cr-group-done")
             await pilot.pause()
             assert _group_headers(app)[3] == "Done ▼"
+            assert [str(row.label)[2:9] for row in app.query(".list-item") if row.display] == [
+                "CPU-001", "CPU-002", "CPU-201", "CPU-202", "CPU-300", "CPU-301", "CPU-302"]
             await wait_until(pilot, lambda: str(app.query_one("#cr-item-5", Button).label).endswith("done 0"))
             await pilot.click("#cr-item-6")                       # a done CR opens its Markdown
             await wait_until(pilot, lambda: any(done[1].read_text(encoding="utf-8") == widget.source
@@ -827,6 +829,25 @@ def test_cr_window_moves_between_every_project_in_the_same_window_and_wraps(tmp_
             await pilot.click("#cr-prev")                                     # before the first: the last
             await wait_until(pilot, lambda: app.project_id == "Gamma")
             assert app.is_running
+
+    asyncio.run(check())
+
+
+def test_cr_window_keeps_done_unfolded_when_moving_between_projects(tmp_path):
+    board = _three_projects(tmp_path)
+    app = CRPopupApp(str(board.config), "Alpha", "open", load=False)
+
+    async def check():
+        async with app.run_test(size=(90, 30)) as pilot:
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Alpha", True))
+            await pilot.pause()
+            await pilot.click("#cr-group-done")
+            await pilot.pause()
+            assert _group_headers(app)[3] == "Done ▼"
+            await pilot.click("#cr-prev")                                     # Alpha → Gamma, which has a done CR
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and app.selected_id == "GGG-001")
+            assert _group_headers(app)[3] == "Done ▼"
+            assert [row.display for row in app.query(".list-item")] == [True, True]
 
     asyncio.run(check())
 

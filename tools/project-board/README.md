@@ -90,7 +90,10 @@ window that no client showed for longest. A pane whose window no client shows st
 reads once as soon as the window is shown. Each visible window gives the Board
 25 columns by default and shows existing panes in the remaining space. A width adjusted in
 tmux is used when the Board pane moves to another window or is created again. Turning the
-Board off restores the previous pane layout and focus. A window with too little space for
+Board off restores the previous pane layout and focus. Turning it on or off takes one tmux process per window; when that takes longer than
+half a second, every attached client shows `Board 끄는 중 3/8` (or `켜는 중`) in the tmux message line,
+which disappears by itself when the work is done. The pane's own first picture, a second or more
+later, is the Board's start-up and not part of that count. A window with too little space for
 the chosen width shows a smaller Board pane; another window with room restores that width.
 Each project shows its decision count above the CR counts. Seats start folded. Click
 `▸` to expand one project's seats, or `▾` to fold them. The fold state is shared by
@@ -128,7 +131,8 @@ drag any other border to resize it. These are tmux's default mouse bindings and 
 pane, where you moved it and as large as you made it. Press `Esc` or the close button to
 close it; that closes only that pane.
 The CR popup is the same window whichever of `O`, `T` or `I` opened it: it lists the Open,
-Todo, In-Progress and Done CRs as groups headed `Open ▼` (click to fold or unfold), starts
+Todo, In-Progress and Done CRs as groups headed `Open ▼` (click to fold or unfold; Done opens
+folded as `Done ▶`, and stays as you leave it while you move between projects), starts
 at the group that was pressed, and shows `Open N, Todo N, In-Progress N, Done N` at the top.
 Click a CR row or focus it with Tab and press Enter to read its full Markdown, done CRs
 included. Select another row to change CRs. In both popups the `◀ project ▶` buttons at the
