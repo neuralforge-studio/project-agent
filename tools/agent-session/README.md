@@ -1,7 +1,7 @@
 # Agent Session
 
 `agent-session`은 등록 프로젝트의 Leader·Worker를 tmux에서 운영합니다.
-공개 명령은 start·send·stop·restart·review·shutdown·resume·watch입니다.
+공개 명령은 start·send·stop·restart·review·shutdown·resume·watch·check·cron입니다.
 상세 동작은 [명세](../../docs/project-team/spec.md)가 소유합니다.
 이 문서는 설치와 실행 진입점을 안내하며 실제 인수 완료를 뜻하지 않습니다.
 
@@ -63,7 +63,9 @@ JOB은 등록의 `path_cr`에 있는 CR 파일입니다. Provider 실행 인자�
 | restart | `agent-session restart --job TOOL-012` |
 | review | `agent-session review --job TOOL-012` 또는 `agent-session review --clear` |
 | shutdown | `agent-session shutdown --all` 또는 `--project NAME`. 서버를 내리기 전에 운영자가 실행합니다. `--timeout SECONDS`, `--force` |
-| watch | `agent-session watch --all` 또는 `--project NAME`. 운영자의 수동 점검과 Claude Leader의 자기 점검(session cron, [자기 점검](../../skills/project-team/references/self-check.md))이 실행합니다. 대화 기록이 30분(`--minutes`) 넘게 갱신되지 않은 Worker(in-progress CR)와 Leader를 깨우고, Worker는 근거와 함께 Leader에게도 알립니다([명세](../../docs/project-team/spec.md#watch)) |
+| watch | `agent-session watch --all` 또는 `--project NAME`. 운영자의 수동 점검입니다. 대화 기록이 30분(`--minutes`) 넘게 갱신되지 않은 Worker(in-progress CR)와 Leader를 깨우고, Worker는 근거와 함께 Leader에게도 알립니다([명세](../../docs/project-team/spec.md#watch)) |
+| check | `agent-session check --project NAME`. project의 crontab `check` 작업이 30분마다 실행하는 주기 점검입니다. `watch`의 Worker 점검에 더해 Leader가 처리할 일(review 대기 CR, 반납 대기 seat, 빈 seat와 todo CR, 답을 받은 결정, 사라진 Worker)을 코드로 판정하고, 일이 있고 Leader가 쉬고 있을 때만 한 번 알립니다. 실행 결과를 `<base>/agent/cron/check.json`에 남깁니다([명세](../../docs/project-team/spec.md#check), [점검 메시지](../../skills/project-team/references/self-check.md)) |
+| cron | `agent-session cron ls --project NAME [--summary]`, `add --id ID --schedule '5칸' --description TEXT --command CMD`, `rm --id ID`. 사용자 crontab의 project 구역만 고칩니다(구역 밖의 줄은 그대로). 결과는 다른 명령과 같은 JSON입니다. `ls`는 작업마다 다음 실행·마지막 실행을 냅니다. Leader를 시작할 때 `check` 작업을 보장합니다([명세](../../docs/project-team/spec.md#cron)) |
 | resume | `agent-session resume --all` 또는 `--project NAME`. 서버가 뜬 뒤 운영자가 실행합니다. shutdown 없이 서버가 내려갔으면 `--lost` |
 
 Start는 todo의 CR을 in-progress로 옮기고 Worker seat를 자동 배정합니다.

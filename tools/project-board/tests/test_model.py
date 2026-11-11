@@ -54,6 +54,7 @@ def test_the_submission_is_the_last_submission_line(result, expected):
     ("- 2026-11-05 leader: 판정합니다.", True),
     (f"- 2026-11-05 leader: `{SUBMIT[:12]}` 검토, 수정 요청.", False),
     (f"- 2026-11-05 leader: {SUBMIT[:7]} 인수.", False),
+    (f"- 2026-11-05 Leader: 제출 {SUBMIT}를 인수합니다.", False),   # the entry `project-item accept` writes: a particle follows the hash
     (f"- 2026-11-05 leader: {SUBMIT[:6]} 인수.", True),           # fewer than 7 characters is no citation
     (f"- 2026-11-05 leader: {OTHER} 검토.", True),                # another (older) submission
 ])

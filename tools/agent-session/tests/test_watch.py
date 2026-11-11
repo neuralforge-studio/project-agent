@@ -370,12 +370,3 @@ def test_only_this_projects_leader_may_watch_it_and_never_several_projects(sessi
     assert refused(worker["session"]["session_id"], "--project", "fixture") == "role_denied"
     assert refused("someone-else", "--project", "fixture") == "caller_unbound"
     assert messages(env) == []
-
-
-def test_self_check_prompts_carry_the_review_wait_items():
-    text = (Path(__file__).resolve().parents[3] / "skills/project-team/references/self-check.md").read_text(encoding="utf-8")
-    worker = text[text.index("## Worker"):text.index("## Leader")]
-    leader = text[text.index("## Leader"):]
-    assert "회신을 30분 넘게 기다렸으면" in worker and "CR ID와 제출 hash" in worker and "점검마다 한 번" in worker
-    assert "아무것도 하지 않고 메시지도 보내지 않습니다" not in worker
-    assert "review 대기 CR" in leader and "제출 행 hash가 Disposition에 없는 것" in leader

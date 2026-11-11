@@ -107,6 +107,11 @@ class Environment:
         self.config = directory / "project.json"
         self.socket_name = tmux_test_server.new_name("agent-lifecycle-test")
 
+    @property
+    def crontab(self):
+        """The file that plays the user's crontab in this test (tests/fake_crontab.py); absent means none."""
+        return Path(os.environ["FAKE_CRONTAB"])
+
     def setup(self, template=None):
         """Lay out the Git repositories and the tmux harness.
 

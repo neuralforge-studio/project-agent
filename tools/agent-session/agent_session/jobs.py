@@ -80,3 +80,33 @@ def state_of(project, job_id):
     item = _call(api.lookup, cr_root(project), check_id(job_id))
     parsed = api.CR.fmt.parse_text(item["text"], Path(item["path"]), item["state"])
     return item["state"], api.outcome_kind(parsed.headers.get("Outcome")) or None
+
+
+def _items(project, kind_name, state):
+    """`(item id, path)` of each file of one state of the project's CR or decision root."""
+    api = item_api()
+    kind = api.CR if kind_name == "cr" else api.DECIDE
+    root = _call(api.item_root, project, kind_name)
+    return [(api.file_id(kind, path), path) for path in api.item_files(kind, root, state)]
+
+
+def waiting_review(project):
+    """The in-progress CRs whose last submission the Leader has not answered (project-item's rule)."""
+    api = item_api()
+    waiting = []
+    for item_id, path in _items(project, "cr", "in-progress"):
+        text = path.read_text(encoding="utf-8")
+        parsed = api.CR.fmt.parse_text(text, path, "in-progress")
+        parts = dict(api.text_sections(text))
+        if api.review_waiting(parsed.headers.get("Mode"), parts.get("Result", ""), parts.get("Disposition", "")):
+            waiting.append(item_id)
+    return waiting
+
+
+def todo_ids(project):
+    return [item_id for item_id, _ in _items(project, "cr", "todo")]
+
+
+def answered_decisions(project):
+    """The decisions that the user answered and the Leader has not finished."""
+    return [item_id for item_id, _ in _items(project, "decide", "answered")]

@@ -105,7 +105,38 @@ def build_parser():
                        help="How long a Worker may rest, or wait in a process that does not run, before watch acts.")
     watch.add_argument("--timeout", type=_seconds, default=120, metavar="SECONDS")
 
+    check = commands.add_parser("check", help="The project's periodic check: wake a stalled Worker and tell an idle "
+                                               "Leader what is left to it. The project's cron job runs it.")
+    check.add_argument("--project", required=True, type=_nonempty, metavar="NAME")
+    check.add_argument("--minutes", type=_seconds, default=30, metavar="MINUTES",
+                       help="How long an instance may rest before check acts.")
+    check.add_argument("--timeout", type=_seconds, default=120, metavar="SECONDS")
+
+    cron = commands.add_parser("cron", help="List, add or remove the project's cron jobs in the user's crontab.")
+    actions = cron.add_subparsers(dest="cron_command", required=True, parser_class=Parser)
+    for name, description in (("ls", "List the project's jobs with their next and last run."),
+                              ("add", "Add a job to the project's crontab section."),
+                              ("rm", "Remove a job from the project's crontab section.")):
+        action = actions.add_parser(name, help=description)
+        action.add_argument("--project", required=True, type=_nonempty, metavar="NAME")
+        if name == "ls":
+            action.add_argument("--summary", action="store_true",
+                                help="Only the number of jobs and the nearest next run.")
+        else:
+            action.add_argument("--id", required=True, type=_nonempty, metavar="JOB_ID")
+        if name == "add":
+            action.add_argument("--schedule", required=True, type=_nonempty, metavar="'M H DOM MON DOW'")
+            action.add_argument("--description", required=True, type=_nonempty, metavar="TEXT")
+            action.add_argument("--command", required=True, type=_nonempty, metavar="COMMAND", dest="job_command")
+        action.add_argument("--timeout", type=_seconds, default=120, metavar="SECONDS")
+
     return parser
+
+
+def _default_cron(**kwargs):
+    from .cron import Cron
+    from .lifecycle import Manager
+    return Cron(Manager, **kwargs)
 
 
 def _default_watch(**kwargs):
@@ -151,7 +182,7 @@ def _diagnostic(manager, operation):
         return None
 
 
-def main(argv=None, manager_factory=None, fleet_factory=None, watch_factory=None):
+def main(argv=None, manager_factory=None, fleet_factory=None, watch_factory=None, cron_factory=None):
     """Run one command. A factory can supply an isolated manager (or, for shutdown and resume, fleet) in tests."""
     parsing = True
     operation = None
@@ -170,11 +201,22 @@ def main(argv=None, manager_factory=None, fleet_factory=None, watch_factory=None
             check_start_arguments(arguments.job, arguments.prompt_file, arguments.seat)
         with redirect_stdout(sys.stderr):
             effects_possible = True
-            if operation == "watch":
+            if operation in ("watch", "check"):
                 watcher = (watch_factory or _default_watch)(
                     config_path=arguments.config, socket_name=arguments.socket_name,
                     socket_path=arguments.socket_path, timeout=arguments.timeout)
-                result = watcher.run(project=arguments.project, everything=arguments.all, minutes=arguments.minutes)
+                if operation == "check":
+                    result = watcher.run(project=arguments.project, minutes=arguments.minutes, check=True)
+                else:
+                    result = watcher.run(project=arguments.project, everything=arguments.all, minutes=arguments.minutes)
+            elif operation == "cron":
+                commander = (cron_factory or _default_cron)(
+                    config_path=arguments.config, socket_name=arguments.socket_name,
+                    socket_path=arguments.socket_path, timeout=arguments.timeout)
+                result = commander.perform(
+                    arguments.cron_command, arguments.project, job_id=getattr(arguments, "id", None),
+                    schedule=getattr(arguments, "schedule", None), description=getattr(arguments, "description", None),
+                    command=getattr(arguments, "job_command", None), summary=getattr(arguments, "summary", False))
             elif operation in ("shutdown", "resume"):
                 fleet = (fleet_factory or _default_fleet)(
                     config_path=arguments.config, socket_name=arguments.socket_name,

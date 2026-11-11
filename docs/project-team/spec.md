@@ -1,7 +1,7 @@
 # Agent Session 동작 명세 v1
 
 공개 CLI는 `agent-session` 하나입니다.
-공개 명령은 start·send·stop·restart·review·shutdown·resume·watch입니다.
+공개 명령은 start·send·stop·restart·review·shutdown·resume·watch·check·cron입니다.
 공통 도구는 프로젝트 코드를 import하거나 실행하지 않습니다.
 프로젝트별 차이는 등록(2절)과 프로젝트 문서·CR 본문으로만 표현합니다.
 
@@ -22,12 +22,16 @@ agent-session shutdown --all
 agent-session shutdown --project agent --timeout 300 --force
 agent-session resume --all
 agent-session watch --all
+agent-session check --project agent
+agent-session cron ls --project agent
+agent-session cron add --project agent --id report --schedule '0 9 * * 1-5' --description '평일 보고' --command '...'
+agent-session cron rm --project agent --id report
 ```
 
 Start는 --job이 필수입니다. Worker의 --seat N은 선택이며 지정한 자리만 검사합니다.
 Leader의 start는 --seat를 받지 않습니다.
 Review는 --job과 --clear 중 정확히 하나가 필수입니다(7절 Review).
-Shutdown·resume·watch는 --project와 --all 중 정확히 하나가 필수입니다(7절 shutdown·resume, watch).
+Shutdown·resume·watch는 --project와 --all 중 정확히 하나가 필수입니다(7절 shutdown·resume, watch). check와 cron은 --project가 필수입니다(7절 check, cron).
 나머지 대상 지정 명령은 --job과 --seat 중 정확히 하나가 필수입니다.
 둘 다 입력하면 같은 대상을 가리켜도 오류입니다.
 Leader는 등록 base에서 시작합니다.
@@ -710,7 +714,7 @@ resume의 run은 `--fork-session`과 위치 인자 prompt를 쓰지 않습니다
 프로젝트의 provider_name이 있으면 현재 CLI의 이름 옵션 `-n`에 전달합니다.
 CLI의 환경에 `CLAUDE_DISABLE_ADOPT=1`을 넣어 CLI가 끝날 때 대화가 background session으로 넘어가지 않게 합니다(3절 "Background로 옮겨진 대화와 등록되지 않은 run의 종료 판정").
 SessionStart·Stop·StopFailure·SessionEnd hook의 session_id가 기대값과 다르면 `owner_mismatch`이지만, 옛 transcript가 그 ID로의 이동을 보여 주면 이동을 기록하고 `conversation_backgrounded`입니다.
-최종 --settings에는 프로젝트 guard와 공통 SessionStart·Stop·StopFailure·SessionEnd hook을 합칩니다. Claude Leader의 run에는 `UserPromptSubmit` hook(7절 watch의 "Leader 자기 점검의 gate")을 더합니다. Worker의 run에는 없습니다.
+최종 --settings에는 프로젝트 guard와 공통 SessionStart·Stop·StopFailure·SessionEnd hook을 합칩니다.
 이 파일의 writer는 prepare-session 하나입니다.
 공통 코드는 hook 조각을 제공하며 같은 파일을 다시 쓰지 않습니다.
 `crossSessionInbound: "accept"`도 이 --settings 파일에 넣습니다.
@@ -1017,7 +1021,7 @@ Claude Worker에 background 작업이 남으면 idle이 되지 않아 종료 요
 이 상태에서 Worker가 그 작업을 멈추면 같은 stop이 끝납니다. stop은 background 작업에 신호를 보내지 않습니다.
 
 session cron은 run이 exit handoff를 껐는지에 따라 셉니다. 근거는 그 run의 `launch.sh`(window option `launch_file`)에 `export CLAUDE_DISABLE_ADOPT=1`이 있는지입니다(3절 방지).
-- 껐으면 session cron은 CLI와 함께 사라지므로 background로 세지 않습니다. 자기 점검 cron(7절)만 남은 run도 idle이면 종료 요청을 보내고, CLI가 끝나면(pane dead, `cli_pid`·`cli_birth` 일치 process 없음, process group 없음) 마지막 Stop 보고에 cron이 남아 있어도 종료로 판정해 반납합니다. 이미 `stopping`이 남은 run을 다시 stop해도 같습니다. stop·restart·shutdown·`finish_ended`가 같은 판정(`providers/claude.py`의 `report_background`)을 씁니다.
+- 껐으면 session cron은 CLI와 함께 사라지므로 background로 세지 않습니다. session cron만 남은 run도 idle이면 종료 요청을 보내고, CLI가 끝나면(pane dead, `cli_pid`·`cli_birth` 일치 process 없음, process group 없음) 마지막 Stop 보고에 cron이 남아 있어도 종료로 판정해 반납합니다. 이미 `stopping`이 남은 run을 다시 stop해도 같습니다. stop·restart·shutdown·`finish_ended`가 같은 판정(`providers/claude.py`의 `report_background`)을 씁니다.
 - 근거가 없으면(옛 run, 읽을 수 없는 `launch.sh`) 지금처럼 session cron을 background로 셉니다.
 - background shell·task(`background_tasks`)는 어느 경우에나 종료를 막는 background로 셉니다.
 
@@ -1137,7 +1141,7 @@ Provider가 Claude인 project만 처리합니다. Codex project는 건드리지 
    - 서버를 내려 CLI가 끊겼고 background 작업과 monitor는 끝났으니 상태를 확인하고 이어 가라고 알립니다.
    - forced였으면 실행 중이던 명령이 강제 종료되어 결과가 없다는 사실을 넣습니다.
    - Leader의 메시지에는 재개한 Worker와 재개하지 못한 대상을 적습니다.
-   - 재개한 대화는 session cron을 잃었으므로 모든 메시지가 자기 점검을 다시 등록하라는 지시를 담습니다(7절 watch의 자기 점검).
+   - 재개 메시지는 점검 등록을 지시하지 않습니다. 점검은 project의 crontab 작업(7절 check)이 하며 Leader를 시작할 때마다 보장합니다(아래 Leader 시작).
    - 메시지 전달 실패는 해당 대상의 `message`에 보고하며 재전송하지 않습니다.
 8. tmux server가 다시 뜬 경우와 종료한 window가 남은 경우 결과가 같습니다. tmux-resurrect가 복원한 window의 option은 채택하지 않습니다(3절).
    - 서버가 뜬 뒤에는 tmux-resurrect 복원보다 resume을 먼저 실행합니다.
@@ -1319,7 +1323,7 @@ agent-session watch --all
 agent-session watch --project NAME --minutes 30
 ```
 
-대화 기록이 `--minutes` 동안 갱신되지 않은 instance를 깨우고 Leader에게 알립니다. 운영자가 수동으로 점검할 때와 Claude Leader가 자기 점검(아래)에서 실행하는 명령입니다. 호출자 판정은 아무것도 바꾸기 전에 합니다. 운영자는 어느 project든 점검할 수 있습니다(shutdown·resume과 같은 판정). 그 project의 현재 Leader는 자기 project 하나만 점검할 수 있고(`--project`로 자기 project를 지정, 또는 등록이 그 하나뿐일 때의 `--all`), Worker는 role_denied, 다른 project의 Leader·등록 밖의 agent는 caller_unbound이며 여럿을 고르는 `--all`은 Leader에게 열려 있지 않습니다. 한 번 실행하면 각 project의 Worker seat와 Leader를 한 번씩 보고 끝납니다. 반복은 명령이 하지 않습니다.
+대화 기록이 `--minutes` 동안 갱신되지 않은 instance를 깨우고 Leader에게 알립니다. 운영자가 수동으로 점검할 때와 Leader가 확인할 때 실행하는 명령입니다(주기 실행은 `check`). 호출자 판정은 아무것도 바꾸기 전에 합니다. 운영자는 어느 project든 점검할 수 있습니다(shutdown·resume과 같은 판정). 그 project의 현재 Leader는 자기 project 하나만 점검할 수 있고(`--project`로 자기 project를 지정, 또는 등록이 그 하나뿐일 때의 `--all`), Worker는 role_denied, 다른 project의 Leader·등록 밖의 agent는 caller_unbound이며 여럿을 고르는 `--all`은 Leader에게 열려 있지 않습니다. 한 번 실행하면 각 project의 Worker seat와 Leader를 한 번씩 보고 끝납니다. 반복은 명령이 하지 않습니다.
 
 | 옵션 | 필수·기본값 | 처리 |
 | --- | --- | --- |
@@ -1328,20 +1332,10 @@ agent-session watch --project NAME --minutes 30
 | --minutes N | 선택. 30 | 가장 새 대화 기록이 오래돼도 되는 시간. 이 시간이 지나야 움직입니다 |
 | --timeout SECONDS | 선택. 120 | 한 project의 전체 대기 제한 |
 
-**자기 점검(실행 방식)**: 반복 실행은 각 Claude instance가 자기 TUI의 session cron(`CronCreate`)으로 합니다. 중앙 감시 process와 system crontab은 두지 않습니다. session cron은 그 instance가 쉬고 있을 때만 실행되고 instance가 끝나면 사라지므로, 점검은 "turn이 끝난 채 멈춘" 상태에만 깨어나고 수명이 instance와 같습니다. 그래서 stop·restart·shutdown은 이 cron을 종료를 막는 background로 세지 않습니다(7절 stop의 `exit_wait` 표의 `session_crons`와 그 아래 session cron 규칙). 종료 전에 `CronDelete`할 필요가 없습니다.
+**반복 실행**: watch는 한 번 보고 끝나는 명령이고, 반복은 project의 crontab 작업이 `check`(아래)로 합니다. Claude Leader·Worker는 session cron을 등록하지 않으며 첫 prompt와 resume 메시지도 등록을 지시하지 않습니다(SESSION-015가 session cron 자기 점검과 TEAM-002의 `UserPromptSubmit` gate를 대체했습니다). [self-check.md](../../skills/project-team/references/self-check.md)는 Leader·Worker가 점검 메시지를 받았을 때 할 일만 적습니다.
 
-- 원본은 [self-check.md](../../skills/project-team/references/self-check.md)입니다. Worker용·Leader용 cron 식(30분 주기, `:00`·`:30`을 피한 분, `recurring: true`)과 점검 prompt가 그 문서에만 있습니다. 첫 prompt와 resume 메시지는 `launch_artifacts.self_check_text` 한 곳이 만든 지시로 그 문서의 자기 역할 절을 읽고 등록하라고 합니다.
-- 등록 시점: Claude Leader·Worker의 최초 prompt(등록 뒤 첫 행동), resume 메시지(재개한 대화는 session cron을 잃습니다). restart는 새 대화이므로 최초 prompt로 다시 등록합니다. Codex에는 session cron이 없어 Codex의 prompt에는 넣지 않습니다. Codex Worker의 멈춤은 운영자의 수동 `watch`로만 점검합니다(지금 등록된 project는 모두 Claude).
-- Worker 점검은 자기 CR·자식 process를 스스로 보고 풀며, 제출해서 Leader 회신을 30분 넘게 기다렸으면 Leader에게 제출 hash와 함께 짧게 다시 알립니다(점검마다 한 번). Leader 점검은 자기 project에 `watch`를 실행하고, review 대기 CR(제출 행의 hash가 Disposition에 없는 것)을 먼저 처리한 뒤 반납 대기·빈 seat·사라진 Worker를 `project-item ls`·state로 봅니다.
-- 한계: session cron은 instance가 turn 중이면 실행되지 않고 주기의 최대 절반(최대 30분)까지 늦으며 7일 뒤 만료합니다. 점검이 만료 전에 자기 등록을 갱신합니다. instance 자체가 쉬지 못하게 막힌 경우(긴 turn)는 이 점검이 보지 못합니다.
-- **Leader 자기 점검의 gate**(TEAM-002): Leader의 session cron은 정해진 시각에 prompt를 무조건 넣고 조건을 걸 수 없습니다. 그래서 Claude Leader run의 settings에 `UserPromptSubmit` hook(`self_check_gate.py`)을 두고, Leader 자기 점검 prompt일 때만 판정합니다(첫 줄이 `[자기 점검]`으로 시작하고 `Leader 자기 점검`을 담은 prompt. Worker 점검·사용자 입력·동료 메시지는 판정하지 않고 통과). 실제 Claude Code 2.1.322에서 확인한 사실: session cron이 넣는 prompt도 `UserPromptSubmit` hook을 거치고, 막으면(`{"decision":"block"}` 또는 exit 2) 모델 호출·user 기록 없이 끝나며 cron은 다음 주기에도 계속 실행됩니다. 화면에는 `Running scheduled task` 줄과 block 알림 한 줄이 남고, 대화 기록에는 시각이 있는 `system` 기록(`scheduled_task_fire`, `informational`)이 남습니다. `suppressOutput`은 이 줄들을 숨기지 못합니다.
-  - 막는 조건: 그 project의 CR 중 open·todo·in-progress가 없고 결정 항목 중 open·answered가 없으며(상태 목록은 project-item의 `CR.listed`에서 `CR.terminal`을 뺀 것과 `DECIDE.listed`로, hook이 다시 적지 않습니다), 이 run의 마지막 통과가 24시간 안입니다.
-  - 통과하는 경우: 항목이 하나라도 있음, 판정할 수 없음(registry·item 경로·디렉터리를 읽지 못함, 예상 밖의 입력, 어떤 오류든), hook이 제한 시간(10초) 안에 끝나지 않음(Claude는 시간을 넘긴 hook의 prompt를 통과시킵니다). 판정이 불확실하면 점검을 통과시킵니다.
-  - 24시간에 한 번 통과: 할 일이 없어도 마지막 통과 뒤 24시간이 지나면 점검 한 번을 통과시킵니다. session cron은 등록 7일 뒤 만료하고 점검 prompt의 마지막 항목이 6일 뒤부터 다시 등록하므로, 모든 점검을 막으면 cron이 사람의 기억 없이 사라집니다. 하루 한 번 통과하면 등록 뒤 6~7일 사이에 점검이 한 번 실행되어 갱신이 끊기지 않습니다. 통과 시각은 `<base>/agent/runs/<run_id>/self-check-gate.json`(`passed_at`)에 쓰고, 없거나 읽을 수 없거나 쓸 수 없으면 통과합니다. run마다 첫 점검은 통과합니다.
-  - 할 일이 생기면 다음 주기(30분 이내)의 점검이 그대로 실행됩니다. 등록하는 쪽의 기억에 기대지 않습니다.
-  - 막은 점검도 대화 기록에 시각 있는 기록을 남기므로 Leader의 가장 새 기록이 갱신됩니다. 이 시각을 쓰는 정체 판정은 in-progress CR이 있을 때만 Leader를 판정하고, 그 CR이 있으면 gate가 점검을 통과시키므로 판정과 맞부딪히지 않습니다.
-  - 이미 떠 있는 Leader run에는 없습니다(settings는 run을 시작할 때 쓰므로 restart 뒤부터).
 - Leader가 호출한 `watch`는 정체한 Worker를 깨우는 판정은 같지만 Leader에게 메시지를 보내지 않고 Leader 자신은 판정하지 않습니다(호출하고 있다는 것이 정체가 아니라는 뜻입니다). 대신 `resting` target 결과에 `evidence`(운영자 호출이면 Leader 메시지에 담기는 근거)를 담고, Leader 알림 기록(`notified_at`)은 남기지 않습니다.
+- `watch` 자체의 Leader 판정은 in-progress CR이 있을 때만 합니다. Leader가 처리할 일 전체의 판정은 `check`가 합니다.
 
 **정체**: 다음이 모두 맞는 instance입니다. 원인(자식 process를 기다림, 제출 뒤 Leader 회신을 기다림, 아무것도 안 함)은 묻지 않습니다. 정체한 instance는 깨워서 스스로 판단하게 합니다. 판정은 사용자 결정 D-20261110-01(대화 기록으로 판정)을 따릅니다.
 
@@ -1366,6 +1360,62 @@ agent-session watch --project NAME --minutes 30
 **반복 방지**: window option `watch`(`resting.nudged_at`·`resting.notified_at`)에 보낸 기록만 둡니다. 판정에는 쓰지 않고 한 정체에 한 번만 보내려는 용도입니다. 보낸 시각(`nudged_at`) 뒤에 대화 기록이 더 생기면 새 상태이므로 그 기록을 지웁니다. 같은 정체가 이어지는 동안은 instance에게 다시 보내지 않습니다. Worker 정체를 Leader에게는 마지막 알림 뒤 `--minutes`가 지날 때마다 다시 알립니다. 점검 메시지는 입력이므로 받은 instance의 대화 기록에 남아 새 상태가 되고, 그 뒤 다시 정체하면 다시 깨웁니다. 전달이 accepted가 아니면 기록하지 않아 다음 점검이 다시 시도합니다(Leader가 없거나 Worker가 준비 중인 경우 등). 이전 판정의 옛 기록 key는 읽을 때 버립니다. 기록은 run의 window에 있으므로 새 run은 처음부터 봅니다. 같은 project의 watch는 `agent/watch.lock`으로 동시에 하나만 돕니다(둘째는 `control_busy`를 그 project의 `error`로 보고하고 아무것도 보내지 않습니다).
 
 결과는 `{threshold_minutes, projects: [{project, targets: [{slot, job_id, status, reason, actions}], error?}]}`입니다. `slot`은 `leader`(운영자 호출만)와 `seat-N`이고 Leader의 `job_id`는 null입니다. status는 `skipped`·`active`(가장 새 기록이 `--minutes` 안)·`resting`(정체)·`error`입니다. Leader가 호출한 결과의 `resting` target은 `evidence`를 더합니다. 한 target의 오류는 다른 target을 막지 않고 그 target의 `error`로 보고합니다. 점검 대상이 없어도 exit 0입니다. 자식 process의 CPU 시간은 Linux에서만 읽습니다. 다른 OS에서는 자식 process를 읽지 못한 것으로 보고 메시지에 그렇게 적습니다.
+
+### check
+
+```sh
+agent-session check --project NAME [--minutes 30]
+```
+
+project의 주기 점검입니다. project의 crontab `check` 작업이 30분마다 실행합니다(아래 cron). 사용자가 직접 실행해도 같습니다. 호출자는 operator나 그 project의 현재 Leader이며 `watch`와 같은 판정을 씁니다. 한 project만 점검합니다(`--project` 필수, `--all` 없음).
+
+`watch`의 실행(`Watch.run`)에 두 가지를 더한 것입니다.
+
+1. Worker는 `watch`와 같습니다. 대화 기록이 `--minutes` 넘게 갱신되지 않은 in-progress Worker를 깨우고 Leader에게 근거와 함께 알립니다. 제출해서 Leader 회신을 기다리는 Worker도 이 판정이 잡습니다(회신을 기다리는 동안 기록이 갱신되지 않으므로). 점검 메시지는 Worker에게 Leader에게 제출 hash를 다시 알리라고 합니다.
+2. Leader는 in-progress CR이 아니라 **처리할 일**(`check.CheckMixin.leader_findings`)로 판정합니다. 아래가 모두 project-item의 상태·파일과 `state.json`·tmux 사실을 읽어 코드로 판정한 것입니다.
+   - review 대기 CR: in-progress CR 가운데 `## Result`의 마지막 제출 행 hash를 `## Disposition`이 인용하지 않은 것(read-only CR은 Result가 비어 있지 않은 것). 규칙의 원본은 `project_item.cr.review_waiting`이고 Board의 review wait와 같습니다.
+   - 반납 대기 seat(`pending_releases`).
+   - 빈 seat가 있고 배정되지 않은 todo CR이 있음.
+   - 답을 받고(`answered/`) 아직 `done`으로 옮기지 않은 결정 항목.
+   - 배정과 대화가 있는 Worker의 window나 CLI가 사라짐(원격 seat와 stop 중인 seat는 제외).
+   - 한 묶음을 판정하지 못하면(읽기 오류 등) 그 사실을 처리할 일로 적습니다. 불확실하면 Leader에게 알리는 쪽으로 틀립니다.
+
+Leader에게는 처리할 일이 있고 Leader의 대화 기록이 `--minutes` 넘게 갱신되지 않았을 때만 `[agent-session check]` 메시지 하나를 보냅니다. 일하는 Leader를 끼어들지 않고, 일이 없으면 아무에게도 보내지 않습니다. 같은 정체(rest)에서는 다시 보내지 않으며(반복 방지는 watch와 같은 window option `watch`의 `resting.nudged_at`), Leader가 응답해 기록이 갱신된 뒤 다시 정체하면 그때 남은 일로 새로 보냅니다. Leader가 없거나 준비 중이면 보내지 않습니다.
+
+결과는 `watch`의 결과에 project마다 `run`(`{ok, result}`)을 더한 것입니다. `result`는 `idle`(보낸 것 없음)·`notified`(메시지를 보냄)·`error`(target이나 project가 실패)이고, `ok`는 `error`가 아닐 때 true입니다. 같은 값을 `<base>/agent/cron/check.json`(`{at, ok, result}`, 원자적 교체)에 마지막 실행으로 남깁니다. 쓰지 못해도 점검은 실패하지 않습니다. 이 파일은 `cron ls`가 읽는 값입니다.
+
+### cron
+
+```sh
+agent-session cron ls --project NAME [--summary]
+agent-session cron add --project NAME --id JOB_ID --schedule 'M H DOM MON DOW' --description TEXT --command COMMAND
+agent-session cron rm --project NAME --id JOB_ID
+```
+
+project마다 사용자 crontab의 **project 구역**을 관리합니다. crontab이 jobs의 유일한 원본이며 같은 사실을 다른 파일에 두지 않습니다(마지막 실행 결과는 다른 사실이라 `agent/cron/<id>.json`에 둡니다). 호출자는 operator나 그 project의 현재 Leader입니다(Worker는 `role_denied`, 등록 밖의 agent는 `caller_unbound`). 모든 명령은 다른 명령과 같은 JSON 결과(`{ok, data, error}`)를 냅니다.
+
+구역의 형식은 다음과 같고, 이 형식이 Board 같은 다른 읽는 쪽과의 계약입니다.
+
+```
+# >>> project-agent: NAME >>>
+# job ID: 설명
+M H DOM MON DOW 명령
+# <<< project-agent: NAME <<<
+```
+
+- 시작·끝 줄은 위 문자열과 정확히 같아야 하고, 그 사이는 `# job <id>: <설명>` 한 줄과 바로 다음의 일정·명령 한 줄이 한 쌍입니다. 명령의 `%`는 cron 규칙대로 `\%`로 씁니다. ID는 `[a-z][a-z0-9-]{0,31}`입니다. 구역이 없는 project는 작업이 없는 것입니다.
+- 이 project의 구역만 고칩니다. 구역 밖의 줄(사용자 작업, 다른 project의 구역)은 바이트 그대로 둡니다. 새 구역은 끝에 빈 줄 하나를 두고 붙이고, 구역이 마지막 작업과 함께 사라질 때 그 빈 줄도 지우므로 추가했다가 지우면 crontab이 처음과 같습니다. 마지막 줄 끝에 줄바꿈이 없으면 줄바꿈을 더합니다.
+- 고치는 순서: `~/.cache/agent-session/crontab.lock`을 잡고 `crontab -l`로 읽어 이 구역만 바꾼 뒤, 쓰기 직전에 다시 읽어 그 사이 다른 편집(`crontab -e`)이 있었으면 처음부터 다시 하고(5회까지, 넘으면 `crontab_busy`), 같으면 `crontab -`로 씁니다. 바뀐 것이 없으면 쓰지 않습니다.
+- `crontab -l`이 "no crontab for"로 실패하면 빈 crontab으로 봅니다. 그 밖의 읽기 실패는 아무것도 쓰지 않고 `crontab_unreadable`입니다(`crontab` 명령이 없으면 `crontab_unavailable`). 구역이 깨져 있으면(끝 줄 없음·중복·구역 안의 낯선 줄) 그 project의 쓰기는 `cron_invalid`로 거절하고 아무것도 쓰지 않으며 다른 project의 구역은 영향이 없습니다.
+- 일정은 5칸 cron 식입니다. 숫자·`*`·목록(`,`)·범위(`-`)·간격(`/`)만 받고 이름(`mon`)과 `@daily` 같은 줄임은 `cron_invalid`입니다. 요일은 0~7(0과 7이 일요일)입니다. 일·요일이 둘 다 제한되면 둘 중 하나만 맞아도 그날이고, 하나가 `*`로 시작하면 둘 다 맞아야 합니다. 분은 시스템 시각(local)의 분 단위입니다.
+
+**다음 실행 시각**은 `agent_session/cron.py`의 `Schedule.next_run`이 한 곳에서 정합니다(주어진 시각보다 엄밀히 뒤의 첫 일치 분, 8년 안에 없으면 없음). 다른 언어의 읽는 쪽(Board의 sidebar)은 같은 결과를 내야 하고 [`tests/fixtures/cron_next_run.json`](../../tools/agent-session/tests/fixtures/cron_next_run.json)의 손으로 쓴 사례(시각은 시간대 없는 local 분)로 일치를 지킵니다.
+
+`ls` 결과는 `{project, jobs: [{id, schedule, description, command, next_run, last_run}]}`입니다. `next_run`은 local 시각 `YYYY-MM-DDTHH:MM`(없으면 null), `last_run`은 그 작업의 명령이 남긴 `{at(UTC), ok, result}`(없으면 null)입니다. `--summary`는 sidebar가 2초 주기에서 읽는 값으로 `{project, count, next_run}`(작업 수와 가장 가까운 다음 실행)만 냅니다. Board는 이 명령을 부르거나, `crontab -l`을 직접 읽어 위 형식을 해석하고 위 규칙으로 다음 실행을 계산할 수 있습니다.
+
+**기본 점검 작업**: project의 작업 `check`는 30분마다(`13,43 * * * *`, `:00`·`:30`을 피함) 그 release의 `bin/agent-session --config <등록 파일> [--socket-name|--socket-path ...] check --project NAME`을 실행합니다. cron이 출력을 메일로 보내지 않도록 `>/dev/null 2>&1`을 붙이며, 결과는 `last_run`이 보입니다.
+
+**Leader 시작**: Claude·Codex 모두 Leader를 시작(start·restart·resume의 새 run)할 때 `check` 작업이 없으면 만듭니다. 있으면 일정과 설명은 그대로 두고(사람이 바꿨을 수 있음) 명령만 이 release의 것으로 맞춥니다. 결과의 `cron`은 `{"check": "added" | "present" | "updated"}`이고 crontab을 읽거나 쓰지 못하면 Leader 시작은 막지 않고 `{"check": "failed", "error": ...}`를 적습니다(다음 시작이 다시 시도). Worker 시작은 crontab을 건드리지 않습니다.
 
 ## 8. CR과 실행 입력
 
@@ -1400,7 +1450,7 @@ Start와 restart는 다음 실행 입력을 만듭니다.
 | 항목 | 계약 |
 | --- | --- |
 | prompt_file | `agent/runs/<run_id>/prompt.md`. 공통 prompt, 인계 파일, CR 파일 경로와 그 파일을 읽으라는 지시를 포함 |
-| settings_file | Claude만. 공통 코드가 `agent/runs/<run_id>/settings.json`을 씁니다: `crossSessionInbound: accept`와 등록 hook(Leader는 자기 점검 gate hook도). Codex는 null |
+| settings_file | Claude만. 공통 코드가 `agent/runs/<run_id>/settings.json`을 씁니다: `crossSessionInbound: accept`와 등록 hook. Codex는 null |
 | provider_name | Claude만. Tmux window 이름 |
 | env | 공통 `AGENT_SESSION_*` |
 | unset_env | 없음 |
