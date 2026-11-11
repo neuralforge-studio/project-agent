@@ -117,5 +117,5 @@ golden!(
     basic_liveness, basic_hover_name, basic_hover_count, basic_hover_fold, basic_hover_seat, basic_hover_empty_seat,
     basic_focus_decision, basic_focus_seat, basic_focus_active_seat, basic_focus_active_name, basic_wide,
     basic_narrow_scrollbar, basic_short_scrolled, long_names, long_names_scrolled_right, long_names_scrolled_end,
-    many_projects, many_projects_scrolled, many_projects_expanded,
+    many_projects, many_projects_scrolled, many_projects_expanded, counts_wide_with_scrollbar,
 );

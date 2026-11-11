@@ -391,7 +391,9 @@ pub fn layout(facts: &Facts, screen_w: usize, screen_h: usize) -> Layout {
         let view_w = screen_w.saturating_sub(if vbar { 2 } else { 0 }).max(1);
         let view_h = region_h.saturating_sub(if hbar { 1 } else { 0 });
         result = place(&per_project, view_w, view_h, facts.loaded);
-        let (need_v, need_h) = (vbar || result.virtual_h > view_h, hbar || result.virtual_w > view_w);
+        // Textual compares the content width with the width of the whole container, not the one left by the vertical bar
+        // (measured: a 24 cell row in a 25 cell pane with a vertical bar scrolls by one cell and has no horizontal bar).
+        let (need_v, need_h) = (vbar || result.virtual_h > view_h, hbar || result.virtual_w > screen_w);
         if (need_v, need_h) == (vbar, hbar) {
             break;
         }
