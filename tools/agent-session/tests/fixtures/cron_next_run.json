@@ -1,0 +1,23 @@
+{
+  "comment": "The next-run rule of agent_session.cron (docs/project-team/spec.md, cron). Times are local wall-clock minutes (no zone), written by hand from the calendar, not computed by the code. Any other reader of the crontab (the Board's sidebar) must give the same `next` for each case.",
+  "next_run": [
+    {"schedule": "13,43 * * * *", "after": "2026-11-11T20:15", "next": "2026-11-11T20:43"},
+    {"schedule": "13,43 * * * *", "after": "2026-11-11T20:43", "next": "2026-11-11T21:13"},
+    {"schedule": "13,43 * * * *", "after": "2026-11-11T23:50", "next": "2026-11-12T00:13"},
+    {"schedule": "*/10 * * * *", "after": "2026-11-11T20:15", "next": "2026-11-11T20:20"},
+    {"schedule": "*/15 8-9 * * *", "after": "2026-11-11T20:15", "next": "2026-11-12T08:00"},
+    {"schedule": "0 9 * * 1-5", "after": "2026-11-11T20:15", "next": "2026-11-12T09:00"},
+    {"schedule": "0 9 * * 1-5", "after": "2026-11-13T09:00", "next": "2026-11-16T09:00"},
+    {"schedule": "5 4 * * 7", "after": "2026-11-11T20:15", "next": "2026-11-15T04:05"},
+    {"schedule": "5 4 * * 0", "after": "2026-11-11T20:15", "next": "2026-11-15T04:05"},
+    {"schedule": "0 0 1 * 0", "after": "2026-11-11T20:15", "next": "2026-11-15T00:00"},
+    {"schedule": "0 0 1 * *", "after": "2026-11-11T20:15", "next": "2026-12-01T00:00"},
+    {"schedule": "0 0 * * 0", "after": "2026-11-15T00:00", "next": "2026-11-22T00:00"},
+    {"schedule": "59 23 31 12 *", "after": "2026-11-11T20:15", "next": "2026-12-31T23:59"},
+    {"schedule": "0 0 29 2 *", "after": "2027-02-28T23:59", "next": "2028-02-29T00:00"},
+    {"schedule": "0 12 * 2 1", "after": "2026-11-11T20:15", "next": "2027-02-01T12:00"},
+    {"schedule": "7 3 10-12 11 *", "after": "2026-11-12T03:07", "next": "2027-11-10T03:07"}
+  ],
+  "invalid": ["* * * *", "* * * * * *", "60 * * * *", "* 24 * * *", "* * 0 * *", "* * * 13 *", "* * * * 8",
+              "*/0 * * * *", "5-1 * * * *", "a * * * *", "@daily", "mon * * * *", "1-2-3 * * * *", "*/ * * * *", ""]
+}

@@ -179,7 +179,7 @@ def test_help_lists_only_current_commands(capsys):
     assert cli.main(["--help"]) == 0
     output = capsys.readouterr()
     assert not output.err
-    assert "{start,send,stop,restart,review,shutdown,resume,watch}" in output.out
+    assert "{start,send,stop,restart,review,shutdown,resume,watch,check,cron}" in output.out
     assert re.search(r"\bview\b", output.out) is None
 
 

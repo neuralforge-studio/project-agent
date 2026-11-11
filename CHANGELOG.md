@@ -4,8 +4,15 @@
 
 ## Unreleased
 
+- TEST-013
+
+형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
+
+## 0.9.0 - 2026-11-11
+
 - BOARD-026
 - TEAM-002
+- BOARD-025
 
 형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
 

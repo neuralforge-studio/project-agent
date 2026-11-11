@@ -151,13 +151,19 @@ def test_t19_the_running_product_writes_only_where_section_5_says(home, source, 
     base = "proj/base/"
     # Section 5.2: the registered project's agent/ files (state, locks, runs, controls, items, decide.html).
     # Section 5.1: the project-item lock file under ~/.cache/project-item/locks.
+    # Section 5.1: the crontab lock under ~/.cache/agent-session (the crontab itself is outside HOME, section 5.4).
     allowed = (re.compile(r"^%sagent(/|$)" % re.escape(base)),
-               re.compile(r"^\.cache(/project-item(/locks(/[0-9a-f]+\.lock)?)?)?$"))
+               re.compile(r"^\.cache(/project-item(/locks(/[0-9a-f]+\.lock)?)?)?$"),
+               re.compile(r"^\.cache(/agent-session(/crontab\.lock)?)?$"))
     outside = sorted(path for path in created_paths | removed | modified if not any(rule.match(path) for rule in allowed))
     assert not outside, outside
     assert not removed - {path for path in removed if path.startswith(base + "agent/")}
     assert any(path.startswith(base + "agent/state.json") for path in created_paths)
     assert (runs.base / "agent/cr").is_dir()
+    # Section 5.4: the Leader's start put the project's check job in the crontab, in the project's section only.
+    crontab = runs.crontab.read_text()
+    assert crontab.startswith("# >>> project-agent: pifx >>>\n") and crontab.endswith("# <<< project-agent: pifx <<<\n")
+    assert crontab.count("\n") == 4 and " check --project pifx >/dev/null 2>&1" in crontab
     # The installation itself is untouched by running it.
     after = home.snapshot()
     for path, entry in before.items():

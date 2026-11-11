@@ -17,11 +17,17 @@ import tempfile
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools" / "tests"))  # tmux_test_server, shared by every tool's tests
+import fake_crontab  # noqa: E402
 import tmux_test_server  # noqa: E402
 # PROJECT_AGENT_INSTALLER points the tests at another copy of the installer (to show that a test fails on an
 # older one); by default it is the checkout's.
 INSTALLER = Path(os.environ.get("PROJECT_AGENT_INSTALLER") or REPO / "install" / "project-agent-install")
 LIB = ".local/lib/project-agent"
+# The wait limit of one installer command is a ceiling for a hung command; it asserts no speed. An `install`
+# copies and checks a whole release, so its time follows the host's load. Measured on this workstation
+# (TEST-013) at load 55-60: `install` 97 s and `check` 23 s alone; the 0.9.0 gate (load 90-140, two `-n 8`
+# suites at once) exceeded the earlier 300 s. 900 s is three times that 300 s.
+INSTALLER_TIMEOUT = 900
 # The names the contract gives (section 2). Written here, not imported from the installer.
 SHIMS = (".local/bin/agent-session", ".local/bin/project-item", ".local/bin/project-board")
 CLAUDE_LINKS = (".claude/skills/project-team", ".claude/skills/project-item")
@@ -165,7 +171,7 @@ class Home:
     def read(self, relative):
         return (self.home / relative).read_bytes()
 
-    def run(self, *args, source=None, env=None, cwd=None, installer=None, timeout=300):
+    def run(self, *args, source=None, env=None, cwd=None, installer=None, timeout=INSTALLER_TIMEOUT):
         """Run the installer as a user would; `source` is the Git checkout to release."""
         command = [sys.executable, str(installer or INSTALLER), *args]
         if source is not None and args[0] in ("install", "upgrade"):
@@ -293,6 +299,10 @@ class Runs:
         self.interpreter.write_text('#!/bin/sh\n[ "$1" = -S ] && shift\nexec "%s" "$@"\n' % os.path.abspath(sys.executable))
         self.interpreter.chmod(0o755)
         home.env["TMUX_TMPDIR"] = str(self.socket_dir)          # even a missing option cannot reach the user's server
+        # A Leader's start keeps the project's check job in the user's crontab; here that crontab is a file outside
+        # HOME (tools/tests/fake_crontab.py), so no run touches the real one.
+        self.crontab = self.socket_dir / "crontab.txt"
+        home.env.update(fake_crontab.install(self.socket_dir / "bin", self.crontab))
         tmux_test_server.watch_path(self.socket)
         self.tmux("new-session", "-d", "-s", "harness", "sleep", "86400")
 

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import datetime as dt
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -25,11 +24,10 @@ for _name in ("agent-session", "project-item"):
 from agent_session import api  # noqa: E402
 from agent_session.api import RemoteSeat, SessionError, load_registry, registry_path  # noqa: E402
 from project_item.api import (CR, DECIDE, cr_states, decision_stage, file_id,  # noqa: E402
-                              item_files, submitted_hash, text_sections)
+                              item_files, review_waiting, submitted_hash, text_sections)
 
 CR_STATES = ("open", "todo", "in-progress")           # the sidebar's states; done and deferred are not counted
 READABLE_STATES = CR_STATES + ("done",)               # the CR popup also reads done (BOARD-021)
-HASH_TOKEN = re.compile(r"\b[0-9a-f]{7,40}\b")
 DECIDE_HIDDEN = ("Disposition", "Result")
 
 
@@ -46,21 +44,11 @@ def _elapsed(connected_at: str | None, now: dt.datetime) -> int | None:
     return max(0, int((now - start).total_seconds()))
 
 
-def cited(disposition: str, commit: str) -> bool:
-    """Whether the Disposition names the commit by at least its first 7 characters."""
-    return any(commit.startswith(token) for token in HASH_TOKEN.findall(disposition))
-
-
 def review_wait(state: str, headers: dict, parts: dict) -> bool:
     """A submission the Leader has not answered yet. The rule is owned by
-    tools/project-board/README.md ("Review wait")."""
-    if state != "in-progress":
-        return False
-    result = parts.get("Result", "")
-    if headers.get("Mode") == "read-only":
-        return bool(result.strip())
-    commit = submitted_hash(result)
-    return commit is not None and not cited(parts.get("Disposition", ""), commit)
+    tools/project-board/README.md ("Review wait"); `project_item.api.review_waiting` implements it."""
+    return state == "in-progress" and review_waiting(headers.get("Mode"), parts.get("Result", ""),
+                                                      parts.get("Disposition", ""))
 
 
 def _last_entry(result: str) -> str:

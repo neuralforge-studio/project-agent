@@ -101,6 +101,23 @@ def submitted_hash(result: str) -> str | None:
     return found
 
 
+HASH_TOKEN = re.compile(r"(?<![0-9a-zA-Z])[0-9a-f]{7,40}(?![0-9a-f])")   # a Korean particle may follow: "<hash>를 인수합니다"
+
+
+def review_waiting(mode: str | None, result: str, disposition: str) -> bool:
+    """Whether an in-progress CR holds a submission that the Leader has not answered.
+
+    A write CR waits when the last submission line of `## Result` has a hash that `## Disposition` does
+    not cite: a word of 7 to 40 hex characters that starts the submitted hash, whether it accepts or asks
+    for changes. A read-only CR (`- Mode: read-only`) has no commit and waits when its Result has text. The
+    rule is owned by tools/project-board/README.md ("Review wait"); this is its one implementation, used
+    by the Board and by agent-session's check."""
+    if mode == "read-only":
+        return bool(result.strip())
+    commit = submitted_hash(result)
+    return commit is not None and not any(commit.startswith(token) for token in HASH_TOKEN.findall(disposition))
+
+
 def _header_end(lines: list[str]) -> int:
     """Index after the header block (title, then '- Key: value' lines and blank lines)."""
     i = 1

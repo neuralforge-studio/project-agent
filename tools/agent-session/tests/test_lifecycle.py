@@ -550,7 +550,7 @@ def test_start_reports_a_hook_that_ended_without_a_result_before_its_timeout(ses
     with_flags(monkeypatch, "--kill-hook")
     started = time.monotonic()
     with pytest.raises(SessionError) as error:      # waiting out the limit would raise "timeout" instead
-        env.manager(timeout=120).start("leader")
+        env.manager(timeout=command_timeout()).start("leader")
     from agent_session import hook_started
     assert time.monotonic() - started < hook_started.HOOK_TIMEOUT       # SESSION-013: within the raised hook limit too
     assert error.value.code == "registration_failed" and error.value.exit_code == 4
@@ -560,7 +560,7 @@ def test_start_reports_a_hook_that_ended_without_a_result_before_its_timeout(ses
     assert env.store.read()["leader"] is None
     # A repeated start names the same failure at once; it neither waits again nor launches another run.
     with pytest.raises(SessionError) as again:
-        env.manager(timeout=60).start("leader")
+        env.manager(timeout=command_timeout()).start("leader")
     assert again.value.code == "registration_failed"
     assert env.tmux.get_current("fixture", "leader")["run_id"] == waiting["run_id"]
 
@@ -2470,7 +2470,7 @@ def test_start_reports_a_failed_registration_before_its_timeout(session_env, mon
 
     monkeypatch.setattr(FakeProvider, "launch_spec", never_listed)
     with pytest.raises(SessionError) as error:      # waiting out the limit would raise "timeout" instead
-        env.manager(timeout=60).start("leader")
+        env.manager(timeout=command_timeout()).start("leader")
     assert error.value.code == "registration_failed" and error.value.exit_code == 4
     assert error.value.details["hook_error"]["code"] == "session_not_bound"
     assert "ListAgents" in error.value.details["hook_error"]["message"]
@@ -2479,6 +2479,6 @@ def test_start_reports_a_failed_registration_before_its_timeout(session_env, mon
     assert env.store.read()["leader"] is None
     # A repeated start names the same failure at once; it neither waits again nor launches another run.
     with pytest.raises(SessionError) as again:
-        env.manager(timeout=60).start("leader")
+        env.manager(timeout=command_timeout()).start("leader")
     assert again.value.code == "registration_failed"
     assert env.tmux.get_current("fixture", "leader")["run_id"] == waiting["run_id"]

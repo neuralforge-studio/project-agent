@@ -2,7 +2,9 @@
 
 `WatchMixin` is the one-target judgement of a project's `Manager`. `Watch` is the command: it selects
 projects from the registry and runs the judgement for every Worker seat and the Leader once. The operator
-runs it by hand; the Leader runs it for its own project from its own session cron (spec 7, watch).
+runs it by hand. `agent-session check` is the same run with one change: the Leader is judged by what it has
+to do (`check.CheckMixin.leader_findings`) instead of by the CRs in progress, and the run is kept as the
+project's last `check` run. The project's crontab job calls `check` (spec 7, watch).
 
 A stall is judged by the conversation record alone, whatever the cause: the newest record of the
 provider's conversation file (`provider.last_record`) is older than `--minutes`. A turn that runs keeps
@@ -41,6 +43,10 @@ WORKER_NOTICE = (
     "제출해서 Leader 회신을 기다리는 중이면 `agent-session send --job leader`로 Leader에게 CR ID와 제출 commit을 "
     "짧게 다시 알리십시오. 멈춘 대기(예: 자기 shell과도 맞아 끝나지 않는 `pgrep -f` loop)이면 원인을 풀고 이어서 "
     "진행하고, 막혔다면 이유를 Leader에게 보고하십시오. 같은 정체 상태에서는 이 메시지를 다시 보내지 않습니다.\n{evidence}")
+CHECK_LEADER_NOTICE = (
+    "[agent-session check] 자동 점검 메시지입니다. Leader의 대화 기록이 {minutes}분 넘게 갱신되지 않았는데 처리할 일이 있습니다. "
+    "아래 근거를 보고 필요한 조치를 하십시오(project-team skill의 Leader 절). 같은 상태에서는 이 메시지를 다시 보내지 않습니다.\n"
+    "{evidence}")
 WORKER_LEADER_NOTICE = (
     "[agent-session watch] seat {seat}의 {job} Worker의 대화 기록이 {minutes}분째 갱신되지 않았습니다(CR in-progress). "
     "{delivery} 강제로 끊지 않았습니다. 제출 뒤 review를 기다리는 중일 수 있으니 `## Result`의 제출 hash가 "
@@ -74,12 +80,13 @@ class WatchMixin:
     - `remaining()`, `_owned`, `_session`, `_provider_context`, `send`
     """
 
-    def watch_target(self, slot, threshold, now=None, tell_leader=True):
+    def watch_target(self, slot, threshold, now=None, tell_leader=True, findings=None):
         """Judge one seat (a Worker's, or the Leader's with `slot` "leader") and act once. Return what was seen
         and done.
 
         With `tell_leader` False the caller is the Leader, who gets the evidence in the result instead of
-        a message to itself."""
+        a message to itself. `findings` (the check's) makes the Leader's judgement ask what it has to do:
+        a list of lines, empty when nothing is left to it, instead of whether a CR is in progress."""
         now = time.time() if now is None else now
         state = self.store.read()
         leader = slot == LEADER
@@ -87,7 +94,10 @@ class WatchMixin:
         if leader:
             job_id = None
             outcome = {"slot": slot, "job_id": None, "status": "skipped", "reason": None, "actions": []}
-            if not working:
+            if findings is not None:
+                if not findings:
+                    return {**outcome, "reason": "nothing_to_do"}
+            elif not working:
                 return {**outcome, "reason": "no_cr_in_progress"}        # nothing for a Leader to have forgotten
         else:
             job_id = state[slot[len("seat-"):]]["job_id"]
@@ -116,7 +126,7 @@ class WatchMixin:
         if now - at < threshold:
             outcome.update(status="active")
         elif leader:
-            outcome.update(self._judge_leader_stall(working, record, at, now, threshold))
+            outcome.update(self._judge_leader_stall(working, findings, record, at, now, threshold))
         else:
             outcome.update(self._judge_stall(meta, pane, record, at, now, threshold, job_id, slot, tell_leader))
         if record != (meta.get("watch") or {}):
@@ -169,13 +179,18 @@ class WatchMixin:
             seat=slot[len("seat-"):], job=job_id, minutes=minutes, delivery=delivery, evidence=evidence))
         return {"status": "resting", "reason": None, "actions": actions}
 
-    def _judge_leader_stall(self, working, record, at, now, threshold):
-        """Wake a stalled Leader once per stall with the CRs in progress."""
+    def _judge_leader_stall(self, working, findings, record, at, now, threshold):
+        """Wake a stalled Leader once per stall: with the CRs in progress, or with the check's findings."""
         resting = record.get("resting") or {}
         actions = []
         if not resting.get("nudged_at"):
-            evidence = "근거: in-progress CR " + ", ".join(f"{job}(seat {key})" for key, job in working[:LISTED])
-            if self._deliver(actions, LEADER, LEADER_NOTICE.format(minutes=_minutes(now - at), evidence=evidence)):
+            if findings is None:
+                notice = LEADER_NOTICE
+                evidence = "근거: in-progress CR " + ", ".join(f"{job}(seat {key})" for key, job in working[:LISTED])
+            else:
+                notice = CHECK_LEADER_NOTICE
+                evidence = "근거:\n" + "\n".join(f"- {line}" for line in findings[:LISTED * 2])
+            if self._deliver(actions, LEADER, notice.format(minutes=_minutes(now - at), evidence=evidence)):
                 resting["nudged_at"] = _iso(now)
         record["resting"] = resting
         return {"status": "resting", "reason": None, "actions": actions}
@@ -253,7 +268,9 @@ class Watch(Fleet):
         actor, _ = self._manager(selected[0], 30)._authorize(operation, "leader")
         return actor
 
-    def run(self, project=None, everything=False, minutes=DEFAULT_MINUTES):
+    def run(self, project=None, everything=False, minutes=DEFAULT_MINUTES, check=False):
+        """Look once at every target of the selected projects. With `check` the Leader is judged by its
+        findings and each project's run is kept as the last run of its `check` cron job."""
         registry, selected = self._select(project, everything)
         tell_leader = self._authorize(registry, selected, "watch") != "leader"
         threshold = minutes * 60
@@ -266,7 +283,7 @@ class Watch(Fleet):
                     state = manager.store.read(missing_ok=True)
                     if tell_leader and state.get(LEADER):
                         # A Leader that runs this command is not stalled, so only the operator judges the Leader.
-                        outcome["targets"].append(self._target(manager, LEADER, None, threshold, tell_leader))
+                        outcome["targets"].append(self._leader_target(manager, state, threshold, tell_leader, check))
                     for key, row in state.items():
                         if key == LEADER or row["job_id"] is None or row["session"] is None:
                             continue
@@ -275,13 +292,37 @@ class Watch(Fleet):
             except SessionError as error:
                 # Another watch of this project is running, or its state cannot be read.
                 outcome["error"] = error.as_dict()
+            if check:
+                outcome["run"] = self._keep_run(item, outcome)
             results.append(outcome)
         return {"threshold_minutes": minutes, "projects": results}
 
     @staticmethod
-    def _target(manager, slot, job_id, threshold, tell_leader):
+    def _leader_target(manager, state, threshold, tell_leader, check):
+        """The Leader's target; with `check` the findings the Leader has to act on come with it."""
+        if not check:
+            return Watch._target(manager, LEADER, None, threshold, tell_leader)
         try:
-            return manager.watch_target(slot, threshold, tell_leader=tell_leader)
+            findings = manager.leader_findings(state)
+        except Exception as error:                      # a Leader that cannot be judged is told, not skipped
+            findings = [f"점검이 Leader의 일을 판정하지 못했습니다({type(error).__name__}). 직접 확인하십시오."]
+        return Watch._target(manager, LEADER, None, threshold, tell_leader, findings=findings)
+
+    @staticmethod
+    def _keep_run(project, outcome):
+        """Write the check's result where `cron ls` reads it: ok unless a target or the project failed."""
+        from . import cron
+        targets = outcome["targets"]
+        failed = "error" in outcome or any(item.get("status") == "error" for item in targets)
+        sent = sum(1 for item in targets for action in item.get("actions", []) if action.get("ok"))
+        result = "error" if failed else "notified" if sent else "idle"
+        cron.record_run(project, cron.CHECK_ID, not failed, result)
+        return {"ok": not failed, "result": result}
+
+    @staticmethod
+    def _target(manager, slot, job_id, threshold, tell_leader, findings=None):
+        try:
+            return manager.watch_target(slot, threshold, tell_leader=tell_leader, findings=findings)
         except SessionError as error:
             return {"slot": slot, "job_id": job_id, "status": "error", "error": error.as_dict()}
         except Exception as error:         # a bug in one target must not hide the others

@@ -11,7 +11,6 @@ import time
 import uuid
 
 from .. import process
-from .. import self_check_gate
 from ..hook_started import HOOK_TIMEOUT
 from ..errors import SessionError
 from .common import (TRANSCRIPT_TAIL, context_timeout, deadline, executable, json_result, last_record_time, run,
@@ -368,21 +367,7 @@ class ClaudeProvider:
                 # A resumed conversation reports source "resume"; every other run starts a new one.
                 entry["matcher"] = "resume" if context.get("resume") else "startup"
             hooks[event] = [entry]
-        if context.get("target") == "leader":
-            hooks["UserPromptSubmit"] = [self._self_check_gate(context)]
         return hooks
-
-    @staticmethod
-    def _self_check_gate(context):
-        """The Leader's gate for its own idle self-check (`self_check_gate`). Only the Leader's run has it."""
-        if not context.get("base"):
-            raise SessionError("invalid_provider_input", "Missing Claude hook project base.", 2)
-        code = ("import sys; sys.path.insert(0, sys.argv[1]); "
-                "from agent_session.self_check_gate import main; "
-                "main(run_id=sys.argv[2],config_path=sys.argv[3],base=sys.argv[4])")
-        command = shlex.join([str(context["python"]), "-S", "-c", code, str(context["library_path"]),
-                              str(context["run_id"]), str(context["config_path"]), str(context["base"])])
-        return {"hooks": [{"type": "command", "command": command, "timeout": self_check_gate.HOOK_TIMEOUT}]}
 
     def _configuration(self, context, prepared, sources):
         paths = []

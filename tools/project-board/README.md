@@ -162,9 +162,10 @@ If a managed pane is respawned while its client stays on the same window, run
 ## Review wait
 
 A seat shows `review_wait` when its Worker submitted and the Leader has not answered that
-submission. The owner of this rule is this section; `review_wait` and `cited` in
-`project_board/model.py` implement it, `tests/test_model.py` covers it, and
-`rust/src/data/items.rs` follows it (`tests/test_rust_equivalence.py` compares the two).
+submission. The owner of this rule is this section; `project_item.cr.review_waiting` implements it
+(the Board's `review_wait` in `project_board/model.py` adds only the in-progress condition, and
+agent-session's `check` uses the same function), `tests/test_model.py` covers it, and
+`rust/src/data/items.rs` follows the Python result (`tests/test_rust_equivalence.py` compares the two).
 
 - Only a CR in `in-progress/` can wait. A CR in any other state does not.
 - A write CR waits when the last submission line of its `## Result` has a hash that its
