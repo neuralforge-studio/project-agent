@@ -61,6 +61,8 @@ def test_new_seat_defers_submodule_initialization(tmp_path, project):
     (library / "module.txt").write_text("library contents\n")
     git(library, "add", "module.txt")
     git(library, "commit", "-m", "Add library content")
+    git(project.base, "config", "user.name", "Fixture")  # the run's HOME has no global identity (TEST-014)
+    git(project.base, "config", "user.email", "fixture@example.invalid")
     git(project.base, "submodule", "add", str(library), "external/library", allow_file=True)
     git(project.base, "commit", "-m", "Add library submodule")
     git(project.base, "push", "origin", "main")

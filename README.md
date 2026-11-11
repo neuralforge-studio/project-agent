@@ -50,6 +50,7 @@ python -m pytest -q -n 8 install/tests
 - Test가 사용자 계정에 남기는 자원은 test가 끝나면(통과·실패·중단 모두) test 전 수준으로 돌아갑니다.
   - tmux server: 모든 test server는 [`tools/tests/tmux_test_server.py`](tools/tests/tmux_test_server.py)의 `claim`으로 이름을 받고 `release`로 끝냅니다. `release`는 server와 pane의 process, `/tmp/tmux-<uid>`의 socket 파일, Board가 server마다 만드는 `/tmp/project-board-<uid>-<server pid>`를 지웁니다. `claim`은 소유 pytest process가 사라지면(SIGKILL·SIGTERM 포함) 같은 정리를 하는 watchdog을 함께 띄웁니다. Test에서 `kill-server`를 직접 부르지 않습니다.
   - 임시 디렉터리: `tools/conftest.py`가 만드는 `TMPDIR/pt-*`는 통과한 run이 끝날 때 지웁니다. 실패·중단한 run의 것은 조사용으로 남고, 다음 run이 시작할 때 소유 run이 끝난 것 중 최근 5개만 남기고 지웁니다. 진행 중인 run의 것은 지우지 않습니다. 소유자 표시가 없는 옛 디렉터리는 24시간 넘게 손대지 않았을 때만 지웁니다. 규칙과 이유는 [`tools/tests/private_root.py`](tools/tests/private_root.py)가 소유합니다.
+  - 실제 HOME: `tools/conftest.py`와 `install/tests/conftest.py`가 run마다 HOME을 `<basetemp>-home`(보통 `TMPDIR/pt-*` 안)으로 바꿔 run과 자식 process(xdist worker 포함)의 `~`를 거기로 보냅니다. Test는 실제 HOME의 `~/.cache/project-item/locks` 같은 곳에 파일을 만들지 않고, 실제 운영 잠금과 디렉터리를 공유하지 않습니다. 통과한 run은 그 HOME을 지웁니다. 이 격리는 [`tools/test_private_root.py`](tools/test_private_root.py)가 검사합니다. HOME이 따로 필요한 test는 `monkeypatch.setenv`로 바꿉니다. HOME에서 위치를 정하는 읽기 전용 도구 위치(`PYTHONUSERBASE`: `pip install --user`한 pytest·xdist·textual, `RUSTUP_HOME`: rustup proxy의 toolchain)는 HOME을 바꾸기 전 값으로 고정합니다(이미 값이 있으면 그대로 둡니다). `CARGO_HOME`은 고정하지 않아 cargo cache는 run의 HOME에 생깁니다.
 - CLI smoke: `tools/<도구>/bin/<도구> --help`.
 
 ## 관련 문서
