@@ -165,12 +165,12 @@ class Home:
     def read(self, relative):
         return (self.home / relative).read_bytes()
 
-    def run(self, *args, source=None, env=None, cwd=None, installer=None):
+    def run(self, *args, source=None, env=None, cwd=None, installer=None, timeout=300):
         """Run the installer as a user would; `source` is the Git checkout to release."""
         command = [sys.executable, str(installer or INSTALLER), *args]
         if source is not None and args[0] in ("install", "upgrade"):
             command += ["--source", str(source)]
-        return subprocess.run(command, capture_output=True, text=True, timeout=300, cwd=cwd or self.root,
+        return subprocess.run(command, capture_output=True, text=True, timeout=timeout, cwd=cwd or self.root,
                               env={**self.env, **(env or {})})
 
     def snapshot(self):

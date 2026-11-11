@@ -251,7 +251,8 @@ def test_t39_the_vendored_directory_comes_from_the_crate_config_unless_the_varia
 def test_t40_the_real_cargo_builds_a_sidebar_that_runs(home, source, name):
     env = {"PROJECT_AGENT_CARGO": REAL_CARGO, "PROJECT_AGENT_RUST_VENDOR": ""}
     before = home.snapshot()
-    result = home.run("install", source=source, env=env)
+    # a real build takes 40 s on a quiet host and 5 minutes on a loaded one (host load above 60)
+    result = home.run("install", source=source, env=env, timeout=1800)
     assert result.returncode == 0, result.stdout + result.stderr
     assert_changes(before, home.snapshot(), created=install_paths(name) | {".tmux.conf"}, trees=[tree(name)])
     version = sidebar(home, name)
