@@ -27,7 +27,8 @@ development checkout reads the file in the repository. The file finds its helper
 itself and needs no copy under `~/.tmux`.
 
 It binds prefix `B` (set the option `@project_agent_board_key` before reading to use another
-key) and root `MouseDown1Pane` only when they are unbound or have tmux's default. A key
+key), root `MouseDown1Pane` and root `MouseDragEnd1Border` (it saves the Board width you
+dragged) only when they are unbound or have tmux's default. A key
 that has another binding is left as it is and is listed in `@project_agent_board_skipped`.
 Its hooks are named `[project-agent]`, so other hooks stay. It does not change your status
 layout. To show the open decisions, add one line to your own tmux configuration:
