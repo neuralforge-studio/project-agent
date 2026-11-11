@@ -498,6 +498,32 @@ def test_unconfirmed_acceptance_response_keeps_the_draft(tmp_path):
     asyncio.run(check())
 
 
+def test_answer_box_ctrl_j_inserts_a_newline_like_enter_and_keeps_ctrl_s(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.decide(base, "open", "D-20261107-01")
+    sent = []
+    app = PopupApp(str(board.config), "Falcon2", load=False,
+                   answer_sender=lambda *args: sent.append(args) or {"ok": False, "error": {"message": "x"}})
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            editor = app.query_one("#answer", TextArea)
+            editor.focus()
+            await pilot.press("a", "ctrl+j", "b", "enter", "c")
+            assert editor.text == "a\nb\nc"
+            editor.move_cursor((0, 1))
+            await pilot.press("ctrl+j")
+            assert editor.text == "a\n\nb\nc" and editor.cursor_location == (1, 0)
+            await pilot.press("ctrl+s")
+            await wait_until(pilot, lambda: sent)
+            assert sent == [(str(board.config), "Falcon2", "D-20261107-01", "a\n\nb\nc")]
+            await pilot.press("escape")
+
+    asyncio.run(check())
+
+
 def test_percent_encoded_local_csv_link_opens_a_table(tmp_path):
     board = Board(tmp_path)
     base = board.project("Falcon2", seats=1)
