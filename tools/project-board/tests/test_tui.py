@@ -91,7 +91,7 @@ def test_cr_list_opens_in_its_own_popup(tmp_path):
         async with app.run_test(size=(70, 20)) as pilot:
             await app.apply_snapshot(model.snapshot(board.config))
             assert [str(item.label) for item in app.query(".list-item")] == [
-                "▶ CPU-001 CR title", "  CPU-002 CR title",
+                "▶ CPU-001 CR title", "  CPU-002 CR title", "  CPU-003 CR title", "  CPU-012 CR title",
             ]
             assert any("The **contract** of CPU-001." in widget.source for widget in app.query(Markdown))
             await pilot.click("#cr-close")
@@ -637,3 +637,254 @@ def test_cr_popup_row_marks_review_wait(tmp_path):
 
 
 
+# BOARD-021: one CR window with four foldable groups, and ◀▶ between projects in the CR and decision windows.
+
+def _four_state_board(tmp_path, open_count=2):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    for number in range(open_count):
+        board.cr(base, "open", f"CPU-{number + 1:03d}", f"open {number}")
+    board.cr(base, "todo", "CPU-101", "todo one")
+    board.cr(base, "in-progress", "CPU-201", "working one")
+    board.cr(base, "in-progress", "CPU-202", "working two")
+    done = [board.cr(base, "done", f"CPU-30{number}", f"done {number}") for number in range(3)]
+    board.cr(base, "deferred", "CPU-400", "deferred one")
+    return board, base, done
+
+
+def _group_headers(app):
+    return [str(button.label) for button in app.query(".group-header")]
+
+
+@pytest.mark.parametrize("state", ("open", "todo", "in-progress"))
+def test_cr_window_shows_four_groups_with_counts_for_any_pressed_state(tmp_path, state):
+    board, _, _ = _four_state_board(tmp_path)
+    app = CRPopupApp(str(board.config), "Falcon2", state, load=False)
+
+    async def check():
+        async with app.run_test(size=(90, 40)) as pilot:
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Falcon2", True))
+            await pilot.pause()
+            assert str(app.query_one("#cr-title", Static).content) == "Open 2, Todo 1, In-Progress 2, Done 3"
+            assert _group_headers(app) == ["Open ▼", "Todo ▼", "In-Progress ▼", "Done ▼"]
+            assert [str(row.label)[2:9] for row in app.query(".list-item")] == [
+                "CPU-001", "CPU-002", "CPU-101", "CPU-201", "CPU-202", "CPU-300", "CPU-301", "CPU-302"]
+            assert all(row.display for row in app.query(".list-item"))
+            assert "CPU-400" not in str(app.query_one("#cr-items").children)      # deferred stays hidden
+            first = {"open": "CPU-001", "todo": "CPU-101", "in-progress": "CPU-201"}[state]
+            assert app.selected_id == first
+
+    asyncio.run(check())
+
+
+def test_cr_window_scrolls_to_the_pressed_group_first(tmp_path):
+    board, base, _ = _four_state_board(tmp_path, open_count=12)
+    for number in range(10):
+        board.cr(base, "done", f"CPU-5{number:02d}", f"older done {number}")
+    app = CRPopupApp(str(board.config), "Falcon2", "in-progress", load=False)
+
+    async def check():
+        async with app.run_test(size=(90, 14)) as pilot:
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Falcon2", True))
+            await pilot.pause()
+            listing = app.query_one("#cr-items")
+            header = app.query_one("#cr-group-in-progress")
+            assert listing.scroll_y > 0
+            assert header.region.y == listing.region.y            # the group starts at the top of the list
+            assert app.selected_id == "CPU-201"
+
+    asyncio.run(check())
+
+
+def test_cr_window_folds_and_unfolds_each_group_and_reads_done(tmp_path):
+    board, _, done = _four_state_board(tmp_path)
+    app = CRPopupApp(str(board.config), "Falcon2", "open", load=False)
+
+    async def check():
+        async with app.run_test(size=(90, 40)) as pilot:
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Falcon2", True))
+            await pilot.pause()
+            await pilot.click("#cr-group-todo")
+            await pilot.pause()
+            assert _group_headers(app) == ["Open ▼", "Todo ▶", "In-Progress ▼", "Done ▼"]
+            assert [str(row.label)[2:9] for row in app.query(".list-item") if row.display] == [
+                "CPU-001", "CPU-002", "CPU-201", "CPU-202", "CPU-300", "CPU-301", "CPU-302"]
+            await pilot.click("#cr-group-done")
+            await pilot.pause()
+            assert not any(row.display for row in app.query(".list-item") if str(row.label)[2:7] == "CPU-3")
+            # the counts line does not change when a group is folded
+            assert str(app.query_one("#cr-title", Static).content) == "Open 2, Todo 1, In-Progress 2, Done 3"
+            await pilot.pause(app.query_one("#cr-group-done", Button).active_effect_duration)
+            await pilot.click("#cr-group-done")
+            await pilot.pause()
+            assert _group_headers(app)[3] == "Done ▼"
+            await wait_until(pilot, lambda: str(app.query_one("#cr-item-5", Button).label).endswith("done 0"))
+            await pilot.click("#cr-item-6")                       # a done CR opens its Markdown
+            await wait_until(pilot, lambda: any(done[1].read_text(encoding="utf-8") == widget.source
+                                                for widget in app.query(Markdown)))
+
+    asyncio.run(check())
+
+
+def test_cr_window_empty_group_and_sidebar_snapshot_has_no_done(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Falcon2", seats=0)
+    board.cr(base, "open", "CPU-001")
+    assert "done" not in model.snapshot(board.config)["projects"][0]["crs"]
+    app = CRPopupApp(str(board.config), "Falcon2", "open", load=False)
+
+    async def check():
+        async with app.run_test(size=(90, 30)) as pilot:
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Falcon2", True))
+            await pilot.pause()
+            assert str(app.query_one("#cr-title", Static).content) == "Open 1, Todo 0, In-Progress 0, Done 0"
+            await pilot.click("#cr-group-todo")
+            assert not app.query_one("#cr-empty-todo").display
+
+    asyncio.run(check())
+
+
+def test_model_reads_done_cr_only_from_its_done_directory(tmp_path):
+    board, base, done = _four_state_board(tmp_path)
+    data = model.popup_snapshot(board.config, "Falcon2", True)
+    project = data["projects"][0]
+    assert [item["id"] for item in project["crs"]["done"]] == ["CPU-300", "CPU-301", "CPU-302"]
+    assert project["crs"]["done"][0]["title"] == "item"                   # from the file name; the file is not opened
+    assert data["order"] == ["Falcon2"] and [item["id"] for item in data["projects"]] == ["Falcon2"]
+    assert model.read_cr_markdown(project, project["crs"]["done"][0], "done") == done[0].read_text(encoding="utf-8")
+    with pytest.raises(ValueError, match="유효하지"):
+        model.read_cr_markdown(project, project["crs"]["done"][0], "deferred")
+    with pytest.raises(ValueError, match="유효하지"):
+        model.read_cr_markdown(project, project["crs"]["open"][0], "done")
+
+
+def _three_projects(tmp_path):
+    board = Board(tmp_path)
+    first = board.project("Alpha", seats=0)
+    board.cr(first, "open", "AAA-001", "alpha open")
+    board.decide(first, "open", "D-20261107-01", "alpha question")
+    second = board.project("Beta", seats=0)
+    board.cr(second, "todo", "BBB-001", "beta todo")
+    board.decide(second, "done", "D-20261107-02", "beta finished")        # no decision to show
+    third = board.project("Gamma", seats=0)
+    board.cr(third, "in-progress", "GGG-001", "gamma working")
+    board.cr(third, "done", "GGG-002", "gamma done")
+    board.decide(third, "open", "D-20261107-03", "gamma question")
+    return board
+
+
+def test_cr_window_moves_between_every_project_in_the_same_window_and_wraps(tmp_path):
+    board = _three_projects(tmp_path)
+    app = CRPopupApp(str(board.config), "Alpha", "open", load=False)
+
+    async def project():
+        return str(app.query_one("#cr-project", Static).content)
+
+    async def check():
+        async with app.run_test(size=(90, 30), tooltips=True) as pilot:
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Alpha", True))
+            await pilot.pause()
+            previous, following = app.query_one("#cr-prev", Button), app.query_one("#cr-next", Button)
+            assert str(previous.tooltip) == "이전 project: Gamma"           # wraps to the other end
+            assert str(following.tooltip) == "다음 project: Beta"
+            await pilot.click("#cr-next")
+            await wait_until(pilot, lambda: app.project_id == "Beta" and app.selected_id == "BBB-001")
+            assert await project() == "Beta" and str(following.tooltip) == "다음 project: Gamma"
+            assert str(previous.tooltip) == "이전 project: Alpha"
+            assert str(app.query_one("#cr-title", Static).content) == "Open 0, Todo 1, In-Progress 0, Done 0"
+            await pilot.click("#cr-next")
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and app.selected_id == "GGG-001")
+            assert str(app.query_one("#cr-title", Static).content) == "Open 0, Todo 0, In-Progress 1, Done 1"
+            assert [str(row.label)[2:9] for row in app.query(".list-item")] == ["GGG-001", "GGG-002"]
+            await pilot.click("#cr-next")                                     # past the last project: the first
+            await wait_until(pilot, lambda: app.project_id == "Alpha" and app.selected_id == "AAA-001")
+            await pilot.click("#cr-prev")                                     # before the first: the last
+            await wait_until(pilot, lambda: app.project_id == "Gamma")
+            assert app.is_running
+
+    asyncio.run(check())
+
+
+def test_cr_window_with_one_project_has_no_move_target(tmp_path):
+    board = Board(tmp_path)
+    base = board.project("Alpha", seats=0)
+    board.cr(base, "open", "AAA-001")
+    app = CRPopupApp(str(board.config), "Alpha", "open", load=False)
+
+    async def check():
+        async with app.run_test(size=(90, 20)) as pilot:
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Alpha", True))
+            await pilot.pause()
+            assert app.query_one("#cr-prev", Button).disabled and app.query_one("#cr-next", Button).disabled
+
+    asyncio.run(check())
+
+
+def test_decision_window_moves_only_between_projects_with_decisions_and_keeps_drafts(tmp_path):
+    board = _three_projects(tmp_path)
+    app = PopupApp(str(board.config), "Alpha", load=False)
+
+    async def check():
+        async with app.run_test(size=(100, 36), tooltips=True) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.pause()
+            previous, following = app.query_one("#popup-prev", Button), app.query_one("#popup-next", Button)
+            # Beta has only a finished decision, so it is skipped like the sidebar's disabled D button
+            assert str(following.tooltip) == "다음 project: Gamma"
+            assert str(previous.tooltip) == "이전 project: Gamma"
+            editor = app.query_one("#answer", TextArea)
+            editor.text = "alpha 초안"
+            await pilot.click("#popup-next")
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and "D-20261107-03" in app.decisions)
+            assert str(app.query_one("#popup-project", Static).content) == "Gamma"
+            assert editor.text == "" and not editor.disabled
+            assert [str(button.label) for button in app.query("#decision-list Button")] == [
+                "▶ D-20261107-03 대기 gamma question"]
+            editor.text = "gamma 초안"
+            await pilot.click("#popup-prev")
+            await wait_until(pilot, lambda: app.project_id == "Alpha" and "D-20261107-01" in app.decisions)
+            assert editor.text == "alpha 초안"
+            await pilot.click("#popup-next")
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and "D-20261107-03" in app.decisions)
+            assert editor.text == "gamma 초안"
+            assert app.is_running
+
+    asyncio.run(check())
+
+
+def test_decision_window_send_uses_the_project_it_is_showing(tmp_path):
+    board = _three_projects(tmp_path)
+    sent = []
+    app = PopupApp(str(board.config), "Alpha", load=False,
+                   answer_sender=lambda *args: sent.append(args) or {"ok": False, "error": {"message": "x"}})
+
+    async def check():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await app.apply_snapshot(model.snapshot(board.config))
+            await pilot.click("#popup-next")
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and app.decide_id == "D-20261107-03")
+            app.query_one("#answer", TextArea).text = "A"
+            app.action_send()
+            await wait_until(pilot, lambda: bool(sent))
+            assert sent == [(str(board.config), "Gamma", "D-20261107-03", "A")]
+
+    asyncio.run(check())
+
+
+def test_decision_window_learns_the_other_projects_after_it_is_up(tmp_path):
+    board = _three_projects(tmp_path)
+    reads = []
+
+    def navigation(config):
+        reads.append(config)
+        return model.snapshot(config)
+    app = PopupApp(str(board.config), "Alpha", load=False, navigation_reader=navigation)
+
+    async def check():
+        async with app.run_test(size=(100, 36), tooltips=True) as pilot:
+            await app.apply_snapshot(model.popup_snapshot(board.config, "Alpha"))      # the project alone
+            await wait_until(pilot, lambda: str(app.query_one("#popup-next", Button).tooltip) == "다음 project: Gamma")
+            assert reads == [str(board.config)]
+            assert [item for item in app.eligible] and app.eligible == {"Alpha", "Gamma"}
+
+    asyncio.run(check())

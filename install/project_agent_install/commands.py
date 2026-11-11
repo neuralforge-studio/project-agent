@@ -523,6 +523,8 @@ def binding_undo(key, skipped):
         lines.append("tmux unbind-key -T prefix %s" % key)
     if "root:MouseDown1Pane" not in words:
         lines.append(MOUSE_DEFAULT)
+    if "root:MouseDragEnd1Border" not in words:
+        lines.append("tmux unbind-key -T root MouseDragEnd1Border")
     lines += ["tmux set-hook -gu '%s[project-agent]'" % hook for hook in HOOKS]
     lines += ["tmux set-hook -gwu '%s[project-agent]'" % hook for hook in WINDOW_HOOKS]
     lines.append("tmux set-hook -gwu '%s'" % AGENT_SESSION_HOOK)

@@ -618,6 +618,88 @@ def test_resize_hook_records_only_board_pane_width():
         tmux_test_server.release(name)
 
 
+TMUX_INTEGRATION = Path(__file__).resolve().parents[3] / "integrations/tmux"
+
+
+def _drag_border(master, column, target, row=5):
+    """Press the border at 0-based `column`, move it to `target`, release (what the terminal sends tmux)."""
+    def send(sequence):
+        os.write(master, sequence.encode())
+        time.sleep(0.15)
+    send(f"\x1b[<0;{column + 1};{row}M")
+    step = 1 if target > column else -1
+    for x in range(column + step, target + step, step):
+        send(f"\x1b[<32;{x + 1};{row}M")
+    send(f"\x1b[<0;{target + 1};{row}m")
+
+
+def _resize_client(name, client, window, columns):
+    process, master, _tty = client
+    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, columns, 0, 0))
+    os.killpg(process.pid, signal.SIGWINCH)
+    for _ in range(100):
+        if _tmux(name, "display-message", "-p", "-t", window, "#{window_width}") == str(columns):
+            return
+        time.sleep(0.05)
+    pytest.fail("tmux did not take the new client size")
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_width_dragged_with_the_mouse_is_saved_after_the_terminal_was_resized(monkeypatch):
+    """BOARD-019: after-resize-pane runs once when a drag starts, so the drag's own width was lost."""
+    name = tmux_test_server.claim("board-test")
+    clients = []
+    try:
+        _tmux(name, "-f", "/dev/null", "new-session", "-d", "-s", "one", "sleep", "60")
+        _tmux(name, "new-session", "-d", "-s", "two", "sleep", "60")
+        first = _tmux(name, "display-message", "-p", "-t", "one", "#{window_id}")
+        second = _tmux(name, "display-message", "-p", "-t", "two", "#{window_id}")
+        clients.append(_attached(name, "two"))
+        socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
+        _tmux(name, "set-option", "-g", "mouse", "on")
+        _tmux(name, "set-option", "-g", "@project_agent_tmux_dir", str(TMUX_INTEGRATION))
+        _tmux(name, "run-shell", f"{TMUX_INTEGRATION}/project_agent_bind.sh --socket {socket_path}")
+        monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
+        assert tmux_control.toggle_sidebar(socket=socket_path)["ok"] is True
+        board = _tmux(name, "show-options", "-wqv", "-t", second, "@project_board_pane")
+        # The Board pane keeps its marks the way tmux_control makes them; the hook reads the mark.
+        saved = lambda: _tmux(name, "show-options", "-gqv", "@project_board_width")  # noqa: E731
+        width = lambda window, pane: _pane_geometry(name, window)[pane][0]  # noqa: E731
+
+        # (a) a drag of the Board's border
+        start = width(second, board)
+        assert saved() == str(start)
+        _drag_border(clients[0][1], start, start + 12)
+        assert width(second, board) == start + 12
+        assert saved() == str(start + 12)
+
+        # (b) the terminal gets narrower and wider again, then the border is dragged again
+        _resize_client(name, clients[0], second, 50)
+        _resize_client(name, clients[0], second, 80)
+        assert saved() == str(start + 12), "a terminal resize is not a width the user chose"
+        current = width(second, board)
+        _drag_border(clients[0][1], current, 33)
+        assert width(second, board) == 33
+        assert saved() == "33"
+
+        # (c) the saved width is the width of the Board in another window
+        _tmux(name, "switch-client", "-c", clients[0][2], "-t", "one")
+        assert tmux_control.reconcile(socket=socket_path)["ok"] is True
+        other = _tmux(name, "show-options", "-wqv", "-t", first, "@project_board_pane")
+        assert width(first, other) == 33
+        assert saved() == "33"
+    finally:
+        for process, master, _client in clients:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+            os.close(master)
+        tmux_test_server.release(name)
+
+
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_managed_pane_death_removes_board_and_restore_state(monkeypatch):
     name = tmux_test_server.claim("board-test")
@@ -763,10 +845,10 @@ def _managed(name, window, project, target):
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 @pytest.mark.parametrize("bare", [True, False])
-def test_a_failing_popup_never_covers_the_work_pane_and_the_client_is_told(bare):
-    """BOARD-011: `display-popup -E` ends with the exit status of its command. As a bare `run-shell` job a
-    failure opened view mode in the active pane (`bare`, the check that the test can see it); the Board's own
-    popup records the failure and shows it on the client that opened the popup."""
+def test_a_failing_board_window_never_covers_the_work_pane_and_the_client_is_told(bare):
+    """BOARD-011, BOARD-020: `new-pane -W` ends with the exit status of its command, as `display-popup -E` did.
+    As a bare `run-shell` job a failure opened view mode in the active pane (`bare`, the check that the test
+    can see it); the Board's own window records the failure and shows it on the client that opened it."""
     name = tmux_test_server.claim("board-popup")
     process = master = None
     try:
@@ -776,10 +858,11 @@ def test_a_failing_popup_never_covers_the_work_pane_and_the_client_is_told(bare)
         command = ["sh", "-c", "echo noisy; echo noisy >&2; exit 3"]
         if bare:
             socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
-            popup = ["tmux", "-S", socket_path, "display-popup", "-E", "-c", client, "-w", "50%", "-h", "50%", *command]
-            control.command("run-shell", "-b", " ".join(map(shlex.quote, popup)))
+            job = ["tmux", "-S", socket_path, "new-pane", "-W", "-t", "work", *command]
+            control.command("run-shell", "-b", " ".join(map(shlex.quote, job)))
         else:
-            assert tmux_control._popup(control, client, command, "fake", "50%") == {"ok": True, "data": {"client": client}, "error": None}
+            result = tmux_control._popup(control, client, command, "fake", "50%")
+            assert result["ok"] is True and result["data"]["client"] == client
         deadline = time.monotonic() + 10
         mode = ""
         while time.monotonic() < deadline:
@@ -807,6 +890,363 @@ def test_a_failing_popup_never_covers_the_work_pane_and_the_client_is_told(bare)
                 process.wait(timeout=2)
             os.close(master)
         tmux_test_server.release(name)
+
+
+FAKE_BOARD = """#!/bin/sh
+# Stands for the Board TUI of a CR or decision window: records how it was started, ends when told to.
+here=$(dirname "$0")
+printf '%s\\n' "$PROJECT_BOARD_CLIENT" "$@" > "$here/started"
+read answer
+exit "${answer:-0}"
+"""
+
+
+class _Floating:
+    """A test server with one attached client and a stand-in Board TUI for the CR and decision windows."""
+
+    def __init__(self, tmp_path, monkeypatch, windows=1):
+        self.tmp_path = tmp_path
+        self.name = tmux_test_server.claim("board-float")
+        self.clients = []
+        launcher = tmp_path / "fake-board"
+        launcher.write_text(FAKE_BOARD)
+        launcher.chmod(0o755)
+        monkeypatch.setattr(tmux_control, "LAUNCHER", launcher)
+        monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
+        _tmux(self.name, "-f", "/dev/null", "new-session", "-d", "-s", "work", "cat")
+        for _ in range(windows - 1):
+            _tmux(self.name, "new-window", "-d", "-t", "work", "cat")
+        _tmux(self.name, "set-option", "-g", "mouse", "on")
+        self.clients.append(_attached(self.name, "work"))
+        self.master, self.client = self.clients[0][1], self.clients[0][2]
+        self.socket = _tmux(self.name, "display-message", "-p", "#{socket_path}")
+        self.window = _tmux(self.name, "display-message", "-p", "-t", "work", "#{window_id}")
+        self.work = _tmux(self.name, "display-message", "-p", "-t", self.window, "#{pane_id}")
+
+    def close(self):
+        _release_clients(self.clients)
+        tmux_test_server.release(self.name)
+
+    def tmux(self, *args):
+        return _tmux(self.name, *args)
+
+    def floating(self, window=None):
+        """The floating panes of a window: id -> (left, top, width, height)."""
+        rows = self.tmux("list-panes", "-t", window or self.window, "-F",
+                         "#{pane_id}\t#{pane_floating_flag}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}")
+        found = {}
+        for row in rows.splitlines():
+            pane, flag, *geometry = row.split("\t")
+            if flag == "1":
+                found[pane] = tuple(map(int, geometry))
+        return found
+
+    def open(self, kind="cr", project="Falcon2"):
+        if kind == "cr":
+            return tmux_control.open_cr_popup(None, project, "open", self.client, self.socket)
+        return tmux_control.open_popup(None, project, "D-1", self.client, self.socket)
+
+    def started(self):
+        deadline = time.monotonic() + 5
+        path = self.tmp_path / "started"
+        while time.monotonic() < deadline:
+            if path.exists() and path.read_text().endswith("\n"):
+                return path.read_text().split("\n")[:-1]
+            time.sleep(0.05)
+        pytest.fail("the Board window did not start")
+
+    def mouse(self, button, x, y, up=False):
+        """One SGR mouse event on the client, 1-based cell as tmux counts."""
+        os.write(self.master, f"\033[<{button};{x};{y}{'m' if up else 'M'}".encode())
+        time.sleep(0.15)
+
+    def drag(self, start, end, button=0):
+        (x0, y0), (x1, y1) = start, end
+        self.mouse(button, x0, y0)
+        self.mouse(button + 32, (x0 + x1) // 2, (y0 + y1) // 2)
+        self.mouse(button + 32, x1, y1)
+        self.mouse(button, x1, y1, up=True)
+
+    def wait_gone(self, pane, timeout=5):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if pane not in self.tmux("list-panes", "-a", "-F", "#{pane_id}").split():
+                return True
+            time.sleep(0.05)
+        return False
+
+
+@pytest.fixture
+def floating(tmp_path, monkeypatch):
+    made = []
+
+    def make(windows=1):
+        made.append(_Floating(tmp_path, monkeypatch, windows))
+        return made[-1]
+    yield make
+    for server in made:
+        server.close()
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_cr_or_decision_window_opens_as_a_floating_pane_of_the_clicking_clients_window(floating):
+    """BOARD-020 contract 1: where, how large, what runs in it. Decision 90%, CR 80%, centred, as the popup was."""
+    server = floating(windows=2)
+    server.tmux("select-window", "-t", "work:1")
+    shown = server.tmux("display-message", "-p", "-t", "work:1", "#{window_id}")
+    other = server.tmux("display-message", "-p", "-t", "work:0", "#{window_id}")
+    assert tmux_control.open_cr_popup(None, "Falcon2", "todo", server.client, server.socket)["ok"] is True
+    client, *arguments = server.started()
+    assert client == server.client and arguments == ["cr", "--project", "Falcon2", "--state", "todo"]
+    assert server.floating(other) == {}
+    ((pane, geometry),) = server.floating(shown).items()
+    window_width, window_height = map(int, server.tmux("display-message", "-p", "-t", shown,
+                                                       "#{window_width} #{window_height}").split())
+    left, top, width, height = geometry
+    # 80% of the window includes the border; the margin is the rest, halved
+    assert (width + 2, height + 2) == (window_width * 80 // 100, window_height * 80 // 100)
+    assert abs(left - 1 - (window_width - width - 2) // 2) <= 1 and abs(top - 1 - (window_height - height - 2) // 2) <= 1
+    assert server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW) == "1"
+    assert server.tmux("display-message", "-p", "-t", pane, "#{pane_title}") == "CR · Falcon2"
+
+    server.tmux("send-keys", "-t", pane, "Enter")
+    assert server.wait_gone(pane)
+    (server.tmp_path / "started").unlink()
+    assert tmux_control.open_popup(None, "Falcon2", "D-1", server.client, server.socket)["ok"] is True
+    client, *arguments = server.started()
+    assert arguments == ["popup", "--project", "Falcon2", "--decision", "D-1"]
+    ((pane, (_, _, width, height)),) = server.floating(shown).items()
+    assert (width + 2, height + 2) == (window_width * 90 // 100, window_height * 90 // 100)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_the_board_window_is_moved_and_resized_with_the_mouse_by_tmux_defaults(floating):
+    """BOARD-020 contract 2: dragging the top border moves it, dragging another border resizes it, Alt-drag moves
+    it. These are tmux 3.8's own root bindings; the Board adds no binding, so no other pane's mouse changes."""
+    server = floating()
+    before_keys = server.tmux("list-keys", "-T", "root")
+    assert server.open()["ok"] is True
+    ((pane, (left, top, width, height)),) = server.floating().items()
+    assert server.tmux("list-keys", "-T", "root") == before_keys
+
+    server.drag((left + 5, top), (left + 11, top + 2))               # the top border: the cell above the pane
+    assert server.floating()[pane] == (left + 6, top + 2, width, height)
+    left, top = left + 6, top + 2
+    server.drag((left + width + 1, top + height + 1), (left + width - 5, top + height - 2))   # the corner
+    assert server.floating()[pane] == (left, top, width - 6, height - 3)
+    width, height = width - 6, height - 3
+    server.drag((left + 4, top + 3), (left + 6, top + 4), button=8)  # Alt held
+    assert server.floating()[pane] == (left + 2, top + 1, width, height)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+@pytest.mark.parametrize("focus", ["window", "behind"])
+def test_moving_or_resizing_the_board_window_never_changes_the_saved_sidebar_width(floating, focus):
+    """BOARD-020 with BOARD-019: the integration saves a width when a border drag ends on a pane whose
+    `@project_board_managed` is 1. The Board window is not that pane, so dragging its borders (move, resize)
+    leaves `@project_board_width` alone, whichever pane has the focus; dragging the sidebar's border still saves."""
+    server = floating()
+    server.tmux("source-file", str(Path(__file__).resolve().parents[3] / "integrations/tmux/project-agent.conf"))
+    assert tmux_control.toggle_sidebar(socket=server.socket, client=server.client)["ok"] is True
+    sidebar = server.tmux("show-options", "-wqv", "-t", server.window, tmux_control.WINDOW_PANE)
+    assert server.open()["ok"] is True
+    ((pane, (left, top, width, height)),) = server.floating().items()
+    assert server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_MARK) == ""
+    if focus == "behind":
+        server.tmux("select-pane", "-t", server.work)
+    saved = server.tmux("show-options", "-gqv", tmux_control.WIDTH)
+
+    server.drag((left + 5, top), (left + 11, top + 2))                                           # move
+    server.drag((left + 6 + width + 1, top + 2 + height + 1), (left + 6 + width - 5, top + 2 + height - 2))   # resize
+    time.sleep(0.5)
+    assert server.floating()[pane] == (left + 6, top + 2, width - 6, height - 3)
+    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == saved
+
+    border = int(server.tmux("display-message", "-p", "-t", sidebar, "#{pane_width}"))
+    row = top + 2 + height + 2                                                                   # below the window
+    server.drag((border + 1, row), (border + 4, row))                                            # the sidebar's own border
+    time.sleep(0.5)
+    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == str(border + 3) != saved
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_while_the_board_window_is_open_the_pane_behind_it_takes_input_and_the_sidebar_stays(floating):
+    """BOARD-020 contract 3: a popup took every key of its client. The window stays on top when the pane behind
+    it is selected, the pane behind gets what the client types, and the sidebar is not disturbed."""
+    server = floating()
+    assert tmux_control.toggle_sidebar(socket=server.socket, client=server.client)["ok"] is True
+    sidebar = server.tmux("show-options", "-wqv", "-t", server.window, tmux_control.WINDOW_PANE)
+    width = server.tmux("show-options", "-gqv", tmux_control.WIDTH)
+    assert server.open()["ok"] is True
+    ((pane, _),) = server.floating().items()
+    assert server.tmux("display-message", "-p", "-t", pane, "#{pane_active}") == "1"
+
+    ((_, (left, _, window_width, _)),) = server.floating().items()
+    column = left + window_width + 3                                        # right of the window: the pane behind, not the sidebar
+    assert column <= 80
+    server.mouse(0, column, 12)
+    server.mouse(0, column, 12, up=True)
+    assert server.tmux("display-message", "-p", "-t", server.work, "#{pane_active}") == "1"
+    assert pane in server.floating() and server.tmux("display-message", "-p", "-t", pane, "#{pane_z}") == "0"
+    os.write(server.master, b"typed behind\r")                       # what a person types to the pane behind
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and "typed behind" not in server.tmux("capture-pane", "-p", "-t", server.work):
+        time.sleep(0.05)
+    assert "typed behind" in server.tmux("capture-pane", "-p", "-t", server.work)
+    assert "typed behind" not in server.tmux("capture-pane", "-p", "-t", pane)
+    assert server.tmux("show-options", "-wqv", "-t", server.window, tmux_control.WINDOW_PANE) == sidebar
+    assert server.tmux("show-options", "-pqv", "-t", sidebar, tmux_control.PANE_MARK) == "1"
+    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == width
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_click_on_the_sidebar_reaches_the_board_while_its_window_is_open(floating, request):
+    """BOARD-020 contract 3: the click binding of the integration sends a click on the sidebar to the Board, with
+    the clicking client and the cell, whatever floating pane is open; a click on the Board window is not one."""
+    server = floating()
+    server.tmux("source-file", str(Path(__file__).resolve().parents[3] / "integrations/tmux/project-agent.conf"))
+    assert tmux_control.toggle_sidebar(socket=server.socket, client=server.client)["ok"] is True
+    sidebar = server.tmux("show-options", "-wqv", "-t", server.window, tmux_control.WINDOW_PANE)
+    click_path = Path(server.tmux("show-options", "-pqv", "-t", sidebar, tmux_control.PANE_SOCKET))
+    received = []
+
+    def serve():
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(str(click_path))
+            os.chmod(click_path, 0o600)
+            listener.settimeout(15)
+            listener.listen(2)
+            while True:
+                try:
+                    connection, _ = listener.accept()
+                except OSError:
+                    return
+                with connection:
+                    received.append(json.loads(connection.makefile("r").readline()))
+                    connection.sendall(b'{"ok":true,"data":null,"error":null}\n')
+
+    threading.Thread(target=serve, daemon=True).start()
+    for _ in range(100):
+        if click_path.exists():
+            break
+        time.sleep(0.05)
+    assert server.open()["ok"] is True
+    ((pane, (left, top, _, _)),) = server.floating().items()
+    server.mouse(0, 3, 4)
+    server.mouse(0, 3, 4, up=True)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline and not received:
+        time.sleep(0.1)
+    assert received == [{"client": server.client, "x": 2, "y": 3}]
+    assert server.tmux("display-message", "-p", "-t", pane, "#{pane_active}") == "1"      # the click did not move focus
+    server.mouse(0, left + 3, top + 3)                               # inside the Board window: no click for the sidebar
+    server.mouse(0, left + 3, top + 3, up=True)
+    time.sleep(1.0)
+    assert len(received) == 1
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_another_item_reuses_the_window_with_its_place_and_size(floating):
+    """BOARD-020 contract 4: one Board window per window; another click shows the new content in it."""
+    server = floating()
+    assert server.open("cr")["ok"] is True
+    server.started()
+    ((pane, (left, top, width, height)),) = server.floating().items()
+    server.drag((left + 5, top), (left + 9, top + 3))
+    server.drag((left + width + 1, top + height + 1), (left + width - 9, top + height - 3))
+    placed = server.floating()[pane]
+    (tmp := server.tmp_path / "started").unlink()
+
+    result = server.open("decision")
+    assert result["ok"] is True and result["data"]["pane"] == pane
+    client, *arguments = server.started()
+    assert arguments[:2] == ["popup", "--project"] and client == server.client
+    assert server.floating() == {pane: placed}
+    assert server.tmux("display-message", "-p", "-t", pane, "#{pane_title}") == "Decision · Falcon2"
+    time.sleep(1.0)
+    assert server.tmux("show-options", "-gqv", "@project_agent_last_error") == ""   # replacing it is not a failure
+    server.tmux("send-keys", "-t", pane, "Enter")
+    assert server.wait_gone(pane)
+    assert server.tmux("show-options", "-gqv", "@project_agent_last_error") == ""
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_two_clicks_at_once_open_one_window(floating):
+    """BOARD-020 contract 4: a window marks itself after it starts, so a second click must wait for the mark."""
+    server = floating()
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(server.open())) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+    assert [result["ok"] for result in results] == [True] * 3
+    assert len(server.floating()) == 1
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_closing_the_board_window_closes_only_that_pane_even_in_a_window_that_keeps_dead_panes(floating):
+    """BOARD-020 contract 5: agent-session's windows have `remain-on-exit on`; the closed Board window must not stay
+    as a dead pane. The sidebar, its width and the managed-pane option are what they were."""
+    server = floating()
+    server.tmux("source-file", str(Path(__file__).resolve().parents[3] / "integrations/tmux/project-agent.conf"))
+    server.tmux("set-option", "-w", "-t", server.window, "remain-on-exit", "on")
+    server.tmux("set-option", "-w", "-t", server.window, tmux_control.PANE_ID_OPTION, json.dumps(server.work))
+    assert tmux_control.toggle_sidebar(socket=server.socket, client=server.client)["ok"] is True
+    before = (server.tmux("show-options", "-wqv", "-t", server.window, tmux_control.WINDOW_PANE),
+              server.tmux("show-options", "-gqv", tmux_control.WIDTH),
+              server.tmux("show-options", "-wqv", "-t", server.window, tmux_control.PANE_ID_OPTION))
+    panes = set(server.tmux("list-panes", "-t", server.window, "-F", "#{pane_id}").split())
+    assert server.open()["ok"] is True
+    ((pane, (_, _, width, height)),) = server.floating().items()
+    server.tmux("resize-pane", "-t", pane, "-x", str(width - 7))     # resizing it is not resizing the sidebar
+    time.sleep(0.5)
+    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == before[1]
+
+    server.tmux("send-keys", "-t", pane, "Enter")
+    assert server.wait_gone(pane)
+    assert set(server.tmux("list-panes", "-t", server.window, "-F", "#{pane_id}").split()) == panes
+    assert (server.tmux("show-options", "-wqv", "-t", server.window, tmux_control.WINDOW_PANE),
+            server.tmux("show-options", "-gqv", tmux_control.WIDTH),
+            server.tmux("show-options", "-wqv", "-t", server.window, tmux_control.PANE_ID_OPTION)) == before
+    assert server.tmux("show-options", "-gqv", "@project_agent_last_error") == ""
+
+    assert server.open()["ok"] is True                               # closing the window it is in
+    server.tmux("new-window", "-d", "-t", "work", "cat")
+    server.tmux("kill-window", "-t", server.window)
+    time.sleep(0.5)
+    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == before[1]
+    assert server.tmux("show-options", "-gqv", "@project_agent_last_error") == ""
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+@pytest.mark.parametrize("split", [False, True])
+def test_removing_the_sidebar_restores_the_layout_around_an_open_board_window(floating, split):
+    """BOARD-020: `select-layout` names every pane of the window, so a saved layout cannot be restored once a
+    floating pane came or went. The tiled panes get their layout back and the Board window stays where it was."""
+    server = floating()
+    if split:
+        server.tmux("split-window", "-d", "-h", "-t", server.window, "cat")
+    window = server.window
+    before = _pane_geometry(server.name, window)
+    assert tmux_control.toggle_sidebar(socket=server.socket, client=server.client)["ok"] is True
+    assert server.open()["ok"] is True
+    ((pane, placed),) = server.floating().items()
+
+    result = tmux_control.toggle_sidebar(socket=server.socket, client=server.client)
+    assert result["ok"] is True, result["error"]["details"]["failures"]
+    assert server.floating() == {pane: placed}
+    after = _pane_geometry(server.name, window)
+    # the Board window keeps the focus it had; where the tiled panes are is what is compared
+    assert {key: value[:4] for key, value in after.items() if key != pane} == {key: value[:4] for key, value in before.items()}
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_board_window_that_cannot_be_opened_is_reported_to_the_caller(floating):
+    server = floating()
+    result = tmux_control.open_cr_popup(None, "Falcon2", "open", "/dev/pts/9999", server.socket)
+    assert result["ok"] is False and result["error"]["code"] == "popup_unavailable"
+    assert server.floating() == {}
 
 
 def _counting(monkeypatch):

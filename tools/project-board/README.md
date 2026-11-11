@@ -40,7 +40,8 @@ development checkout reads the file in the repository. The file finds its helper
 itself and needs no copy under `~/.tmux`.
 
 It binds prefix `B` (set the option `@project_agent_board_key` before reading to use another
-key) and root `MouseDown1Pane` only when they are unbound or have tmux's default. A key
+key), root `MouseDown1Pane` and root `MouseDragEnd1Border` (it saves the Board width you
+dragged) only when they are unbound or have tmux's default. A key
 that has another binding is left as it is and is listed in `@project_agent_board_skipped`.
 Its hooks are named `[project-agent]`, so other hooks stay. It does not change your status
 layout. To show the open decisions, add one line to your own tmux configuration:
@@ -112,10 +113,23 @@ count to open its CR list, `D` to read decisions, or a seat with a Worker sessio
 the clicking client to its Worker window. For an SSH seat, that window contains the SSH
 connection to the remote Worker's tmux screen. The Board uses the same local window switch
 as for a local seat. A seat with a CR but no Worker session shows `대기` and ignores clicks,
-as does an empty seat. The decision popup uses 90% of that client's
-terminal; the CR popup uses 80%. Press `Esc` or the popup's close button to close it.
-In the CR popup, click a CR row or focus it with Tab and press Enter to read its full
-Markdown. Select another row to change CRs. In either popup, `목록` is shown only below
+as does an empty seat. The decision window and the CR window are floating tmux panes in
+the clicking client's current window, not popups: the decision window starts at 90% of that
+window, the CR window at 80%, both centred. While one is open the sidebar scrolls and
+clicks, and the pane behind it (the Worker's Claude) takes input once you click it; the
+window stays on top. Drag its top border to move it (or hold Alt and drag inside it) and
+drag any other border to resize it. These are tmux's default mouse bindings and need
+`mouse on`. A window holds one Board window: clicking another item shows it in the same
+pane, where you moved it and as large as you made it. Press `Esc` or the close button to
+close it; that closes only that pane.
+The CR popup is the same window whichever of `O`, `T` or `I` opened it: it lists the Open,
+Todo, In-Progress and Done CRs as groups headed `Open ▼` (click to fold or unfold), starts
+at the group that was pressed, and shows `Open N, Todo N, In-Progress N, Done N` at the top.
+Click a CR row or focus it with Tab and press Enter to read its full Markdown, done CRs
+included. Select another row to change CRs. In both popups the `◀ project ▶` buttons at the
+top move the same window to the previous or next project (registration order, wrapping; the
+tooltip names the target). The CR popup visits every project; the decision popup visits only
+projects the sidebar's `D` can open, and keeps unsent answers per decision. In either popup, `목록` is shown only below
 70 columns. Use it to switch between the list and the selected item. Wider popups show
 both panes and hide the button. After a popup grows and shrinks again, it shows the selected
 item's body. If a listed CR file moves, is deleted, or cannot be read, the
@@ -128,7 +142,8 @@ whose related CRs are still in progress. These items remain accessible at `D:0`.
 decisions are complete, `D:0` ignores clicks. A completed selection moves to the first
 remaining item, or an empty view when none remain. CR counts of `0`, `-`, or `!`, and
 decision counts of `-` or `!`, ignore clicks without opening a popup or showing an error.
-tmux keeps an open popup running if an external command changes the client's window.
+An open Board window belongs to the window it was opened in; changing the client's window
+leaves it there.
 If a managed pane is respawned while its client stays on the same window, run
 `project-board sync` to restore that window's Board pane immediately.
 

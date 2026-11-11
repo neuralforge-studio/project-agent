@@ -6,6 +6,11 @@ dies, or the window closes. Multiple clients watching the same window share that
 mouse binding sends each click's client and pane-relative coordinates over a local
 socket so actions still target the client that clicked. The sidebar is the `project-board-sidebar` binary
 (tools/project-board/rust); it runs the actions below through `project-board` subcommands.
+
+A CR or decision window is a floating pane of the clicking client's window (BOARD-020), not a
+popup: a popup is modal, a floating pane lets the sidebar and the work pane behind it be used.
+Each window holds at most one; opening another item reuses it, keeping where it was moved to and
+how large it was made.
 """
 from __future__ import annotations
 
@@ -35,6 +40,7 @@ WINDOW_PANE = "@project_board_pane"
 WINDOW_RESTORE = "@project_board_restore"
 PANE_MARK = "@project_board_managed"
 PANE_SOCKET = "@project_board_click_socket"
+PANE_WINDOW = "@project_board_window"
 WINDOW_SEEN = "@project_board_seen"
 SIDEBAR_WIDTH = 25
 # The most Board panes kept at once. One Board process holds about 50 MB (RSS, measured; the Textual sidebar) and reads
@@ -43,6 +49,8 @@ SIDEBAR_WIDTH = 25
 # Workers) fit; a pane over the bound is removed from the window that no client showed for longest.
 MAX_KEPT = 8
 CLICK_TIMEOUT = 2
+# How long opening a Board window waits for its pane to mark itself; a failed start is reported by its job.
+WINDOW_START = 3
 TOOL = Path(__file__).resolve().parents[1]
 LAUNCHER = TOOL / "bin" / "project-board"
 SIDEBAR_NAME = "project-board-sidebar"
@@ -358,13 +366,61 @@ def _board_pane(control: Tmux, window: str, record: _Window) -> str | None:
     return None
 
 
+def _floating(node: dict) -> list[dict]:
+    """The floating panes of a tmux layout tree (`#{window_layout}`, tmux 3.8): the leaves with a `z`."""
+    if node["t"] == "p":
+        return [node] if "z" in node else []
+    return [leaf for child in node["c"] for leaf in _floating(child)]
+
+
+def _tiled(node: dict, active: bool) -> dict | None:
+    """The layout tree without its floating panes. A container left with one child is that child.
+
+    `active` is true when a floating pane is the active one: a layout names one active pane only, so
+    the tiled panes then keep none."""
+    if node["t"] == "p":
+        if "z" in node:
+            return None
+        return {key: value for key, value in node.items() if key != "a"} if active else node
+    children = [child for child in (_tiled(child, active) for child in node["c"]) if child is not None]
+    if len(children) == 1:
+        return {**children[0], **{key: node[key] for key in "whxy"}}
+    return {**node, "c": children}
+
+
+def _layout_with_floating(control: Tmux, window: str, layout: str) -> tuple[str, bool]:
+    """`layout` (saved before the sidebar was added) with the window's floating panes of now, and whether
+    one of them is the active pane.
+
+    `select-layout` needs a layout that names every pane of the window. A saved layout names the panes
+    of its time, so a floating pane (the Board's CR or decision window) opened or closed since would
+    make it fail.
+    """
+    try:
+        current = _floating(json.loads(control.command("display-message", "-p", "-t", window,
+                                                       "#{window_layout}"))["L"])
+        saved = json.loads(layout)
+        active = any(leaf.get("a") for leaf in current)
+        root = _tiled(saved["L"], active)
+    except (ValueError, KeyError, TypeError):
+        return layout, False
+    if root is None:
+        return layout, False
+    if current:
+        if root["t"] == "p":
+            root = {"t": "v", **{key: root[key] for key in "whxy"}, "c": [root]}
+        root = {**root, "c": [*root["c"], *current]}
+    return json.dumps({**saved, "L": root}, separators=(",", ":")), active
+
+
 def _restore(control: Tmux, window: str) -> None:
     raw = _options(control, "-w", "-t", window, WINDOW_RESTORE)
     if not raw:
         return
     saved = json.loads(raw)
-    control.command("select-layout", "-t", window, saved["layout"])
-    if saved["focus"] in _panes(control, window):
+    layout, floating_active = _layout_with_floating(control, window, saved["layout"])
+    control.command("select-layout", "-t", window, layout)
+    if not floating_active and saved["focus"] in _panes(control, window):
         control.command("select-pane", "-t", saved["focus"])
 
 
@@ -577,18 +633,65 @@ def toggle_sidebar(config=None, client=None, socket=None) -> dict:
         return _fail("sidebar_unavailable", str(error))
 
 
+def _window_pane(control: Tmux, window: str) -> str | None:
+    """The window's Board window (a floating pane marked `@project_board_window`), or None."""
+    for row in _lines(control, "list-panes", "-t", window, "-F", f"#{{pane_id}}\t#{{{PANE_WINDOW}}}"):
+        pane, _, mark = row.partition("\t")
+        if mark == "1":
+            return pane
+    return None
+
+
+def _window_command(socket: str, args: list[str]) -> list[str]:
+    """The command of a Board window: it marks its own pane, then becomes `args`.
+
+    The mark is made by the pane itself because `new-pane -W` returns only when the pane ends, so
+    nothing can mark it from outside after it starts. `remain-on-exit` of the pane is off: a managed
+    window has it on (agent-session), which would leave a closed Board window behind as a dead pane.
+    """
+    script = (f"tmux -S {shlex.quote(socket)} set-option -p -t \"$TMUX_PANE\" remain-on-exit off \\; "
+              f"set-option -p -t \"$TMUX_PANE\" {PANE_WINDOW} 1; exec \"$@\"")
+    return ["sh", "-c", script, "sh", *args]
+
+
 def _popup(control: Tmux, client: str, args: list[str], title: str, size: str) -> dict:
-    # display-popup -E waits until the popup closes. Run it as a tmux background
-    # job so the click socket and the sidebar remain responsive while it is open.
-    # A person opened it: a failure is recorded and shown on that client, never in a work pane (BOARD-011).
-    command = ["tmux", "-S", control.effective_socket(), "display-popup", "-E", "-c", client,
-               "-w", size, "-h", size, "-T", title, "-e", f"PROJECT_BOARD_CLIENT={client}", *args]
-    control.run_quiet(shlex.join(command), "board-popup", client)
-    return _ok({"client": client})
+    """Show `args` in the Board window of the client's window: a floating pane `size` large, centred.
+
+    A window has one Board window. When it exists the pane keeps its position and size and runs
+    `args` instead (`respawn-pane -k`). A new one is created by `new-pane -W`, which returns when the
+    pane ends, so it runs as a tmux background job: the click socket and the sidebar stay responsive.
+    A person opened it: a failure is recorded and shown on that client, never in a work pane (BOARD-011).
+    """
+    window = _client_window(control, client)
+    if window is None:
+        raise ValueError("The tmux client has no window")
+    margin = f"{(100 - int(size.rstrip('%'))) // 2}%"
+    with _locked(control):
+        pane = _window_pane(control, window)
+        if pane is not None:
+            control.command("respawn-pane", "-k", "-t", pane, "-e", f"PROJECT_BOARD_CLIENT={client}",
+                            *_window_command(control.effective_socket(), args))
+            control.command("select-pane", "-t", pane, "-T", title)
+            return _ok({"client": client, "pane": pane})
+        command = ["tmux", "-S", control.effective_socket(), "new-pane", "-W", "-t", window,
+                   "-x", size, "-y", size, "-X", margin, "-Y", margin, "-T", title,
+                   "-e", f"PROJECT_BOARD_CLIENT={client}", *_window_command(control.effective_socket(), args)]
+        # tmux ends a pane it closes (the border's close button, `kill-window`) with SIGHUP, and `-W` then
+        # returns 129. That is a person closing the window, not a failure, so BOARD-011 records none.
+        control.run_quiet(shlex.join(command) + '; status=$?; [ "$status" -ne 129 ] || status=0; exit "$status"',
+                          "board-popup", client)
+        # The next click must find this pane, so the lock is kept until the pane has marked itself.
+        deadline = time.monotonic() + WINDOW_START
+        while time.monotonic() < deadline:
+            pane = _window_pane(control, window)
+            if pane is not None:
+                break
+            time.sleep(0.02)
+    return _ok({"client": client, "pane": pane})
 
 
 def open_popup(config, project_id: str, decide_id: str | None = None, client: str | None = None, socket=None) -> dict:
-    """Open one decision in a large popup on the specified tmux client."""
+    """Open one decision in the Board window of the specified tmux client's window."""
     try:
         control = _control(socket)
         selected = _client(control, client)
@@ -606,7 +709,7 @@ def open_popup(config, project_id: str, decide_id: str | None = None, client: st
 
 
 def open_cr_popup(config, project_id: str, state: str, client: str | None = None, socket=None) -> dict:
-    """Open a project's CR list without changing the shared sidebar screen."""
+    """Open a project's CR list in the Board window of the specified client's window, leaving the sidebar screen as it is."""
     if state not in model.CR_STATES:
         return _fail("cr_state_invalid", "Choose open, todo or in-progress.")
     try:

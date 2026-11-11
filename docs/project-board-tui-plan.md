@@ -83,7 +83,7 @@ R 0 GPU-007
 | --- | --- |
 | 상태줄 `Board` | 같은 tmux server의 모든 client에 sidebar 켜기·끄기 |
 | Project 이름 | 클릭한 client를 해당 project tmux session의 현재 window로 이동. 대상 session이 없으면 오류 표시 |
-| 각 project의 `O/T/I` | 클릭한 client에 해당 CR 목록과 선택한 CR의 전체 Markdown을 읽는 popup 열기 |
+| 각 project의 `O/T/I` | 클릭한 client에 CR popup 열기. 셋 중 무엇을 눌러도 같은 popup이며, 누른 상태의 묶음이 처음 보이게 열립니다 |
 | 각 project의 `D` | 클릭한 client에 그 project의 결정 popup 열기 |
 | 각 project의 좌석 버튼 | 해당 project의 좌석 목록을 펼치거나 접기 |
 | Worker session이 있는 seat의 CR ID | 클릭한 client를 해당 Worker의 tmux window로 이동. 대상 window가 없으면 오류 표시 |
@@ -96,6 +96,7 @@ SSH seat의 Worker window는 Leader 호스트의 SSH 표시 창입니다. 이 �
 `O/T/I`가 `0`, `-`, `!`이면 클릭해도 popup이나 오류 알림을 열지 않습니다. `D`는 표시 상태가 `완료`가 아닌 결정이 없거나 `-`, `!`일 때만 열지 않습니다.
 
 CR popup은 왼쪽 목록에서 선택한 항목의 전체 Markdown 원본을 오른쪽에 표시합니다.
+목록은 Open, Todo, In-Progress, Done 네 묶음입니다(BOARD-021). 묶음 제목은 `Open ▼` 모양이고 눌러 접고(`▶`) 펼칩니다. 처음에는 모두 펼쳐져 있고, `O/T/I` 중 누른 상태의 묶음이 목록 맨 위에 오도록 scroll하며 그 묶음의 첫 CR을 선택합니다(`cr --state`가 이 묶음을 정합니다. 묶음이 비면 첫 CR). 비어 있는 묶음은 `없음` 한 줄입니다. 맨 위에는 `Open {N}, Todo {N}, In-Progress {N}, Done {N}`을 표시하며 묶음을 접어도 바뀌지 않습니다. done CR도 같은 방식으로 본문을 읽습니다. deferred는 보이지 않습니다. done 목록은 popup이 읽을 때만 읽고(`model.popup_snapshot(done=True)`) sidebar의 snapshot과 개수에는 없습니다. done CR은 project마다 수백 개이고 파일 하나를 여는 데 공유 disk에서 10 ms 넘게 걸리므로(balvian 1471개는 19초) 목록은 파일을 열지 않고 파일 이름의 제목으로 먼저 그린 뒤, 진짜 제목(첫 줄)을 한 파일씩 읽어 바꿉니다(`model.done_items`·`done_title`).
 마우스로 CR 행을 클릭하거나 키보드로 행에 초점을 맞춘 뒤 Enter를 눌러 선택합니다.
 CR·결정 popup의 너비가 70 column 미만이면 `목록` 버튼으로 목록과 본문을 전환합니다.
 70 column 이상이면 목록과 본문을 함께 표시하고 `목록` 버튼을 숨깁니다.
@@ -104,6 +105,10 @@ CR·결정 popup의 너비가 70 column 미만이면 `목록` 버튼으로 목�
 오류가 나도 popup은 열린 상태를 유지합니다.
 원본 경로는 등록한 CR root의 해당 상태에서 열거한 항목으로 제한합니다.
 
+#### Project 이동 (BOARD-021)
+
+CR popup과 결정 popup은 맨 위에 `◀ project ▶`를 둡니다. 누르면 같은 창이 이전·다음 project의 내용으로 바뀝니다(창을 닫지 않습니다). 순서는 sidebar의 등록 순서이고 끝에서는 반대쪽 끝으로 돕니다. ◀▶ 위에 mouse를 올리면 갈 project를 tooltip(`이전 project: NAME`·`다음 project: NAME`)으로 보입니다. CR popup은 등록된 모든 project를 돕습니다. 결정 popup은 sidebar `D`가 켜지는 기준(`tui._visible_decisions`가 있음)인 project만 돕습니다. 갈 project가 없으면(하나뿐) 버튼은 꺼집니다. popup은 연 project 하나만 먼저 읽어 바로 열고(`model.popup_snapshot`, 등록 순서 `order` 포함), 결정 popup이 갈 project를 정하는 데 필요한 다른 project의 결정은 창이 뜬 뒤에 읽습니다(전체를 읽으면 실제 등록 10개에서 5초 안팎). 그동안 결정 창의 ◀▶는 꺼져 있습니다. 결정 popup의 답변 초안은 (project, 결정 ID)마다 남아, project를 옮겼다 돌아와도 유지되고 돌아오면 떠날 때 보던 결정이 열립니다. 답변 전송 중에는 옮기지 않습니다. `project-board cr`·`popup`의 인자는 바뀌지 않습니다. `cr`의 `--state`는 처음 scroll할 묶음입니다.
+
 #### Popup 목록 행과 선택 표시 (BOARD-007)
 
 CR popup과 결정 popup의 왼쪽 목록은 같은 규칙을 씁니다(`tui._item_label`).
@@ -111,7 +116,7 @@ CR popup과 결정 popup의 왼쪽 목록은 같은 규칙을 씁니다(`tui._it
 - 항목마다 한 줄입니다. 형식은 `표식 ID 상태 제목`이고 줄바꿈하지 않습니다. 칸보다 긴 줄은 끝을 `…`로 줄입니다. ID와 상태가 앞에 있으므로 줄어드는 것은 제목뿐입니다. 제목 전체는 오른쪽 본문 머리에서 읽습니다. 너비는 문자 폭(한글 2칸) 기준이며 칸 너비가 바뀌면 다시 줄입니다.
 - 목록 칸은 popup 너비의 40%이고 30~46 column입니다. 80 column popup에서 결정 ID와 상태를 모두 보이게 하는 최소 폭입니다.
 - 선택한 항목은 표식 `▶`, 파란 배경, 굵은 흰 글자입니다. 선택하지 않은 항목의 표식은 공백이고 어두운 배경입니다. 키보드 초점(Tab)이 선택하지 않은 항목에 있으면 밝은 회청색 배경으로 구별합니다. 선택과 초점은 서로 다른 표시입니다. 선택은 Enter나 클릭으로만 바뀝니다.
-- 결정의 상태는 snapshot의 `display_state`를 줄인 말(`결정 대기`→`대기`, `답변 접수`→`접수`, `반영 중`→`반영`)이며 상태마다 색이 다릅니다(대기 노랑, 접수 하늘, 반영 초록). CR 목록은 popup이 상태 하나(`open`·`todo`·`in-progress`)의 목록이고 머리줄이 그 상태를 이미 표시하므로 행마다 반복하지 않습니다. 행에는 구별이 필요한 `review_wait`(아래)만 `검토`로 노랑으로 표시합니다.
+- 결정의 상태는 snapshot의 `display_state`를 줄인 말(`결정 대기`→`대기`, `답변 접수`→`접수`, `반영 중`→`반영`)이며 상태마다 색이 다릅니다(대기 노랑, 접수 하늘, 반영 초록). CR 목록은 묶음 제목이 상태를 이미 표시하므로 행마다 반복하지 않습니다. 행에는 구별이 필요한 `review_wait`(아래)만 `검토`로 노랑으로 표시합니다.
 
 `review_wait`의 판정 규칙은 [project-board README](../tools/project-board/README.md#review-wait)가 소유합니다. 제출 행의 문법은 [CR 계약](../skills/project-item/references/cr.md)이 소유합니다. 이 표시는 `R` 표시와 별개입니다.
 
@@ -120,7 +125,7 @@ CR popup과 결정 popup의 왼쪽 목록은 같은 규칙을 씁니다(`tui._it
 결정 popup은 터미널 너비와 높이의 90%를 사용합니다. 사용자가 다른 상태 정보를 보지 않아도 결정할 수 있게 구성합니다.
 
 ```text
-┌ 결정 1/2 · D-20261106-07 ───────────────────────────┐
+┌ ◀ project ▶ · 결정 1/2 · D-20261106-07 ─────────────┐
 │ 결정 목록      │ 질문 · 긴급도 · 관련 CR             │
 │ D-...          │ Background                          │
 │ D-...          │ Options [넓은 표는 가로 스크롤]      │
@@ -152,7 +157,9 @@ tmux `next-3.9`의 전체 높이 일반 pane을 사용합니다. Controller는 �
 
 tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합니다. Hook은 `sync`를 시작할 일이 있을 때만 시작합니다. 시작 조건은 tmux format(`@project_agent_sync_needed`)이며 "Board가 켜져 있고 이 window의 Board pane이 없거나 저장한 폭이 아님"입니다. 이미 Board pane이 있는 window로 옮긴 hook은 프로세스를 시작하지 않습니다. 조건이 참이면 Controller는 보이는 window와 Board pane을 동기화합니다. 관리된 `agent-session` pane이 종료되면 Board pane도 먼저 제거해 종료 window의 정리를 방해하지 않습니다. 이 구조에는 별도의 서버나 상주 감시 프로세스가 없습니다.
 
-상태줄 `Board`와 prefix `B`는 전역 toggle을 실행합니다. 일반 pane의 클릭은 tmux에 전달합니다. Board pane의 클릭은 tmux binding이 클릭한 client 이름, pane ID, 좌표를 Unix socket으로 TUI에 전달합니다. 따라서 같은 Board pane을 공유하는 client도 자신의 popup을 열거나 자신의 window를 이동합니다. 결정 popup은 90%, CR popup은 80% 크기로 해당 client에 엽니다.
+상태줄 `Board`와 prefix `B`는 전역 toggle을 실행합니다. 일반 pane의 클릭은 tmux에 전달합니다. Board pane의 클릭은 tmux binding이 클릭한 client 이름, pane ID, 좌표를 Unix socket으로 TUI에 전달합니다. 따라서 같은 Board pane을 공유하는 client도 자신의 창을 열거나 자신의 window를 이동합니다. 결정 창은 90%, CR 창은 80% 크기로 클릭한 client의 현재 window에 엽니다.
+
+결정·CR 창은 tmux `display-popup`이 아니라 그 window의 떠 있는 pane(`new-pane`, tmux 3.8)입니다(BOARD-020). popup은 떠 있는 동안 그 client의 입력을 모두 받아 sidebar 스크롤·클릭과 뒤 pane(Claude) 입력을 막기 때문입니다. 떠 있는 pane은 modal이 아니므로 sidebar와 뒤 pane을 그대로 쓰고, 창은 계속 위에 보입니다. 위쪽 경계를 끌면 옮기고(Alt를 누른 채 안쪽을 끌어도 됩니다) 다른 경계를 끌면 크기가 바뀝니다. 둘 다 tmux 기본 mouse binding이며 Board는 binding을 더하지 않습니다. 한 window에는 Board 창이 하나입니다. pane option `@project_board_window`가 그 창을 표시하고, 창이 떠 있을 때 다른 항목을 누르면 `respawn-pane -k`로 같은 pane의 내용만 바꿉니다. 그래서 옮긴 위치와 바꾼 크기가 남습니다. 창은 열 때 자기 pane에 이 표시를 하고(`new-pane -W`는 창이 끝날 때까지 돌아오지 않아 밖에서 표시할 수 없습니다), 동시에 두 번 눌러도 하나만 만들도록 열기는 Board의 잠금 안에서 표시를 기다립니다. pane의 `remain-on-exit`은 끕니다. 관리 window는 이 option이 켜져 있어 그대로 두면 닫은 창이 죽은 pane으로 남기 때문입니다. 창에서 `Esc`나 닫기 버튼으로 끝내면 그 pane만 닫힙니다. 창이 있는 window에서 sidebar를 끌 때(`_restore`)는 저장한 layout에 지금의 떠 있는 pane을 더해 복원합니다. `select-layout`은 window의 모든 pane을 이름으로 요구하기 때문입니다.
 
 ## 6. 구현 단위와 완료 기준
 
@@ -167,7 +174,7 @@ tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합
 
 `project-board` 테스트 61건과 `project-item` 테스트 83건이 통과했습니다. 실제 tmux 화면에서 두 project의 개수와 seat, 결정 Markdown 표와 CSV 표를 확인했습니다. 두 client의 다른 window에 같은 전체 목록이 표시됐습니다. 마우스 클릭은 해당 client의 CR popup을 열었고, seat 클릭은 해당 client만 Worker window로 이동했습니다. 느린 조회 중 클릭과 중복 조회 방지도 TUI 테스트로 확인했습니다. 실제 사용 중인 tmux server에는 테스트 동작을 적용하지 않았습니다.
 
-tmux popup을 열어 둔 상태에서 외부 명령으로 client의 window를 바꾸면 popup 프로세스는 기존 window에 남습니다. Popup에서 `Esc`나 닫기 버튼으로 종료합니다. 이번 구현은 사용 중인 popup을 창 이동 시 강제로 닫지 않습니다.
+결정·CR 창은 열린 window에 속합니다. client가 다른 window로 옮겨도 창은 그 window에 남고, 창에서 `Esc`나 닫기 버튼으로 종료합니다. 이번 구현은 창을 이동 시 강제로 닫지 않습니다(BOARD-020 이전에는 popup이 같은 방식이었습니다).
 
 관리된 pane이 종료된 뒤 같은 window에서 곧바로 `respawn-pane`되면 Board는 다음 client·window 동기화 때 다시 나타납니다. 즉시 갱신하려면 `project-board sync`를 실행합니다. tmux `next-3.9`에는 `after-respawn-pane` hook이 없습니다.
 
