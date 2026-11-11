@@ -25,6 +25,7 @@
 ## Disposition
 - 2026-11-11 Leader: 고친다(Leader 판정). release 검증을 막는 test 결함입니다. 0.9.0은 실패한 세 test를 다시 실행해 통과한 근거로 release했습니다.
 - 2026-11-11 Leader: open -> todo. Leader 판정: release 검증을 막는 test 결함
+- 2026-11-11 Leader: 범위를 넓힙니다. 같은 0.9.0 검증에서 install/tests 4개도 설치 명령의 300초 한도를 넘겨 실패했습니다. 대상은 `test_tmux.py::test_t20_user_bindings_are_kept_and_reported_as_skipped`와 `test_tmux_version.py::test_check_passes_when_the_first_tmux_is_the_minimum_or_newer`의 3.8, next-3.9, 4.0입니다. 전체 1시간 45분이 걸렸고 load는 90~140이었습니다. 다시 실행하면 5 passed였습니다(load 40~100). 그때 seat 1 Worker가 띄운 install test 두 개가 부모 없이 2시간 넘게 돌고 있었습니다. 이 4개도 같은 기준(부하 아래 반복)으로 고칩니다. 0.9.0은 실패한 test를 다시 실행해 모두 통과한 근거로 release했습니다.
 
 ## Implementation
 읽을 문서: `tools/agent-session/tests/test_suspend.py`, `test_watch.py`, `tests/conftest.py`의 `AGENT_SESSION_TEST_TIMEOUT`, `agent_session/lifecycle.py`의 wait limit, README 검증, [release 절차](../../project-team/release.md), [project-team Worker 절](../../../skills/project-team/SKILL.md).
