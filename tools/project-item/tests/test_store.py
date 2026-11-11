@@ -617,3 +617,137 @@ def test_in_progress_transitions_and_format(tmp_path):
 def test_job_headers_are_checked(tmp_path, header, message):
     path = todo_cr(tmp_path / "cr", extra=header)
     assert message in CR.fmt.check(CR.fmt.parse(path, "todo"))
+
+
+# ---------------------------------------------------------------- number cache (ITEM-001)
+@pytest.fixture
+def git_log_calls(monkeypatch):
+    """The `git log` runs of the number decision: (stdin revs, whether `--all` was used)."""
+    real = store.subprocess.run
+    calls = []
+
+    def spy(cmd, *args, **kwargs):
+        if "log" in cmd and "-C" in cmd:
+            calls.append(((kwargs.get("input") or b"").decode().split(), "--all" in cmd))
+        return real(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(store.subprocess, "run", spy)
+    return calls
+
+
+def _head(repo):
+    return git(repo, "rev-parse", "HEAD").strip()
+
+
+def _number(repo):
+    return int(new_cr(repo / "cr", "t").name.split("-")[1])
+
+
+def _cache_file(repo):
+    return store.number_cache_path(repo / "cr")
+
+
+def test_second_new_after_a_removed_number_reads_no_git_history(tmp_path, git_log_calls):
+    repo = tmp_path / "repo"
+    git_init(repo)
+    _commit_then_remove(repo, "cr/done/TOOL-003-a.md")
+    assert _number(repo) == 4
+    assert len(git_log_calls) == 1 and git_log_calls[0][0] == [_head(repo)]    # first call: whole history
+    assert _number(repo) == 5                                                  # TOOL-004 is a file now
+    assert len(git_log_calls) == 1                                             # nothing new: no git log
+    assert store.history_high(repo / "cr", "TOOL") == 3
+
+
+def test_cache_with_a_removed_number_still_blocks_reuse(tmp_path):
+    repo = tmp_path / "repo"
+    git_init(repo)
+    _commit_then_remove(repo, "cr/done/TOOL-003-a.md")
+    new_cr(repo / "cr", "first").unlink()                    # the cache exists, the file does not
+    assert _number(repo) == 4                                # 3 is in the history, 4 only was a file
+    assert store.history_high(repo / "cr", "TOOL") == 3
+
+
+def test_number_on_another_branch_only_is_not_reused(tmp_path):
+    repo = tmp_path / "repo"
+    git_init(repo)
+    _commit_then_remove(repo, "cr/done/TOOL-001-a.md")
+    main = git(repo, "branch", "--show-current").strip()
+    git(repo, "switch", "-q", "-c", "other")
+    _commit_then_remove(repo, "cr/done/TOOL-007-b.md")
+    git(repo, "switch", "-q", main)
+    assert _number(repo) == 8                                # no cache: full read of every ref
+
+
+def test_commits_after_the_cache_are_read_and_merged(tmp_path, git_log_calls):
+    repo = tmp_path / "repo"
+    git_init(repo)
+    _commit_then_remove(repo, "cr/done/TOOL-003-a.md")
+    assert _number(repo) == 4
+    old = _head(repo)
+    main = git(repo, "branch", "--show-current").strip()
+    git(repo, "switch", "-q", "-c", "other")
+    _commit_then_remove(repo, "cr/done/TOOL-010-b.md")       # a new commit on a new branch
+    git(repo, "switch", "-q", main)
+    _commit_then_remove(repo, "cr/done/AXI-002-c.md")        # and one on the old branch
+    git_log_calls.clear()
+    assert _number(repo) == 11
+    (revs, used_all), = git_log_calls
+    assert not used_all and f"^{old}" in revs                # only what the cached commit does not reach
+    assert store.history_high(repo / "cr", "AXI") == 2       # the cache keeps every AREA it has seen
+
+
+def test_second_call_does_not_read_before_the_remembered_commit(tmp_path, monkeypatch):
+    """Observed with GIT_TRACE2_EVENT: the commits git walks are the new ones only."""
+    repo = tmp_path / "repo"
+    git_init(repo)
+    for n in range(1, 6):
+        _commit_then_remove(repo, f"cr/done/TOOL-00{n}-a.md")
+    assert _number(repo) == 6
+    _commit_then_remove(repo, "cr/done/TOOL-020-b.md")
+    trace = tmp_path / "trace.json"
+    monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace))
+    assert store.history_high(repo / "cr", "TOOL") == 20
+    argv = [line for line in trace.read_text().splitlines() if '"event":"start"' in line and '"log"' in line]
+    assert len(argv) == 1 and "--stdin" in argv[0] and "--all" not in argv[0]
+
+
+@pytest.mark.parametrize("content", [
+    "", "not json", "[]", "{}", '{"version": 2, "root": "R", "tips": [], "high": {}}',
+    '{"version": 1, "root": "elsewhere", "tips": [], "high": {"TOOL": 99}}',
+    '{"version": 1, "root": "R", "tips": ["zz"], "high": {"TOOL": 99}}',
+    '{"version": 1, "root": "R", "tips": [], "high": {"TOOL": "9"}}',
+    '{"version": 1, "root": "R", "tips": [], "high": {"TOOL": -1}}',
+    '{"version": 1, "root": "R", "tips": [], "high": []}',
+])
+def test_unusable_cache_means_a_full_read_and_a_new_cache(tmp_path, git_log_calls, content):
+    repo = tmp_path / "repo"
+    git_init(repo)
+    _commit_then_remove(repo, "cr/done/TOOL-003-a.md")
+    cache = _cache_file(repo)
+    cache.parent.mkdir(parents=True)
+    cache.write_text(content.replace("R", str((repo / "cr").resolve())), encoding="utf-8")
+    assert _number(repo) == 4
+    assert git_log_calls and git_log_calls[0][0] == [_head(repo)]      # no `^known` line: nothing trusted
+    assert store._read_number_cache(repo / "cr") == ([_head(repo)], {"TOOL": 3})
+
+
+def test_remembered_commit_that_git_cannot_find_means_a_full_read(tmp_path, git_log_calls):
+    repo = tmp_path / "repo"
+    git_init(repo)
+    _commit_then_remove(repo, "cr/done/TOOL-003-a.md")
+    main = git(repo, "branch", "--show-current").strip()
+    git(repo, "switch", "-q", "-c", "doomed")
+    _commit_then_remove(repo, "cr/done/TOOL-009-b.md")
+    git(repo, "switch", "-q", main)
+    new_cr(repo / "cr", "t")
+    assert store.history_high(repo / "cr", "TOOL") == 9
+    for stale in (repo / "cr" / "open").glob("*.md"):
+        stale.unlink()
+    git(repo, "branch", "-q", "-D", "doomed")                # a force push and a gc, in effect
+    git(repo, "reflog", "expire", "--expire=now", "--all")
+    git(repo, "gc", "-q", "--prune=now")
+    git_log_calls.clear()
+    assert _number(repo) == 4        # TOOL-009 is gone with the branch; the cache that held it is not trusted
+    assert len(git_log_calls) == 2 and git_log_calls[0][0][1:2] != [] and git_log_calls[0][0][1].startswith("^")
+    assert git_log_calls[1][0] == [_head(repo)]                         # git refused the `^gone`: full read
+    assert store._read_number_cache(repo / "cr") == ([_head(repo)], {"TOOL": 3})
