@@ -114,6 +114,21 @@ Errors print `project-item: <code>: <message>` and exit 2.
 orders sessions of one machine. It does not order two machines that write the same network
 path; `check` finds the duplicate IDs that such a race can make.
 
+## Number cache
+
+`new cr` must not reuse a number that any ref's history ever held, removed files included. Reading
+the whole history costs minutes on a loaded network file system, so the result is kept per root:
+`~/.cache/project-item/numbers/<same digest as the lock>.json` holds the commits at the ends of every
+ref and HEAD, and the highest number of each AREA found in the history up to them. A call reads only
+the commits that the remembered ones do not reach (`git log --stdin` with `^<commit>` lines) and
+merges them. With no new commit it runs no `git log`. The file is written under the root lock, to a
+temporary file that replaces the old one.
+
+The cache is derived from git, so it can be deleted at any time. A missing, damaged or differently
+shaped file, or a remembered commit that git no longer has (after a forced push and `gc`), means one
+full read, which writes a new cache. A branch deleted since the last call keeps its numbers in the
+cache until the cache is deleted: a number is never reissued, but may be skipped.
+
 ## Tests
 
 ```sh
