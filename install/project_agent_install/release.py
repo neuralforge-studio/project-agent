@@ -9,6 +9,7 @@ import subprocess
 import sys
 import sysconfig
 
+from . import rustbuild
 from .layout import InstallerError
 
 PRODUCT_DIRS = ("tools", "skills", "docs", "integrations", "install")
@@ -88,7 +89,8 @@ def load_source(root):
         raise InstallerError("source_dirty", "The release files differ from the commit %s; commit or restore "
                              "them first." % commit[:HASH_LENGTH], {"files": sorted(dirty)[:20], "count": len(dirty)})
     files = tuple(sorted(name for name in tracked if included(name)))
-    if "VERSION" not in files or not any(name.startswith("tools/agent-session/") for name in files):
+    if ("VERSION" not in files or not any(name.startswith("tools/agent-session/") for name in files)
+            or rustbuild.CRATE + "/Cargo.toml" not in files):
         raise InstallerError("source_invalid", "The source tree is not a project-agent checkout.",
                              {"source": str(root)})
     return Source(root, version, commit, files)
