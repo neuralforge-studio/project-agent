@@ -43,9 +43,9 @@ PANE_SOCKET = "@project_board_click_socket"
 PANE_WINDOW = "@project_board_window"
 WINDOW_SEEN = "@project_board_seen"
 SIDEBAR_WIDTH = 25
-# The most Board panes kept at once. One Board process holds about 50 MB (RSS, measured; the Textual sidebar) and reads
+# The most Board panes kept at once. One Board process holds about 13 MB (RSS of the Rust sidebar with 10 projects; the Textual one held 50 MB) and reads
 # the project files only while its window is shown, so the bound is memory, not CPU: 8 panes are
-# about 400 MB at most. The windows a user moves among in a working session (a project's Leader and
+# about 100 MB at most. The windows a user moves among in a working session (a project's Leader and
 # Workers) fit; a pane over the bound is removed from the window that no client showed for longest.
 MAX_KEPT = 8
 CLICK_TIMEOUT = 2

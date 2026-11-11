@@ -77,6 +77,13 @@ R 0 GPU-007
 - 화면은 등록 순서를 유지합니다. 긴 project 이름과 CR ID는 tooltip과 가로 스크롤로 전체 값을 볼 수 있게 합니다.
 - Tooltip은 pane이 focus를 잃으면(`FocusLost`) 곧바로, 그 밖에는 마지막 mouse motion 5초 뒤에 지웁니다(`app.rs`의 `TOOLTIP_IDLE`). Mouse가 다른 pane으로 나가면 tmux는 이 pane에 아무 event도 보내지 않아 sidebar가 tooltip을 지울 계기가 없습니다. 그래서 모든 경우에 tooltip이 남아 사용자가 따로 치울 일이 없게 시간으로 닫습니다. 5초는 표시 지연(0.5초) 뒤 가장 긴 tooltip(seat의 CR 제목·호스트·원격 경로)을 읽기에 충분하고, 움직이지 않는 mouse 때문에 오래 남지는 않는 값입니다. Motion이 이어지면 시간을 다시 잽니다. 닫은 tooltip은 mouse를 다시 움직여야 다시 뜹니다.
 
+0.7.1의 Textual sidebar와 화면이 다른 곳은 다음뿐입니다(BOARD-018 확인). 24개 화면의 칸 단위 비교는 [golden 화면](../tools/project-board/rust/tests/golden)과 Rust test(`golden.rs`)가 맡습니다.
+
+- 비활성 버튼 글자색의 한 색 채널이 1 다릅니다(Textual의 혼합 계산 반올림).
+- Tooltip 상자는 pane 폭 안에서 줄을 바꿉니다. Textual은 상자를 40칸 폭으로 만든 뒤 pane 밖을 잘라 냅니다. 상자는 pointer 아래에 가운데 맞춰 놓고, 아래에 자리가 없으면 위에 놓습니다.
+- 동작 실패 알림은 pane 아래쪽의 붉은 줄이며 5초 뒤 사라집니다. Textual의 toast와 모양이 다릅니다.
+- 종료 키는 `ctrl+q`뿐입니다. Textual의 command palette(`ctrl+p`)는 없습니다.
+
 마우스 클릭은 필수 조작입니다. tmux 설정은 이미 `mouse on`입니다. Sidebar pane 안의 클릭과 휠은 TUI가 처리합니다. tmux 상태줄의 별도 `Board` 영역은 기존 session·cswap 클릭 동작을 유지하면서 sidebar toggle에 사용합니다.
 
 | 클릭 대상 | 동작 |

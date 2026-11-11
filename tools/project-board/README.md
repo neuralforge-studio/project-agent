@@ -82,7 +82,7 @@ In tmux, prefix `B` or click `Board` in the status line to toggle the sidebar fo
 attached client. The same window shares one Board pane. A window keeps its Board pane after
 the last client leaves it, so returning to a window shows the Board at once instead of starting
 it again; turning the Board off removes every Board pane. A window that no client has watched
-has none. At most 8 Board panes are kept (about 50 MB each); a ninth removes the pane of the
+has none. At most 8 Board panes are kept (about 13 MB each); a ninth removes the pane of the
 window that no client showed for longest. A pane whose window no client shows stops reading and
 reads once as soon as the window is shown. Each visible window gives the Board
 25 columns by default and shows existing panes in the remaining space. A width adjusted in
