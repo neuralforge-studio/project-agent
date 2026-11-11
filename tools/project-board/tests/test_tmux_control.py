@@ -12,6 +12,7 @@ import socket
 import stat
 import struct
 import subprocess
+import sys
 import tempfile
 import termios
 import threading
@@ -1013,7 +1014,7 @@ def test_a_failing_board_window_never_covers_the_work_pane_and_the_client_is_tol
             job = ["tmux", "-S", socket_path, "new-pane", "-W", "-t", "work", *command]
             control.command("run-shell", "-b", " ".join(map(shlex.quote, job)))
         else:
-            result = tmux_control._popup(control, client, command, "fake", "50%")
+            result = tmux_control._popup(control, client, command, "fake", "50%", "cr", {})
             assert result["ok"] is True and result["data"]["client"] == client
         deadline = time.monotonic() + 10
         mode = ""
@@ -1048,6 +1049,8 @@ FAKE_BOARD = """#!/bin/sh
 # Stands for the Board TUI of a CR or decision window: records how it was started, ends when told to.
 here=$(dirname "$0")
 printf '%s\\n' "$PROJECT_BOARD_CLIENT" "$@" > "$here/started"
+# says it listens, on a socket nothing listens on: a click then starts the window again (BOARD-025)
+tmux set-option -p -t "$TMUX_PANE" @project_board_window_link /nonexistent
 read answer
 exit "${answer:-0}"
 """
@@ -1056,12 +1059,12 @@ exit "${answer:-0}"
 class _Floating:
     """A test server with one attached client and a stand-in Board TUI for the CR and decision windows."""
 
-    def __init__(self, tmp_path, monkeypatch, windows=1):
+    def __init__(self, tmp_path, monkeypatch, windows=1, board=FAKE_BOARD):
         self.tmp_path = tmp_path
         self.name = tmux_test_server.claim("board-float")
         self.clients = []
         launcher = tmp_path / "fake-board"
-        launcher.write_text(FAKE_BOARD)
+        launcher.write_text(board)
         launcher.chmod(0o755)
         monkeypatch.setattr(tmux_control, "LAUNCHER", launcher)
         monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
@@ -1132,8 +1135,8 @@ class _Floating:
 def floating(tmp_path, monkeypatch):
     made = []
 
-    def make(windows=1):
-        made.append(_Floating(tmp_path, monkeypatch, windows))
+    def make(windows=1, board=FAKE_BOARD):
+        made.append(_Floating(tmp_path, monkeypatch, windows, board))
         return made[-1]
     yield make
     for server in made:
@@ -1547,6 +1550,187 @@ def test_reading_the_folds_takes_no_lock_and_starts_one_tmux_command(monkeypatch
     assert tmux_control.expanded_projects() == {"one", "two"}
     assert len(calls) == 1 and calls[0][0] == "show-options"
 
+
+LISTENING_BOARD = f"""#!{sys.executable}
+# Stands for a Board window that listens (window_link): records each start and each request, and answers by `mode`.
+import asyncio, os, subprocess, sys, time
+from pathlib import Path
+sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})
+from project_board import window_link
+here = Path(__file__).parent
+with (here / "starts").open("a") as starts:
+    starts.write(" ".join([str(os.getpid()), *sys.argv[1:]]) + "\\n")
+link = os.environ[window_link.SOCKET_ENV]
+time.sleep(float((here / "slow-start").read_text()) if (here / "slow-start").exists() else 0)
+
+def handle(request):
+    with (here / "requests").open("a") as requests:
+        requests.write(repr(request) + "\\n")
+    mode = (here / "mode").read_text() if (here / "mode").exists() else "ok"
+    return window_link.reply() if mode == "ok" else window_link.reply(False, mode, "the window said " + mode)
+
+async def main():
+    server = await window_link.serve(link, handle)
+    subprocess.run(["tmux", "set-option", "-p", "-t", os.environ["TMUX_PANE"], "@project_board_window_link", link])
+    await asyncio.sleep(60)
+
+asyncio.run(main())
+"""
+
+
+def _lines_of(server, name):
+    path = server.tmp_path / name
+    return path.read_text().splitlines() if path.exists() else []
+
+
+def _wait_lines(server, name, count, timeout=20):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if len(_lines_of(server, name)) >= count:
+            return _lines_of(server, name)
+        time.sleep(0.05)
+    pytest.fail(f"{name} has {_lines_of(server, name)}")
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_another_item_of_the_same_kind_is_told_to_the_open_window_and_starts_nothing(floating):
+    """BOARD-025 contract 1: the process of an open window shows the next item; no process is started."""
+    server = floating(board=LISTENING_BOARD)
+    assert server.open("cr")["ok"] is True
+    (first,) = _wait_lines(server, "starts", 1)
+    ((pane, placed),) = server.floating().items()
+    deadline = time.monotonic() + 20
+    while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    result = tmux_control.open_cr_popup(None, "Alpha", "todo", server.client, server.socket)
+    assert result["ok"] is True and result["data"] == {"pane": pane, "reused": True}
+    assert [eval(line) for line in _lines_of(server, "requests")] == [
+        {"kind": "cr", "project": "Alpha", "state": "todo", "client": server.client}]
+    assert _lines_of(server, "starts") == [first]                           # still the one process
+    assert server.floating() == {pane: placed}
+    assert server.tmux("display-message", "-p", "-t", pane, "#{pane_title}") == "CR · Alpha"
+
+    # a window of the other kind is another process: the pane is started again, in the same place
+    result = tmux_control.open_popup(None, "Alpha", "D-1", server.client, server.socket)
+    assert result["ok"] is True and "reused" not in result["data"]
+    starts = _wait_lines(server, "starts", 2)
+    assert starts[1].split()[1:] == ["popup", "--project", "Alpha", "--decision", "D-1"]
+    assert starts[1].split()[0] != first.split()[0] and server.floating() == {pane: placed}
+    # and it is the one a decision click reaches next
+    deadline = time.monotonic() + 20
+    while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert tmux_control.open_popup(None, "Beta", None, server.client, server.socket)["data"]["reused"] is True
+    assert eval(_lines_of(server, "requests")[-1]) == {
+        "kind": "decision", "project": "Beta", "decision": None, "client": server.client}
+    assert len(_lines_of(server, "starts")) == 2
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_click_waits_for_a_window_of_its_kind_that_is_still_starting(floating):
+    """The process needs seconds to come up on a loaded host: a click during that tells it instead of killing it."""
+    server = floating(board=LISTENING_BOARD)
+    (server.tmp_path / "slow-start").write_text("2")
+    assert server.open("cr")["ok"] is True
+    (first,) = _wait_lines(server, "starts", 1)
+    started = time.monotonic()
+    result = tmux_control.open_cr_popup(None, "Alpha", "todo", server.client, server.socket)
+    assert result["ok"] is True and result["data"]["reused"] is True and time.monotonic() - started >= 1
+    assert _lines_of(server, "starts") == [first]
+    assert [eval(line)["project"] for line in _lines_of(server, "requests")] == ["Alpha"]
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_window_that_cannot_change_what_it_shows_is_not_replaced(floating):
+    """An answer being sent must not be lost: `busy` is reported to the click, the process stays."""
+    server = floating(board=LISTENING_BOARD)
+    assert server.open("decision")["ok"] is True
+    (first,) = _wait_lines(server, "starts", 1)
+    deadline = time.monotonic() + 20
+    ((pane, _),) = server.floating().items()
+    while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    (server.tmp_path / "mode").write_text("busy")
+    result = tmux_control.open_popup(None, "Alpha", None, server.client, server.socket)
+    assert result["ok"] is False and result["error"]["code"] == "window_busy"
+    assert _lines_of(server, "starts") == [first]
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_window_process_that_is_gone_is_started_again(floating):
+    """The socket of a process that ended (or never listened) cannot be reached: the pane runs the window again."""
+    server = floating()                                   # its link is a path nothing listens on
+    assert server.open("cr")["ok"] is True
+    server.started()
+    ((pane, placed),) = server.floating().items()
+    deadline = time.monotonic() + 5
+    while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    (server.tmp_path / "started").unlink()
+    result = tmux_control.open_cr_popup(None, "Alpha", "todo", server.client, server.socket)
+    assert result["ok"] is True and "reused" not in result["data"]
+    client, *arguments = server.started()
+    assert arguments == ["cr", "--project", "Alpha", "--state", "todo"] and server.floating() == {pane: placed}
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_board_window_says_what_it_is_starting_before_its_screen_is_drawn(floating):
+    server = floating()
+    assert server.open("cr")["ok"] is True
+    ((pane, _),) = server.floating().items()
+    server.started()
+    assert tmux_control.STARTING in server.tmux("capture-pane", "-p", "-t", pane)
+
+
+def _notify_as_the_plan_says(server, window, kind, request_line):
+    """The client side of the plan ("열려 있는 창에 새 내용 알리기"), written from its text with raw tmux commands
+    and a plain socket (the way a client in another language does it). Returns the reply, or None where the plan
+    says to start the window."""
+    rows = server.tmux("list-panes", "-t", window, "-F", "#{pane_id}\t#{@project_board_window}").splitlines()
+    panes = [row.split("\t")[0] for row in rows if row.split("\t")[1:] == ["1"]]
+    if not panes:
+        return None
+    pane = panes[0]
+    deadline = time.monotonic() + 20
+    while True:
+        window_kind = server.tmux("show-options", "-pqv", "-t", pane, "@project_board_window_kind")
+        link = server.tmux("show-options", "-pqv", "-t", pane, "@project_board_window_link")
+        if window_kind != kind or link or time.monotonic() > deadline:
+            break
+        time.sleep(0.05)
+    if window_kind != kind or not link:
+        return None
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(2)
+            connection.connect(link)
+            connection.sendall(request_line)
+            reply = b""
+            while not reply.endswith(b"\n"):
+                block = connection.recv(4096)
+                if not block:
+                    return None
+                reply += block
+        return json.loads(reply)
+    except (OSError, ValueError):
+        return None
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_client_that_follows_the_plan_with_raw_tmux_and_a_socket_reaches_the_window(floating):
+    """BOARD-025: the Rust sidebar is such a client. The window is a stand-in that listens as the plan says."""
+    server = floating(board=LISTENING_BOARD)
+    assert _notify_as_the_plan_says(server, server.window, "cr", b"{}\n") is None      # no window yet: start one
+    assert server.open("cr")["ok"] is True
+    (first,) = _wait_lines(server, "starts", 1)
+    line = json.dumps({"kind": "cr", "project": "Alpha", "state": "todo", "client": server.client}).encode() + b"\n"
+    assert _notify_as_the_plan_says(server, server.window, "cr", line) == {"ok": True}
+    assert [eval(row) for row in _lines_of(server, "requests")] == [
+        {"kind": "cr", "project": "Alpha", "state": "todo", "client": server.client}]
+    assert _lines_of(server, "starts") == [first]
+    # the other kind is not told: the plan says to start the window again
+    assert _notify_as_the_plan_says(server, server.window, "decision", b"{}\n") is None
 
 def _boards_on(name, windows, monkeypatch):
     """A server of one session with `windows` windows, one client and a stand-in Board TUI. The client visits

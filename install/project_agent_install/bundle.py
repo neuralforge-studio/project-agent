@@ -14,10 +14,16 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import sysconfig
+from importlib.metadata import distribution, packages_distributions
 from importlib.util import MAGIC_NUMBER
 
 # Tool directory of a release (relative to its root) -> the package that is the tool.
 TOOLS = {"tools/agent-session": "agent_session", "tools/project-item": "project_item", "tools/project-board": "project_board"}
+
+# The packages whose commands import an installed package (textual) when they start: their recorder may also
+# record that package's modules (an entry of the bundle that is guarded by the package's metadata directory).
+EXTERNAL_USERS = ("project_board",)
 
 # Standard library modules that the tools import when a command runs, not when its program starts: the
 # recorder does not see them. `datetime.strptime` imports `_strptime` (and `calendar`) on its first call.
@@ -71,10 +77,19 @@ def _tool_modules(tool_directory, package):
     return modules
 
 
+def _site_directories():
+    """The installing interpreter's directories of installed packages (resolved), which `python -S` does not search."""
+    paths = {sysconfig.get_paths()[key] for key in ("purelib", "platlib")}
+    return sorted({str(Path(path).resolve()) for path in paths if Path(path).is_dir()})
+
+
 def _start_recorder(tool_directory, package, names):
+    # The TUI commands import textual: its directory is on the path of the recorder of the tool that needs it,
+    # so that the modules it loads are recorded (the recorder itself runs without the site step).
+    path = [str(tool_directory), *(_site_directories() if package in EXTERNAL_USERS else [])]
     return subprocess.Popen([sys.executable, "-S", "-c", RECORDER, package, *names], stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True,
-                            env={**os.environ, "PYTHONPATH": str(tool_directory), "PYTHONNOUSERSITE": "1",
+                            env={**os.environ, "PYTHONPATH": os.pathsep.join(path), "PYTHONNOUSERSITE": "1",
                                  "PYTHONDONTWRITEBYTECODE": "1"})
 
 
@@ -90,13 +105,30 @@ def _recorded_modules(process, tool_directory):
     return json.loads(out)
 
 
+def _guards(files):
+    """{module name: the metadata directory of the installed package that owns it} for the modules of `files`
+    that are in an installed package. The bundle serves such a module only while that directory exists: an
+    upgrade or removal of the package names another directory, and the module is imported from the package."""
+    owners = packages_distributions()
+    guards = {}
+    for name in files:
+        top = name.split(".")[0]
+        for dist in owners.get(top, ()):
+            path = getattr(distribution(dist), "_path", None)
+            if path is not None and Path(path).is_dir():
+                guards[name] = str(Path(path).resolve())
+                break
+    return guards
+
+
 def write(path, entries):
-    """`entries`: {module name: (source file, name the code reports, origin to record, is_package)}."""
+    """`entries`: {module name: (source file, name the code reports, origin to record, is_package[, guard])}.
+    A `guard` is the absolute path of a directory the module's code is valid for (see `_guards`)."""
     index, blobs, offset = {}, [], 0
-    for name, (source, filename, origin, is_package) in sorted(entries.items()):
+    for name, (source, filename, origin, is_package, *guard) in sorted(entries.items()):
         code = compile(Path(source).read_bytes(), filename, "exec", dont_inherit=True, optimize=0)
         blob = marshal.dumps(code)
-        index[name] = (offset, len(blob), is_package, origin)
+        index[name] = (offset, len(blob), is_package, origin, *guard)
         blobs.append(blob)
         offset += len(blob)
     header = marshal.dumps((MAGIC_NUMBER, sys.version, index))
@@ -110,7 +142,8 @@ def build(release, final):
     tools, so that a tool that imports another tool's package while a command runs finds it there, and the
     standard library modules that each tool loads when it starts."""
     tools, final_tools = Path(release, "tools"), Path(final, "tools")
-    entries, standard_files, recorders = {}, {}, []
+    entries, standard_files, installed_files, recorders = {}, {}, {}, []
+    sites = [path + os.sep for path in _site_directories()]
     for tool, package in TOOLS.items():          # the three recorders run at the same time
         tool_directory = Path(release, tool)
         own = _tool_modules(tool_directory, package)
@@ -126,6 +159,8 @@ def build(release, final):
             for name, origin in loaded["modules"].items():
                 if origin.startswith(standard) and "site-packages" not in origin and "lib-dynload" not in origin:
                     standard_files[name] = origin
+                elif any(origin.startswith(site) for site in sites):
+                    installed_files[name] = origin
     finally:
         for _, process in recorders:
             if process.poll() is None:
@@ -134,4 +169,8 @@ def build(release, final):
     for name, origin in standard_files.items():
         if name not in entries:
             entries[name] = (origin, origin, origin, Path(origin).name == "__init__.py")
+    guards = _guards(installed_files)
+    for name, origin in installed_files.items():
+        if name not in entries and name in guards:
+            entries[name] = (origin, origin, origin, Path(origin).name == "__init__.py", guards[name])
     write(tools / "__pycache__" / bundle_name(), entries)

@@ -61,14 +61,14 @@ def main(argv=None) -> int:
                         context_reader=tmux_control.active_context)
         return 0
     if args.command == "popup":
-        from . import tui
+        from . import tmux_control, tui
 
-        tui.run_popup(args.config, args.project, args.decision)
+        tui.run_popup(args.config, args.project, args.decision, mark_link=tmux_control.mark_window_ready)
         return 0
     if args.command == "cr":
-        from . import tui
+        from . import tmux_control, tui
 
-        tui.run_cr_popup(args.config, args.project, args.state)
+        tui.run_cr_popup(args.config, args.project, args.state, mark_link=tmux_control.mark_window_ready)
         return 0
     if args.command == "toggle":
         from . import tmux_control

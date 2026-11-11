@@ -88,11 +88,16 @@ def test_project_board_adds_package_paths_after_its_own_root(fake_python, tmp_pa
     assert "NOUSERSITE=1" in result.stdout
 
 
-@pytest.mark.parametrize("command,site_flag", [("sync", True), ("click", True), ("toggle", True),
-                                                ("sidebar", False), ("popup", False), (None, False)])
-def test_project_board_skips_site_only_for_the_commands_without_textual(command, site_flag, fake_python):
-    """The tmux hooks and keys run at every window change and import no textual; the TUI needs site-packages."""
-    result = run(ENTRIES["project-board"], *([command] if command else []), env={"PROJECT_AGENT_PYTHON": str(fake_python)})
+@pytest.mark.parametrize("arguments,site_flag", [(["sync"], True), (["click"], True), (["toggle"], True),
+                                                  (["cr"], True), (["popup"], True),
+                                                  (["--config", "/x/projects.json", "popup", "--project", "p"], True),
+                                                  (["--config", "/x/projects.json", "cr", "--project", "p"], True),
+                                                  (["--config", "/x/projects.json", "sidebar"], False),
+                                                  (["sidebar"], False), ([], False)])
+def test_project_board_skips_site_for_the_commands_that_start_from_the_bundle(arguments, site_flag, fake_python):
+    """The tmux hooks and keys run at every window change and import no textual. The two windows (cr, popup) import it
+    from the bundle (BOARD-025), whether or not `--config` comes first; the sidebar still needs site-packages."""
+    result = run(ENTRIES["project-board"], *arguments, env={"PROJECT_AGENT_PYTHON": str(fake_python)})
     assert result.stdout.startswith("ARGV1=-S" if site_flag else "ARGV1=-m")
 
 
