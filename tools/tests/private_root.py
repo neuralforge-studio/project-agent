@@ -20,6 +20,11 @@ included, which inherit the environment) then resolve ``~`` there, and no test c
 ``~/.cache/project-item/locks`` in the real HOME or share the lock directory of the real project items. A test
 that needs its own HOME still sets one with ``monkeypatch.setenv``.
 
+Two tool locations that the run only reads are derived from HOME, and an empty HOME would lose them: the Python
+user site (``PYTHONUSERBASE``, where a ``pip install --user`` puts pytest, xdist and textual) and rustup's
+toolchains (``RUSTUP_HOME``, behind a ``~/.cargo/bin/cargo`` proxy). Before HOME changes they are fixed to their
+value then, only when unset; a value already set stays. ``CARGO_HOME`` is left alone: its caches belong in the run's HOME.
+
 Runs that start together prune the same directories: one already removed by another run is pruned,
 not an error. ``_owner`` and ``rmtree(ignore_errors=True)`` already read it that way.
 
@@ -30,6 +35,7 @@ removed too early.
 import os
 from pathlib import Path
 import shutil
+import site
 import tempfile
 import time
 
@@ -105,6 +111,10 @@ def home(basetemp):
 def _isolate_home(basetemp):
     directory = home(basetemp)
     Path(directory).mkdir(parents=True, exist_ok=True)
+    if not os.environ.get("PYTHONUSERBASE"):
+        os.environ["PYTHONUSERBASE"] = site.getuserbase()
+    if not os.environ.get("RUSTUP_HOME"):
+        os.environ["RUSTUP_HOME"] = str(Path.home() / ".rustup")
     os.environ["HOME"] = directory
 
 

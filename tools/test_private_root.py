@@ -4,6 +4,7 @@ import getpass
 import os
 from pathlib import Path
 import shutil
+import site
 import subprocess
 import sys
 import tempfile
@@ -143,6 +144,9 @@ def pytest_sessionfinish(session, exitstatus):
 INNER_TEST = """
 import os
 from pathlib import Path
+import site
+import subprocess
+import sys
 
 
 def test_one():
@@ -150,6 +154,10 @@ def test_one():
     locks.mkdir(parents=True)
     (locks / "leak.lock").write_text("")
     assert Path.home() == Path(os.environ["HOME"])
+    child = subprocess.run([sys.executable, "-c", "import site; print(site.getuserbase())"],
+                           capture_output=True, text=True, check=True).stdout.strip()
+    assert site.getuserbase() == child == os.environ["EXPECT_USERBASE"]
+    assert os.environ["RUSTUP_HOME"] == os.environ["EXPECT_RUSTUP"]
 """
 
 
@@ -166,11 +174,28 @@ def test_a_passing_run_leaves_nothing_in_the_real_home_and_removes_its_own(tmp_p
     temp = tmp_path / "tmp"
     temp.mkdir()
     env = {**os.environ, "HOME": str(real_home), "TMPDIR": str(temp)}
-    for name in ("PYTEST_ADDOPTS", "PYTEST_XDIST_WORKER", "PYTEST_CURRENT_TEST"):
+    for name in ("PYTEST_ADDOPTS", "PYTEST_XDIST_WORKER", "PYTEST_CURRENT_TEST", "PYTHONUSERBASE", "RUSTUP_HOME"):
         env.pop(name, None)
+    env.update(EXPECT_USERBASE=str(real_home / ".local"), EXPECT_RUSTUP=str(real_home / ".rustup"))
     done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *extra],
                           cwd=project, env=env, capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stdout + done.stderr
     assert list(real_home.iterdir()) == []                 # the real HOME of the run is untouched
     assert list(temp.iterdir()) == []                      # the private root and its HOME are gone
     assert not (project / "explicit-home").exists()        # so is the HOME next to an explicit --basetemp
+
+
+def test_a_tool_location_that_is_already_set_stays(tmp_path):
+    project = tmp_path / "inner"
+    project.mkdir()
+    (project / "conftest.py").write_text(INNER_CONFTEST.format(tests=str(Path(__file__).resolve().parent / "tests")))
+    (project / "test_inner.py").write_text(
+        "import os\n\n\ndef test_kept():\n"
+        "    assert os.environ['PYTHONUSERBASE'] == os.environ['EXPECT_USERBASE']\n"
+        "    assert os.environ['RUSTUP_HOME'] == os.environ['EXPECT_RUSTUP']\n")
+    env = {**os.environ, "HOME": str(tmp_path), "TMPDIR": str(tmp_path),
+           "PYTHONUSERBASE": str(tmp_path / "ub"), "RUSTUP_HOME": str(tmp_path / "ru")}
+    env.update(EXPECT_USERBASE=env["PYTHONUSERBASE"], EXPECT_RUSTUP=env["RUSTUP_HOME"])
+    done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+                          cwd=project, env=env, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stdout + done.stderr
