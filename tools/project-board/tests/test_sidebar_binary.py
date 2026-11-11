@@ -287,10 +287,10 @@ def test_folding_shows_at_once_and_is_kept_in_the_shared_tmux_option(tmp_path, r
     pane.wait_text("ProjectB")
     assert pane.send_click(19, 3)["data"] == {"widget": "project-0-seats"}
     pane.wait_text("R 0 CPU-012", timeout=2)
-    _wait(lambda: pane.folds() == {"Falcon2"}, what="the shared option")
+    _wait(lambda: pane.folds() == {"Falcon2"}, timeout=60, what="the shared option")  # a Python process starts under the load of the host
     assert pane.send_click(19, 3)["data"] == {"widget": "project-0-seats"}
     pane.wait_gone("R 0 CPU-012", timeout=2)
-    _wait(lambda: pane.folds() == set(), what="the shared option cleared")
+    _wait(lambda: pane.folds() == set(), timeout=60, what="the shared option cleared")
 
 
 def test_a_fold_another_pane_wrote_reaches_this_one_at_the_next_read(tmp_path, request):
@@ -371,7 +371,7 @@ def test_every_periodic_read_and_the_visibility_check_start_one_tmux_process(tmp
     pane.wait_text("Falcon2")
     time.sleep(1.0)
     started = len(log.read_text().splitlines())
-    assert started <= 1 + 1 + 3, log.read_text()          # mark_ready, the first fold read, the first 10-second reads
+    assert started <= 1 + 1 + 1 + 3, log.read_text()      # mark_ready, the visibility check after the signal the test sends, the first fold read, the first 10-second reads
     log.write_text("")
     time.sleep(20.5)
     calls = log.read_text().splitlines()

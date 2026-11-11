@@ -1,11 +1,12 @@
 """User interactions and displayed project facts in the terminal Board."""
 import asyncio
 import datetime as dt
+import os
 import threading
 
 import pytest
 
-from board_testing import Board, leader, session, wait_until
+from board_testing import Board, click_socket, leader, session, wait_until
 from project_board import model, window_link
 from project_board.tui import CRPopupApp, CSVScreen, PopupApp
 from textual.widgets import Button, DataTable, Markdown, Static, TextArea
