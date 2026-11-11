@@ -114,6 +114,36 @@ Button.list-item.selected:focus { background: #3a7bc8; text-style: bold; }
 """
 
 
+def _adjacent(order: list[str], current: str, step: int, allowed: set[str]) -> str | None:
+    """The project `step` (1 or -1) places from `current` in `order` that is in `allowed`, wrapping at the ends.
+    None when there is no other such project (or `current` is not in `order`)."""
+    if current not in order:
+        return None
+    for turn in range(1, len(order)):
+        candidate = order[(order.index(current) + step * turn) % len(order)]
+        if candidate in allowed:
+            return candidate
+    return None
+
+
+def _set_nav(previous: Button, following: Button, order: list[str], current: str, allowed: set[str]) -> dict:
+    """Aim the ◀▶ buttons at the neighbouring projects and say where each goes in its tooltip."""
+    targets = {}
+    for button, step, word in ((previous, -1, "이전"), (following, 1, "다음")):
+        target = _adjacent(order, current, step, allowed)
+        targets[step] = target
+        button.disabled = target is None
+        button.tooltip = f"{word} project: {target}" if target else None
+    return targets
+
+
+NAV_CSS = """
+.nav-row { height: 1; padding: 0 1; }
+.nav-row Button { height: 1; width: 3; min-width: 3; border: none; padding: 0; }
+.nav-row Static { width: auto; padding: 0 1; text-style: bold; color: #f3f6ff; }
+"""
+
+
 def _item_label(selected: bool, item_id: str, status: tuple[str, str] | None, title: str) -> Content:
     """`▶ ID 상태 제목` on one line. CSS cuts the end of the line, so only the title is shortened."""
     parts: list = ["▶ " if selected else "  ", item_id, " "]
@@ -762,39 +792,55 @@ class CSVScreen(Screen):
         self.app.pop_screen()
 
 
+CR_GROUPS = (("open", "Open"), ("todo", "Todo"), ("in-progress", "In-Progress"), ("done", "Done"))
+
+
 class CRPopupApp(App):
-    """A read-only CR reader in a client-local tmux popup."""
+    """A read-only CR reader in a client-local tmux popup. One window shows the four states as foldable
+    groups and ◀▶ moves between the registered projects (BOARD-021)."""
 
     CSS = """
     Screen { background: #111c28; }
-    #cr-title { height: 2; padding: 0 1; text-style: bold; }
+    #cr-title { height: 1; padding: 0 1; text-style: bold; }
     #cr-main { height: 1fr; }
     #cr-items { width: 40%; min-width: 30; max-width: 46; border-right: solid #536474; }
     #cr-detail { width: 1fr; padding: 0 1; }
     #cr-actions { height: 2; }
     #cr-actions Button { height: 1; width: auto; min-width: 0; border: none; margin-right: 1; }
+    Button.group-header { width: 100%; height: 1; min-width: 0; border: none; padding: 0 1;
+                          content-align: left middle; text-align: left; text-style: bold;
+                          background: #22344a; color: #ffe1a0; }
+    Button.group-header:focus { background: #2b3d52; text-style: bold; }
+    .group-empty { color: #8097ad; padding: 0 1; }
     #cr-show-list { display: none; }
     .narrow #cr-show-list { display: block; }
     .narrow #cr-items { display: none; }
     .narrow.list-open #cr-items { display: block; width: 100%; max-width: 100%; }
     .narrow.list-open #cr-detail { display: none; }
-    """ + LIST_ITEM_CSS
+    """ + NAV_CSS + LIST_ITEM_CSS
     BINDINGS = [("escape", "quit", "닫기")]
 
     def __init__(self, config: str | None, project_id: str, state: str, *, load: bool = True):
         super().__init__()
         self.config = config
         self.project_id = project_id
-        self.state = state
+        self.focus_state: str | None = state      # the group to show first; only the first load uses it
         self.load = load
         self.project: dict | None = None
+        self.order: list[str] = []
         self.items: list[dict] = []
         self.selected_id: str | None = None
+        self.collapsed: set[str] = set()
+        self._targets: dict[int, str | None] = {}
         self._load_generation = 0
         self._closing = False
 
     def compose(self) -> ComposeResult:
-        yield Static(f"{self.project_id} · {self.state}", id="cr-title")
+        with Horizontal(classes="nav-row"):
+            yield Button("◀", id="cr-prev", disabled=True)
+            yield Static(self.project_id, id="cr-project")
+            yield Button("▶", id="cr-next", disabled=True)
+        yield Static("", id="cr-title")
         with Horizontal(id="cr-main"):
             yield VerticalScroll(id="cr-items")
             yield VerticalScroll(id="cr-detail")
@@ -811,35 +857,67 @@ class CRPopupApp(App):
         self._load_generation += 1
 
     async def refresh_items(self) -> None:
+        project_id = self.project_id
         try:
-            data = await asyncio.to_thread(model.snapshot, self.config, project_id=self.project_id)
-            if not self._closing:
+            data = await asyncio.to_thread(model.cr_popup_snapshot, self.config, project_id)
+            if not self._closing and project_id == self.project_id:
                 await self.apply_snapshot(data)
         except Exception as error:
             if not self._closing:
                 await self._show_message(f"CR 목록을 읽을 수 없습니다: {error}")
 
+    def _groups(self) -> dict[str, list[dict]]:
+        crs = (self.project or {}).get("crs") or {}
+        return {state: crs.get(state, []) for state, _ in CR_GROUPS}
+
     async def apply_snapshot(self, data: dict) -> None:
-        self.project = next((item for item in data.get("projects", []) if item["id"] == self.project_id), None)
+        projects = data.get("projects", [])
+        self.order = [item["id"] for item in projects]
+        self.project = next((item for item in projects if item["id"] == self.project_id), None)
+        self.query_one("#cr-project", Static).update(self.project_id)
+        self._targets = _set_nav(self.query_one("#cr-prev", Button), self.query_one("#cr-next", Button),
+                                 self.order, self.project_id, set(self.order))
         listing = self.query_one("#cr-items", VerticalScroll)
         await listing.remove_children()
+        groups = self._groups()
+        self.items = [item for state, _ in CR_GROUPS for item in groups[state]]
+        counts = ", ".join(f"{label} {len(groups[state])}" for state, label in CR_GROUPS)
+        self.query_one("#cr-title", Static).update(counts)
         if self.project is None:
-            self.items = []
             await listing.mount(Static("Project를 찾을 수 없습니다."))
             await self._show_message("Project를 찾을 수 없습니다.")
             return
-        self.items = (self.project.get("crs") or {}).get(self.state, [])
+        widgets, index = [], 0
+        for state, label in CR_GROUPS:
+            widgets.append(Button(self._group_label(state), id=f"cr-group-{state}", classes="group-header"))
+            for item in groups[state]:
+                row = Button(self._row_label(item), id=f"cr-item-{index}", classes="list-item")
+                row.display = state not in self.collapsed
+                widgets.append(row)
+                index += 1
+            if not groups[state]:
+                empty = Static("  없음", id=f"cr-empty-{state}", classes="group-empty")
+                empty.display = state not in self.collapsed
+                widgets.append(empty)
+        await listing.mount(*widgets)
+        if not any(item["id"] == self.selected_id for item in self.items):
+            first = next((item for item in groups.get(self.focus_state, [])), None) or next(iter(self.items), None)
+            self.selected_id = first["id"] if first else None
+        self._mark_selected()
         if self.items:
-            if not any(item["id"] == self.selected_id for item in self.items):
-                self.selected_id = self.items[0]["id"]
-            await listing.mount(*[Button(self._row_label(item), id=f"cr-item-{index}", classes="list-item")
-                                  for index, item in enumerate(self.items)])
-            self._mark_selected()
             await self._show_cr()
         else:
-            await listing.mount(Static("CR이 없습니다."))
-            self.selected_id = None
             await self._show_message("CR이 없습니다.")
+        focus, self.focus_state = self.focus_state, None
+        if focus is not None:
+            self.call_after_refresh(listing.scroll_to_widget, self.query_one(f"#cr-group-{focus}"),
+                                    animate=False, top=True)
+        else:
+            listing.scroll_home(animate=False)
+
+    def _group_label(self, state: str) -> str:
+        label = dict(CR_GROUPS)[state]
+        return f"{label} {'▶' if state in self.collapsed else '▼'}"
 
     def _row_label(self, item: dict) -> Content:
         return _item_label(item["id"] == self.selected_id, item["id"], _cr_status(item), item["title"])
@@ -850,12 +928,20 @@ class CRPopupApp(App):
             button.label = self._row_label(item)
             button.set_class(item["id"] == self.selected_id, "selected")
 
+    def _fold(self, state: str) -> None:
+        self.collapsed ^= {state}
+        self.query_one(f"#cr-group-{state}", Button).label = self._group_label(state)
+        for index, item in enumerate(self.items):
+            if item["state"] == state:
+                self.query_one(f"#cr-item-{index}", Button).display = state not in self.collapsed
+        for empty in self.query(f"#cr-empty-{state}"):
+            empty.display = state not in self.collapsed
+
     async def _show_message(self, message: str) -> None:
         self._load_generation += 1
         detail = self.query_one("#cr-detail", VerticalScroll)
         await detail.remove_children()
         await detail.mount(Static(message))
-        self.query_one("#cr-title", Static).update(f"{self.project_id} · {self.state}")
 
     async def _show_cr(self) -> None:
         item = next((row for row in self.items if row["id"] == self.selected_id), None)
@@ -863,11 +949,8 @@ class CRPopupApp(App):
             return
         self._load_generation += 1
         generation = self._load_generation
-        position = self.items.index(item) + 1
-        self.query_one("#cr-title", Static).update(
-            f"{self.project_id} · {self.state} {position}/{len(self.items)} · {item['id']}")
         try:
-            source = await asyncio.to_thread(model.read_cr_markdown, self.project, item, self.state)
+            source = await asyncio.to_thread(model.read_cr_markdown, self.project, item, item["state"])
         except (OSError, UnicodeError, ValueError) as error:
             source = None
             message = f"{item['id']} 파일을 읽을 수 없습니다: {error}"
@@ -878,6 +961,14 @@ class CRPopupApp(App):
         await detail.mount(Markdown(source, open_links=False) if source is not None else Static(message))
         detail.scroll_home(animate=False)
 
+    async def _move(self, step: int) -> None:
+        target = self._targets.get(step)
+        if target is None:
+            return
+        self.project_id = target
+        self.selected_id = None
+        await self.refresh_items()
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id.startswith("cr-item-"):
@@ -886,6 +977,10 @@ class CRPopupApp(App):
             self._mark_selected()
             await self._show_cr()
             self.remove_class("list-open")
+        elif button_id.startswith("cr-group-"):
+            self._fold(button_id.removeprefix("cr-group-"))
+        elif button_id in ("cr-prev", "cr-next"):
+            await self._move(-1 if button_id == "cr-prev" else 1)
         elif button_id == "cr-show-list":
             self.toggle_class("list-open")
         elif button_id == "cr-close":
@@ -903,7 +998,7 @@ class PopupApp(App):
 
     CSS = """
     Screen { background: #101923; }
-    #popup-heading { height: 2; padding: 0 1; text-style: bold; color: #f3f6ff; }
+    #popup-heading { height: 1; padding: 0 1; text-style: bold; color: #f3f6ff; }
     #popup-main { height: 1fr; }
     #decision-list { width: 40%; min-width: 30; max-width: 46; border-right: solid #536474; }
     #decision-detail { width: 1fr; padding: 0 1; }
@@ -921,7 +1016,7 @@ class PopupApp(App):
     .narrow #decision-list { display: none; }
     .narrow.list-open #decision-list { display: block; width: 100%; max-width: 100%; }
     .narrow.list-open #decision-detail { display: none; }
-    """ + LIST_ITEM_CSS
+    """ + NAV_CSS + LIST_ITEM_CSS
     BINDINGS = [("escape", "quit", "닫기"), ("ctrl+s", "send", "전송")]
 
     def __init__(
@@ -946,13 +1041,21 @@ class PopupApp(App):
         self._sending = False
         self._closing = False
         self._evidence_open = False
-        self._drafts: dict[str, str] = {}
+        self._drafts: dict[tuple[str, str], str] = {}   # (project ID, decision ID) -> unsent answer
+        self._last_selected: dict[str, str] = {}        # project ID -> the decision shown when it was left
+        self.order: list[str] = []
+        self._targets: dict[int, str | None] = {}
+        self._switched = False                          # a project change waits for its decisions to load
         self._tasks: set[asyncio.Task] = set()
 
     def _read_project(self, config: str | None) -> dict:
-        return model.snapshot(config, project_id=self.project_id)
+        return model.snapshot(config)
 
     def compose(self) -> ComposeResult:
+        with Horizontal(classes="nav-row"):
+            yield Button("◀", id="popup-prev", disabled=True)
+            yield Static(self.project_id, id="popup-project")
+            yield Button("▶", id="popup-next", disabled=True)
         yield Static("결정 항목을 읽는 중…", id="popup-heading")
         with Horizontal(id="popup-main"):
             yield VerticalScroll(id="decision-list")
@@ -983,9 +1086,10 @@ class PopupApp(App):
         task.add_done_callback(self._tasks.discard)
 
     async def refresh_decisions(self) -> None:
+        project_id = self.project_id
         try:
             data = await asyncio.to_thread(self.snapshot_reader, self.config)
-            if not self._closing:
+            if not self._closing and project_id == self.project_id:
                 await self.apply_snapshot(data)
         except asyncio.CancelledError:
             raise
@@ -993,16 +1097,25 @@ class PopupApp(App):
             self.query_one("#popup-message", Static).update(str(error))
 
     async def apply_snapshot(self, data: dict) -> None:
-        self.project = next((item for item in data.get("projects", []) if item["id"] == self.project_id), None)
+        projects = data.get("projects", [])
+        self.project = next((item for item in projects if item["id"] == self.project_id), None)
+        self.order = [item["id"] for item in projects]
+        self.query_one("#popup-project", Static).update(self.project_id)
+        # the projects the sidebar's `D` opens: the ones with a decision that is not complete
+        self._targets = _set_nav(self.query_one("#popup-prev", Button), self.query_one("#popup-next", Button),
+                                 self.order, self.project_id,
+                                 {item["id"] for item in projects if _visible_decisions(item)})
         if self.project is None:
             self.query_one("#popup-heading", Static).update(f"{self.project_id}: project를 찾을 수 없습니다.")
             return
         items = _visible_decisions(self.project)
         self.decisions = {item["id"]: item for item in items}
-        if self.decide_id not in self.decisions:
-            self.decide_id = items[0]["id"] if items else None
+        if self.decide_id not in self.decisions or self._switched:
+            if self.decide_id not in self.decisions:
+                self.decide_id = items[0]["id"] if items else None
+            self._switched = False
             self.query_one("#answer", TextArea).text = (
-                self._drafts.get(self.decide_id, "")
+                self._drafts.get((self.project_id, self.decide_id), "")
                 if self.decisions.get(self.decide_id, {}).get("state") == "open" else "")
             self._evidence_open = False
         listing = self.query_one("#decision-list", VerticalScroll)
@@ -1035,12 +1148,12 @@ class PopupApp(App):
         await detail.remove_children()
         item = self.decisions.get(self.decide_id)
         if item is None:
-            self.query_one("#popup-heading", Static).update(f"{self.project_id} · 결정 없음")
+            self.query_one("#popup-heading", Static).update("결정 없음")
             self._sync_answer_controls()
             return
         position = list(self.decisions).index(item["id"]) + 1
         self.query_one("#popup-heading", Static).update(
-            f"{self.project_id} · 결정 {position}/{len(self.decisions)} · {item['id']} · {item['display_state']}")
+            f"결정 {position}/{len(self.decisions)} · {item['id']} · {item['display_state']}")
         meta = "\n".join(filter(None, [
             item["title"],
             f"상태: {item['display_state']}",
@@ -1068,15 +1181,18 @@ class PopupApp(App):
         button_id = event.button.id or ""
         if button_id.startswith("decision-"):
             index = int(button_id.removeprefix("decision-"))
-            if self.decide_id is not None and self.decisions[self.decide_id].get("state") == "open":
-                self._drafts[self.decide_id] = self.query_one("#answer", TextArea).text
+            if index >= len(self.decisions):            # a project change is still loading
+                return
+            self._keep_draft()
             self.decide_id = list(self.decisions)[index]
             self.query_one("#answer", TextArea).text = (
-                self._drafts.get(self.decide_id, "")
+                self._drafts.get((self.project_id, self.decide_id), "")
                 if self.decisions[self.decide_id].get("state") == "open" else "")
             self._evidence_open = False
             await self._show_decision()
             self.remove_class("list-open")
+        elif button_id in ("popup-prev", "popup-next"):
+            self._move(-1 if button_id == "popup-prev" else 1)
         elif button_id == "evidence-toggle":
             self._evidence_open = not self._evidence_open
             evidence = self.query_one("#evidence-body", Vertical)
@@ -1088,6 +1204,23 @@ class PopupApp(App):
             self.action_send()
         elif button_id == "close":
             self.exit()
+
+    def _keep_draft(self) -> None:
+        if self.decide_id is not None and self.decisions.get(self.decide_id, {}).get("state") == "open":
+            self._drafts[(self.project_id, self.decide_id)] = self.query_one("#answer", TextArea).text
+
+    def _move(self, step: int) -> None:
+        """Show the neighbouring project in this window. The unsent answer stays with its decision."""
+        target = self._targets.get(step)
+        if target is None or self._sending:
+            return
+        self._keep_draft()
+        self._last_selected[self.project_id] = self.decide_id
+        self.project_id = target
+        self.decide_id = self._last_selected.get(target)
+        self.decisions = {}
+        self._switched = True
+        self._queue(self.refresh_decisions())
 
     def on_resize(self, event) -> None:
         narrow = event.size.width < 70
@@ -1117,7 +1250,7 @@ class PopupApp(App):
                 if item is not None:
                     item["state"] = "answered"
                     item["display_state"] = "답변 접수"
-                self._drafts.pop(decide_id, None)
+                self._drafts.pop((self.project_id, decide_id), None)
                 editor = self.query_one("#answer", TextArea)
                 if self.decide_id == decide_id:
                     editor.text = ""

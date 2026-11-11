@@ -27,7 +27,8 @@ from agent_session.api import RemoteSeat, SessionError, load_registry, registry_
 from project_item.api import (CR, DECIDE, cr_states, decision_stage, file_id,  # noqa: E402
                               item_files, submitted_hash, text_sections)
 
-CR_STATES = ("open", "todo", "in-progress")           # done and deferred are not shown
+CR_STATES = ("open", "todo", "in-progress")           # the sidebar's states; done and deferred are not counted
+READABLE_STATES = CR_STATES + ("done",)               # the CR popup also reads done (BOARD-021)
 HASH_TOKEN = re.compile(r"\b[0-9a-f]{7,40}\b")
 DECIDE_HIDDEN = ("Disposition", "Result")
 
@@ -184,10 +185,15 @@ def cr_items(root: Path) -> dict:
             for state in CR_STATES}
 
 
+def done_items(root: Path) -> list[dict]:
+    """done CRs, for the CR popup only. The sidebar snapshot does not carry them."""
+    return [dict(item) for item in _cached(("cr", str(root), "done"), _listing(CR, root, "done"), _cr_item("done"))]
+
+
 def read_cr_markdown(project: dict, item: dict, state: str) -> str:
     """Read a listed CR only from its registered root and state directory."""
     root = project.get("cr_root")
-    if state not in CR_STATES or not root or item.get("state") != state or not item.get("path"):
+    if state not in READABLE_STATES or not root or item.get("state") != state or not item.get("path"):
         raise ValueError("CR 목록 경로가 유효하지 않습니다.")
     path = Path(item["path"]).resolve(strict=True)
     if not path.is_relative_to(Path(root).resolve() / state) or file_id(CR, path) != item.get("id"):
@@ -329,6 +335,21 @@ def snapshot(config=None, now: dt.datetime | None = None, project_id: str | None
         projects = [project for project in projects if project.project_id == project_id]
     return {"now": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "projects": [project_view(project, now) for project in projects], "error": None}
+
+
+def cr_popup_snapshot(config=None, done_project: str | None = None) -> dict:
+    """`snapshot(config)` for every project, plus the done CRs of `done_project` under `crs["done"]`.
+
+    A done list that cannot be read is reported as an `errors` entry (source `cr`), like the other lists.
+    """
+    data = snapshot(config)
+    for project in data["projects"]:
+        if project["id"] == done_project and project["cr_root"] is not None:
+            try:
+                (project["crs"] or {}).setdefault("done", done_items(Path(project["cr_root"])))
+            except Exception as error:
+                project["errors"].append({"source": "cr", **_error(error)})
+    return data
 
 
 # JOB ID -> release hold of each project, as the last `liveness()` read it. Both facts come from

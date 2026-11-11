@@ -73,7 +73,7 @@ R 0 GPU-007
 | --- | --- |
 | 상태줄 `Board` | 같은 tmux server의 모든 client에 sidebar 켜기·끄기 |
 | Project 이름 | 클릭한 client를 해당 project tmux session의 현재 window로 이동. 대상 session이 없으면 오류 표시 |
-| 각 project의 `O/T/I` | 클릭한 client에 해당 CR 목록과 선택한 CR의 전체 Markdown을 읽는 popup 열기 |
+| 각 project의 `O/T/I` | 클릭한 client에 CR popup 열기. 셋 중 무엇을 눌러도 같은 popup이며, 누른 상태의 묶음이 처음 보이게 열립니다 |
 | 각 project의 `D` | 클릭한 client에 그 project의 결정 popup 열기 |
 | 각 project의 좌석 버튼 | 해당 project의 좌석 목록을 펼치거나 접기 |
 | Worker session이 있는 seat의 CR ID | 클릭한 client를 해당 Worker의 tmux window로 이동. 대상 window가 없으면 오류 표시 |
@@ -86,6 +86,7 @@ SSH seat의 Worker window는 Leader 호스트의 SSH 표시 창입니다. 이 �
 `O/T/I`가 `0`, `-`, `!`이면 클릭해도 popup이나 오류 알림을 열지 않습니다. `D`는 표시 상태가 `완료`가 아닌 결정이 없거나 `-`, `!`일 때만 열지 않습니다.
 
 CR popup은 왼쪽 목록에서 선택한 항목의 전체 Markdown 원본을 오른쪽에 표시합니다.
+목록은 Open, Todo, In-Progress, Done 네 묶음입니다(BOARD-021). 묶음 제목은 `Open ▼` 모양이고 눌러 접고(`▶`) 펼칩니다. 처음에는 모두 펼쳐져 있고, `O/T/I` 중 누른 상태의 묶음이 목록 맨 위에 오도록 scroll하며 그 묶음의 첫 CR을 선택합니다(`cr --state`가 이 묶음을 정합니다. 묶음이 비면 첫 CR). 비어 있는 묶음은 `없음` 한 줄입니다. 맨 위에는 `Open {N}, Todo {N}, In-Progress {N}, Done {N}`을 표시하며 묶음을 접어도 바뀌지 않습니다. done CR도 같은 방식으로 본문을 읽습니다. deferred는 보이지 않습니다. done 목록은 popup이 읽을 때만 읽고(`model.cr_popup_snapshot`) sidebar의 snapshot과 개수에는 없습니다.
 마우스로 CR 행을 클릭하거나 키보드로 행에 초점을 맞춘 뒤 Enter를 눌러 선택합니다.
 CR·결정 popup의 너비가 70 column 미만이면 `목록` 버튼으로 목록과 본문을 전환합니다.
 70 column 이상이면 목록과 본문을 함께 표시하고 `목록` 버튼을 숨깁니다.
@@ -94,6 +95,10 @@ CR·결정 popup의 너비가 70 column 미만이면 `목록` 버튼으로 목�
 오류가 나도 popup은 열린 상태를 유지합니다.
 원본 경로는 등록한 CR root의 해당 상태에서 열거한 항목으로 제한합니다.
 
+#### Project 이동 (BOARD-021)
+
+CR popup과 결정 popup은 맨 위에 `◀ project ▶`를 둡니다. 누르면 같은 창이 이전·다음 project의 내용으로 바뀝니다(창을 닫지 않습니다). 순서는 sidebar의 등록 순서이고 끝에서는 반대쪽 끝으로 돕니다. ◀▶ 위에 mouse를 올리면 갈 project를 tooltip(`이전 project: NAME`·`다음 project: NAME`)으로 보입니다. CR popup은 등록된 모든 project를 돕습니다. 결정 popup은 sidebar `D`가 켜지는 기준(`tui._visible_decisions`가 있음)인 project만 돕습니다. 갈 project가 없으면(하나뿐) 버튼은 꺼집니다. 결정 popup의 답변 초안은 (project, 결정 ID)마다 남아, project를 옮겼다 돌아와도 유지되고 돌아오면 떠날 때 보던 결정이 열립니다. 답변 전송 중에는 옮기지 않습니다. `project-board cr`·`popup`의 인자는 바뀌지 않습니다. `cr`의 `--state`는 처음 scroll할 묶음입니다.
+
 #### Popup 목록 행과 선택 표시 (BOARD-007)
 
 CR popup과 결정 popup의 왼쪽 목록은 같은 규칙을 씁니다(`tui._item_label`).
@@ -101,7 +106,7 @@ CR popup과 결정 popup의 왼쪽 목록은 같은 규칙을 씁니다(`tui._it
 - 항목마다 한 줄입니다. 형식은 `표식 ID 상태 제목`이고 줄바꿈하지 않습니다. 칸보다 긴 줄은 끝을 `…`로 줄입니다. ID와 상태가 앞에 있으므로 줄어드는 것은 제목뿐입니다. 제목 전체는 오른쪽 본문 머리에서 읽습니다. 너비는 문자 폭(한글 2칸) 기준이며 칸 너비가 바뀌면 다시 줄입니다.
 - 목록 칸은 popup 너비의 40%이고 30~46 column입니다. 80 column popup에서 결정 ID와 상태를 모두 보이게 하는 최소 폭입니다.
 - 선택한 항목은 표식 `▶`, 파란 배경, 굵은 흰 글자입니다. 선택하지 않은 항목의 표식은 공백이고 어두운 배경입니다. 키보드 초점(Tab)이 선택하지 않은 항목에 있으면 밝은 회청색 배경으로 구별합니다. 선택과 초점은 서로 다른 표시입니다. 선택은 Enter나 클릭으로만 바뀝니다.
-- 결정의 상태는 snapshot의 `display_state`를 줄인 말(`결정 대기`→`대기`, `답변 접수`→`접수`, `반영 중`→`반영`)이며 상태마다 색이 다릅니다(대기 노랑, 접수 하늘, 반영 초록). CR 목록은 popup이 상태 하나(`open`·`todo`·`in-progress`)의 목록이고 머리줄이 그 상태를 이미 표시하므로 행마다 반복하지 않습니다. 행에는 구별이 필요한 `review_wait`(아래)만 `검토`로 노랑으로 표시합니다.
+- 결정의 상태는 snapshot의 `display_state`를 줄인 말(`결정 대기`→`대기`, `답변 접수`→`접수`, `반영 중`→`반영`)이며 상태마다 색이 다릅니다(대기 노랑, 접수 하늘, 반영 초록). CR 목록은 묶음 제목이 상태를 이미 표시하므로 행마다 반복하지 않습니다. 행에는 구별이 필요한 `review_wait`(아래)만 `검토`로 노랑으로 표시합니다.
 
 `review_wait`의 판정 규칙은 [project-board README](../tools/project-board/README.md#review-wait)가 소유합니다. 제출 행의 문법은 [CR 계약](../skills/project-item/references/cr.md)이 소유합니다. 이 표시는 `R` 표시와 별개입니다.
 
@@ -110,7 +115,7 @@ CR popup과 결정 popup의 왼쪽 목록은 같은 규칙을 씁니다(`tui._it
 결정 popup은 터미널 너비와 높이의 90%를 사용합니다. 사용자가 다른 상태 정보를 보지 않아도 결정할 수 있게 구성합니다.
 
 ```text
-┌ 결정 1/2 · D-20261106-07 ───────────────────────────┐
+┌ ◀ project ▶ · 결정 1/2 · D-20261106-07 ─────────────┐
 │ 결정 목록      │ 질문 · 긴급도 · 관련 CR             │
 │ D-...          │ Background                          │
 │ D-...          │ Options [넓은 표는 가로 스크롤]      │
