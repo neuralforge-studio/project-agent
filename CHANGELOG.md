@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- TEAM-004
 - SESSION-017
 - BOARD-027
 - TEAM-003
