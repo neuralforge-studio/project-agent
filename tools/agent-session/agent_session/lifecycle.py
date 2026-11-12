@@ -359,12 +359,18 @@ class Manager(SuspendMixin, WatchMixin, CheckMixin):
             return self._moved_observation(meta, moved, pane)
         self._record_background_clear(meta, observed)
         live, group_live, extra_live = self._process_facts(meta, pane)
-        stopped = bool(pane["pane_dead"] and not live and not group_live and not extra_live
-                       and observed.get("known") and observed.get("terminal")
-                       and not observed.get("active_turn") and not observed.get("pending")
-                       and not observed.get("background"))
-        return {**observed, "stopped": stopped, "pane": pane, "cli_alive": live,
-                "group_alive": group_live, "tracked_alive": extra_live}
+        gone = bool(pane["pane_dead"] and not live and not group_live and not extra_live)
+        by_provider = bool(gone and observed.get("known") and observed.get("terminal")
+                           and not observed.get("active_turn") and not observed.get("pending")
+                           and not observed.get("background"))
+        # Claude reports the end of a conversation only through its SessionEnd hook, which a killed CLI never
+        # runs, and its last Stop report still lists the work the CLI had then. When the pane is dead and the
+        # CLI, its process group, and its tracked PIDs are all gone (and the conversation did not move, which
+        # returned above), nothing is left that could work: the same ground `finish_ended` confirms on.
+        by_process = bool(gone and self.project.provider == "claude")
+        return {**observed, "stopped": by_provider or by_process,
+                "basis": "provider" if by_provider else "process" if by_process else None,
+                "pane": pane, "cli_alive": live, "group_alive": group_live, "tracked_alive": extra_live}
 
     @staticmethod
     def _process_facts(meta, pane):
@@ -1038,20 +1044,16 @@ class Manager(SuspendMixin, WatchMixin, CheckMixin):
     def _ended_basis(self, meta):
         """How the end of a run whose pane died is confirmed, or None: `provider` as `stop` confirms it, or `process`.
 
-        `process`: Claude reports the end of a conversation only through its SessionEnd hook, which a killed
-        CLI never runs. When the pane is dead and neither the CLI, its process group, nor its tracked PIDs
-        live, nothing is left that could work (the same ground that confirms a forced shutdown). A moved
-        conversation is never confirmed this way. A process group that is still draining is waited for."""
+        The judgement is `_observe`'s (its `basis`), so `stop`, `restart`, and this wrap-up confirm an end on the
+        same ground. A process group that is still draining is waited for."""
         limit = time.monotonic() + min(FINISH_END_SECONDS, self.remaining())
         while True:
             pane = self.tmux.pane_info(meta["pane_id"])
             if not pane["pane_dead"]:
                 return None
-            if self._observe(meta)["stopped"]:
-                return "provider"
-            if (self.project.provider == "claude" and not meta.get("moved_to_background")
-                    and not any(self._process_facts(meta, pane))):
-                return "process"
+            observed = self._observe(meta)
+            if observed["stopped"]:
+                return observed.get("basis") or "provider"
             if time.monotonic() >= limit:
                 return None
             time.sleep(0.2)

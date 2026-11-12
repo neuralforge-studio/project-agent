@@ -719,7 +719,7 @@ def test_a_published_run_is_reported_even_when_the_lock_cannot_be_taken_again(se
     result = env.manager().start("leader")
     assert result["ready"] is True
     assert result["cleanup"]["kept"] == [{"window_id": None, "reason": "lock_timeout"}]   # left to the next start
-    assert env.store.read()["leader"]["session_id"] == result["session"]["session_id"]
+    assert env.manager().store.read()["leader"]["session_id"] == result["session"]["session_id"]
 
 
 def test_commands_do_not_wait_for_a_controller_that_waits_for_registration(session_env):
@@ -2482,3 +2482,49 @@ def test_start_reports_a_failed_registration_before_its_timeout(session_env, mon
         env.manager(timeout=command_timeout()).start("leader")
     assert again.value.code == "registration_failed"
     assert env.tmux.get_current("fixture", "leader")["run_id"] == waiting["run_id"]
+
+
+def drop_adopt_record(env, window_id):
+    """Make the run look like one started by code that predates `CLAUDE_DISABLE_ADOPT` (a frozen or old release)."""
+    path = Path(env.tmux.read_meta(window_id)["launch_file"])
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if "CLAUDE_DISABLE_ADOPT" not in line]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_claude_stop_ends_a_run_without_the_adopt_record_whose_cli_left_with_only_a_session_cron(session_env, monkeypatch):
+    # SESSION-017: the run's own launch.sh has no CLAUDE_DISABLE_ADOPT line, so the session cron in its last
+    # Stop report counted as work for ever. The CLI is gone and the conversation did not move: nothing can adopt it.
+    env = session_env
+    record = claude_project(env, monkeypatch)
+    worker = env.manager().start(env.cr())
+    drop_adopt_record(env, worker["window_id"])
+    (env.base / "agent" / "fixture-cron-seat-0").write_text("")
+    result = env.manager(timeout=20).control("stop", job=worker["job_id"])
+    assert result["stopped"] is True
+    assert recorded(record) == [{"signal": "SIGTERM"}]
+
+
+def end_cli_on_its_own(env, worker):
+    os.kill(int(env.tmux.read_meta(worker["window_id"])["cli_pid"]), signal.SIGTERM)
+    deadline = time.monotonic() + 10
+    while not env.tmux.pane_info(worker["pane_id"])["pane_dead"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is True
+
+
+@pytest.mark.parametrize("marker", ["fixture-cron-leader", "fixture-background-leader"])
+def test_claude_restart_replaces_a_leader_whose_cli_is_gone_whatever_its_last_stop_report_listed(
+        session_env, monkeypatch, marker):
+    # SESSION-017: a frozen or old run (no CLAUDE_DISABLE_ADOPT in its launch.sh) restarted by the current
+    # release. The CLI is gone and the conversation did not move; the stale report must not hold the restart.
+    env = session_env
+    claude_project(env, monkeypatch)
+    leader = env.manager().start("leader")
+    drop_adopt_record(env, leader["window_id"])
+    (env.base / "agent" / marker).write_text("")
+    end_cli_on_its_own(env, leader)
+    env.handoff("leader", "Continue the Leader work.")
+    result = env.manager(timeout=20).control("restart", job="leader")
+    assert result["restarted"] is True and result["run_id"] != leader["run_id"]
+    assert result["session"]["session_id"] != leader["session"]["session_id"]
+    assert env.manager().store.read()["leader"]["session_id"] == result["session"]["session_id"]
