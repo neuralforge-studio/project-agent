@@ -2546,7 +2546,7 @@ def test_claude_restart_replaces_a_leader_whose_cli_is_gone_whatever_its_last_st
 def kill_waiting_process(env, window):
     """SIGTERM the run's waiting process (falcon2: it died before the CLI launched); the pane stays dead."""
     os.kill(window["placeholder_pid"], signal.SIGTERM)
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + command_timeout()
     while not env.tmux.pane_info(window["pane_id"])["pane_dead"]:
         assert time.monotonic() < deadline
         time.sleep(0.1)

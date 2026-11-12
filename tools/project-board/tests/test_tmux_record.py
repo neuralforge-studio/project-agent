@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(board_testing.TOOL).parent / "agent-session"))
 from agent_session import tmux_program
 from agent_session.errors import SessionError
 from rust_binary import sidebar_binary
+from wait_limit import command_timeout
 
 TOOLS = Path(board_testing.TOOL).parent
 NONE = "no tmux"            # the record names none: Python refuses, the shell script gets an empty TMUX_BIN, Rust an empty program
@@ -82,7 +83,7 @@ def test_shell_launcher(shell, name, text, variables, expected, tmp_path):
     script = ('. "$1/tmux-launcher.sh"; project_agent_select_tmux "$2"; '
               'printf "%s\\n%s\\n%s" "$TMUX_BIN" "$PROJECT_AGENT_TMUX_LD_LIBRARY_PATH" "${LD_LIBRARY_PATH:-}"')
     done = subprocess.run([shell, "-c", script, shell, str(TOOLS), str(tmp_path)], env=_environment(variables),
-                          capture_output=True, text=True, timeout=30)
+                          capture_output=True, text=True, timeout=command_timeout())
     assert done.returncode == 0, done.stderr
     program, library, ld_path = done.stdout.split("\n")
     if expected == NONE:
@@ -100,7 +101,7 @@ def test_rust_sidebar(name, text, variables, expected, tmp_path):
     shutil.copy2(sidebar_binary(), binary)
     _write(tmp_path / "tools", text)
     done = subprocess.run([str(binary), "tmux-program"], env=_environment(variables), capture_output=True, text=True,
-                          timeout=30)
+                          timeout=command_timeout())
     assert done.returncode == 0, done.stderr
     found = json.loads(done.stdout)
     if expected == NONE:
