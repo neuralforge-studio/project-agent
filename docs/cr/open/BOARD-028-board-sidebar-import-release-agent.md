@@ -18,3 +18,6 @@ Board sidebar process는 시작할 때 import한 코드를 계속 씁니다. 설
 - 자동 재시작은 요청하지 않습니다. 화면 배치가 바뀌므로 다시 켜는 것은 사람이 합니다.
 - release를 비교하는 원본은 설치본의 release 식별(VERSION·release 디렉터리) 하나를 씁니다. run마다 release를 고정하는 정책과 이 표시가 어떤 관계인지(sidebar는 run이 아님)는 담당 project가 정합니다.
 - 형식·문구·version은 담당 project가 정합니다.
+
+## Disposition
+- 2026-11-12 Leader: 설계 선택(표시만, 같은 pane 자동 전환, 둘 다)이 요청한 project의 계약을 바꾸므로 결정 항목 D-20261112-01로 사용자에게 묻습니다. BOARD-027·TMUX-004가 Rust sidebar를 고치는 중이라 그 뒤에 시작합니다.
