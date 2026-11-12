@@ -8,6 +8,8 @@
 //! `test_rust_release.py` holds the two equal.
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{Duration, Instant};
 
 pub const SIDEBAR: &str = "project-board-sidebar";
 /// Set (to `1`) by the process that replaces itself with the sidebar of another release: the click socket it leaves
@@ -86,26 +88,93 @@ pub fn check(own: &Own) -> Verdict {
     Verdict::Switch { name, binary }
 }
 
-/// Replace this process with `binary` (same pid, same pane, same environment, same arguments). Returns only when
-/// that failed, with the reason. `execv`, not `Command::exec`: the standard library's `execvp` runs a file that is
-/// not a program through `/bin/sh` (`ENOEXEC`), which would end the sidebar instead of failing.
+/// Replace this process with `binary` (same pid, same pane, same environment plus `SUCCESSOR`, same arguments).
+/// Returns only when that failed, with the reason. `execve` with an environment built here: threads are running, and
+/// changing the process environment under them is not safe (libc reads it, e.g. `TZ`). `execv`, not
+/// `Command::exec`: the standard library's `execvp` runs a file that is not a program through `/bin/sh`
+/// (`ENOEXEC`), which would end the sidebar instead of failing.
 pub fn exec_into(binary: &Path) -> std::io::Error {
     use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-    let invalid = || std::io::Error::new(std::io::ErrorKind::InvalidInput, "path or argument with a NUL byte");
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let invalid = || std::io::Error::new(std::io::ErrorKind::InvalidInput, "path, argument or variable with a NUL byte");
     let Ok(path) = CString::new(binary.as_os_str().as_bytes()) else { return invalid() };
     let mut arguments = vec![path.clone()];
     for argument in std::env::args_os().skip(1) {
         let Ok(argument) = CString::new(argument.as_bytes()) else { return invalid() };
         arguments.push(argument);
     }
-    let mut argv: Vec<*const libc::c_char> = arguments.iter().map(|a| a.as_ptr()).collect();
-    argv.push(std::ptr::null());
-    std::env::set_var(SUCCESSOR, "1");
-    unsafe { libc::execv(path.as_ptr(), argv.as_ptr()) };
-    let error = std::io::Error::last_os_error();
-    std::env::remove_var(SUCCESSOR);
-    error
+    let mut variables = Vec::new();
+    for (name, value) in std::env::vars_os() {
+        if name == SUCCESSOR {
+            continue;
+        }
+        let mut entry = name.into_vec();
+        entry.push(b'=');
+        entry.extend(value.into_vec());
+        let Ok(entry) = CString::new(entry) else { return invalid() };
+        variables.push(entry);
+    }
+    variables.push(CString::new(format!("{SUCCESSOR}=1")).expect("no NUL"));
+    let pointers = |list: &Vec<CString>| -> Vec<*const libc::c_char> {
+        let mut pointers: Vec<*const libc::c_char> = list.iter().map(|a| a.as_ptr()).collect();
+        pointers.push(std::ptr::null());
+        pointers
+    };
+    let (argv, envp) = (pointers(&arguments), pointers(&variables));
+    unsafe { libc::execve(path.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
+    std::io::Error::last_os_error()
+}
+
+/// How long a binary that is about to replace this process may take to answer `release`.
+pub const PROBE_LIMIT: Duration = Duration::from_secs(10);
+
+/// Run `binary release` once before the process image is given up: a binary that can be executed but ends at
+/// once (a loader error, a panic) would otherwise take the pane with it. It must exit 0 and name `expected` as its
+/// own release, which also assures that it reads the release the same way (`current`'s). The Err is the reason.
+pub fn probe(binary: &Path, expected: &str, limit: Duration) -> Result<(), String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = Command::new(binary)
+        .arg("release")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("실행하지 못했습니다({error})"))?;
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{}초 안에 답하지 않습니다", limit.as_secs().max(1)));
+            }
+            Err(error) => return Err(format!("확인하지 못했습니다({error})")),
+        }
+    };
+    let (mut out, mut err) = (String::new(), String::new());
+    if let Some(pipe) = child.stdout.take() {
+        let _ = pipe.take(4096).read_to_string(&mut out);
+    }
+    if let Some(pipe) = child.stderr.take() {
+        let _ = pipe.take(4096).read_to_string(&mut err);
+    }
+    let excerpt = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect::<String>();
+    if !status.success() {
+        let how = match status.code() {
+            Some(code) => format!("종료 코드 {code}"),
+            None => "신호로 끝남".to_string(),
+        };
+        let said = excerpt(if err.trim().is_empty() { &out } else { &err });
+        return Err(if said.is_empty() { format!("바로 끝납니다({how})") } else { format!("바로 끝납니다({how}: {said})") });
+    }
+    match serde_json::from_str::<serde_json::Value>(out.trim()).ok().and_then(|v| v.get("release").cloned()) {
+        Some(serde_json::Value::String(name)) if name == expected => Ok(()),
+        Some(serde_json::Value::String(name)) => Err(format!("자기 release를 {name}이라고 합니다")),
+        _ => Err(format!("release를 말하지 않습니다({})", excerpt(&out))),
+    }
 }
 
 /// `--version`: the program and its release.
@@ -213,5 +282,42 @@ mod tests {
         std::fs::create_dir_all(lib.0.join("elsewhere")).unwrap();
         lib.point("elsewhere");
         assert!(matches!(check(&own), Verdict::Restart(reason) if reason.contains("releases")));
+    }
+
+    fn script(lib: &Lib, name: &str, body: &str) -> PathBuf {
+        let binary = lib.release(name, false);
+        std::fs::write(&binary, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        binary
+    }
+
+    #[test]
+    fn a_binary_that_names_the_expected_release_passes_the_probe() {
+        let lib = Lib::new("probe-ok");
+        let binary = script(&lib, "0.12.0-bbbbbbbbbbbb", "echo '{\"release\": \"0.12.0-bbbbbbbbbbbb\"}'");
+        assert_eq!(probe(&binary, "0.12.0-bbbbbbbbbbbb", Duration::from_secs(5)), Ok(()));
+    }
+
+    #[test]
+    fn a_binary_that_ends_at_once_names_another_release_or_says_nothing_fails_the_probe_with_a_reason() {
+        let lib = Lib::new("probe-bad");
+        let ends = script(&lib, "a-1", "echo 'GLIBC_2.99 not found' >&2; exit 1");
+        let reason = probe(&ends, "a-1", Duration::from_secs(5)).unwrap_err();
+        assert!(reason.contains("종료 코드 1") && reason.contains("GLIBC_2.99"), "{reason}");
+        let other = script(&lib, "a-2", "echo '{\"release\": \"0.99.0-zzzzzzzzzzzz\"}'");
+        assert!(probe(&other, "a-2", Duration::from_secs(5)).unwrap_err().contains("0.99.0-zzzzzzzzzzzz"));
+        let silent = script(&lib, "a-3", "echo hello");
+        assert!(probe(&silent, "a-3", Duration::from_secs(5)).unwrap_err().contains("말하지 않습니다"));
+        let missing = lib.0.join("releases/none/tools/project-board/bin/project-board-sidebar");
+        assert!(probe(&missing, "x", Duration::from_secs(5)).unwrap_err().contains("실행하지 못했습니다"));
+    }
+
+    #[test]
+    fn a_binary_that_does_not_answer_is_stopped_after_the_limit() {
+        let lib = Lib::new("probe-slow");
+        let slow = script(&lib, "a-1", "sleep 30");
+        let started = Instant::now();
+        assert!(probe(&slow, "a-1", Duration::from_millis(300)).unwrap_err().contains("답하지 않습니다"));
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 }

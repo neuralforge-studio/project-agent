@@ -126,10 +126,12 @@ def test_a_sidebar_that_is_not_in_a_release_never_switches(tmp_path, request):
     assert _executable(process) == before and RESTART not in pane.screen()
 
 
-@pytest.mark.parametrize("situation", ["no binary", "not executable", "not a program", "current is gone", "current outside releases"])
+@pytest.mark.parametrize("situation", ["no binary", "not executable", "not a program", "exits at once", "another release name",
+                                       "says nothing", "current is gone", "current outside releases"])
 def test_a_sidebar_that_cannot_switch_keeps_its_code_and_says_a_restart_is_needed_and_why(tmp_path, request, situation):
     lib, pane = _sidebar_in(tmp_path, request)
     process = _process(pane)
+    facts = _facts(pane)
     if situation == "no binary":
         lib.release(NEW, binary=False)
         lib.point(NEW)
@@ -142,6 +144,16 @@ def test_a_sidebar_that_cannot_switch_keeps_its_code_and_says_a_restart_is_neede
         lib.binary(NEW).write_bytes(b"\x7fELF not a program")
         lib.point(NEW)
         reason = "실행하지 못했습니다"
+    elif situation in ("exits at once", "another release name", "says nothing"):
+        # these can be executed (a script with a shebang is), so the exec would succeed and end the pane
+        body = {"exits at once": "echo 'GLIBC_2.99 not found' >&2\nexit 1",
+                "another release name": "echo '{\"release\": \"0.99.0-zzzzzzzzzzzz\"}'",
+                "says nothing": "echo hello"}[situation]
+        lib.binary(NEW).unlink()
+        lib.binary(NEW).write_text("#!/bin/sh\n" + body + "\n")
+        lib.binary(NEW).chmod(0o755)
+        lib.point(NEW)
+        reason = {"exits at once": "GLIBC_2.99", "another release name": "0.99.0-zzzzzzzzzzzz", "says nothing": "말하지"}[situation]
     elif situation == "current is gone":
         lib.point("nothing-here")
         reason = "current를 읽을 수 없습니다"
@@ -153,7 +165,7 @@ def test_a_sidebar_that_cannot_switch_keeps_its_code_and_says_a_restart_is_neede
     screen = pane.screen()
     assert reason in screen.replace("\n", "") or reason in " ".join(screen.split()), screen
     assert "prefix B" in " ".join(screen.split()), screen                               # how to start it again
-    assert _executable(process) == lib.binary(OLD) and _process(pane) == process        # the old code carries on
+    assert _executable(process) == lib.binary(OLD) and _facts(pane) == facts            # the old code carries on, in the same pane
     assert any("Falcon2" in line for line in pane.lines())                              # and keeps drawing
     # `current` is this release again: the notice goes
     lib.point(OLD)

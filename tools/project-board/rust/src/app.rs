@@ -243,9 +243,18 @@ fn snapshot_loop(reader: Arc<Reader>, tmux: Arc<Tmux>, tx: Sender<Msg>, visible:
                 return;
             }
             if let Some(own) = &own {
-                let verdict = release::check(own);
-                if told.as_ref() != Some(&verdict) {
-                    told = Some(verdict.clone());
+                let checked = release::check(own);
+                if told.as_ref() != Some(&checked) {
+                    told = Some(checked.clone());
+                    // a binary that is about to replace this process is run once first (`release::probe`): only when
+                    // `current` changed, never at the 2-second reads that find nothing new
+                    let verdict = match checked {
+                        Verdict::Switch { name, binary } => match release::probe(&binary, &name, release::PROBE_LIMIT) {
+                            Ok(()) => Verdict::Switch { name, binary },
+                            Err(reason) => Verdict::Restart(format!("새 release {name}의 sidebar가 시작하지 못합니다({reason})")),
+                        },
+                        other => other,
+                    };
                     if tx.send(Msg::Release(verdict)).is_err() {
                         return;
                     }
