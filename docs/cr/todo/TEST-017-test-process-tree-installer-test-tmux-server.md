@@ -14,6 +14,8 @@
 - socket 파일은 이미 지워져 있었습니다(`pi-*` 디렉터리는 15:30~15:31에 바뀜). 그래서 정리 함수 `release_path`(`tmux -S <socket> kill-server`)로는 server에 닿지 못했고, Leader가 server PID 4개를 `kill`로 멈췄습니다.
 - 가설(확인하지 않음): `TaskStop`이 process tree 전체(새 session으로 띄운 watchdog 포함)를 끝내서 watchdog이 정리 전에 죽었습니다. 같은 일은 process tree를 통째로 끝내는 다른 경로(CI, 터미널 종료)에서도 생길 수 있습니다. socket 파일을 누가 지웠는지는 확인하지 않았습니다.
 - 지금 정리 책임은 server 밖의 별도 process(watchdog)에 있습니다. 그 process가 함께 죽으면 아무도 정리하지 않습니다.
+- 관련 관찰(TEST-016 Worker, 2026-11-12, 확인 안 됨): 다른 큰 suite와 동시에 `install/tests`를 `-n 8`로 돌렸을 때 `install/tests/test_tmux.py` 5건이 `tmux: no server running`으로 실패했습니다. TimeoutExpired는 아니었고, 단독 실행이나 제출 commit의 전체 install 실행에서는 재현되지 않았습니다.
+  - test가 쓰던 server나 socket이 다른 run의 정리(watchdog 등)로 사라졌을 가능성이 있습니다. 이 CR을 조사할 때 함께 원인을 확인합니다.
 
 ## Contract
 1. test가 띄운 tmux server는 소유 test process가 어떻게 끝나든(정상, 실패, SIGTERM, SIGKILL, process tree 전체 종료) 그 뒤 정해진 시간 안에 사라집니다. socket 파일과 Board가 server마다 만드는 디렉터리도 사라집니다.
