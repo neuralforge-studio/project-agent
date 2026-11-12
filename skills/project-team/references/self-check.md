@@ -9,9 +9,9 @@ Leader와 Worker는 점검을 스스로 등록하지 않습니다. 반복 점검
 대화 기록이 30분 넘게 갱신되지 않아 점검이 깨운 것입니다.
 
 1. 내 CR이 아직 in-progress이고 할 일이 남았으면 이어서 합니다.
-2. 제출해서 Leader의 회신을 기다리는 중(CR의 `## Result`에 제출 행이 있고 그 뒤 Leader의 feedback이 없음)이면 Leader에게 CR ID와 제출 hash를 담아 `agent-session send --job leader`로 짧게 다시 알립니다.
+2. 제출과 보고를 마쳐 Leader의 회신을 기다리는 중이면 같은 제출을 다시 보고하지 않습니다.
 3. 메시지의 근거(background 작업, 자식 process의 명령·실행 시간·CPU)와 `ps -o pid,etime,time,args --ppid $PPID`를 봅니다. 진전 없는 대기(자기 shell과도 맞아 끝나지 않는 `pgrep -f` loop 등)이면 그 process를 PID로 멈추고 올바른 방법으로 다시 합니다.
-4. 스스로 풀 수 없게 막혔으면 `agent-session send --job leader`로 이유를 한 번 보고합니다. 이미 보고한 같은 내용은 반복하지 않습니다.
+4. 새 제출·새 외부 차단·종료 준비 완료는 `agent-session send --job leader`로 간결하게 보고합니다. 이미 보고한 같은 내용은 반복하지 않습니다.
 
 ## Leader: `[agent-session check]`·`[agent-session watch]` 메시지
 
