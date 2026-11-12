@@ -19,8 +19,10 @@ only the `crontab` command found on PATH, so a test replaces it with a shim.
 """
 
 import datetime as dt
+import os
 import re
 import shlex
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -34,6 +36,7 @@ CHECK_SCHEDULE = "13,43 * * * *"       # every 30 minutes, off :00 and :30
 CHECK_DESCRIPTION = "정체한 Worker·Leader와 Leader가 처리할 일을 점검합니다(agent-session check)"
 JOB_ID = re.compile(r"[a-z][a-z0-9-]{0,31}")
 RETRIES = 5                            # read-modify-write attempts when another editor changed the crontab
+CRON_PATH = ("/usr/bin", "/bin")          # the PATH cron gives a job
 COMMAND_TIMEOUT = 30                   # seconds one `crontab` process may take
 SEARCH_YEARS = 8                       # how far `next_run` looks for a match before it gives up
 NO_CRONTAB = re.compile(r"no crontab for", re.I)
@@ -328,8 +331,11 @@ def runs_directory(project):
     return project.runtime_path / "cron"
 
 
-def record_run(project, job_id, ok, result, at=None):
-    """Keep the last run of a job (its command calls this). A failure to keep it never fails the job."""
+def record_run(project, job_id, ok, result, at=None, code=None):
+    """Keep the last run of a job (its command calls this). A failure to keep it never fails the job.
+
+    A failed run (`ok` false) may carry the `code` of the error that failed it (SESSION-016); the output of the
+    command is dropped, so this is where the reason stays."""
     import json
     directory = runs_directory(project)
     stamp = dt.datetime.fromtimestamp(time.time() if at is None else at, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -337,15 +343,17 @@ def record_run(project, job_id, ok, result, at=None):
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{_check_job_id(job_id)}.json"
         temporary = path.with_name(f".{path.name}.{time.monotonic_ns()}")
-        temporary.write_text(json.dumps({"at": stamp, "ok": bool(ok), "result": result}, ensure_ascii=False),
-                             encoding="utf-8")
+        record = {"at": stamp, "ok": bool(ok), "result": result}
+        if code:
+            record["code"] = str(code)
+        temporary.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
         temporary.replace(path)
     except OSError:
         pass
 
 
 def last_run(project, job_id):
-    """The kept last run `{at, ok, result}` of a job, or None."""
+    """The kept last run `{at, ok, result[, code]}` of a job, or None."""
     import json
     try:
         value = json.loads((runs_directory(project) / f"{job_id}.json").read_text(encoding="utf-8"))
@@ -402,14 +410,31 @@ def remove(project, crontab, job_id):
     return {"project": project.project_id, "removed": job_id, "written": written}
 
 
+def tmux_directory():
+    """The directory of the tmux this process finds on its PATH, or None when there is none.
+
+    Leader start, restart and resume run in the environment that started the server, so this tmux speaks to it.
+    A relative PATH entry is made absolute; a symlink (`.../tmux/latest/bin`) is kept as it is so that the job
+    follows an update of it."""
+    found = shutil.which("tmux")
+    return os.path.dirname(os.path.abspath(found)) if found else None
+
+
 def check_command(project, socket_name=None, socket_path=None):
-    """The command line of the project's check job: this release's `agent-session check` for the project."""
+    """The command line of the project's check job: this release's `agent-session check` for the project.
+
+    cron's PATH (`/usr/bin:/bin`) finds the system tmux, which may not speak to the server (SESSION-016), so the
+    line starts with `env PATH=<the tmux directory>:/usr/bin:/bin`. The same line runs from any shell. It has no
+    `env` when no tmux was found (the run then fails with `tmux_unavailable`) or when tmux is in cron's PATH."""
     from .launch_artifacts import library_path
     parts = [str(library_path() / "bin" / "agent-session"), "--config", str(project.config_path)]
     if socket_name:
         parts += ["--socket-name", socket_name]
     if socket_path:
         parts += ["--socket-path", str(socket_path)]
+    directory = tmux_directory()
+    if directory and directory not in CRON_PATH:
+        parts = ["env", f"PATH={directory}:{':'.join(CRON_PATH)}"] + parts
     # cron mails whatever a job prints; the result of a run is kept in `last_run`, so the output is dropped.
     return shlex.join(parts + ["check", "--project", project.project_id]) + " >/dev/null 2>&1"
 

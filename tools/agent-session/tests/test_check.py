@@ -232,8 +232,9 @@ def test_a_failing_run_is_kept_as_not_ok(session_env, last, capsys, monkeypatch)
     last.at = time.time() - 10 * THRESHOLD
     monkeypatch.setattr(Manager, "watch_target", lambda self, *a, **k: (_ for _ in ()).throw(ValueError("x")))
     _, out = check(env, capsys)
-    assert out["data"]["projects"][0]["run"] == {"ok": False, "result": "error"}
-    assert json.loads((env.base / "agent" / "cron" / "check.json").read_text())["ok"] is False
+    assert out["data"]["projects"][0]["run"] == {"ok": False, "result": "error", "code": "internal_error"}
+    record = json.loads((env.base / "agent" / "cron" / "check.json").read_text())
+    assert record["ok"] is False and record["code"] == "internal_error"
 
 
 def test_the_check_wakes_a_stalled_worker_as_watch_does(session_env, last, capsys):
@@ -305,3 +306,72 @@ def test_a_crontab_that_cannot_be_read_does_not_stop_the_leader(session_env, mon
     env.manager().control("stop", job="leader")
     assert env.manager().start("leader")["cron"] == {"check": "added"}
     assert env.crontab.read_text().startswith("0 1 * * * /user\n")
+
+
+# SESSION-016: the check job under cron's environment
+
+def cron_run(env, line, path):
+    """What cron does: the line in `/bin/sh` with a minimal environment and PATH `path`."""
+    import os
+    import subprocess
+    return subprocess.run(["env", "-i", f"HOME={os.environ['HOME']}", f"PATH={path}", "/bin/sh", "-c", line],
+                          capture_output=True, text=True, timeout=120)
+
+
+def kept_run(env):
+    return json.loads((env.base / "agent" / "cron" / "check.json").read_text())
+
+
+def with_a_worker(env):
+    """A Leader and a Worker on a CR in progress: the check has a window to ask tmux about."""
+    env.manager().start("leader")
+    env.manager().start(env.cr())
+
+
+def wrong_tmux(tmp_path):
+    """A directory whose `tmux` does not speak to the server (the system tmux 2.7 against a 3.8 server)."""
+    wrong = tmp_path / "wrong"
+    wrong.mkdir()
+    (wrong / "tmux").write_text("#!/bin/sh\necho 'lost server' >&2\nexit 1\n")
+    (wrong / "tmux").chmod(0o755)
+    return wrong
+
+
+def test_the_check_line_reaches_the_leaders_tmux_where_a_wrong_tmux_stands_ahead_in_cron_path(
+        session_env, monkeypatch, tmp_path):
+    import shutil
+    env = session_env
+    with_a_worker(env)
+    right = tmp_path / "right"
+    right.mkdir()
+    (right / "tmux").symlink_to(shutil.which("tmux"))
+    monkeypatch.setattr(cron, "tmux_directory", lambda: str(right))     # the tmux the Leader start ran with
+    line = cron.check_command(env.project, socket_name=env.socket_name)
+    assert line.startswith(f"env PATH={right}:/usr/bin:/bin ")
+    done = cron_run(env, line, f"{wrong_tmux(tmp_path)}:/usr/bin:/bin")
+    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
+    record = kept_run(env)
+    assert record["ok"] is True and record["result"] == "idle" and "code" not in record
+
+
+def test_a_tmux_that_cannot_reach_the_server_leaves_its_code_in_the_run(session_env, monkeypatch, tmp_path):
+    env = session_env
+    with_a_worker(env)
+    monkeypatch.setattr(cron, "tmux_directory", lambda: None)           # a line without the Leader's tmux
+    line = cron.check_command(env.project, socket_name=env.socket_name)
+    assert not line.startswith("env ")
+    cron_run(env, line, f"{wrong_tmux(tmp_path)}:/usr/bin:/bin")
+    record = kept_run(env)
+    assert record["ok"] is False and record["result"] == "error" and record["code"] == "tmux_command_failed"
+
+
+def test_without_any_tmux_the_run_names_tmux_unavailable(session_env, capsys, monkeypatch, tmp_path):
+    env = session_env
+    with_a_worker(env)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with monkeypatch.context() as search:
+        search.setenv("PATH", str(empty))
+        _, out = check(env, capsys)
+    assert out["data"]["projects"][0]["run"] == {"ok": False, "result": "error", "code": "tmux_unavailable"}
+    assert kept_run(env)["code"] == "tmux_unavailable"

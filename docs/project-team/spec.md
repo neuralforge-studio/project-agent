@@ -1383,7 +1383,7 @@ project의 주기 점검입니다. project의 crontab `check` 작업이 30분마
 
 Leader에게는 처리할 일이 있고 Leader의 대화 기록이 `--minutes` 넘게 갱신되지 않았을 때만 `[agent-session check]` 메시지 하나를 보냅니다. 일하는 Leader를 끼어들지 않고, 일이 없으면 아무에게도 보내지 않습니다. 같은 정체(rest)에서는 다시 보내지 않으며(반복 방지는 watch와 같은 window option `watch`의 `resting.nudged_at`), Leader가 응답해 기록이 갱신된 뒤 다시 정체하면 그때 남은 일로 새로 보냅니다. Leader가 없거나 준비 중이면 보내지 않습니다.
 
-결과는 `watch`의 결과에 project마다 `run`(`{ok, result}`)을 더한 것입니다. `result`는 `idle`(보낸 것 없음)·`notified`(메시지를 보냄)·`error`(target이나 project가 실패)이고, `ok`는 `error`가 아닐 때 true입니다. 같은 값을 `<base>/agent/cron/check.json`(`{at, ok, result}`, 원자적 교체)에 마지막 실행으로 남깁니다. 쓰지 못해도 점검은 실패하지 않습니다. 이 파일은 `cron ls`가 읽는 값입니다.
+결과는 `watch`의 결과에 project마다 `run`(`{ok, result[, code]}`)을 더한 것입니다. `result`는 `idle`(보낸 것 없음)·`notified`(메시지를 보냄)·`error`(target이나 project가 실패)이고, `ok`는 `error`가 아닐 때 true입니다. `code`는 실패한 run(`error`)에만 있고 실패 이유의 오류 code입니다(예: `tmux_command_failed`, `tmux_unavailable`). project 자체의 오류가 있으면 그 code이고, 없으면 처음 실패한 target의 code입니다. 같은 값을 `<base>/agent/cron/check.json`(`{at, ok, result[, code]}`, 원자적 교체)에 마지막 실행으로 남깁니다. cron 줄이 출력을 버리므로 실패 이유는 여기에만 남습니다. 성공한 run에는 `code`가 없고 `at`·`ok`·`result`의 뜻은 그대로입니다. tmux가 닿지 못해도 target을 하나도 판정하지 않은 run(Leader가 처리할 일이 없고 배정된 Worker가 없음)은 tmux를 부르지 않으므로 `idle`입니다. 쓰지 못해도 점검은 실패하지 않습니다. 이 파일은 `cron ls`가 읽는 값입니다.
 
 ### cron
 
@@ -1412,11 +1412,13 @@ M H DOM MON DOW 명령
 
 **다음 실행 시각**은 `agent_session/cron.py`의 `Schedule.next_run`이 한 곳에서 정합니다(주어진 시각보다 엄밀히 뒤의 첫 일치 분, 8년 안에 없으면 없음). 다른 언어의 읽는 쪽(Board의 sidebar)은 같은 결과를 내야 하고 [`tests/fixtures/cron_next_run.json`](../../tools/agent-session/tests/fixtures/cron_next_run.json)의 손으로 쓴 사례(시각은 시간대 없는 local 분)로 일치를 지킵니다.
 
-`ls` 결과는 `{project, jobs: [{id, schedule, description, command, next_run, last_run}]}`입니다. `next_run`은 local 시각 `YYYY-MM-DDTHH:MM`(없으면 null), `last_run`은 그 작업의 명령이 남긴 `{at(UTC), ok, result}`(없으면 null)입니다. `--summary`는 sidebar가 2초 주기에서 읽는 값으로 `{project, count, next_run}`(작업 수와 가장 가까운 다음 실행)만 냅니다. Board는 이 명령을 부르거나, `crontab -l`을 직접 읽어 위 형식을 해석하고 위 규칙으로 다음 실행을 계산할 수 있습니다.
+`ls` 결과는 `{project, jobs: [{id, schedule, description, command, next_run, last_run}]}`입니다. `next_run`은 local 시각 `YYYY-MM-DDTHH:MM`(없으면 null), `last_run`은 그 작업의 명령이 남긴 `{at(UTC), ok, result[, code]}`(없으면 null)입니다. `--summary`는 sidebar가 2초 주기에서 읽는 값으로 `{project, count, next_run}`(작업 수와 가장 가까운 다음 실행)만 냅니다. Board는 이 명령을 부르거나, `crontab -l`을 직접 읽어 위 형식을 해석하고 위 규칙으로 다음 실행을 계산할 수 있습니다.
 
 **기본 점검 작업**: project의 작업 `check`는 30분마다(`13,43 * * * *`, `:00`·`:30`을 피함) 그 release의 `bin/agent-session --config <등록 파일> [--socket-name|--socket-path ...] check --project NAME`을 실행합니다. cron이 출력을 메일로 보내지 않도록 `>/dev/null 2>&1`을 붙이며, 결과는 `last_run`이 보입니다.
 
-**Leader 시작**: Claude·Codex 모두 Leader를 시작(start·restart·resume의 새 run)할 때 `check` 작업이 없으면 만듭니다. 있으면 일정과 설명은 그대로 두고(사람이 바꿨을 수 있음) 명령만 이 release의 것으로 맞춥니다. 결과의 `cron`은 `{"check": "added" | "present" | "updated"}`이고 crontab을 읽거나 쓰지 못하면 Leader 시작은 막지 않고 `{"check": "failed", "error": ...}`를 적습니다(다음 시작이 다시 시도). Worker 시작은 crontab을 건드리지 않습니다.
+**check 줄이 쓰는 tmux**(SESSION-016): cron의 PATH는 `/usr/bin:/bin`이라 시스템 tmux가 잡히고, 이것이 server(사내 tmux)와 맞지 않으면 모든 호출이 `lost server`로 실패합니다. 그래서 줄을 만드는 쪽(`cron.check_command`, 한 곳)이 Leader를 시작한 환경의 PATH에서 처음 찾은 `tmux`의 디렉터리(절대 경로, symlink는 풀지 않아 `latest`를 따라감)를 줄 앞에 `env PATH=<그 디렉터리>:/usr/bin:/bin`으로 적습니다. 줄은 cron의 `/bin/sh`에서도, 사람이 어느 shell에서 복사해 실행해도 같게 동작합니다. 그 디렉터리가 `/usr/bin`이나 `/bin`이면 cron이 같은 tmux를 찾으므로 `env`를 붙이지 않습니다. tmux를 찾지 못했으면 붙이지 않고, 그 줄의 run은 `tmux_unavailable`로 기록됩니다. Leader 시작(start·restart·resume의 새 run)은 이 server에 이미 닿은 환경에서 실행하므로 그 tmux는 server와 맞습니다. 사용자의 PATH나 login 설정은 쓰지 않습니다.
+
+**Leader 시작**: Claude·Codex 모두 Leader를 시작(start·restart·resume의 새 run)할 때 `check` 작업이 없으면 만듭니다. 있으면 일정과 설명은 그대로 두고(사람이 바꿨을 수 있음) 명령만 이 release의 것(위 tmux 접두 포함)으로 맞춥니다. 옛 명령과 사람이 앞에 붙인 `PATH=` 접두도 이때 새 명령으로 바뀝니다. `cron add`로 넣은 다른 작업의 명령은 바꾸지 않습니다. 결과의 `cron`은 `{"check": "added" | "present" | "updated"}`이고 crontab을 읽거나 쓰지 못하면 Leader 시작은 막지 않고 `{"check": "failed", "error": ...}`를 적습니다(다음 시작이 다시 시도). Worker 시작은 crontab을 건드리지 않습니다.
 
 ## 8. CR과 실행 입력
 
