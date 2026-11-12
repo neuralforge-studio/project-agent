@@ -404,7 +404,7 @@ Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않
 마무리는 먼저 대상 제어 잠금 없이 그 slot의 현재 실행 포인터가 이 run과 이 pane을 가리키는지 읽습니다. 아니면 잠금을 잡지 않고 `not_current`로 끝납니다. `stop`이 반납한 run의 pane이 죽어도 이 hook이 돌지만, 그 run은 이미 현재가 아니고 다시 현재가 되지 않습니다. 이 확인에 잠금을 쓰면 바로 이어지는 `start`가 그 slot을 "target control is busy"로 건너뛰어 다른 seat를 받습니다(TEST-006). 포인터를 읽지 못하면 현재로 보고 아래 절차로 갑니다. 현재인 run(사용자 `/exit`)은 대상 제어 잠금 안에서 다음을 모두 확인한 run만 마무리합니다. 하나라도 아니면 아무것도 바꾸지 않고 이유(`finished: false`, `reason`)만 남깁니다.
 
 - 그 slot의 현재 실행 포인터가 이 run과 이 pane을 가리킵니다(`not_current`). 로컬이고 게시를 마친(`registered`·`ready`) run입니다(`not_published`). 등록하지 못한 run은 start가 근거를 읽으므로 지금처럼 둡니다. 원격 seat는 SSH 표시 창의 종료가 Worker의 종료가 아니므로 다룰 수 없습니다.
-- 명령이 제어하는 run이 아닙니다(`control_active`): stopping이 아니고, control_pending이 false이며, 살아 있는 controller가 없습니다. stop·restart·shutdown은 자기 잠금 안에서 stopping을 쓰고 끝냅니다. 그래서 실행 중인 stop·restart의 중복 마무리와, restart가 새 run을 띄우는 window의 정리가 없고, shutdown이 끝낸 run(resume이 이어받음)은 정리하지 않습니다. 잠금이 잡혀 있으면 5초 기다리고, 그래도 잡혀 있으면 그 명령에 맡기고 끝납니다.
+- 명령이 제어하는 run이 아닙니다(`control_active`): stopping이 아니고, control_pending이 false이며, 살아 있는 controller가 없습니다. stop·restart·shutdown은 자기 잠금 안에서 stopping을 쓰고 끝냅니다. 그래서 실행 중인 stop·restart의 중복 마무리와, restart가 새 run을 띄우는 window의 정리가 없고, shutdown이 끝낸 run(resume이 이어받음)은 정리하지 않습니다. 잠금이 잡혀 있으면 5초 기다리고, 그래도 잡혀 있으면 그 명령에 맡기고 끝납니다(`finish-result.json`의 `reason`은 `lock_timeout`). 이 결과는 마무리가 실패했다는 뜻이 아니라 stop·restart가 그 run의 종료 확인을 맡고 있다는 뜻입니다. 그 명령이 종료를 확인하지 못하면 아무도 마무리하지 않으므로, 명령의 종료 판정은 이 마무리와 같은 근거여야 합니다(7절 session cron·process 규칙).
 - 종료를 확인했습니다(`termination_unconfirmed`). pane이 dead이고 provider의 관찰이 stop과 같은 기준으로 종료를 보고합니다. Claude는 종료한 CLI가 SessionEnd hook을 실행하지 못했을 수 있으므로, pane이 dead이고 CLI·process group·추적한 background PID가 모두 없으면(forced shutdown의 확인과 같은 근거) 종료입니다. 최대 15초 기다려 process group이 정리되는 것을 봅니다. background 대화로 옮겨진 run은 이 기준을 쓰지 않습니다. 확인하지 못하면 보존합니다.
 
 확인하면 먼저 `agent/runs/<run_id>/ended.json`에 종료 근거를 씁니다. 근거는 run_id·target·job_id·session_id·`cli_pid`·`cli_birth`·process group·`basis`(`provider` 또는 `process`)·`ended_at`입니다. 그 뒤 stopping을 쓰고 이름을 바꾸고(`-exited-`), stop의 반납 판정을 그대로 적용합니다.
@@ -1025,7 +1025,8 @@ Claude Worker에 background 작업이 남으면 idle이 되지 않아 종료 요
 
 session cron은 run이 exit handoff를 껐는지에 따라 셉니다. 근거는 그 run의 `launch.sh`(window option `launch_file`)에 `export CLAUDE_DISABLE_ADOPT=1`이 있는지입니다(3절 방지).
 - 껐으면 session cron은 CLI와 함께 사라지므로 background로 세지 않습니다. session cron만 남은 run도 idle이면 종료 요청을 보내고, CLI가 끝나면(pane dead, `cli_pid`·`cli_birth` 일치 process 없음, process group 없음) 마지막 Stop 보고에 cron이 남아 있어도 종료로 판정해 반납합니다. 이미 `stopping`이 남은 run을 다시 stop해도 같습니다. stop·restart·shutdown·`finish_ended`가 같은 판정(`providers/claude.py`의 `report_background`)을 씁니다.
-- 근거가 없으면(옛 run, 읽을 수 없는 `launch.sh`) 지금처럼 session cron을 background로 셉니다.
+- 근거가 없으면(옛 run, 읽을 수 없는 `launch.sh`) CLI가 살아 있는 동안은 지금처럼 session cron을 background로 셉니다. CLI가 이미 끝났으면(`cli_pid`·`cli_birth` 일치 process 없음) 세지 않습니다. exit handoff가 일어났다면 그 사실은 옛 transcript의 `continued-in` 기록이며(3절 감지) 종료 판정이 그 기록을 먼저 읽으므로, 기록이 없는 끝난 CLI의 cron은 이어받을 곳이 없습니다.
+- 종료 판정은 provider 보고 안의 남은 작업보다 process 사실이 우선합니다. Claude run은 pane이 dead이고 CLI·process group·추적한 background PID가 모두 없으며 대화가 옮겨지지 않았으면, 마지막 Stop 보고에 background 작업이나 cron이 남아 있어도 종료입니다(`basis`: `process`). stop·restart·start와 `finish_ended`(3절)가 이 판정 하나를 씁니다. 끝난 CLI의 보고는 그 CLI가 가졌던 작업이므로 더 이상 일하지 않습니다.
 - background shell·task(`background_tasks`)는 어느 경우에나 종료를 막는 background로 셉니다.
 
 Worker는 아래 반납 검사를 추가로 확인합니다.
@@ -1276,6 +1277,15 @@ Controller가 살아 있어도 다음을 모두 만족하면 자기 run의 windo
 결과 파일이 completed=true이고, 그 window의 control_pending이 false이고, 정리하는 process가 그 window에 기록된 controller PID·생성 시각과 같습니다.
 다른 controller, 결과가 없거나 미완료인 controller, pending이 남은 window는 보존합니다.
 다른 대상 제어는 기본적으로 최종 결과까지 기다리고 반환합니다.
+
+#### run을 시작한 코드와 제어하는 코드가 다를 때
+
+한 run의 CLI와 hook·launch script는 그 run을 시작한 코드(agent 저장소의 동결 사본, 옛 release)이고, controller와 `finish-ended` hook은 그 시점의 현재 release입니다. 이 workstation의 관리 run은 둘이 다를 수 있습니다. 현재 release가 옛 run을 제어할 때의 규칙은 다음과 같습니다.
+
+- 종료 판정은 run을 시작한 코드의 버전이나 환경 선언(`launch.sh`의 `CLAUDE_DISABLE_ADOPT` 줄)이 아니라 지금 확인할 수 있는 사실로 합니다. 사실은 process 생존, 대화의 `continued-in` 기록, hook이 남긴 관찰값(`hook_observations`)입니다. 선언은 CLI가 살아 있는 동안의 예측에만 씁니다(7절 session cron).
+- 옛 run의 hook이 쓰는 관찰값과 window option은 현재 코드가 읽을 수 있어야 합니다. 형식 version(`agent_session`·`tmux_options`)이 바뀌지 않는 한 호환입니다.
+- 현재 release가 종료를 확인하면 새 대화를 시작합니다. 확인하지 못하면 `timeout`·`conversation_backgrounded` 등의 오류를 `control-result.json`에 남기고, `stopping`과 state의 이전 대화 연결(session)을 지우지 않습니다. 이전 대화는 보존됩니다.
+- 그 상태를 복구하는 사람은 `control-result.json`의 `details`(`stopping_kept`, `exit_wait`)를 읽습니다. `exit_wait`의 `cli_alive`·`group_alive`·`tracked_alive`가 모두 false이고 `pane_dead`가 true이면 CLI는 끝난 것이며, 남은 `background`는 끝난 CLI의 마지막 보고입니다. 그때는 위 규칙에 따라 같은 release에서 `agent-session start --job <leader 또는 CR>`가 새 대화로 진행합니다. 하나라도 살아 있으면 그 process를 확인하고 끝낸 뒤 다시 실행합니다(7절 수동 복구).
 
 Claude 종료는 pane dead·CLI·추적한 자식과 background 종료를 확인합니다.
 Codex는 공유 engine의 active turn·pending 입력·background도 확인합니다.
