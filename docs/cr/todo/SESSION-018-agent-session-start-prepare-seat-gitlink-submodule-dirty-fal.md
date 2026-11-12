@@ -17,6 +17,15 @@
 - 우회: Leader 가 `git -C <seat1> -c submodule.recurse=false checkout main`(reflog 의 직전 상태)으로 되돌려 dirty 0 을 확인한 뒤 `start --job MCUDES-014 --timeout 600` 을 다시 실행했습니다.
 - state.json 당시: `"1": {"job_id": "MCUDES-014", "git_hash": null, "session": null}`.
 
+### 추가 증상(2026-11-12 falcon2 Leader 보고, Leader 확인)
+- seat를 main으로 되돌린 뒤 `start --job MCUDES-014 --timeout 600`은 준비까지 성공했습니다(CR Base `a3049d9f81`, state seat1 `git_hash` 기록). 그러나 Worker 연결에서 `target_changed: The waiting pane process no longer matches this run.`으로 실패했고, 다시 실행해도 같습니다. state seat1의 `session`은 null입니다.
+- Leader가 읽기만 하며 확인한 사실:
+  - 현재 run `68936e5dc11640d78c39718965e8053f`의 window `falcon2-seat1-MCUDES-014-exited-68936e5d`(@942)는 pane이 dead이고(`Pane is dead (signal 15, Thu Nov 12 13:45:09 2026)`), `@agent_session_provider_launch_attempted false`입니다. provider를 띄우기 전에 대기 process(placeholder pid 4120311)가 SIGTERM으로 죽었습니다. `finish-result.json`(13:45:16)은 `lock_timeout`이고, `launch.sh`는 14:14:18에 다시 쓰였습니다(같은 run의 재시도).
+  - 코드(0.11.0과 main): `Manager._start_existing`은 `provider_launch_attempted`가 False인 run을 같은 run으로 다시 준비하고 `Tmux.launch`로 갑니다. `Tmux.launch`는 대기 process가 죽었으면 `target_changed`를 냅니다. 죽은 run을 새 run으로 바꾸는 조건 `_unregistered_ended`는 `provider_launch_attempted`가 False가 아닌 run에만 적용됩니다. 그래서 provider를 띄우기 전에 대기 process가 죽은 run은 start를 몇 번 다시 해도 같은 실패를 반복합니다.
+  - 누가 대기 process에 SIGTERM을 보냈는지는 확인하지 않았습니다.
+  - 같은 seat1의 이전 window(DCPUSAN-005, @933)는 Board sidebar pane(0.10.0 Python)만 남아 이름이 `python3`입니다.
+- falcon2 Leader는 복구 방법을 알 때까지 MCUDES-014를 멈춰 둡니다. 이 CR의 첫 일은 현재 release에서 falcon2 seat1을 안전하게 복구하는 방법을 확인해 Result에 적는 것입니다(Leader가 falcon2에 전달). 실제 falcon2 seat·state·tmux는 건드리지 않고 격리 환경에서 확인합니다.
+
 ## Contract
 - (1) prepare 가 중간에 끊기면 seat 를 시작 전 HEAD/branch 로 되돌리거나, 다시 실행한 start 가 자기 prepare 의 흔적을 이어받아 끝내도록 합니다. 배정만 남고 session 이 없는 seat 를 stop 으로 반납할 수 있어야 합니다.
 - (2) dirty 판정에서 gitlink 만 다른 submodule(submodule 안 content 변경 0)은 사용자 변경으로 보지 않습니다(또는 prepare 가 그 상태를 정상으로 다룹니다).
@@ -27,7 +36,7 @@
   - 판단 기준은 사용자 지시 "판단의 주요관점은 ** Root cause & SSOT **"입니다.
   - Leader가 본 원인(확인할 것): [동작 명세](../../project-team/spec.md) "Start의 Git 준비"는 마지막에 `git submodule update --init --recursive`(timeout 600초)로 submodule을 HEAD의 gitlink에 맞춥니다. 요청서의 두 증상은 한 원인으로 보입니다. prepare가 base checkout 뒤, submodule 맞춤 전에 끊겼습니다(start `timeout`). 그 결과 seat는 base로 옮겨졌지만 submodule은 옛 commit이었고, 다시 실행한 start의 dirty 검사는 자기 prepare의 흔적(gitlink만 다름)을 사용자 변경으로 보고 거절했습니다.
   - 따라서 "gitlink만 다른 submodule을 무조건 무시"는 근본 수정이 아닐 수 있습니다. seat가 base에 맞는지(submodule 포함)의 정의와, prepare가 중단에서 이어지거나 되돌아가는 규칙을 한 곳에서 정해야 합니다.
-  - seat 4개가 모두 차 있습니다. 먼저 비는 seat에서 시작합니다.
+  - seat 4개가 모두 차 있습니다. 먼저 비는 seat에서 시작합니다(BOARD-028보다 먼저. falcon2가 막혀 있습니다).
 - 2026-11-12 Leader: open -> todo.
 
 ## Implementation
