@@ -4,6 +4,8 @@
 - Scope: project-agent
 - Severity: S3
 - Requester: agent, /primehome/swain/Utils/agent/agent.base, 2026-11-12
+- Base: 6d2421e10bfcdfc5c9c490f19625909ce89e765d 2026-11-12T13:50:37+09:00
+- Outcome: fixed
 
 ## Symptom
 Write CR을 main에 통합한 뒤 `cr/<ID>` branch를 지우는 단계가 절차와 도구에 없습니다. 그래서 통합을 마친 branch가 원격과 seat에 계속 쌓입니다. Leader가 규칙을 어긴 것이 아니라 절차에 단계가 없는 것입니다.
@@ -35,6 +37,14 @@ Write CR을 main에 통합한 뒤 `cr/<ID>` branch를 지우는 단계가 절차
   - 판단 기준은 사용자 지시 "판단의 주요관점은 ** Root cause & SSOT **"입니다. 원인은 CR 상태 전이에 branch의 수명이 묶여 있지 않은 것입니다. branch를 만드는 곳(`agent-session start`)과 상태 전이를 하는 곳(`project-item move`)이 이미 있으므로, 수명 규칙은 한 곳에 두고 그 두 도구가 그 규칙을 실행하게 합니다.
   - seat 4개가 모두 차 있습니다. 먼저 비는 seat에서 시작합니다.
 - 2026-11-12 Leader: open -> todo.
+- 2026-11-12 Leader 검토(제출 0901e18639aa8b6b46ca0fc3bdfa67d7eb61969e): 인수.
+  - 규칙의 원본은 `cr.md`의 새 절 "`cr/<ID>` branch의 수명" 한 곳이고, skill·명세·README는 link만 합니다.
+  - origin·base 삭제는 `project_item.branch.drop_integrated` 한 함수가 합니다. 조건은 tip이 최신 `origin/main`의 조상일 때이고, `--force-with-lease`로 확인 뒤의 push를 보호합니다. `move`와 재시도 명령 `drop-branch`가 이 함수를 부릅니다. seat 쪽은 `git_ops.prune_integrated`가 다음 start에서 지웁니다.
+  - 보류·waived·deferred·open·인수 뒤 push된 commit은 남습니다. 삭제가 실패해도 done 기록은 그대로입니다. 격리 bare origin test로 확인했습니다.
+  - 검증: project-item 147, api_boundary 4, 문서 검사는 통과입니다. agent-session 전체 실행은 930 passed, 5 failed였고, 같은 5건을 직렬로 다시 돌려 통과했습니다. 5건 중 3건(SESSION-017 restart test 2건 `timeout=20`, `test_git_ops`의 git `timeout=2`)과 `test_tmux`(client `timeout=10`)는 성공을 숫자 한도로 기다리는 TEST-016 범주입니다. `test_remote`의 1건과 함께 TEST-016 근거에 더했습니다. 이 CR의 변경과는 관계없습니다.
+  - SESSION-018이 같은 `git_ops.prepare`를 고치는 중이므로, 나중에 통합되는 쪽이 merge로 맞춥니다.
+- 2026-11-12 Leader: 제출 0901e18639aa8b6b46ca0fc3bdfa67d7eb61969e를 인수합니다.
+- 2026-11-12 Leader: in-progress -> done, Outcome fixed. 통합 9ad637a (origin/main)
 
 ## Implementation
 읽을 문서:
@@ -66,3 +76,22 @@ Write CR을 main에 통합한 뒤 `cr/<ID>` branch를 지우는 단계가 절차
   - `tools/agent-session/**`: `python -m pytest -q -n 8 tools/agent-session/tests`. `agent_session/api.py`·state 형식·tmux option 이름을 바꾸면 project-item·project-board test와 `python -m pytest -q -n 8 install/tests`도 실행합니다.
   - 문서(`skills/**`, `docs/**`): 고친 문서의 상대 link 검사, `python -m pytest -q tools/test_distribution_boundary.py`. `skills/project-item`의 형식 문서를 바꾸면 `python -m pytest -q tools/project-item/tests/test_doc_contract.py`, `skills/**`나 `docs/project-team/spec.md`를 바꾸면 `python -m pytest -q tools/agent-session/tests/test_remote.py`도 실행합니다.
 - 실제 원격(`origin`)의 branch는 test에서 지우지 않습니다. 격리 원격만 씁니다.
+
+## Result
+- 제출 commit: 0901e18639aa8b6b46ca0fc3bdfa67d7eb61969e
+
+변경(브랜치 `cr/TEAM-003`, Base 6d2421e 위의 commit 하나):
+- 규칙 원본: `skills/project-item/references/cr.md`의 새 절 "`cr/<ID>` branch의 수명"(언제 지우는지, 지우지 않는 경우, 실패, 이미 쌓인 branch). `skills/project-team/SKILL.md` Leader 7단계, `skills/project-item/SKILL.md`, `docs/project-team/spec.md` Git 준비, `tools/project-item/README.md`는 이 절을 link합니다.
+- origin·base 삭제: `project_item/branch.py`의 `drop_integrated` 한 함수. `project-item move`(Write CR의 in-progress→done fixed, 팀 project)가 이동 뒤 root lock 밖에서 부릅니다. tip이 `origin/main`의 조상일 때만 `--force-with-lease=<ref>:<tip>`로 지웁니다. base의 local `cr/<ID>`도 같은 조건으로 지웁니다. 지우지 않았거나 실패하면 stderr 경고와 `project-item drop-branch <ID>`를 출력하고 exit 0, done 기록은 그대로입니다.
+- 재시도: 새 명령 `project-item drop-branch <CR-ID>`(Leader·operator, done의 fixed Write CR만 `not_integrated`로 거절, 지우지 못하면 exit 1). 같은 함수를 부르므로 통합 script(agent D-20261112-02)도 `branch.drop_integrated`를 부르면 됩니다.
+- seat: `agent_session/git_ops.py`의 `prune_integrated`가 `prepare`에서 `_prepare_git` 뒤·submodule 갱신 앞에 tip이 `origin/main`의 조상인 local `cr/*`(이 JOB의 `cr/<ID>` 제외)를 지우고 `git remote prune origin`으로 remote-tracking ref를 지웁니다. 실패한 Git 명령(`git_failed`)은 건너뛰어 start를 막지 않습니다. base의 remote-tracking은 push가 지웁니다.
+- 판단: 이미 쌓인 origin branch의 일괄 삭제는 넣지 않았습니다(요청서 그대로). CR 형식·`api.py`·state 형식·tmux option은 바꾸지 않았습니다. `guard.py`의 `_origin_main_has`는 `branch.py`의 git 함수를 쓰도록 바꿨고(동작 같음), 이동 조건 판정을 `guard.closes_integrated`로 뽑아 `check_move`와 `move`가 함께 씁니다. version·CHANGELOG는 Leader 몫이라 건드리지 않았습니다.
+- 기존 test 수정: `test_git_ops.py`의 옛 방식 oracle 비교 3건은 병합된 옛 `cr/OLD-001`이 지워지는 새 동작을 oracle에 반영했습니다.
+
+검증(제출 commit 0901e18, README 표 해당 행):
+- `python -m pytest -q tools/project-item/tests`: 147 passed.
+- `python -m pytest -q tools/agent-session/tests/test_api_boundary.py`: 4 passed.
+- `python -m pytest -q -n 8 tools/agent-session/tests`: 930 passed, 5 failed(`test_git_ops::test_timed_out_git_releases_its_lock_and_reports_the_interruption`, `test_remote::test_dead_report_bridge_reuses_its_token_and_replaces_its_stale_socket`, `test_lifecycle::test_claude_restart_replaces_a_leader_whose_cli_is_gone_whatever_its_last_stop_report_listed`(2), `test_tmux::test_exit_refuses_tmux_mode_and_preserves_partial_input[False-copy-mode]`). 이 host가 심하게 느려(전체 49분) 8 worker 부하에서 난 timeout류로 보이며, 같은 5건을 직렬로 다시 돌려 8 passed(exit 0)입니다. 확정한 원인은 아니고 재실행 통과만 확인했습니다. 근거 재사용 없이 제출 commit에서 실행했습니다(마지막 코드 수정은 `test_git_ops.py`의 oracle 3건과 prune의 keep 인자이고 그 뒤에 전체를 돌렸습니다).
+- 문서: 고친 5개 문서의 상대 link·anchor 검사 통과, `python -m pytest -q tools/test_distribution_boundary.py`와 `tools/project-item/tests/test_doc_contract.py` 통과(`test_remote.py`는 위 전체 실행에 포함, 위 실패 1건은 직렬 재실행 통과).
+- 새 test(격리 bare origin): `test_team_guard.py` — 통합한 branch가 done 이동 때 origin·base에서 사라짐, 인수 뒤 push된 commit이 있으면 남고 이유 출력, 보류·waived·deferred·open은 남음, 원격 삭제가 pre-receive로 거절돼도 done 유지·안내 출력·`drop-branch` 재시도 성공, `drop-branch`의 `not_integrated`·`role_denied`. `test_git_ops.py` — 다음 start가 통합된 `cr/*`와 사라진 remote-tracking을 지우고 보류·미push local branch는 남김. 실제 origin의 branch는 지우지 않았습니다.
+- 실행하지 않은 것: `install/tests`와 project-board test(`api.py`·state·tmux option·CR 형식을 바꾸지 않아 표의 추가 조건에 해당하지 않음).
