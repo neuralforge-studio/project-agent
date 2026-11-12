@@ -18,11 +18,12 @@ TUI는 답변 접수에만 `project_item`의 Decision 기록 경로를 사용합
 | 배정과 검토 대상 | `<base>/agent/state.json`, `agent_session.api` | seat 행의 CR ID와 `R` 표시 |
 | 실행 확인 | `agent_session.api.liveness` | 멈춤·확인 불가를 색과 설명으로 표시 |
 | CR 개수 | `project_item`이 읽는 `path_cr/open`, `todo`, `in-progress` | `O`, `T`, `I`에 표시 |
+| Project별 cron 작업 | 사용자 crontab의 project 구역(`crontab -l`). 구역 형식과 다음 실행 규칙의 원본은 `agent_session.cron`([명세 7절 cron](project-team/spec.md#cron)) | `C`에 작업 수, tooltip에 가장 가까운 다음 실행까지 남은 시간, 누르면 cron 창 |
 | 결정 상태와 답변 | `project_item`이 읽는 `path_decide/open`, `answered`, `done` | `D`와 popup에 표시하고 `open → answered` 접수를 기록 |
 | 반영 진행 | Decision의 `Related`가 가리키는 `path_cr` 상태 | `반영 중`과 `완료`를 계산 |
 | Leader 알림 | `agent-session send --job leader` | 저장한 사용자 답을 알리고 결과를 표시 |
 
-Sidebar는 Rust binary `project-board-sidebar`입니다(BOARD-018, [소스](../tools/project-board/rust)). 위 표의 읽기 규칙은 binary의 `data` 모듈이 구현합니다. 같은 규칙이 Python의 [`project_board.model`](../tools/project-board/project_board/model.py)·`agent_session`·`project_item`에도 있으므로 [일치 test](../tools/project-board/tests/test_rust_equivalence.py)가 같은 파일에서 두 구현의 결과를 비교합니다. 예외의 이유와 범위는 [제품 지도](project-team/README.md#예외-rust-sidebar와-python이-같은-규칙을-읽습니다)가 소유합니다. Popup은 계속 Python의 `model.snapshot()`을 씁니다. Sidebar의 켜짐 상태, 폭, 선택 위치를 tmux UI 상태로 유지합니다. 좌석 펼침 상태의 원본은 tmux server option 하나입니다. Board pane은 project별 상태를 공유하며 새 pane도 이를 읽습니다.
+Sidebar는 Rust binary `project-board-sidebar`입니다(BOARD-018, [소스](../tools/project-board/rust)). 위 표의 읽기 규칙은 binary의 `data` 모듈이 구현합니다. 같은 규칙이 Python의 [`project_board.model`](../tools/project-board/project_board/model.py)·`agent_session`·`project_item`에도 있으므로 [일치 test](../tools/project-board/tests/test_rust_equivalence.py)가 같은 파일에서 두 구현의 결과를 비교합니다. cron 구역과 다음 실행의 규칙도 Rust(`rust/src/cron.rs`)에 있고, [일치 test](../tools/project-board/tests/test_rust_cron.py)와 Rust 단위 test가 Python의 같은 입력과 `tests/fixtures/cron_next_run.json`으로 지킵니다. 예외의 이유와 범위는 [제품 지도](project-team/README.md#예외-rust-sidebar와-python이-같은-규칙을-읽습니다)가 소유합니다. cron 창(Python)은 `agent_session.api.cron_listing`으로 읽습니다. Popup은 계속 Python의 `model.snapshot()`을 씁니다. Sidebar의 켜짐 상태, 폭, 선택 위치를 tmux UI 상태로 유지합니다. 좌석 펼침 상태의 원본은 tmux server option 하나입니다. Board pane은 project별 상태를 공유하며 새 pane도 이를 읽습니다.
 
 ### 갱신과 실행 단위
 
@@ -30,12 +31,13 @@ TUI 프로세스를 새로 띄우는 비용은 기동과 첫 읽기입니다. Py
 
 Sidebar를 한 번 표시한 tmux window마다 sidebar 프로세스 하나를 둡니다. 이 프로세스는 Board를 끄거나 window가 닫힐 때까지, 동시에 8개까지 유지합니다(5절). 어느 client도 보지 않는 window의 프로세스는 읽지 않습니다. 같은 window를 보는 client는 같은 pane과 화면을 봅니다. 프로세스의 main thread가 화면과 마우스·키보드 입력을 처리합니다. 별도 상주 HTTP server나 project별 감시 프로세스를 두지 않습니다. 결정 popup을 열 때만 별도의 단기 TUI 프로세스(Python·Textual)를 실행합니다. Popup은 같은 파일 원본을 직접 읽습니다. 제출 경로는 Decision root 잠금 안에서 `open`을 다시 확인합니다.
 
-Sidebar는 파일 상태를 2초마다, 실행 상태와 지금 보는 창을 10초마다 다시 읽습니다. 각 읽기는 자기 thread에서 실행합니다. 느린 실행 상태 읽기가 파일 읽기를 막지 않습니다.
+Sidebar는 파일 상태를 2초마다, 실행 상태와 지금 보는 창, project별 cron(`crontab -l`)을 10초마다 다시 읽습니다. 각 읽기는 자기 thread에서 실행합니다. 느린 실행 상태 읽기나 crontab 읽기가 파일 읽기를 막지 않습니다.
 
 - 첫 그림은 첫 파일 읽기만 기다립니다. 실행 상태를 기다리지 않습니다. 읽기 전의 pane은 비어 있습니다.
 - 첫 파일 읽기는 NFS의 파일 열기 지연이 지배하므로 파일을 여러 thread(기본 32, 환경 변수 `PROJECT_BOARD_THREADS`)로 동시에 엽니다. 이후 읽기는 `stat`으로 바뀐 것만 다시 읽습니다.
 - 실행 상태는 tmux 서버를 읽는 일입니다. project·slot 수와 무관하게 tmux process 둘로 모든 project를 판정합니다(`agent_session.api.server_view`의 규칙). 반납 대기(`release_pending`)도 이 10초 읽기가 갱신하고, 다음 파일 읽기의 seat 상태가 씁니다. SSH seat의 실행 판정만 Python의 `project-board liveness`에 맡깁니다(SSH가 필요하기 때문입니다).
 - 어느 client에도 보이지 않는 window의 sidebar는 두 읽기를 모두 멈추고, 보이게 되면 각각 곧바로 한 번 읽습니다. tmux hook이 보임 상태가 바뀐 pane에 SIGUSR1을 보내고, pane이 tmux에 자기 window가 보이는지 묻습니다(`tmuxio.rs`의 `visible`). 시작할 때는 SIGUSR1 handler를 설치한 뒤 `@project_board_ready`를 1로 씁니다(`mark_ready`).
+- cron은 모든 project를 `crontab -l` process 하나로 읽습니다(BOARD-027). project마다 process를 만들지 않고, 2초 파일 읽기에는 더하지 않으며, 보이지 않는 window에서는 읽지 않고 보이게 되면 곧바로 한 번 읽습니다(10초 실행 상태 읽기와 같은 주기·같은 가시성 규칙). 첫 그림은 crontab 읽기를 기다리지 않고, 읽기 전의 `C`는 `C:-`입니다. 읽은 구역의 일정만 보관하고, 가장 가까운 다음 실행은 tooltip을 보일 때의 지금을 기준으로 계산합니다.
 - 접힘 상태는 2초 읽기마다 `show-options` 한 번으로 읽습니다. tmux를 부르는 일은 이것과 10초 읽기(실행 상태는 process 둘, 지금 보는 창은 하나)와 가시성 확인(명령을 `;`로 묶어 process 하나)뿐입니다. load가 높으면 tmux process 하나가 70~100 ms이므로 읽기마다 process 수를 늘리지 않습니다(BOARD-022). [test](../tools/project-board/tests/test_sidebar_binary.py)가 호출 수를 셉니다.
 - project 이름과 seat 클릭은 sidebar가 직접 tmux로 client를 옮깁니다(client 확인·조회·전환, process 2~3개). CR·결정 클릭은 같은 종류의 창이 떠 있으면 5절의 규약(`rust/src/window.rs`)으로 그 창에 알리고, 창이 없거나 종류가 다르거나 시작 중이거나 응답이 없으면 `project-board`(시동 번들로 시작)가 창을 엽니다. 접기·펴기도 `project-board`를 실행합니다.
 - 파일 읽기의 규칙은 파일마다 크기·수정 시각·inode가 이전 읽기와 같으면 이전 결과를 쓰고, 목록은 디렉터리 트리(하위 디렉터리 포함)의 수정 시각이 같으면 이전 목록을 씁니다. 수정 시각이 방금(2초 안) 바뀐 것은 시계가 아직 넘어가지 않았을 수 있어 믿지 않고 다음 읽기에서 다시 읽습니다. 등록 파일도 같은 방식입니다. `state.json`은 매번 읽습니다.
@@ -49,18 +51,20 @@ Sidebar는 파일 상태를 2초마다, 실행 상태와 지금 보는 창을 10
 
 ```text
 Falcon2
-D:2
+D:2 C:1
 O:2 T:1 I:1 ▸
 
 ProjectB
-D:1
+D:1 C:0
 O:0 T:3 I:0 ▾
 R 0 GPU-007
   1 -
 ```
 
 - 모든 등록 project를 하나의 목록에 순서대로 표시합니다. Project를 바꾸는 탭이나 필터를 두지 않습니다. 화면 높이가 부족하면 목록 전체를 세로로 스크롤합니다.
-- 각 project는 이름, `D`, `O/T/I`와 좌석 버튼 순서로 표시합니다. 좌석은 기본으로 접습니다. `▸`와 `▾` 버튼으로 project별 좌석을 펼치거나 접습니다. 창 전환과 Board OFF/ON 뒤에도 상태를 유지합니다. 다른 Board pane에서 바꾼 상태는 다음 snapshot 갱신 때 반영합니다.
+- 각 project는 이름, `D`와 `C`, `O/T/I`와 좌석 버튼 순서로 표시합니다. 좌석은 기본으로 접습니다. `▸`와 `▾` 버튼으로 project별 좌석을 펼치거나 접습니다. 창 전환과 Board OFF/ON 뒤에도 상태를 유지합니다. 다른 Board pane에서 바꾼 상태는 다음 snapshot 갱신 때 반영합니다.
+- `C`(BOARD-027)는 그 project의 crontab 구역(SESSION-015)에 있는 작업 수이고 `D`와 같은 줄에 나란히 있습니다. 구역이 없거나 crontab이 비어 있으면 `C:0`이고, 읽기 전에는 `C:-`입니다. 둘은 빈 seat의 `-`와 같은 흐린 회색이며 눌러도 아무것도 열지 않습니다. `C:n`(n ≥ 1)은 `O/T/I`와 같은 보통 색이고 누를 수 있습니다. crontab을 읽지 못했거나(`crontab` 명령 없음 포함) 그 project의 구역이 깨졌으면 `C:!`이고 `D:!`와 같은 색입니다. 구역이 깨진 경우 다른 project의 표시는 영향받지 않고, crontab을 읽지 못하면 모든 project가 `C:!`입니다. `D`의 색 규칙은 바뀌지 않습니다.
+- `C` tooltip: `C:n`(n ≥ 1)은 `cron N개, 다음 실행 3m 뒤`처럼 가장 가까운 다음 실행까지 남은 시간을 단위 하나로 보입니다. 남은 시간은 가장 가까운 다음 실행(local 분)에서 지금(local 분)을 뺀 값입니다. 1440분 이상이면 `Nd`, 60분 이상이면 `Nh`, 그 밖은 `Nm`이고 각 단위에서 내립니다(61분 → `1h`, 47시간 → `1d`, 30초 → `1m`). 다음 실행이 없으면(8년 안에 일치 없음) `cron N개, 다음 실행 없음`입니다. `C:0`은 `cron 작업 없음`, `C:!`는 읽기 실패 이유, `C:-`는 `cron을 읽는 중입니다`입니다. 다음 실행은 `agent_session.cron`의 `Schedule.next_run`과 같은 결과입니다.
 - `O/T/I`는 CR의 `open/todo/in-progress` 개수입니다. `D`는 열린 결정 항목 개수입니다. 두 종류를 합산하지 않습니다.
 - 열린 결정 항목이 하나 이상이면 `D`를 빨간색으로 표시합니다. `D:0`, 미설정 `D:-`, 읽기 오류 `D:!`는 기존 노란색으로 표시합니다. `D:0`이어도 답변 접수·반영 중 항목이 있으면 popup을 열 수 있습니다. 표시 상태가 `완료`인 항목만 있으면 열지 않습니다.
 - Seat 번호는 등록 순서의 0부터 시작합니다. 빈 seat는 번호 뒤에 `-`를 회색으로 표시합니다. 배정된 seat는 같은 행에 CR ID를 표시합니다. Worker session이 없는 배정은 `대기`를 붙여 시작 대기를 표시합니다. Worker가 종료했지만 CR이 in-progress라 반납하지 못한 seat는 `반납대기`를 붙입니다(`agent_session.api.pending_releases`). CR을 옮기면 사라집니다.
@@ -81,6 +85,7 @@ R 0 GPU-007
 0.7.1의 Textual sidebar와 화면이 다른 곳은 다음뿐입니다(BOARD-018 확인). 24개 화면의 칸 단위 비교는 [golden 화면](../tools/project-board/rust/tests/golden)과 Rust test(`golden.rs`)가 맡습니다.
 
 - 비활성 버튼 글자색의 한 색 채널이 1 다릅니다(Textual의 혼합 계산 반올림).
+- `D`와 `C`가 한 줄에 나란히 있어서 `D` 버튼은 줄 전체가 아니라 `O/T/I`처럼 글자 폭입니다(BOARD-027, golden 화면을 이에 맞춰 다시 그렸습니다).
 - Tooltip 상자는 pane 폭 안에서 줄을 바꿉니다. Textual은 상자를 40칸 폭으로 만든 뒤 pane 밖을 잘라 냅니다. 상자는 pointer 아래에 가운데 맞춰 놓고, 아래에 자리가 없으면 위에 놓습니다.
 - 동작 실패 알림은 pane 아래쪽의 붉은 줄이며 5초 뒤 사라집니다. Textual의 toast와 모양이 다릅니다.
 - 종료 키는 `ctrl+q`뿐입니다. Textual의 command palette(`ctrl+p`)는 없습니다.
@@ -93,6 +98,7 @@ R 0 GPU-007
 | Project 이름 | 클릭한 client를 해당 project tmux session의 현재 window로 이동. 대상 session이 없으면 오류 표시 |
 | 각 project의 `O/T/I` | 클릭한 client에 CR popup 열기. 셋 중 무엇을 눌러도 같은 popup이며, 누른 상태의 묶음이 처음 보이게 열립니다 |
 | 각 project의 `D` | 클릭한 client에 그 project의 결정 popup 열기 |
+| 각 project의 `C` | `C:n`(n ≥ 1)이면 클릭한 client에 그 project의 cron 창 열기([아래](#cron-창-board-027)). `C:0`·`C:-`·`C:!`는 열지 않음 |
 | 각 project의 좌석 버튼 | 해당 project의 좌석 목록을 펼치거나 접기 |
 | Worker session이 있는 seat의 CR ID | 클릭한 client를 해당 Worker의 tmux window로 이동. 대상 window가 없으면 오류 표시 |
 | 빈 seat 또는 시작 대기 seat | 이동하지 않음. Popup이나 오류 알림을 열지 않음 |
@@ -101,7 +107,7 @@ SSH seat의 Worker window는 Leader 호스트의 SSH 표시 창입니다. 이 �
 | Sidebar의 휠 | 모든 project가 들어 있는 목록 스크롤 |
 
 위 클릭은 CR과 결정 항목의 상태를 바꾸지 않습니다. 키보드에서도 같은 화면을 열 수 있게 합니다.
-`O/T/I`가 `0`, `-`, `!`이면 클릭해도 popup이나 오류 알림을 열지 않습니다. `D`는 표시 상태가 `완료`가 아닌 결정이 없거나 `-`, `!`일 때만 열지 않습니다.
+`O/T/I`가 `0`, `-`, `!`이면 클릭해도 popup이나 오류 알림을 열지 않습니다. `C`도 같습니다. `D`는 표시 상태가 `완료`가 아닌 결정이 없거나 `-`, `!`일 때만 열지 않습니다.
 
 CR popup은 왼쪽 목록에서 선택한 항목의 전체 Markdown 원본을 오른쪽에 표시합니다.
 목록은 Open, Todo, In-Progress, Done 네 묶음입니다(BOARD-021). 묶음 제목은 `Open ▼` 모양이고 눌러 접고(`▶`) 펼칩니다. 처음에는 Done만 접혀 있고(`Done ▶`, BOARD-026) Open·Todo·In-Progress는 펼쳐져 있습니다. 접고 펼친 상태는 창 단위라서 ◀▶로 project를 옮겨도 유지됩니다. `O/T/I` 중 누른 상태의 묶음이 목록 맨 위에 오도록 scroll하며 그 묶음의 첫 CR을 선택합니다(`cr --state`가 이 묶음을 정합니다. 묶음이 비면 첫 CR). 비어 있는 묶음은 `없음` 한 줄입니다. 맨 위에는 `Open {N}, Todo {N}, In-Progress {N}, Done {N}`을 표시하며 묶음을 접어도 바뀌지 않습니다. done CR도 같은 방식으로 본문을 읽습니다. deferred는 보이지 않습니다. done 목록은 popup이 읽을 때만 읽고(`model.popup_snapshot(done=True)`) sidebar의 snapshot과 개수에는 없습니다. done CR은 project마다 수백 개이고 파일 하나를 여는 데 공유 disk에서 10 ms 넘게 걸리므로(balvian 1471개는 19초) 목록은 파일을 열지 않고 파일 이름의 제목으로 먼저 그린 뒤, 진짜 제목(첫 줄)을 한 파일씩 읽어 바꿉니다(`model.done_items`·`done_title`).
@@ -116,6 +122,10 @@ CR·결정 popup의 너비가 70 column 미만이면 `목록` 버튼으로 목�
 #### Project 이동 (BOARD-021)
 
 CR popup과 결정 popup은 맨 위에 `◀ project ▶`를 둡니다. 누르면 같은 창이 이전·다음 project의 내용으로 바뀝니다(창을 닫지 않습니다). 순서는 sidebar의 등록 순서이고 끝에서는 반대쪽 끝으로 돕니다. ◀▶ 위에 mouse를 올리면 갈 project를 tooltip(`이전 project: NAME`·`다음 project: NAME`)으로 보입니다. CR popup은 등록된 모든 project를 돕습니다. 결정 popup은 sidebar `D`가 켜지는 기준(`tui._visible_decisions`가 있음)인 project만 돕습니다. 갈 project가 없으면(하나뿐) 버튼은 꺼집니다. popup은 연 project 하나만 먼저 읽어 바로 열고(`model.popup_snapshot`, 등록 순서 `order` 포함), 결정 popup이 갈 project를 정하는 데 필요한 다른 project의 결정은 창이 뜬 뒤에 읽습니다(전체를 읽으면 실제 등록 10개에서 5초 안팎). 그동안 결정 창의 ◀▶는 꺼져 있습니다. 결정 popup의 답변 초안은 (project, 결정 ID)마다 남아, project를 옮겼다 돌아와도 유지되고 돌아오면 떠날 때 보던 결정이 열립니다. 답변 전송 중에는 옮기지 않습니다. `project-board cr`·`popup`의 인자는 바뀌지 않습니다. `cr`의 `--state`는 처음 scroll할 묶음입니다.
+
+#### Cron 창 (BOARD-027)
+
+`C:n`(n ≥ 1)을 누르면 클릭한 client에 그 project의 cron 창이 뜹니다(`project-board cron --project P`, 80% 크기, 창 pane은 CR 창과 같은 방식). 읽기 전용입니다. 작업은 `agent-session cron add|rm`으로 더하고 지웁니다. 창의 틀은 CR 창을 따릅니다. 맨 위 `◀ project ▶`는 등록된 모든 project를 돕고, 작업이 없는 project는 `작업 없음` 한 줄입니다. 왼쪽 목록은 작업마다 `표식 ID 설명` 한 줄이고(마지막 실행이 실패면 `실패` 표시), 오른쪽 본문은 선택한 작업의 ID, 설명, 일정(cron 식), 다음 실행(local 시각과 남은 시간), 마지막 실행(시각, 성공·실패, `result`, 없으면 `아직 없음`)과 명령 전체입니다. crontab이나 그 project의 구역을 읽지 못하면 본문에 이유를 보이고 ◀▶는 계속 씁니다. 너비가 70 column 미만이면 `목록` 버튼으로 목록과 본문을 전환합니다. 창은 열 때와 project를 옮길 때 읽고(`agent_session.api.cron_listing`, `agent-session cron ls`와 같은 값), 이미 떠 있는 cron 창이 있으면 [5절의 규약](#열려-있는-창에-새-내용-알리기-board-025)으로 그 창에 알려 내용을 바꿉니다.
 
 #### Popup 목록 행과 선택 표시 (BOARD-007)
 
@@ -165,20 +175,20 @@ tmux `next-3.9`의 전체 높이 일반 pane을 사용합니다. Controller는 �
 
 tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합니다. Hook은 `sync`를 시작할 일이 있을 때만 시작합니다. 시작 조건은 tmux format(`@project_agent_sync_needed`)이며 "Board가 켜져 있고 이 window의 Board pane이 없거나 저장한 폭이 아님"입니다. 이미 Board pane이 있는 window로 옮긴 hook은 프로세스를 시작하지 않습니다. 조건이 참이면 Controller는 보이는 window와 Board pane을 동기화합니다. 관리된 `agent-session` pane이 종료되면 Board pane도 먼저 제거해 종료 window의 정리를 방해하지 않습니다. 이 구조에는 별도의 서버나 상주 감시 프로세스가 없습니다.
 
-상태줄 `Board`와 prefix `B`는 전역 toggle을 실행합니다. 일반 pane의 클릭은 tmux에 전달합니다. Board pane의 클릭은 tmux binding이 클릭한 client 이름, pane ID, 좌표를 Unix socket으로 TUI에 전달합니다. 따라서 같은 Board pane을 공유하는 client도 자신의 창을 열거나 자신의 window를 이동합니다. 결정 창은 90%, CR 창은 80% 크기로 클릭한 client의 현재 window에 엽니다.
+상태줄 `Board`와 prefix `B`는 전역 toggle을 실행합니다. 일반 pane의 클릭은 tmux에 전달합니다. Board pane의 클릭은 tmux binding이 클릭한 client 이름, pane ID, 좌표를 Unix socket으로 TUI에 전달합니다. 따라서 같은 Board pane을 공유하는 client도 자신의 창을 열거나 자신의 window를 이동합니다. 결정 창은 90%, CR 창과 cron 창은 80% 크기로 클릭한 client의 현재 window에 엽니다.
 
 결정·CR 창은 tmux `display-popup`이 아니라 그 window의 떠 있는 pane(`new-pane`, tmux 3.8)입니다(BOARD-020). popup은 떠 있는 동안 그 client의 입력을 모두 받아 sidebar 스크롤·클릭과 뒤 pane(Claude) 입력을 막기 때문입니다. 떠 있는 pane은 modal이 아니므로 sidebar와 뒤 pane을 그대로 쓰고, 창은 계속 위에 보입니다. 위쪽 경계를 끌면 옮기고(Alt를 누른 채 안쪽을 끌어도 됩니다) 다른 경계를 끌면 크기가 바뀝니다. 둘 다 tmux 기본 mouse binding이며 Board는 binding을 더하지 않습니다. 한 window에는 Board 창이 하나입니다. pane option `@project_board_window`가 그 창을 표시하고, 창이 떠 있을 때 다른 항목을 누르면 떠 있는 창 process에 새 내용을 알립니다([아래 규약](#열려-있는-창에-새-내용-알리기-board-025)). 알릴 수 없을 때만 `respawn-pane -k`로 같은 pane의 내용을 바꿉니다. 어느 쪽이든 옮긴 위치와 바꾼 크기가 남습니다. 창은 열 때 자기 pane에 이 표시를 하고(`new-pane -W`는 창이 끝날 때까지 돌아오지 않아 밖에서 표시할 수 없습니다), 동시에 두 번 눌러도 하나만 만들도록 열기는 Board의 잠금 안에서 표시를 기다립니다. pane의 `remain-on-exit`은 끕니다. 관리 window는 이 option이 켜져 있어 그대로 두면 닫은 창이 죽은 pane으로 남기 때문입니다. 창에서 `Esc`나 닫기 버튼으로 끝내면 그 pane만 닫힙니다. 창이 있는 window에서 sidebar를 끌 때(`_restore`)는 저장한 layout에 지금의 떠 있는 pane을 더해 복원합니다. `select-layout`은 window의 모든 pane을 이름으로 요구하기 때문입니다.
 
 ### 열려 있는 창에 새 내용 알리기 (BOARD-025)
 
-창을 새로 시작하는 비용(Python과 Textual 시동)은 부하가 높은 host에서 수 초입니다(BOARD-025 Result의 측정). 그래서 창이 떠 있고 같은 종류(CR 또는 결정)이면 새 process를 시작하지 않고 떠 있는 창 process에 무엇을 보일지 알립니다. 이 규약은 언어와 무관합니다. Python sidebar(`tmux_control`)와 Rust sidebar(BOARD-018)가 같은 규약을 씁니다. 구현의 원본은 Python의 `window_link.py`(메시지)와 `tmux_control._popup`(client 쪽)이고, test가 이 절을 `window_link`를 쓰지 않고 raw socket·raw tmux 명령만으로 따라 해서 지킵니다(`tools/project-board/tests/test_window_protocol.py`는 창 쪽, `test_tmux_control.py`의 `test_a_client_that_follows_the_plan_...`는 client 쪽).
+창을 새로 시작하는 비용(Python과 Textual 시동)은 부하가 높은 host에서 수 초입니다(BOARD-025 Result의 측정). 그래서 창이 떠 있고 같은 종류(CR, 결정 또는 cron)이면 새 process를 시작하지 않고 떠 있는 창 process에 무엇을 보일지 알립니다. 이 규약은 언어와 무관합니다. Python sidebar(`tmux_control`)와 Rust sidebar(BOARD-018)가 같은 규약을 씁니다. 구현의 원본은 Python의 `window_link.py`(메시지)와 `tmux_control._popup`(client 쪽)이고, test가 이 절을 `window_link`를 쓰지 않고 raw socket·raw tmux 명령만으로 따라 해서 지킵니다(`tools/project-board/tests/test_window_protocol.py`는 창 쪽, `test_tmux_control.py`의 `test_a_client_that_follows_the_plan_...`는 client 쪽).
 
 **창 pane의 option.** 모두 pane option(`set-option -p`)입니다.
 
 | option | 값 | 쓰는 쪽 |
 | --- | --- | --- |
 | `@project_board_window` | `1`. Board 창의 pane 표시 | 창 pane의 시작 script |
-| `@project_board_window_kind` | `cr` 또는 `decision`. 이 process가 시작된 종류 | 시작 script (다시 시작하는 쪽도 먼저 씀) |
+| `@project_board_window_kind` | `cr`, `decision` 또는 `cron`. 이 process가 시작된 종류 | 시작 script (다시 시작하는 쪽도 먼저 씀) |
 | `@project_board_window_link` | 창 process가 듣는 unix socket의 절대 경로. process가 듣기 시작한 뒤에만 있고, 시작할 때마다 지워집니다 | 창 process |
 
 창은 `list-panes -t <window> -F '#{pane_id} #{@project_board_window}'`에서 `1`인 pane입니다. 한 window에 하나입니다.
@@ -196,9 +206,10 @@ tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합
 ```json
 {"kind": "cr", "project": "falcon2", "state": "todo", "client": "/dev/pts/3"}
 {"kind": "decision", "project": "falcon2", "decision": "D-20261111-01", "client": "/dev/pts/3"}
+{"kind": "cron", "project": "falcon2", "client": "/dev/pts/3"}
 ```
 
-- `kind`: `cr` 또는 `decision`. 창의 종류와 같아야 합니다.
+- `kind`: `cr`, `decision` 또는 `cron`. 창의 종류와 같아야 합니다.
 - `project`: 등록 project ID.
 - `state`(`cr`만): `open`, `todo`, `in-progress` 중 하나. 그 그룹을 먼저 보입니다.
 - `decision`(`decision`만): 결정 ID 또는 `null`(그 project의 첫 결정).
@@ -212,7 +223,7 @@ tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합
 | `invalid` | 요청을 이해하지 못함(종류·project·state가 맞지 않음) | 다시 시작합니다 |
 | `closing` | 창이 닫히는 중 | 다시 시작합니다 |
 
-**시작(창이 없거나 다시 시작할 때).** 새 창은 `new-pane -W -t <window> -x <크기> -y <크기> -X <여백> -Y <여백> -T <title> ...`(결정 90%, CR 80%, 가운데), 있는 pane은 `respawn-pane -k -t <pane>`에 같은 환경과 명령을 줍니다. 환경은 `-e PROJECT_BOARD_CLIENT=<client>`와 `-e PROJECT_BOARD_WINDOW_SOCKET=<새 socket 경로>`입니다. socket 경로는 Board의 runtime 디렉터리(`/tmp/project-board-<uid>-<server pid>`, 0700) 아래 `<16자리 hex>.win`입니다. 다시 시작하기 전에 옛 `link` option을 지우고(`set-option -pu`) `kind`를 새 종류로 쓰고, 옛 socket 파일을 지웁니다. 명령은 `sh -c`로 시작 script를 실행합니다. script는 자기 pane에 `remain-on-exit off`, `@project_board_window 1`, `@project_board_window_kind`를 쓰고 `link`를 지운 뒤, 창 화면이 그려지기 전의 빈 화면에 `Board 창을 시작하는 중…`을 출력하고, `project-board [--config PATH] cr --project P --state S` 또는 `popup --project P [--decision D]`로 `exec`합니다. 창 process는 `PROJECT_BOARD_WINDOW_SOCKET`에 socket을 열고(0600) 듣기 시작한 뒤 자기 pane의 `link` option에 그 경로를 씁니다. 끝나면 socket 파일을 지웁니다.
+**시작(창이 없거나 다시 시작할 때).** 새 창은 `new-pane -W -t <window> -x <크기> -y <크기> -X <여백> -Y <여백> -T <title> ...`(결정 90%, CR과 cron 80%, 가운데), 있는 pane은 `respawn-pane -k -t <pane>`에 같은 환경과 명령을 줍니다. 환경은 `-e PROJECT_BOARD_CLIENT=<client>`와 `-e PROJECT_BOARD_WINDOW_SOCKET=<새 socket 경로>`입니다. socket 경로는 Board의 runtime 디렉터리(`/tmp/project-board-<uid>-<server pid>`, 0700) 아래 `<16자리 hex>.win`입니다. 다시 시작하기 전에 옛 `link` option을 지우고(`set-option -pu`) `kind`를 새 종류로 쓰고, 옛 socket 파일을 지웁니다. 명령은 `sh -c`로 시작 script를 실행합니다. script는 자기 pane에 `remain-on-exit off`, `@project_board_window 1`, `@project_board_window_kind`를 쓰고 `link`를 지운 뒤, 창 화면이 그려지기 전의 빈 화면에 `Board 창을 시작하는 중…`을 출력하고, `project-board [--config PATH] cr --project P --state S`, `popup --project P [--decision D]` 또는 `cron --project P`로 `exec`합니다. 창 process는 `PROJECT_BOARD_WINDOW_SOCKET`에 socket을 열고(0600) 듣기 시작한 뒤 자기 pane의 `link` option에 그 경로를 씁니다. 끝나면 socket 파일을 지웁니다.
 
 **창이 보이는 동안 읽는 중.** 창은 시작하자마자(Python이 뜨기 전에는 시작 script의 문구로, 뜬 뒤에는 화면의 "읽는 중…"으로) 무엇을 읽는지 보입니다. 알림을 받으면 새 항목을 읽는 동안에도 같은 문구를 보인 뒤 바꿉니다.
 

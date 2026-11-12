@@ -108,6 +108,28 @@ pub fn tell(kind: &str, request: &Value, client: &str, title: &str) -> Outcome {
     outcome
 }
 
+/// `project-board-sidebar tell --kind K --client C --title T --request JSON`: `tell` for the equivalence test, which gives
+/// the Python client (`tmux_control._reuse`) and this one the same window and compares what each does. Prints
+/// `{"outcome": "done" | "busy" | "fallback", "message": ...}` (`fallback` is what makes the sidebar run `project-board`).
+pub fn run(args: &[String]) -> i32 {
+    let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let (Some(kind), Some(client), Some(title), Some(request)) = (value("--kind"), value("--client"), value("--title"), value("--request")) else {
+        eprintln!("usage: project-board-sidebar tell --kind K --client C --title T --request JSON");
+        return 2;
+    };
+    let Ok(request) = serde_json::from_str::<Value>(&request) else {
+        eprintln!("tell: --request is not JSON");
+        return 2;
+    };
+    let answer = match tell(&kind, &request, &client, &title) {
+        Outcome::Done => json!({"outcome": "done", "message": null}),
+        Outcome::Busy(message) => json!({"outcome": "busy", "message": message}),
+        Outcome::Fallback => json!({"outcome": "fallback", "message": null}),
+    };
+    println!("{answer}");
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

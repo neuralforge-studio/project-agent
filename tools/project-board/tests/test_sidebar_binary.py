@@ -51,6 +51,8 @@ class Pane:
             self.launcher.write_text(f'#!/bin/sh\necho "$@" >> {self.log}\n')
             self.launcher.chmod(0o755)
         self.board = board
+        self.crontab = CrontabShim(tmp_path)
+        path = self.crontab.directory + os.pathsep + (path or os.environ["PATH"])
         self.size = size
         self.socket_path = socket_path = str(tmux_test_server.socket_path(self.name))
         variables = {"PROJECT_BOARD_SOCKET": socket_path, "AGENT_SESSION_SOCKET": socket_path,
@@ -61,7 +63,7 @@ class Pane:
         for key, value in variables.items():
             command += ["-e", f"{key}={value}"]
         # tmux ignores `-e PATH=`; a program that needs another PATH is run through env
-        command += (["env", f"PATH={path}"] if path else []) + [str(sidebar_binary()), "--config", str(board.config)]
+        command += ["env", f"PATH={path}"] + [str(sidebar_binary()), "--config", str(board.config)]
         tmux(self.name, *command)
         tmux(self.name, "set-option", "-g", "window-size", "manual")
         if attach:
@@ -141,6 +143,43 @@ class Pane:
         return set(json.loads(raw)) if raw else set()
 
 
+class CrontabShim:
+    """A `crontab` first on the sidebar's PATH, so that no test reads the real crontab: `crontab -l` prints `text` (no
+    crontab for the user while it is None), or fails with `failure`. One line of `calls` is one `crontab` process."""
+
+    def __init__(self, tmp_path):
+        self.directory = str(tmp_path / "crontab-shim")
+        self.dir = Path(self.directory)
+        self.dir.mkdir(exist_ok=True)
+        self.calls_path = tmp_path / "crontab-calls.log"
+        script = self.dir / "crontab"
+        script.write_text(
+            "#!/bin/sh\n"
+            f'printf "%s\\n" "$*" >> {self.calls_path}\n'
+            f'if [ -f {self.dir}/failure ]; then cat {self.dir}/failure >&2; exit 1; fi\n'
+            f'if [ -f {self.dir}/text ]; then cat {self.dir}/text; exit 0; fi\n'
+            'echo "no crontab for $USER" >&2; exit 1\n')
+        script.chmod(0o755)
+
+    def set(self, text=None, failure=None):
+        for name, value in (("text", text), ("failure", failure)):
+            if value is None:
+                (self.dir / name).unlink(missing_ok=True)
+            else:
+                (self.dir / name).write_text(value, encoding="utf-8")
+
+    def calls(self):
+        return self.calls_path.read_text().splitlines() if self.calls_path.exists() else []
+
+
+def cron_section(project, *jobs):
+    """The crontab lines of a project's section: `jobs` are (id, schedule) pairs."""
+    lines = [f"# >>> project-agent: {project} >>>"]
+    for job_id, schedule in jobs:
+        lines += [f"# job {job_id}: {job_id} job", f"{schedule} /bin/true"]
+    return "\n".join(lines + [f"# <<< project-agent: {project} <<<", ""])
+
+
 def _tmux_shim(tmp_path):
     """A `tmux` first on PATH that logs its arguments and runs the real one: one line is one tmux process."""
     directory = tmp_path / "shim"
@@ -178,9 +217,10 @@ def _board(tmp_path):
 def test_it_shows_every_project_with_its_counts_and_folds_seats_until_expanded(tmp_path, request):
     pane = Pane(tmp_path, request, _board(tmp_path))
     pane.wait_text("ProjectB")
+    pane.wait_text("C:0")                # the crontab is read after the first drawing (no crontab: no jobs)
     lines = pane.lines()
     assert lines[1].startswith("Falcon2 ") and lines[1].endswith("m")           # the Leader's time (BOARD-023)
-    assert lines[:1] + lines[2:9] == ["", " D:2", " O:2   T:1   I:1   ▸", "", "ProjectB", " D:1", " O:0   T:1   I:0   ▸", ""]
+    assert lines[:1] + lines[2:9] == ["", " D:2   C:0", " O:2   T:1   I:1   ▸", "", "ProjectB", " D:1   C:0", " O:0   T:1   I:0   ▸", ""]
     tmux(pane.name, "set-option", "-s", "@project_board_expanded", json.dumps(["Falcon2"]))
     pane.wait_text("R 0 CPU-012")      # the next 2-second read shows the fold the tmux option holds
     lines = pane.lines()
@@ -342,6 +382,9 @@ def test_a_sidebar_nobody_watches_reads_nothing_until_it_is_shown_again(tmp_path
     board.cr(Path(board.registry and next(iter(board.registry))), "todo", "CPU-099")
     time.sleep(3.0)                               # more than one read interval
     assert " T:1 " in pane.screen() and " T:2 " not in pane.screen()
+    hidden = len(pane.crontab.calls())
+    time.sleep(11.0)                              # more than one 10-second read interval: the crontab is not read either
+    assert len(pane.crontab.calls()) == hidden
     tmux(pane.name, "select-window", "-t", "main:0")
     os.kill(process_id, signal.SIGUSR1)
     pane.wait_text("T:2", timeout=3)              # read at once, not at the next 2 second tick
@@ -382,6 +425,9 @@ def test_every_periodic_read_and_the_visibility_check_start_one_tmux_process(tmp
     others = [c for c in calls if c not in folds]
     assert 9 <= len(folds) <= 11, calls                   # one per 2 seconds
     assert len(others) <= 2 * 3, calls                    # two 10-second cycles, three processes each at most
+    # BOARD-027: the crontab is one `crontab -l` for every project, every 10 seconds, and none at the 2-second reads
+    cron_calls = pane.crontab.calls()
+    assert set(cron_calls) == {"-l"} and 3 <= len(cron_calls) <= 4, cron_calls     # the first read, then two 10-second cycles
     log.write_text("")
     process_id = int(tmux(pane.name, "display-message", "-p", "-t", pane.pane, "#{pane_pid}"))
     os.kill(process_id, signal.SIGUSR1)
@@ -490,3 +536,70 @@ def test_a_window_whose_process_is_gone_or_a_missing_window_is_started_the_ordin
     pane.send_click(8, 3, client)
     _wait(lambda: len(pane.helper_calls()) == 2, what="the helper run without a window")
     assert pane.helper_calls()[1].endswith(f"open-cr --project Falcon2 --state todo --client {client}")
+
+
+# ------------------------------------------------------------------ the cron count (BOARD-027)
+CRON_TEXT = "MAILTO=me\n0 1 * * * backup\n\n" + cron_section("Falcon2", ("check", "13,43 * * * *"), ("nightly", "0 3 * * *"))
+
+
+def test_the_cron_count_shows_each_projects_jobs_and_marks_a_broken_section_or_an_unreadable_crontab(tmp_path, request):
+    board = _board(tmp_path)
+    shim = CrontabShim(tmp_path)
+    shim.set(CRON_TEXT + "# >>> project-agent: ProjectB >>>\n# job x: y\n")           # ProjectB's section has no end
+    pane = Pane(tmp_path, request, board)
+    pane.wait_text("C:2")
+    assert pane.lines()[2] == " D:2   C:2" and pane.lines()[6] == " D:1   C:!"
+    shim.set(failure="crontab: no permission")
+    _wait(lambda: pane.lines()[2] == " D:2   C:!", timeout=12, what="C:! on every project")   # the next 10-second read
+    assert pane.lines()[2] == " D:2   C:!" and pane.lines()[6] == " D:1   C:!"
+    shim.set(CRON_TEXT)
+    _wait(lambda: pane.lines()[2] == " D:2   C:2", timeout=12, what="C:2 again")
+    assert pane.lines()[6] == " D:1   C:0"
+
+
+def test_the_cron_count_has_a_tooltip_with_the_time_to_the_next_run(tmp_path, request):
+    board = _board(tmp_path)
+    CrontabShim(tmp_path).set(CRON_TEXT)
+    pane = Pane(tmp_path, request, board)
+    pane.wait_text("C:2")
+    pane.mouse("move", 8, 2)
+    _wait(lambda: "cron 2개, 다음 실행" in pane.screen().replace("\n", " "), what="the tooltip", timeout=3)
+    assert " 뒤" in pane.screen().replace("\n", " ")
+    pane.mouse("move", 8, 6)                    # ProjectB's C:0
+    _wait(lambda: "cron 작업 없음" in pane.screen(), what="the tooltip of C:0", timeout=3)
+
+
+def test_pressing_the_cron_count_opens_the_cron_window_and_c0_does_nothing(tmp_path, request):
+    board = _board(tmp_path)
+    pane = Pane(tmp_path, request, board, launcher="fake")
+    pane.crontab.set(CRON_TEXT)
+    pane.wait_text("C:2", timeout=12)                      # the crontab is read before the first press
+    client = pane.clients[0][2]
+    assert pane.send_click(8, 2, client)["data"] == {"widget": "project-0-C"}
+    _wait(lambda: len(pane.helper_calls()) == 1, what="the helper run")
+    assert pane.helper_calls() == [f"--config {pane.board.config} open-cron --project Falcon2 --client {client}"]
+    assert pane.send_click(8, 6, client)["data"] == {"widget": "project-1-C"}        # C:0: acknowledged, nothing opened
+    time.sleep(0.5)
+    assert len(pane.helper_calls()) == 1
+
+
+def test_a_cron_click_tells_an_open_cron_window_and_starts_nothing(tmp_path, request):
+    pane, window, client = _window_pane_setup(tmp_path, request, kind="cron")
+    pane.crontab.set(CRON_TEXT)
+    pane.wait_text("C:2", timeout=12)
+    assert pane.send_click(8, 2, client)["data"] == {"widget": "project-0-C"}
+    _wait(lambda: len(window.requests) == 1, what="the request")
+    assert window.requests[0] == {"kind": "cron", "project": "Falcon2", "client": client}
+    _wait(lambda: tmux(pane.name, "display-message", "-p", "-t", window.window_pane, "#{pane_title}") == "Cron · Falcon2", what="the title")
+    time.sleep(0.5)
+    assert pane.helper_calls() == []
+
+
+def test_a_cron_click_on_a_window_of_another_kind_starts_the_cron_window_the_ordinary_way(tmp_path, request):
+    pane, window, client = _window_pane_setup(tmp_path, request, kind="cr")
+    pane.crontab.set(CRON_TEXT)
+    pane.wait_text("C:2", timeout=12)
+    pane.send_click(8, 2, client)
+    _wait(lambda: len(pane.helper_calls()) == 1, what="the helper run")
+    assert pane.helper_calls() == [f"--config {pane.board.config} open-cron --project Falcon2 --client {client}"]
+    assert window.requests == []

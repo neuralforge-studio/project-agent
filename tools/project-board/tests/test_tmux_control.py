@@ -952,6 +952,8 @@ class _Floating:
     def open(self, kind="cr", project="Falcon2"):
         if kind == "cr":
             return tmux_control.open_cr_popup(None, project, "open", self.client, self.socket)
+        if kind == "cron":
+            return tmux_control.open_cron_popup(None, project, self.client, self.socket)
         return tmux_control.open_popup(None, project, "D-1", self.client, self.socket)
 
     def started(self):
@@ -1449,6 +1451,38 @@ def test_another_item_of_the_same_kind_is_told_to_the_open_window_and_starts_not
     assert eval(_lines_of(server, "requests")[-1]) == {
         "kind": "decision", "project": "Beta", "decision": None, "client": server.client}
     assert len(_lines_of(server, "starts")) == 2
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_cron_window_is_a_floating_pane_like_the_cr_window_and_is_told_the_next_project(floating):
+    """BOARD-027: 80% like the CR window, started as `cron --project`, told `{"kind": "cron", "project"}` when open,
+    and a window of another kind is started again in the same place."""
+    server = floating(board=LISTENING_BOARD)
+    assert server.open("cron")["ok"] is True
+    (first,) = _wait_lines(server, "starts", 1)
+    assert first.split()[1:] == ["cron", "--project", "Falcon2"]
+    ((pane, placed),) = server.floating().items()
+    window_width, window_height = map(int, server.tmux("display-message", "-p", "-t", server.window,
+                                                       "#{window_width} #{window_height}").split())
+    assert (placed[2] + 2, placed[3] + 2) == (window_width * 80 // 100, window_height * 80 // 100)
+    assert server.tmux("display-message", "-p", "-t", pane, "#{pane_title}") == "Cron · Falcon2"
+    assert server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_KIND) == "cron"
+    deadline = time.monotonic() + 20
+    while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    result = tmux_control.open_cron_popup(None, "Alpha", server.client, server.socket)
+    assert result["ok"] is True and result["data"] == {"pane": pane, "reused": True}
+    assert [eval(line) for line in _lines_of(server, "requests")] == [
+        {"kind": "cron", "project": "Alpha", "client": server.client}]
+    assert _lines_of(server, "starts") == [first]
+    assert server.tmux("display-message", "-p", "-t", pane, "#{pane_title}") == "Cron · Alpha"
+
+    result = tmux_control.open_cr_popup(None, "Alpha", "todo", server.client, server.socket)      # another kind
+    assert result["ok"] is True and "reused" not in result["data"]
+    starts = _wait_lines(server, "starts", 2)
+    assert starts[1].split()[1:] == ["cr", "--project", "Alpha", "--state", "todo"] and server.floating() == {pane: placed}
+    assert server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_KIND) == "cr"
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")

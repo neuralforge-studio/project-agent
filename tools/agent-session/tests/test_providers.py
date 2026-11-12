@@ -459,6 +459,26 @@ def test_claude_cli_that_ended_with_only_a_session_cron_in_its_last_report_is_te
     assert (result["known"], result["terminal"], result["background"], result["session_crons"]) == (True, True, [], [CRON])
 
 
+def test_claude_cli_that_ended_does_not_hold_a_run_without_the_adopt_record_by_its_last_report(claude, tmp_path):
+    # SESSION-017: a run started by code that wrote no CLAUDE_DISABLE_ADOPT line. Its CLI is gone, and a
+    # handoff would be the transcript's `continued-in` record (read by the caller), so the report holds nothing.
+    import subprocess
+
+    provider, fake, context, meta, _ = claude
+    ended = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+    fake.listing = listing(pane="%99")
+    with_launch_script(meta, tmp_path)
+    task = {"id": "bz1mzn8iq", "type": "shell"}
+    meta.update(cli_pid=int(ended.stdout), cli_birth="ended", pane_dead=True)
+    meta["hook_observations"]["Stop"].update(background_tasks=[task], session_crons=[CRON])
+    meta["hook_observations"]["SessionEnd"] = {"session_id": IDENTITY, "reason": "other"}
+    result = provider.observe({"session_id": IDENTITY}, context, meta)
+    assert (result["terminal"], result["background"], result["session_crons"]) == (False, [task], [CRON])
+    meta["hook_observations"]["Stop"]["background_tasks"] = []
+    result = provider.observe({"session_id": IDENTITY}, context, meta)
+    assert (result["known"], result["terminal"], result["background"], result["session_crons"]) == (True, True, [], [CRON])
+
+
 def test_claude_cli_that_ended_during_the_listing_is_observed_from_its_hooks(claude):
     # The stop loop read a live pane, then /exit ended the CLI before ListAgents ran.
     import subprocess

@@ -41,6 +41,8 @@ def main(argv=None) -> int:
     cr = commands.add_parser("cr", help="run a read-only CR list popup TUI")
     cr.add_argument("--project", required=True, help="registered project ID")
     cr.add_argument("--state", required=True, choices=("open", "todo", "in-progress"))
+    cron = commands.add_parser("cron", help="run a read-only cron job list window TUI")
+    cron.add_argument("--project", required=True, help="registered project ID")
     toggle = commands.add_parser("toggle", help="show or hide the sidebar in tmux")
     toggle.add_argument("--client", help="tmux client that requested the global toggle")
     toggle.add_argument("--socket", help="tmux socket path")
@@ -55,7 +57,8 @@ def main(argv=None) -> int:
     # The sidebar (the `project-board-sidebar` binary) runs these for its clicks. It switches a client to a project or a
     # Worker pane itself (rust/src/switch.rs).
     for name, text in (("open-decision", "open a project's decision window on the client"),
-                       ("open-cr", "open a project's CR window on the client")):
+                       ("open-cr", "open a project's CR window on the client"),
+                       ("open-cron", "open a project's cron window on the client")):
         action = commands.add_parser(name, help=text)
         action.add_argument("--project", required=True, help="registered project ID")
         action.add_argument("--client", help="tmux client that clicked")
@@ -80,6 +83,11 @@ def main(argv=None) -> int:
 
         tui.run_cr_popup(args.config, args.project, args.state, mark_link=tmux_control.mark_window_ready)
         return 0
+    if args.command == "cron":
+        from . import tmux_control, tui
+
+        tui.run_cron_popup(args.config, args.project, mark_link=tmux_control.mark_window_ready)
+        return 0
     if args.command == "toggle":
         from . import tmux_control
 
@@ -92,13 +100,15 @@ def main(argv=None) -> int:
         from . import tmux_control
 
         return _result(tmux_control.route_click(args.client, args.pane, args.x, args.y, args.socket))
-    if args.command in ("open-decision", "open-cr", "toggle-fold", "liveness"):
+    if args.command in ("open-decision", "open-cr", "open-cron", "toggle-fold", "liveness"):
         from . import tmux_control
 
         if args.command == "open-decision":
             return _result(tmux_control.open_popup(args.config, args.project, None, args.client))
         if args.command == "open-cr":
             return _result(tmux_control.open_cr_popup(args.config, args.project, args.state, args.client))
+        if args.command == "open-cron":
+            return _result(tmux_control.open_cron_popup(args.config, args.project, args.client))
         if args.command == "toggle-fold":
             try:
                 tmux_control.toggle_expanded_project(args.project)

@@ -88,3 +88,15 @@ pub struct SlotLive {
 /// Per project: slot (`leader` or the seat number as text) -> verdict. A project whose liveness raised an error
 /// other than `state_not_found` is an empty map (the sidebar never shows the error).
 pub type Liveness = BTreeMap<String, BTreeMap<String, SlotLive>>;
+
+/// One project's cron jobs (BOARD-027): the schedule of each job in the project's crontab section, or why the section
+/// could not be read (the crontab cannot be run, or this project's section is broken). A project that is not in a
+/// `CronView` has not been read yet.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct CronEntry {
+    pub schedules: Vec<String>,
+    pub error: Option<String>,
+}
+
+/// Per project: its cron jobs, from one `crontab -l` for all of them.
+pub type CronView = BTreeMap<String, CronEntry>;

@@ -2,13 +2,14 @@
 import asyncio
 import datetime as dt
 import os
+import re
 import threading
 
 import pytest
 
-from board_testing import Board, click_socket, leader, session, wait_until
+from board_testing import Board, click_socket, cron_run, cron_section, isolate_crontab, leader, session, wait_until
 from project_board import model, window_link
-from project_board.tui import CRPopupApp, CSVScreen, PopupApp
+from project_board.tui import CRPopupApp, CronPopupApp, CSVScreen, PopupApp
 from textual.widgets import Button, DataTable, Markdown, Static, TextArea
 
 
@@ -1169,3 +1170,277 @@ def test_done_rows_and_their_titles_are_not_made_until_the_done_group_is_unfolde
             assert sorted(read) == ["CPU-300", "CPU-301", "CPU-302"]            # each title was read once
 
     asyncio.run(check())
+
+
+# BOARD-027: the cron window
+def _cron_board(tmp_path, monkeypatch):
+    """Falcon2 with two jobs (one ran well, one failed), Beta without a section, Gamma with one job never run."""
+    board = Board(tmp_path)
+    falcon, _beta, gamma = (board.project(name, seats=0) for name in ("Falcon2", "Beta", "Gamma"))
+    crontab = isolate_crontab(tmp_path, monkeypatch)
+    crontab.write_text(
+        "0 23 * * * /home/user/nightly.sh\n"
+        + cron_section("Falcon2", ("check", "정체 점검 [30분]", "13,43 * * * *", "/r/bin/agent-session check --project Falcon2 >/dev/null 2>&1"),
+                       ("report", "평일 보고", "0 9 * * 1-5", "/r/bin/report --all 100\\%"))
+        + cron_section("Gamma", ("sweep", "청소", "*/10 * * * *", "/r/bin/sweep")))
+    cron_run(falcon, "check", "2026-11-12T01:13:20Z", True, "점검했습니다")
+    cron_run(falcon, "report", "2026-11-12T00:00:00Z", False, "Leader가 없습니다", code="leader_unavailable")
+    return board, crontab
+
+
+def _detail(app):
+    found = list(app.query("#cr-detail Static"))
+    return str(found[0].content) if found else ""
+
+
+async def _press(pilot, selector):
+    """Click a button once its last press has finished: Textual ignores a click for 0.2 s after one (its `-active`
+    effect), and a project without jobs is read faster than that."""
+    await wait_until(pilot, lambda: not pilot.app.query_one(selector, Button).has_class("-active"))
+    await pilot.click(selector)
+
+
+def _title(app):
+    return str(app.query_one("#cr-title", Static).content)
+
+
+def test_the_cron_window_lists_the_jobs_and_shows_the_selected_one_whole(tmp_path, monkeypatch):
+    board, _ = _cron_board(tmp_path, monkeypatch)
+    app = CronPopupApp(str(board.config), "Falcon2")
+
+    async def check():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await wait_until(pilot, lambda: bool(app.items))
+            await wait_until(pilot, lambda: _detail(app).startswith("check\n") and app.selected_id == "check")
+            assert _title(app) == "cron 2개"
+            rows = _list_rows(app, ".list-item")
+            assert [row[2] for row in rows] == [1, 1]
+            assert rows[0][:2] == ("▶ check 정체 점검 [30분]", True)
+            assert rows[1][0].startswith("  report 실패 평일 보고") and rows[1][1] is False   # the last run failed
+            first = _detail(app)
+            assert first.startswith("check\n정체 점검 [30분]\n")
+            assert "일정      13,43 * * * *\n" in first
+            following = model.cron_view(board.config, "Falcon2")["jobs"][0]
+            # the time left is read at the window's own moment, so only its form is fixed here (the rule: test_model)
+            assert re.search(rf"다음 실행  {following['next_run'][:10]} {following['next_run'][11:16]} \(\d+[mhd] 뒤\)\n", first)
+            at = dt.datetime.fromisoformat("2026-11-12T01:13:20+00:00").astimezone().strftime("%Y-%m-%d %H:%M")
+            assert f"마지막 실행 {at} 성공\n결과      점검했습니다\n" in first
+            assert first.endswith("\n\n명령\n/r/bin/agent-session check --project Falcon2 >/dev/null 2>&1")
+            await pilot.click("#cr-item-1")
+            await wait_until(pilot, lambda: app.selected_id == "report")
+            second = _detail(app)
+            assert second.startswith("report\n평일 보고\n") and "일정      0 9 * * 1-5\n" in second
+            assert " 실패\n결과      Leader가 없습니다\n오류 코드  leader_unavailable\n" in second
+            assert second.endswith("/r/bin/report --all 100%")                    # the whole command, `%` unescaped
+            assert [row[1] for row in _list_rows(app, ".list-item")] == [False, True]
+
+    asyncio.run(check())
+
+
+def test_the_cron_window_says_when_a_job_has_not_run_and_has_no_next_run(tmp_path, monkeypatch):
+    board, _ = _cron_board(tmp_path, monkeypatch)
+    app = CronPopupApp(str(board.config), "Gamma")
+    view = model.cron_view(board.config, "Gamma")
+    view["jobs"][0]["next_run"] = None                                         # a schedule that never matches
+
+    async def check():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await wait_until(pilot, lambda: app.is_running and app.query_one("#cr-title", Static) is not None)
+            await app.apply_view(view)
+            assert _title(app) == "cron 1개"
+            assert "다음 실행  없음\n마지막 실행 아직 없음\n\n명령\n/r/bin/sweep" in _detail(app)
+
+    asyncio.run(check())
+
+
+def test_the_cron_window_shows_one_line_for_a_project_without_jobs(tmp_path, monkeypatch):
+    board, _ = _cron_board(tmp_path, monkeypatch)
+    app = CronPopupApp(str(board.config), "Beta")
+
+    async def check():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await wait_until(pilot, lambda: _detail(app) == "작업 없음")
+            assert _title(app) == "cron 0개" and not list(app.query(".list-item"))
+            assert not app.query_one("#cr-next", Button).disabled and app.is_running
+
+    asyncio.run(check())
+
+
+def test_the_cron_window_moves_between_every_project_and_wraps(tmp_path, monkeypatch):
+    board, _ = _cron_board(tmp_path, monkeypatch)
+    app = CronPopupApp(str(board.config), "Falcon2")
+
+    async def check():
+        async with app.run_test(size=(100, 30), tooltips=True) as pilot:
+            await wait_until(pilot, lambda: app.selected_id == "check")
+            previous, following = app.query_one("#cr-prev", Button), app.query_one("#cr-next", Button)
+            assert str(previous.tooltip) == "이전 project: Gamma" and str(following.tooltip) == "다음 project: Beta"
+            await _press(pilot, "#cr-next")                                       # Beta has no job: still a stop
+            await wait_until(pilot, lambda: app.project_id == "Beta" and _detail(app) == "작업 없음")
+            assert str(app.query_one("#cr-project", Static).content) == "Beta"
+            await _press(pilot, "#cr-next")
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and app.selected_id == "sweep")
+            assert _title(app) == "cron 1개"
+            await _press(pilot, "#cr-next")                                       # past the last project: the first
+            await wait_until(pilot, lambda: app.project_id == "Falcon2" and app.selected_id == "check")
+            await _press(pilot, "#cr-prev")
+            await wait_until(pilot, lambda: app.project_id == "Gamma")
+
+    asyncio.run(check())
+
+
+def test_the_cron_window_reads_again_only_when_it_opens_and_when_the_project_changes(tmp_path, monkeypatch):
+    board, crontab = _cron_board(tmp_path, monkeypatch)
+    app = CronPopupApp(str(board.config), "Falcon2")
+    log = tmp_path / "crontab-calls"
+    monkeypatch.setenv("FAKE_CRONTAB_LOG", str(log))
+
+    async def check():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await wait_until(pilot, lambda: app.selected_id == "check")
+            await pilot.pause(0.5)
+            assert log.read_text().splitlines() == ["-l"]                      # the one read of the opening
+            await pilot.click("#cr-next")
+            await wait_until(pilot, lambda: app.project_id == "Beta")
+            await pilot.pause(0.5)
+            assert log.read_text().splitlines() == ["-l", "-l"]
+
+    asyncio.run(check())
+
+
+def test_the_cron_window_reports_a_crontab_it_cannot_read_and_keeps_moving(tmp_path, monkeypatch):
+    board, crontab = _cron_board(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_CRONTAB_FAIL", "read")
+    app = CronPopupApp(str(board.config), "Falcon2")
+
+    async def check():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await wait_until(pilot, lambda: _detail(app).startswith("cron을 읽을 수 없습니다: "))
+            assert _title(app) == "cron을 읽을 수 없습니다" and "simulated failure" in _detail(app)
+            assert not list(app.query(".list-item"))
+            assert not app.query_one("#cr-next", Button).disabled              # the registry is still read
+            monkeypatch.delenv("FAKE_CRONTAB_FAIL")
+            await pilot.click("#cr-next")
+            await wait_until(pilot, lambda: app.project_id == "Beta" and _detail(app) == "작업 없음")
+            assert app.is_running
+
+    asyncio.run(check())
+
+
+def test_a_damaged_section_of_one_project_does_not_hide_the_others(tmp_path, monkeypatch):
+    board, crontab = _cron_board(tmp_path, monkeypatch)
+    crontab.write_text("# >>> project-agent: Falcon2 >>>\n" + cron_section("Gamma", ("sweep", "청소", "*/10 * * * *", "/x")))
+    app = CronPopupApp(str(board.config), "Falcon2")
+
+    async def check():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await wait_until(pilot, lambda: "section" in _detail(app))
+            assert _title(app) == "cron을 읽을 수 없습니다"
+            await pilot.click("#cr-prev")                                      # Falcon2 → Gamma
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and app.selected_id == "sweep")
+
+    asyncio.run(check())
+
+
+def test_the_cron_window_switches_between_the_list_and_the_job_when_narrow(tmp_path, monkeypatch):
+    board, _ = _cron_board(tmp_path, monkeypatch)
+    app = CronPopupApp(str(board.config), "Falcon2")
+
+    async def check():
+        async with app.run_test(size=(55, 20)) as pilot:
+            await wait_until(pilot, lambda: app.selected_id == "check")
+            assert app.has_class("narrow") and not app.query_one("#cr-items").display
+            assert app.query_one("#cr-detail").display
+            await pilot.click("#cr-show-list")
+            assert app.query_one("#cr-items").display and not app.query_one("#cr-detail").display
+            app.query_one("#cr-item-1", Button).focus()
+            await pilot.press("enter")
+            await wait_until(pilot, lambda: app.selected_id == "report")
+            assert app.query_one("#cr-detail").display and not app.query_one("#cr-items").display
+            assert _detail(app).startswith("report\n")
+
+    asyncio.run(check())
+
+
+def test_the_cron_window_closes_with_the_button_and_escape(tmp_path, monkeypatch):
+    board, _ = _cron_board(tmp_path, monkeypatch)
+
+    async def check(close):
+        app = CronPopupApp(str(board.config), "Falcon2")
+        async with app.run_test(size=(100, 30)) as pilot:
+            await wait_until(pilot, lambda: app.selected_id == "check")
+            await close(pilot)
+            await pilot.pause()
+        assert not app.is_running
+
+    async def button(pilot):
+        await pilot.click("#cr-close")
+
+    async def escape(pilot):
+        await pilot.press("escape")
+
+    asyncio.run(check(button))
+    asyncio.run(check(escape))
+
+
+def test_an_open_cron_window_shows_another_project_when_told(tmp_path, request, monkeypatch):
+    board, _ = _cron_board(tmp_path, monkeypatch)
+    link, marked = click_socket(request), []
+    app = CronPopupApp(str(board.config), "Falcon2", link=link, mark_link=marked.append)
+
+    async def check():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await wait_until(pilot, lambda: marked == [link] and app.selected_id == "check")
+            assert await _tell(link, kind="cron", project="Gamma", client="/dev/pts/3") == {"ok": True}
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and app.selected_id == "sweep")
+            assert str(app.query_one("#cr-project", Static).content) == "Gamma" and _title(app) == "cron 1개"
+            assert await _tell(link, kind="cron", project="Beta") == {"ok": True}
+            await wait_until(pilot, lambda: app.project_id == "Beta" and _detail(app) == "작업 없음")
+
+    asyncio.run(check())
+    assert not os.path.exists(link)
+
+
+@pytest.mark.parametrize("request_", [
+    {"kind": "cr", "project": "Falcon2", "state": "open"},            # a CR request to a cron window
+    {"kind": "decision", "project": "Falcon2", "decision": None},
+    {"kind": "cron", "project": 3},
+    {"kind": "cron", "project": "Falcon2", "client": 5},
+])
+def test_a_cron_window_refuses_what_it_cannot_show(tmp_path, request, monkeypatch, request_):
+    board, _ = _cron_board(tmp_path, monkeypatch)
+    link = click_socket(request)
+    app = CronPopupApp(str(board.config), "Falcon2", load=False, link=link)
+
+    async def check():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await wait_until(pilot, lambda: os.path.exists(link))
+            result = await _tell(link, **request_)
+            assert result["ok"] is False and result["code"] == "invalid"
+            assert app.project_id == "Falcon2"
+
+    asyncio.run(check())
+
+
+def test_the_cr_and_decision_windows_refuse_a_cron_request(tmp_path, request):
+    board = _three_projects(tmp_path)
+    link = click_socket(request)
+    cr = CRPopupApp(str(board.config), "Alpha", "open", load=False, link=link)
+
+    async def check_cr():
+        async with cr.run_test(size=(90, 30)) as pilot:
+            await wait_until(pilot, lambda: os.path.exists(link))
+            result = await _tell(link, kind="cron", project="Gamma")
+            assert result["ok"] is False and result["code"] == "invalid" and cr.project_id == "Alpha"
+
+    asyncio.run(check_cr())
+    link = click_socket(request)
+    decision = PopupApp(str(board.config), "Alpha", load=False, link=link)
+
+    async def check_decision():
+        async with decision.run_test(size=(100, 36)) as pilot:
+            await wait_until(pilot, lambda: os.path.exists(link))
+            result = await _tell(link, kind="cron", project="Gamma")
+            assert result["ok"] is False and result["code"] == "invalid" and decision.project_id == "Alpha"
+
+    asyncio.run(check_decision())
