@@ -1,6 +1,7 @@
 //! `project-board-sidebar render --input SCENE.json`: draws one screen into a buffer and prints its cells as JSON
 //! (`rows` of runs). The comparison with Textual's screen and the golden-screen test use this.
-use crate::model::{Liveness, Snapshot};
+use crate::cron::Civil;
+use crate::model::{CronView, Liveness, Snapshot};
 use crate::ui::{self, Active, Facts, Interaction};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -14,6 +15,11 @@ pub struct Scene {
     pub snapshot: Snapshot,
     #[serde(default)]
     pub liveness: Liveness,
+    /// Every project's cron jobs; a project that is not here shows `C:-` (not read yet).
+    #[serde(default)]
+    pub cron: CronView,
+    /// The local minute the cron tooltip counts from, `YYYY-MM-DDTHH:MM`; the clock when absent.
+    pub now: Option<String>,
     #[serde(default)]
     pub expanded: Vec<String>,
     pub active: Option<Active>,
@@ -40,7 +46,7 @@ impl<'de> Deserialize<'de> for Active {
 
 pub fn draw(scene: &Scene) -> (Buffer, ui::Layout) {
     let expanded: HashSet<String> = scene.expanded.iter().cloned().collect();
-    let facts = Facts { snapshot: &scene.snapshot, liveness: &scene.liveness, expanded: &expanded, active: scene.active.as_ref(), notice: None, loaded: true };
+    let facts = Facts { snapshot: &scene.snapshot, liveness: &scene.liveness, expanded: &expanded, active: scene.active.as_ref(), notice: None, loaded: true, cron: &scene.cron, now: scene.now.as_deref().and_then(Civil::parse).unwrap_or_else(Civil::now) };
     let layout = ui::layout(&facts, scene.width as usize, scene.height as usize);
     let (max_x, max_y) = layout.max_scroll();
     let by_id = |id: &Option<String>| id.as_ref().and_then(|id| layout.widgets.iter().find(|w| &w.id == id)).map(|w| w.key.clone());

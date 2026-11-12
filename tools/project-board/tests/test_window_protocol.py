@@ -13,9 +13,9 @@ import threading
 
 import pytest
 
-from board_testing import Board, click_socket, wait_until
+from board_testing import Board, click_socket, cron_section, isolate_crontab, wait_until
 from project_board import model
-from project_board.tui import CRPopupApp, PopupApp
+from project_board.tui import CRPopupApp, CronPopupApp, PopupApp
 from textual.widgets import Static, TextArea
 
 
@@ -73,7 +73,8 @@ def test_a_cr_window_follows_the_documented_request_and_reply(tmp_path, request)
             # a client that names no tmux client is served as well (it is informational)
             assert await asyncio.to_thread(ask, link, b'{"kind":"cr","project":"Alpha","state":"open"}\n') == {"ok": True}
             await wait_until(pilot, lambda: app.project_id == "Alpha")
-            for bad in (b'{"kind": "decision", "project": "Alpha", "decision": null}\n',   # the other kind
+            for bad in (b'{"kind": "decision", "project": "Alpha", "decision": null}\n',   # the other kinds
+                        b'{"kind": "cron", "project": "Alpha"}\n',
                         b'{"kind": "cr", "project": "Alpha", "state": "done"}\n',
                         b'{"kind": "cr", "project": "Alpha", "state": "open", "client": 5}\n',
                         b'[1]\n', b'not json\n'):
@@ -108,6 +109,7 @@ def test_a_decision_window_follows_the_documented_request_and_reply(tmp_path, re
             await wait_until(pilot, lambda: app.project_id == "Alpha" and app.decide_id == "D-20261107-01"
                              and "D-20261107-01" in app.decisions)
             for bad in (b'{"kind": "cr", "project": "Alpha", "state": "open"}\n',
+                        b'{"kind": "cron", "project": "Alpha"}\n',
                         b'{"kind": "decision", "project": "Alpha", "decision": 7}\n'):
                 reply = await asyncio.to_thread(ask, link, bad)
                 assert reply["ok"] is False and reply["code"] == "invalid"
@@ -123,4 +125,33 @@ def test_a_decision_window_follows_the_documented_request_and_reply(tmp_path, re
         asyncio.run(check())
     finally:
         release.set()
+    assert not os.path.exists(link)
+
+
+def test_a_cron_window_follows_the_documented_request_and_reply(tmp_path, request, monkeypatch):
+    data = board(tmp_path)
+    isolate_crontab(tmp_path, monkeypatch).write_text(cron_section("Gamma", ("check", "점검", "13,43 * * * *", "/x")))
+    link = click_socket(request)
+    app = CronPopupApp(str(data.config), "Alpha", load=False, link=link)
+
+    async def check():
+        async with app.run_test(size=(90, 30)) as pilot:
+            await wait_until(pilot, lambda: os.path.exists(link))
+            line = b'{"kind": "cron", "project": "Gamma", "client": "/dev/pts/3"}\n'
+            assert await asyncio.to_thread(ask, link, line) == {"ok": True}
+            await wait_until(pilot, lambda: app.project_id == "Gamma" and app.selected_id == "check")
+            assert str(app.query_one("#cr-project", Static).content) == "Gamma"
+            # a client that names no tmux client is served as well (it is informational)
+            assert await asyncio.to_thread(ask, link, b'{"kind":"cron","project":"Alpha"}\n') == {"ok": True}
+            await wait_until(pilot, lambda: app.project_id == "Alpha")
+            for bad in (b'{"kind": "cr", "project": "Alpha", "state": "open"}\n',          # the other kinds
+                        b'{"kind": "decision", "project": "Alpha", "decision": null}\n',
+                        b'{"kind": "cron", "project": 3}\n',
+                        b'{"kind": "cron", "project": "Alpha", "client": 5}\n',
+                        b'[1]\n', b'not json\n'):
+                reply = await asyncio.to_thread(ask, link, bad)
+                assert reply["ok"] is False and reply["code"] == "invalid" and isinstance(reply["message"], str), bad
+            assert app.project_id == "Alpha" and app.is_running
+
+    asyncio.run(check())
     assert not os.path.exists(link)

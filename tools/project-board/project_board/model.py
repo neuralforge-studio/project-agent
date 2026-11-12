@@ -430,6 +430,39 @@ def find_project(config, project_id: str):
     return None
 
 
+def remaining_text(next_run, now: dt.datetime) -> str:
+    """The time from `now` to a job's `next_run` (a local minute, ISO text or a datetime; `now` is local time too) in
+    the largest unit that fits, rounded down: `Nd` from 1440 minutes, `Nh` from 60, else `Nm`. The difference is
+    first rounded up to whole minutes (30 seconds is `1m`) and is never below `0m`. The Rust sidebar follows the
+    same rule; `tests/fixtures/cron_remaining.json` holds the cases both keep to."""
+    following = dt.datetime.fromisoformat(next_run) if isinstance(next_run, str) else next_run
+    minutes = max(0, -((now - following) // dt.timedelta(minutes=1)))
+    if minutes >= 1440:
+        return f"{minutes // 1440}d"
+    return f"{minutes // 60}h" if minutes >= 60 else f"{minutes}m"
+
+
+def cron_view(config, project_id: str, now: dt.datetime | None = None) -> dict:
+    """What the cron window shows: `order` (every registered project ID, for ◀▶), `project` and its `jobs`
+    (`agent_session.api.cron_listing`, each with `remaining`, the time left to its next run, or None), and `error`
+    (None or the message of a registry or crontab that cannot be read, or of a damaged section of this project)."""
+    now = now or dt.datetime.now()
+    view = {"order": [], "project": project_id, "jobs": [], "error": None}
+    try:
+        projects = _registry(config)
+        view["order"] = [project.project_id for project in projects]
+        project = next((item for item in projects if item.project_id == project_id), None)
+        if project is None:
+            view["error"] = "Project를 찾을 수 없습니다."
+            return view
+        for job in api.cron_listing(project)["jobs"]:
+            view["jobs"].append({**job, "remaining": remaining_text(job["next_run"], now) if job["next_run"] else None})
+    except SessionError as error:
+        detail = error.details.get("reason") or error.details.get("line")
+        view["error"] = f"{error.message} ({detail})" if detail else error.message
+    return view
+
+
 def open_decision(project, decide_id: str) -> dict | None:
     if project.path_decide is None:
         return None

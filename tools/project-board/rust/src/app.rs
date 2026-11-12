@@ -5,7 +5,8 @@
 //! click socket's requests, and the tmux visibility. A frame is drawn once per batch of messages, and ratatui
 //! writes only the cells that changed, so the screen never shows a state between two others.
 use crate::data::Reader;
-use crate::model::{Liveness, Snapshot};
+use crate::cron::Civil;
+use crate::model::{CronView, Liveness, Snapshot};
 use crate::{switch, window};
 use crate::tmuxio::{self, Tmux};
 use crate::ui::{self, Action, Active, Facts, Hit, Interaction, Key, Layout};
@@ -32,6 +33,8 @@ const CLICK_LIMIT: usize = 4096;
 enum Msg {
     Snapshot(Snapshot, Option<Result<HashSet<String>, String>>),
     Live(Liveness, Option<Option<Active>>),
+    /// Every project's cron jobs, from one `crontab -l` (BOARD-027).
+    Cron(CronView),
     /// A fold helper ended: the shared value read after it.
     FoldDone(Result<HashSet<String>, String>),
     Input(Event),
@@ -51,6 +54,8 @@ struct App {
     kicks: Vec<Sender<()>>,
     snapshot: Snapshot,
     live: Liveness,
+    /// The crontab has not been read until the first `Msg::Cron`; the cron count is then `C:-`.
+    cron: CronView,
     expanded: HashSet<String>,
     active: Option<Active>,
     notice: Option<String>,
@@ -95,6 +100,13 @@ pub fn run(config: Option<String>) -> i32 {
         std::thread::spawn(move || liveness_loop(reader, tmux, tx, flag, kick_rx));
     }
     {
+        // its own thread: `crontab` may be slow, and neither the files nor the run state wait for it
+        let (kick_tx, kick_rx) = mpsc::channel::<()>();
+        kicks.push(kick_tx);
+        let (reader, tx, flag) = (reader.clone(), tx.clone(), visible_flag.clone());
+        std::thread::spawn(move || cron_loop(reader, tx, flag, kick_rx));
+    }
+    {
         let (tmux, tx) = (tmux.clone(), tx.clone());
         std::thread::spawn(move || {
             let _ = tx.send(Msg::Visible(tmux.mark_ready()));
@@ -124,6 +136,7 @@ pub fn run(config: Option<String>) -> i32 {
         kicks,
         snapshot: Snapshot::default(),
         live: Liveness::new(),
+        cron: CronView::new(),
         expanded: HashSet::new(),
         active: None,
         notice,
@@ -232,6 +245,20 @@ fn liveness_loop(reader: Arc<Reader>, tmux: Arc<Tmux>, tx: Sender<Msg>, visible:
     }
 }
 
+/// The crontab is read with the run state's period and visibility rule: not at all while no client sees the window, and
+/// once at once when it is shown again.
+fn cron_loop(reader: Arc<Reader>, tx: Sender<Msg>, visible: Arc<AtomicBool>, kick: Receiver<()>) {
+    loop {
+        let started = Instant::now();
+        if visible.load(Ordering::Relaxed) && tx.send(Msg::Cron(reader.cron())).is_err() {
+            return;
+        }
+        if !pause(&kick, LIVENESS_EVERY.saturating_sub(started.elapsed())) {
+            return;
+        }
+    }
+}
+
 /// Listen on the click socket (`PROJECT_BOARD_CLICK_SOCKET`). A path that is in use or cannot be opened is
 /// reported on the first row, as the Python sidebar did. Returns that text.
 fn start_click_server(path: &str, tx: Sender<Msg>) -> Option<String> {
@@ -328,6 +355,8 @@ impl App {
             if due <= now {
                 self.tooltip_due = None;
                 if self.ui.hover.as_ref() == Some(&key) {
+                    // laid out again: the time to the next cron run is measured from now, not from the last draw
+                    self.facts_layout();
                     self.tooltip = self.layout.widgets.iter().find(|w| w.key == key).and_then(|w| w.tooltip.clone());
                     dirty = self.tooltip.is_some();
                 }
@@ -365,6 +394,10 @@ impl App {
                 if let Some(active) = context {
                     self.active = active;
                 }
+                true
+            }
+            Msg::Cron(cron) => {
+                self.cron = cron;
                 true
             }
             Msg::FoldDone(read) => {
@@ -407,7 +440,7 @@ impl App {
     }
 
     fn facts_layout(&mut self) {
-        let facts = Facts { snapshot: &self.snapshot, liveness: &self.live, expanded: &self.expanded, active: self.active.as_ref(), notice: self.notice.as_deref(), loaded: self.loaded };
+        let facts = Facts { snapshot: &self.snapshot, liveness: &self.live, expanded: &self.expanded, active: self.active.as_ref(), notice: self.notice.as_deref(), loaded: self.loaded, cron: &self.cron, now: Civil::now() };
         self.layout = ui::layout(&facts, self.size.0 as usize, self.size.1 as usize);
         let (max_x, max_y) = self.layout.max_scroll();
         self.ui.scroll_x = self.ui.scroll_x.min(max_x);
@@ -647,6 +680,10 @@ impl App {
                 args.extend(["open-decision".into(), "--project".into(), project.clone()]);
                 told = Some(("decision", json!({"kind": "decision", "project": project, "decision": null}), format!("Decision · {project}")));
             }
+            Action::Cron(project) => {
+                args.extend(["open-cron".into(), "--project".into(), project.clone()]);
+                told = Some(("cron", json!({"kind": "cron", "project": project}), format!("Cron · {project}")));
+            }
         }
         let folding = matches!(action, Action::Fold(_));
         if !folding {
@@ -688,7 +725,7 @@ impl App {
                 if !enabled {
                     // an empty count, a decision list without entries and a seat without a Worker do nothing
                     return match action {
-                        Some(Action::Cr(..)) | Some(Action::Decision(_)) | Some(Action::Seat(..)) => json!({"ok": true, "data": {"widget": id}, "error": null}),
+                        Some(Action::Cr(..)) | Some(Action::Decision(_)) | Some(Action::Cron(_)) | Some(Action::Seat(..)) => json!({"ok": true, "data": {"widget": id}, "error": null}),
                         _ => click_error("not_clickable", "이 항목은 클릭할 수 없습니다."),
                     };
                 }
