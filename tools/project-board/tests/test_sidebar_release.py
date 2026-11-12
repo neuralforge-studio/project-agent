@@ -93,7 +93,7 @@ def test_a_new_release_replaces_the_sidebar_in_the_same_pane_with_the_state_it_h
     assert clicked["error"]["code"] in ("no_widget", "not_clickable")
 
     lib.point(NEW)
-    _wait(lambda: _executable(process) == lib.binary(NEW), timeout=10, what="the new release's binary in the same process")
+    _wait(lambda: _executable(process) == lib.binary(NEW), what="the new release's binary in the same process")
     pane.wait_text("CPU-012")                                                           # drawn again, seats still open
     assert _facts(pane) == facts
     assert RESTART not in pane.screen()
@@ -161,7 +161,7 @@ def test_a_sidebar_that_cannot_switch_keeps_its_code_and_says_a_restart_is_neede
         (lib.root / "elsewhere").mkdir()
         lib.point("../elsewhere")
         reason = "releases 밖"
-    pane.wait_text(RESTART, timeout=10)
+    pane.wait_text(RESTART)
     screen = pane.screen()
     assert reason in screen.replace("\n", "") or reason in " ".join(screen.split()), screen
     assert "prefix B" in " ".join(screen.split()), screen                               # how to start it again
@@ -169,7 +169,7 @@ def test_a_sidebar_that_cannot_switch_keeps_its_code_and_says_a_restart_is_neede
     assert any("Falcon2" in line for line in pane.lines())                              # and keeps drawing
     # `current` is this release again: the notice goes
     lib.point(OLD)
-    pane.wait_gone(RESTART, timeout=10)
+    pane.wait_gone(RESTART)
     assert _executable(process) == lib.binary(OLD)
 
 
@@ -178,8 +178,8 @@ def test_a_notice_stays_with_a_registry_error_that_the_old_code_may_have_made(tm
     lib.release(NEW, binary=False)
     lib.point(NEW)
     pane.board.config.write_text("{not json", encoding="utf-8")                         # the registry no longer reads
-    pane.wait_text("project registry", timeout=10)
-    pane.wait_text(RESTART, timeout=10)                                                 # both are shown
+    pane.wait_text("project registry")
+    pane.wait_text(RESTART)                                                 # both are shown
 
 
 def test_looking_for_the_installed_release_starts_no_process(tmp_path, request):
@@ -189,7 +189,7 @@ def test_looking_for_the_installed_release_starts_no_process(tmp_path, request):
     lib, pane = _sidebar_in(tmp_path, request, path=directory + os.pathsep + os.environ["PATH"])
     lib.release(NEW, binary=False)
     lib.point(NEW)                                                                      # the check now fails every 2 seconds
-    pane.wait_text(RESTART, timeout=10)
+    pane.wait_text(RESTART)
     log.write_text("")
     pane.crontab.calls_path.write_text("")
     time.sleep(20.5)

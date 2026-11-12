@@ -1474,7 +1474,7 @@ def test_a_window_that_another_release_started_is_started_again_in_the_same_plac
     ((pane, placed),) = server.floating().items()
 
     def wait_for_link():
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + command_timeout()
         while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
             time.sleep(0.05)
 
