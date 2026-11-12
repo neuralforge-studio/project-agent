@@ -679,3 +679,109 @@ def test_remote_lock_inspection_runs_on_the_remote_host(repo, monkeypatch, locke
         assert result["allowed"] is not locked
         assert any("index.lock left by an interrupted Git command" in reason
                    for reason in result["reasons"]) is locked
+
+
+# --- SESSION-018: a preparation that ends before `submodule update` -------------------------------------
+
+def end_before(monkeypatch, *prefix):
+    """The deadline passes just before the first Git command that starts with `prefix` (the start's
+    `_git_step` refuses it); every command before it has run."""
+    real = git_ops._git
+
+    def refuse(root, args, timeout):
+        if tuple(args[:len(prefix)]) == prefix:
+            monkeypatch.setattr(git_ops, "_git", real)
+            raise SessionError("timeout", "The command's total wait limit expired.", 4)
+        return real(root, args, timeout)
+
+    monkeypatch.setattr(git_ops, "_git", refuse)
+
+
+def settled(seat):
+    return git(seat, "status", "--porcelain", "--untracked-files=all") == ""
+
+
+@pytest.mark.parametrize("cut", [("branch", "--force"), ("submodule", "update")])
+@pytest.mark.parametrize("mode", ["write", "read-only"])
+def test_interrupted_preparation_is_continued_by_the_same_start(tmp_path, submodule_repo, cr_bases, monkeypatch, cut, mode):
+    source, seat, libs = submodule_repo
+    new = bump(source, libs["liba"], "liba")
+    context, store, project = setup_job(tmp_path, seat, mode)
+    end_before(monkeypatch, *cut)
+    with pytest.raises(SessionError) as ended:
+        git_ops.prepare(context, project, store)
+    assert ended.value.code == "timeout"
+    assert not settled(seat)                                   # HEAD moved, the submodule did not: a gitlink difference
+    assert git(seat, "-C", "external/liba", "rev-parse", "HEAD") != new
+
+    # The same start again: its own trace is not a change, so it completes the preparation.
+    base = cr_bases[-1] if cr_bases else None
+    retry, _, _ = setup_job(tmp_path, seat, mode, base=base)
+    git_ops.prepare(retry, project, store)
+    assert git(seat, "-C", "external/liba", "rev-parse", "HEAD") == new
+    assert settled(seat)
+    assert git(seat, "for-each-ref", git_ops.ALIGNED_REF) == ""          # nothing is left to tell
+
+
+def test_interrupted_preparation_does_not_block_release(tmp_path, submodule_repo, cr_bases, monkeypatch):
+    from agent_session import workspace
+    source, seat, libs = submodule_repo
+    bump(source, libs["liba"], "liba")
+    context, store, project = setup_job(tmp_path, seat)
+    end_before(monkeypatch, "submodule", "update")
+    with pytest.raises(SessionError):
+        git_ops.prepare(context, project, store)
+    meta = {"seat": 0, "seat_root": str(seat)}
+    assert workspace.check_release(project, meta, ("todo", None)) == {"allowed": True, "reasons": []}
+
+
+def move_submodule(seat, name="liba"):
+    """A person commits in a submodule: it now sits at a commit no gitlink records."""
+    sub = seat / "external" / name
+    git(sub, "config", "user.name", "Person")
+    git(sub, "config", "user.email", "person@example.invalid")
+    (sub / "lib.txt").write_text("by hand\n")
+    git(sub, "commit", "-am", "By hand")
+
+
+def test_a_submodule_a_person_moved_after_the_preparation_is_still_a_change(tmp_path, submodule_repo, cr_bases):
+    from agent_session import workspace
+    source, seat, libs = submodule_repo
+    context, store, project = setup_job(tmp_path, seat)
+    git_ops.prepare(context, project, store)
+    move_submodule(seat)
+    meta = {"seat": 0, "seat_root": str(seat)}
+    reasons = workspace.check_release(project, meta, ("todo", None))["reasons"]
+    assert reasons == ["seat has uncommitted or untracked files"]
+    again, _, _ = setup_job(tmp_path, seat, "read-only")
+    with pytest.raises(SessionError) as error:
+        git_ops.prepare(again, project, store)
+    assert error.value.code == "workspace_dirty"
+
+
+def test_a_submodule_a_person_moved_during_an_interrupted_preparation_is_still_a_change(
+        tmp_path, submodule_repo, cr_bases, monkeypatch):
+    source, seat, libs = submodule_repo
+    bump(source, libs["liba"], "liba")
+    context, store, project = setup_job(tmp_path, seat)
+    end_before(monkeypatch, "branch", "--force")
+    with pytest.raises(SessionError):
+        git_ops.prepare(context, project, store)
+    move_submodule(seat)
+    retry, _, _ = setup_job(tmp_path, seat)
+    with pytest.raises(SessionError) as error:
+        git_ops.prepare(retry, project, store)
+    assert error.value.code == "workspace_dirty"
+    assert (seat / "external/liba/lib.txt").read_text() == "by hand\n"
+
+
+def test_edited_content_of_a_submodule_is_a_change_even_after_an_interrupted_preparation(
+        tmp_path, submodule_repo, cr_bases, monkeypatch):
+    source, seat, libs = submodule_repo
+    bump(source, libs["liba"], "liba")
+    context, store, project = setup_job(tmp_path, seat)
+    end_before(monkeypatch, "submodule", "update")
+    with pytest.raises(SessionError):
+        git_ops.prepare(context, project, store)
+    (seat / "external/liba/lib.txt").write_text("edited\n")
+    assert git_ops.dirty(seat) != ""

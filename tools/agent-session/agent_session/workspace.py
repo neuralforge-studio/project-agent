@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .config import RemoteSeat
 from .errors import SessionError
-from .git_ops import git, is_git, lock_reason
+from .git_ops import dirty, git, is_git, lock_reason
 
 
 def _origin(root):
@@ -63,7 +63,7 @@ def _status_reasons(root, reasons):
     locked = lock_reason(root)
     if locked:
         reasons.append(locked)
-    if git(root, "status", "--porcelain", "--untracked-files=all"):
+    if dirty(root):
         reasons.append("seat has uncommitted or untracked files")
 
 

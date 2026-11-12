@@ -36,6 +36,19 @@ def _unregistered_ended(meta, pane):
             and not meta.get("remote_seat") and background.cli_state(meta, pane) == "ended")
 
 
+def _waiting_ended(meta, pane):
+    """A run that never launched its CLI whose waiting process is confirmed gone (killed before the launch).
+
+    The pane is dead and neither the recorded waiting process nor its process group runs. Nothing can launch
+    in that run any more, so a start replaces it. A run without those records is not confirmed."""
+    if meta.get("registered") or meta.get("provider_launch_attempted") is not False:
+        return False
+    try:
+        return process.unlaunched_observation(meta, pane)["stopped"]
+    except SessionError:
+        return False
+
+
 def check_start_arguments(job, prompt_file=None, seat=None):
     """The start rules that need no project: a prompt file is for the Leader, a seat for a Worker JOB.
 
@@ -572,6 +585,8 @@ class Manager(SuspendMixin, WatchMixin, CheckMixin):
             return self._replace_ended(meta)
         if not meta.get("remote_seat") and _unregistered_ended(meta, self.tmux.pane_info(meta["pane_id"])):
             return self._replace_ended(meta)       # its CLI ended before registering
+        if not meta.get("remote_seat") and _waiting_ended(meta, self.tmux.pane_info(meta["pane_id"])):
+            return self._replace_waiting(meta, request)
         if meta.get("provider_launch_attempted") is not False:
             if parked:
                 raise SessionError("assignment_mismatch", PARKED_ALIVE, 3)
@@ -590,6 +605,26 @@ class Manager(SuspendMixin, WatchMixin, CheckMixin):
             request = request if request is not None else meta.get("leader_request")
             self._prepare_launch(meta, request)
         return self._launch(meta, request)
+
+    def _replace_waiting(self, meta, request=None):
+        """A new run in the slot of a run whose waiting process died before its CLI launched (see
+        `_waiting_ended`). The seat's Git preparation may not have finished, so a Worker's new run continues it
+        as a retry does before it launches; the CR, seat and branch stay."""
+        job = jobs.claim(self.project, meta["job_id"]) if meta.get("job_id") else None
+        self._retire_name(meta)
+        context = self._context(meta["target"], job)
+        if job is None:
+            context["leader_request"] = request if request is not None else meta.get("leader_request")
+        context = self._new_window(context)
+        if job is not None:
+            self._prepare_launch(context)
+            self._at("git")
+            git_ops.prepare(context, self.project, self.store)
+            self.tmux.write_meta(context["window_id"], {"job": context["job"]})
+        else:
+            self.store.update(lambda value: value)
+            self._prepare_launch(context, context["leader_request"])
+        return self._launch(context, context.get("leader_request"))
 
     def _replace_ended(self, meta):
         """A new conversation in the slot of a run whose end is confirmed; the CR, seat, and branch stay."""
