@@ -41,7 +41,7 @@ def attach(manager, meta):
                "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2",
                "-o", "ExitOnForwardFailure=yes", "-o", "StreamLocalBindUnlink=yes",
                "-R", bridge["remote_listen"] + ":" + bridge["listen"], "--", meta["remote_seat"]["host"],
-               "PATH=\"$HOME/.local/bin:/opt/homebrew/bin:$PATH\" "
+               "PATH=\"" + ":".join(remote.REMOTE_PATH) + ":$PATH\" "
                + shlex.join(["tmux", "-S", native["socket_path"], "attach-session", "-t", native["project_id"]])]
     script.write_text("#!/bin/bash\nexec " + shlex.join(command) + "\n", encoding="utf-8")
     meta = manager.tmux.write_meta(meta["window_id"], {"launch_file": str(script)})

@@ -20,7 +20,11 @@ set -euo pipefail
 
 [ "${1:-}" = "--socket" ] && [ -n "${2:-}" ] || { echo "usage: $0 --socket SOCKET_PATH" >&2; exit 2; }
 socket=$2
-tm() { tmux -S "$socket" "$@"; }
+script="${BASH_SOURCE[0]}"
+[[ "$script" == */* ]] || script="./$script"
+. "${script%/*}/../../tools/tmux-launcher.sh"
+project_agent_select_tmux "${script%/*}/../../tools"
+tm() { "$TMUX_BIN" -S "$socket" "$@"; }
 
 KEY=$(tm show-options -gqv @project_agent_board_key)
 KEY=${KEY:-B}

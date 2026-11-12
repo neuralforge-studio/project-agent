@@ -22,7 +22,6 @@ import datetime as dt
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -36,7 +35,6 @@ CHECK_SCHEDULE = "13,43 * * * *"       # every 30 minutes, off :00 and :30
 CHECK_DESCRIPTION = "정체한 Worker·Leader와 Leader가 처리할 일을 점검합니다(agent-session check)"
 JOB_ID = re.compile(r"[a-z][a-z0-9-]{0,31}")
 RETRIES = 5                            # read-modify-write attempts when another editor changed the crontab
-CRON_PATH = ("/usr/bin", "/bin")          # the PATH cron gives a job
 COMMAND_TIMEOUT = 30                   # seconds one `crontab` process may take
 SEARCH_YEARS = 8                       # how far `next_run` looks for a match before it gives up
 NO_CRONTAB = re.compile(r"no crontab for", re.I)
@@ -189,8 +187,29 @@ def split(text, name):
     return lines[:starts[0]], _parse_section(name, lines[starts[0] + 1:stops[0]]), lines[stops[0] + 1:]
 
 
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def command_program(command):
+    """The program a job command runs: its first word after a leading `env` and `NAME=value` words, or None.
+
+    This is the one reading of the command line of a job (the installer asks for it through
+    `agent_session.api.crontab_sections`). The line `check_command` writes starts with the program; a line
+    that an earlier release wrote (`env PATH=... <program> ...`) or a person wrote (`PATH=... <program>`) has
+    words before it."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    if words and words[0] in ("env", "/usr/bin/env"):
+        words = words[1:]
+    while words and _ASSIGNMENT.match(words[0]):
+        words = words[1:]
+    return words[0] if words else None
+
+
 def sections(text):
-    """Every project section in the crontab `text`, in order: `{"project", "begin", "end", "jobs": [{id, command}],
+    """Every project section in the crontab `text`, in order: `{"project", "begin", "end", "jobs": [{id, command, program}],
     "error"}`; `begin` and `end` are the section's marker lines.
 
     A section that `split` refuses (incomplete, repeated, a line that is not a job) is listed with its
@@ -206,7 +225,8 @@ def sections(text):
         try:
             jobs = split(text, name)[1] or []
             result.append({"project": name, "begin": _begin(name), "end": _end(name), "error": None,
-                           "jobs": [{"id": job["id"], "command": job["command"]} for job in jobs]})
+                           "jobs": [{"id": job["id"], "command": job["command"], "program": command_program(job["command"])}
+                                    for job in jobs]})
         except SessionError as error:
             result.append({"project": name, "begin": _begin(name), "end": _end(name), "error": error.code,
                            "jobs": []})
@@ -410,31 +430,18 @@ def remove(project, crontab, job_id):
     return {"project": project.project_id, "removed": job_id, "written": written}
 
 
-def tmux_directory():
-    """The directory of the tmux this process finds on its PATH, or None when there is none.
-
-    Leader start, restart and resume run in the environment that started the server, so this tmux speaks to it.
-    A relative PATH entry is made absolute; a symlink (`.../tmux/latest/bin`) is kept as it is so that the job
-    follows an update of it."""
-    found = shutil.which("tmux")
-    return os.path.dirname(os.path.abspath(found)) if found else None
-
-
 def check_command(project, socket_name=None, socket_path=None):
     """The command line of the project's check job: this release's `agent-session check` for the project.
 
-    cron's PATH (`/usr/bin:/bin`) finds the system tmux, which may not speak to the server (SESSION-016), so the
-    line starts with `env PATH=<the tmux directory>:/usr/bin:/bin`. The same line runs from any shell. It has no
-    `env` when no tmux was found (the run then fails with `tmux_unavailable`) or when tmux is in cron's PATH."""
+    The line is the program and its arguments only. cron's PATH (`/usr/bin:/bin`) and its empty environment do
+    not decide which tmux the run uses: `agent-session` reads the tmux the installer recorded in its release
+    (`tmux_program`, TMUX-004), so the same line runs from cron and from any shell."""
     from .launch_artifacts import library_path
     parts = [str(library_path() / "bin" / "agent-session"), "--config", str(project.config_path)]
     if socket_name:
         parts += ["--socket-name", socket_name]
     if socket_path:
         parts += ["--socket-path", str(socket_path)]
-    directory = tmux_directory()
-    if directory and directory not in CRON_PATH:
-        parts = ["env", f"PATH={directory}:{':'.join(CRON_PATH)}"] + parts
     # cron mails whatever a job prints; the result of a run is kept in `last_run`, so the output is dropped.
     return shlex.join(parts + ["check", "--project", project.project_id]) + " >/dev/null 2>&1"
 

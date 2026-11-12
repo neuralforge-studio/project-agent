@@ -2540,3 +2540,60 @@ def test_claude_restart_replaces_a_leader_whose_cli_is_gone_whatever_its_last_st
     assert result["restarted"] is True and result["run_id"] != leader["run_id"]
     assert result["session"]["session_id"] != leader["session"]["session_id"]
     assert env.manager().store.read()["leader"]["session_id"] == result["session"]["session_id"]
+
+
+# ---------------------------------------------------------------- SESSION-018: a waiting process that died
+def kill_waiting_process(env, window):
+    """SIGTERM the run's waiting process (falcon2: it died before the CLI launched); the pane stays dead."""
+    os.kill(window["placeholder_pid"], signal.SIGTERM)
+    deadline = time.monotonic() + 20
+    while not env.tmux.pane_info(window["pane_id"])["pane_dead"]:
+        assert time.monotonic() < deadline
+        time.sleep(0.1)
+
+
+def test_a_worker_run_whose_waiting_process_died_before_launch_is_replaced_by_the_next_start(session_env, monkeypatch):
+    import agent_session.git_ops as git_ops
+
+    env = session_env
+    cr = env.cr()
+    fail_once(monkeypatch, git_ops, "sync_main")
+    with pytest.raises(SessionError):
+        env.manager().start(cr)
+    dead = env.tmux.get_current("fixture", "seat-0")
+    assert dead["provider_launch_attempted"] is False
+    kill_waiting_process(env, dead)
+
+    # Before the fix every start ended in target_changed ("The waiting pane process no longer matches").
+    result = env.manager().start(cr)
+    assert result["ready"] is True and result["seat"] == 0
+    assert result["run_id"] != dead["run_id"]
+    assert env.store.read()["0"]["job_id"] == cr and env.store.read()["0"]["git_hash"]
+    assert git(env.seats[0], "branch", "--show-current") == f"cr/{cr}"
+    assert env.cr_state(cr)[0] == "in-progress"
+
+
+def test_a_leader_run_whose_waiting_process_died_before_launch_is_replaced_by_the_next_start(session_env, monkeypatch):
+    from agent_session.tmux import Tmux
+
+    env = session_env
+    fail_once(monkeypatch, Tmux, "launch")
+    with pytest.raises(SessionError):
+        env.manager().start("leader")
+    dead = env.tmux.get_current("fixture", "leader")
+    assert dead["provider_launch_attempted"] is False
+    kill_waiting_process(env, dead)
+    result = env.manager().start("leader")
+    assert result["ready"] is True and result["run_id"] != dead["run_id"]
+
+
+def test_a_live_waiting_run_is_continued_not_replaced(session_env, monkeypatch):
+    import agent_session.git_ops as git_ops
+
+    env = session_env
+    cr = env.cr()
+    fail_once(monkeypatch, git_ops, "sync_main")
+    with pytest.raises(SessionError):
+        env.manager().start(cr)
+    waiting = env.tmux.get_current("fixture", "seat-0")
+    assert env.manager().start(cr)["run_id"] == waiting["run_id"]

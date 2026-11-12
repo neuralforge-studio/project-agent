@@ -9,7 +9,7 @@
 | 필요한 것 | 확인 |
 | --- | --- |
 | Python 3.10 이상 | `python3 --version` |
-| tmux | `tmux -V`가 [계약 3.2절](project-team/install-contract.md#32-tmux-최소-버전)의 최소 버전 이상이어야 합니다. 낮으면 `check`가 실패로 알리고, 그 tmux는 설정을 읽을 때 오류 한 줄만 보이며 Board binding·hook을 넣지 않습니다. 사내 tmux는 `/primehome/tools/Inhouse/tmux/latest/bin/tmux`입니다. PATH에서 새 tmux가 앞에 오는지 확인합니다. |
+| tmux | 최소 버전([계약 3.2절](project-team/install-contract.md#32-tmux-최소-버전)) 이상인 tmux가 하나는 있어야 합니다. 설치기가 PATH의 첫 `tmux`, 없거나 낮으면 사내 tmux 순서로 찾아 설치본에 기록하고(아래), 하나도 없으면 설치는 되지만 tmux를 쓰는 동작이 `tmux_unavailable`로 실패하며 설치기가 알립니다. 자기 shell에서 부르는 tmux가 낮으면 그 tmux는 설정을 읽을 때 오류 한 줄만 보이며 Board binding·hook을 넣지 않습니다. 사내 tmux는 `/primehome/tools/Inhouse/tmux/latest/bin/tmux`입니다. PATH에서 새 tmux가 앞에 오는지 확인합니다. |
 | git | `git --version` |
 | Claude Code 또는 Codex CLI | 쓰려는 provider의 CLI가 실행됩니다. |
 | Rust toolchain | Board sidebar를 설치할 때 build하므로 cargo와 vendored crate 디렉터리가 필요합니다. 사내 workstation에는 있습니다. 위치를 바꾸는 환경 변수와 찾는 순서는 [계약 2.1절](project-team/install-contract.md#21-rust-sidebar의-build)입니다. 없으면 설치기가 아무것도 바꾸지 않고 거절합니다(`cargo_missing`, `vendor_missing`). |
@@ -19,7 +19,8 @@
 - 설치기는 그 Python이 사내 환경 설정(`LD_LIBRARY_PATH`) 없이도 같은 Python(같은 `sys.prefix`)으로 뜨는지 시험하고, 필요한 library 경로를 설치본에 기록합니다([계약 6.1절](project-team/install-contract.md#61-python-선택)). 그래서 사내 환경 설정이 없는 계정이나 cron, 그런 환경에서 시작한 tmux server에서도 설치본은 같은 Python과 그 package(`textual`)를 씁니다. 그 경로로도 같아지지 않는 Python은 설치를 거절합니다(`python_environment`).
 - 사내 workstation의 Python은 `/primehome/tools/Inhouse/Python3/latest/bin/python3`입니다.
 - `textual`이 없어도 설치는 됩니다. Board만 시작하지 않으며 `check`가 알려 줍니다(5절).
-- 사내 tmux(`/primehome/tools/Inhouse/tmux/latest/bin/tmux`)도 library(libevent 등)가 필요하고, 설치기는 tmux의 경로를 기록하지 않습니다. 사내 환경 설정이 없는 계정에서는 `LD_LIBRARY_PATH`에 사내 library 경로(`/primehome/tools/Inhouse/libs/libevent/lib`, `/primehome/tools/Inhouse/libs/ncurses/lib`)가 있어야 tmux가 뜹니다. 사내 환경 설정이 있는 계정에서는 이미 맞습니다.
+- 설치기는 쓸 tmux를 한 번 골라 설치본(`tools/tmux.env`)에 기록합니다([계약 6.2절](project-team/install-contract.md#62-tmux-선택)). 후보의 순서는 `PROJECT_AGENT_TMUX`(직접 지정), PATH의 첫 `tmux`, 사내 tmux(`/primehome/tools/Inhouse/tmux/latest/bin/tmux`)입니다. 사내 tmux는 library(libevent 등)가 필요한데, 설치기가 빈 환경에서 뜨는 데 필요한 library 경로도 함께 기록합니다. 그래서 cron처럼 사용자 설정을 읽지 않는 환경, 사내 환경 설정이 없는 계정, PATH가 다른 환경에서도 설치본의 모든 구성 요소가 같은 tmux를 씁니다.
+- 다른 tmux를 쓰려면 `PROJECT_AGENT_TMUX=<경로>`를 주고 새 release를 설치(`upgrade`)합니다. 기록한 tmux가 지워졌거나 낮아지면 `check`가 실패로 알립니다. 자기 shell에서 tmux server를 여는 tmux는 사용자의 PATH가 정하므로, 설치기가 기록한 tmux와 같은 tmux가 PATH 앞에 오게 합니다(다른 tmux가 연 server에는 설치본이 닿지 못합니다).
 - Claude Code와 Codex의 skill link는 그 provider의 홈(`~/.claude`, `~/.codex`)이 이미 있을 때만 만듭니다. 쓰려는 CLI를 한 번 실행해 홈을 만든 뒤에 설치합니다.
 - 홈이 생기기 전에 설치했다면 `install`을 다시 실행해도 link를 더하지 않습니다("No change"). 홈을 만든 뒤 `uninstall`과 `install`을 차례로 실행합니다(7절).
 

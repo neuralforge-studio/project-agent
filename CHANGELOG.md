@@ -7,6 +7,9 @@
 - SESSION-017
 - BOARD-027
 - TEAM-003
+- TMUX-004
+- SESSION-018
+- TEST-015
 
 형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
 

@@ -12,7 +12,7 @@ import pytest
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 sys.path.insert(0, str(FIXTURES))
 from agent_session_fixture import command_timeout, git, session_env  # noqa: F401,E402  (pytest fixture)
-from agent_session import ended  # noqa: E402
+from agent_session import ended, tmux_program  # noqa: E402
 from agent_session.errors import SessionError  # noqa: E402
 from agent_session.state import control_lock  # noqa: E402
 from agent_session.tmux import EXIT_HOOK, Tmux  # noqa: E402
@@ -277,9 +277,9 @@ def test_a_tmux_older_than_the_minimum_is_refused_with_a_named_error(monkeypatch
     with pytest.raises(SessionError) as error:
         control.require_version()
     assert (error.value.code, error.value.exit_code) == ("tmux_too_old", 5)
-    assert error.value.details == {"version": version, "minimum": "3.8",
-                                   "company_tmux": "/primehome/tools/Inhouse/tmux/latest/bin"}
-    assert "3.8" in error.value.message and "/primehome/tools/Inhouse/tmux/latest/bin" in error.value.message
+    assert error.value.details == {"version": version, "minimum": "3.8", "program": "tmux",
+                                   "company_tmux": tmux_program.COMPANY_TMUX}
+    assert "3.8" in error.value.message and tmux_program.COMPANY_TMUX in error.value.message
 
 
 def test_start_restart_and_resume_are_refused_before_anything_is_created_on_an_old_tmux(session_env, monkeypatch):

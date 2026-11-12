@@ -7,6 +7,7 @@ mod model;
 mod render_cmd;
 mod switch;
 mod tmuxio;
+mod tmuxprog;
 mod ui;
 mod window;
 
@@ -16,6 +17,7 @@ fn main() {
         Some("--version") => println!("project-board-sidebar {}", env!("CARGO_PKG_VERSION")),
         Some("dump") => std::process::exit(data::dump::run(&args[1..])),
         Some("switch-project") | Some("switch-seat") => std::process::exit(switch::run(&args)),
+        Some("tmux-program") => std::process::exit(tmuxprog::print()),
         Some("render") => std::process::exit(render_cmd::run(&args[1..])),
         Some("tell") => std::process::exit(window::run(&args[1..])),
         _ => {

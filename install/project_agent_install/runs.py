@@ -151,11 +151,12 @@ def releases_in_use(env, slots):
     return {origin[1]: labels for origin, labels in origins_in_use(env, slots).items() if origin[0] == "release"}
 
 
-def server_option(name, socket=None):
-    """A tmux server option of the user's server (AGENT_SESSION_SOCKET, else the default), or None."""
-    command = ["tmux"] + (["-S", socket] if socket else []) + ["show-options", "-gqv", name]
+def server_option(source_root, name, socket=None):
+    """A tmux server option of the user's server (AGENT_SESSION_SOCKET, else the default), or None. It runs the
+    tmux of `source_root`'s `agent_session` (the release's record), not the first `tmux` in PATH."""
+    api = api_of(source_root)
+    control = api.Tmux(socket_path=socket) if socket else api.Tmux()
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
+        return control.command("show-options", "-gqv", name).strip()
+    except api.SessionError:
         return None
-    return result.stdout.strip() if result.returncode == 0 else None

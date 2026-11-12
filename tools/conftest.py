@@ -15,9 +15,11 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "tests"))
 import private_root  # noqa: E402
+import real_crontab  # noqa: E402
 
 
 def pytest_configure(config):
+    real_crontab.block()  # TEST-015: no test or child of the run can use the real crontab, whatever PATH it sets
     private_root.configure(config)
 
 

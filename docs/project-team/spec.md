@@ -173,7 +173,7 @@ SSH 서버는 Unix socket reverse forwarding을 허용해야 합니다.
 이미 승인한 provider 실행 인자는 기존 `launch`에서 읽습니다.
 SSH 명령은 검증한 host와 인자별 quoting을 사용합니다. 작업 경로·Git 인자는 JSON 표준 입력으로 전달합니다.
 
-원격 seat의 clone·Git 준비·작업 파일·셸·빌드·검증·tmux·provider daemon은 원격 호스트가 소유합니다.
+원격 seat의 clone·Git 준비·작업 파일·셸·빌드·검증·tmux·provider daemon은 원격 호스트가 소유합니다. 원격 호스트의 tmux는 로컬 설치의 기록이 정하지 않습니다. 원격 runtime은 그 host의 PATH 앞에 `remote.py`의 `REMOTE_PATH`(`$HOME/.local/bin`, `/opt/homebrew/bin`)를 두어 `tmux`를 찾고, bootstrap과 SSH 표시 명령이 같은 상수를 씁니다(설치 계약 `docs/project-team/install-contract.md` 6.2절).
 원격 clone은 base의 origin URL을 사용하며 로컬 `--reference` 경로를 전달하지 않습니다.
 원격 clone이 실패하면 새 디렉토리를 진단용으로 보존합니다. 기존 원격 파일은 지우지 않습니다.
 Git 기준·branch 준비와 반납 판정은 기존 규칙을 적용하며 해당 Git 명령은 원격 호스트에서 실행합니다.
@@ -399,7 +399,7 @@ Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않
 
 사용자가 대화 안에서 `/exit`하거나 CLI가 비정상 종료하면, 이 run을 끝낼 명령이 없습니다. 마무리는 아무의 명령 없이 끝나야 하므로 `stop`이 종료를 확인한 뒤 하는 일과 같은 함수(`Manager._settle`)를 씁니다.
 
-시작: tmux server가 관리 pane의 종료(`pane-died`)를 알립니다. start·restart·resume·Worker 배정이 CLI를 띄우기 직전에 server 전체의 hook 요소 `pane-died[agent-session]`을 씁니다. 이 hook은 pane이 어떤 관리 window의 pane(`@agent_session_pane_id`)일 때만 `python -m agent_session.internal finish-ended <socket> <window> <pane>`을 실행합니다. 이 요소 하나가 모든 project와 run을 맡고, 나머지는 window의 관리 정보에서 읽습니다. 사용자 설정의 `pane-died` hook은 그대로 실행됩니다(window에 쓰는 hook은 그것들을 대체하므로 쓰지 않습니다). 이름 붙은 hook index는 tmux 3.8부터이므로 start·restart·resume은 시작 전에 tmux 최소 버전을 확인하고, 낮으면 `tmux_too_old`(exit 5)로 거절합니다(최소 버전의 원본은 설치 계약 `docs/project-team/install-contract.md` 3.2절입니다). hook을 쓰는 것은 server 전체 상태를 바꾸므로 설치 계약 5.3절에 적고 `uninstall`이 되돌림 명령을 출력합니다. command를 만드는 경로(interpreter·library)에 따옴표·공백 등 hook이 실을 수 없는 문자가 있으면 hook을 쓰지 않고, 그 run은 지금처럼 `stop`이 마무리합니다. tmux가 hook 쓰기를 거절하면 그 오류(`tmux_command_failed`)로 start가 실패합니다. hook은 출력하지 않고 결과를 `agent/runs/<run_id>/finish-result.json`에 남깁니다. 마무리가 시작하지 못하거나 실패해도(interpreter 오류 등) 작업 pane에는 출력도 종료 상태도 남지 않고, 실패는 server option `@project_agent_last_error`에 한 줄로 기록합니다(설치 계약 5.3절 `run-shell` 규칙).
+시작: tmux server가 관리 pane의 종료(`pane-died`)를 알립니다. start·restart·resume·Worker 배정이 CLI를 띄우기 직전에 server 전체의 hook 요소 `pane-died[agent-session]`을 씁니다. 이 hook은 pane이 어떤 관리 window의 pane(`@agent_session_pane_id`)일 때만 `python -m agent_session.internal finish-ended <socket> <window> <pane>`을 실행합니다. 이 요소 하나가 모든 project와 run을 맡고, 나머지는 window의 관리 정보에서 읽습니다. 사용자 설정의 `pane-died` hook은 그대로 실행됩니다(window에 쓰는 hook은 그것들을 대체하므로 쓰지 않습니다). 이름 붙은 hook index는 tmux 3.8부터이므로 start·restart·resume은 시작 전에 tmux 최소 버전을 확인하고, 낮으면 `tmux_too_old`(exit 5)로 거절합니다(최소 버전의 원본은 설치 계약 `docs/project-team/install-contract.md` 3.2절입니다). hook을 쓰는 것은 server 전체 상태를 바꾸므로 설치 계약 5.3절에 적고 `uninstall`이 되돌림 명령을 출력합니다. command를 만드는 경로(interpreter·library와 기록한 tmux 실행 파일)에 따옴표·공백 등 hook이 실을 수 없는 문자가 있으면 hook을 쓰지 않고, 그 run은 지금처럼 `stop`이 마무리합니다. tmux가 hook 쓰기를 거절하면 그 오류(`tmux_command_failed`)로 start가 실패합니다. hook은 출력하지 않고 결과를 `agent/runs/<run_id>/finish-result.json`에 남깁니다. 마무리가 시작하지 못하거나 실패해도(interpreter 오류 등) 작업 pane에는 출력도 종료 상태도 남지 않고, 실패는 server option `@project_agent_last_error`에 한 줄로 기록합니다(설치 계약 5.3절 `run-shell` 규칙).
 
 마무리는 먼저 대상 제어 잠금 없이 그 slot의 현재 실행 포인터가 이 run과 이 pane을 가리키는지 읽습니다. 아니면 잠금을 잡지 않고 `not_current`로 끝납니다. `stop`이 반납한 run의 pane이 죽어도 이 hook이 돌지만, 그 run은 이미 현재가 아니고 다시 현재가 되지 않습니다. 이 확인에 잠금을 쓰면 바로 이어지는 `start`가 그 slot을 "target control is busy"로 건너뛰어 다른 seat를 받습니다(TEST-006). 포인터를 읽지 못하면 현재로 보고 아래 절차로 갑니다. 현재인 run(사용자 `/exit`)은 대상 제어 잠금 안에서 다음을 모두 확인한 run만 마무리합니다. 하나라도 아니면 아무것도 바꾸지 않고 이유(`finished: false`, `reason`)만 남깁니다.
 
@@ -538,7 +538,7 @@ Claude provider는 이렇게 만든 seat의 workspace trust를 기록합니다(5
 공통 workspace 검사:
 
 - Git work tree이며 origin URL이 base와 같습니다.
-- 추적·비추적 변경이 없습니다.
+- 추적·비추적 변경이 없습니다. "변경"의 정의는 4절 "Git 준비"의 "seat의 변경"이 소유합니다.
 - 현재 HEAD가 origin의 어떤 ref(`refs/remotes/origin/`)에 포함됩니다. 다른 remote는 세지 않습니다.
 - Local `cr/<ID>`가 있으면 `origin/cr/<ID>`와 같습니다.
 
@@ -549,6 +549,7 @@ CLI 프로세스가 존재한다는 이유만으로 시작 성공을 반환하�
 초기 등록이 아직 진행 중이면 남은 timeout 안에서 확인합니다.
 Provider 실행 전 실패한 예약이면 같은 run에서 Git 준비부터 재개합니다.
 이 경우 Worker가 아직 작업하지 않았으므로 별도 handoff를 요구하지 않습니다.
+그 run의 대기 process가 죽었으면(pane이 죽었고 기록한 대기 process와 그 process group이 모두 없음) 같은 run을 재개하지 않고 새 run으로 교체합니다. Provider를 띄우기 전이라 시도한 CLI가 없고, 그 run에서는 `launch`가 끝내 `target_changed`로 실패하기 때문입니다. 새 run은 위 Git 준비의 재시도 규칙으로 준비한 뒤 시작합니다. 대기 process의 종료를 확인하지 못하면(기록이 없음) 교체하지 않고 지금처럼 재개를 시도합니다. 판정은 `lifecycle._waiting_ended` 한 곳이 소유합니다. Leader도 같습니다.
 Provider 실행 여부가 불명확하면 미시작으로 추측하지 않고 오류를 반환합니다.
 실제 종료가 확인됐으면 같은 seat에서 CR을 이어받는 새 대화로 시작할 수 있습니다.
 보류로 todo에 있는 CR은 새 run을 만들기 직전에 in-progress로 옮깁니다.
@@ -583,14 +584,27 @@ CR의 `- Base: <commit> <ISO 시각>` header가 준비 이력입니다. 이 head
 - CR Base와 state hash가 다르면 baseline_mismatch이며 덮어쓰지 않습니다.
 - 새 기준으로 다시 시작하려면 Leader가 CR의 Base를 지우고 Disposition에 이유를 적습니다.
 
-공통 Git 명령은 `-c submodule.recurse=false`로 하위 저장소를 자동 갱신하지 않습니다.
+공통 Git 명령은 `-c submodule.recurse=false`로 하위 저장소를 자동 갱신하지 않습니다. 그래서 base를 checkout하면 gitlink가 바뀐 submodule은 마지막 `submodule update`까지 옛 commit에 남고, `git status`는 그것을 변경으로 보여 줍니다.
+
+#### seat의 변경
+
+"seat에 변경이 있다"는 판정은 `git_ops.dirty` 한 곳이 소유합니다. 준비의 clean 확인, 배정 검사, 반납 검사가 모두 이것을 씁니다(새로 clone한 seat의 확인은 준비 전이라 표지가 없어 해당 없음). `git status`의 변경에서 다음 하나를 뺀 나머지가 변경입니다.
+
+- 준비 도중에 남은 submodule gitlink 차이: 아직 끝나지 않은 준비가 있고(아래 표지가 있음), 그 submodule의 안쪽 변경이 없고(commit만 다름), 지금 checkout된 commit이 표지가 기록한 commit의 gitlink와 같은 것.
+
+표지는 seat의 `refs/agent-session/aligned` ref입니다. 값은 "submodule이 gitlink에 맞춰 있는 commit"입니다. Git 준비가 시작할 때 표지가 없으면 그때의 HEAD로 만들고(Git 명령을 하나 더 쓰며 작업 tree를 훑지 않음), 마지막 `submodule update`가 끝나면 지웁니다. 표지가 이미 있으면(이전 준비가 끊김) 바꾸지 않습니다. 그래서 같은 start를 다시 실행하면 자기 흔적을 변경으로 보지 않고 이어서 끝내며, `stop`·반납 검사도 그 흔적 때문에 막히지 않습니다.
+
+- 준비를 마친 seat(표지 없음)의 gitlink 차이는 모두 변경입니다. Worker나 사람이 submodule을 옮긴 것이기 때문입니다.
+- 준비가 끊긴 seat에서도 사람이 submodule을 다른 commit으로 옮겼거나 그 안의 파일을 고쳤으면 변경입니다. 표지의 gitlink와 다르거나 `SC..` 밖이기 때문입니다.
+- 표지는 사용자 변경을 가리지 않습니다. 이 ref는 `git status`·origin 포함 검사·push에 나타나지 않습니다.
+
 Git 준비와 seat 검사(배정·반납)의 Git 명령은 모두 timeout 600초를 씁니다. Seat 생성 clone만 3600초입니다.
 start의 Git 명령은 시작하기 전에 명령 전체 한도(`--timeout`)도 확인합니다(위 "한도를 넘긴 start").
 Timeout이 나면 git에 먼저 SIGTERM을 보내 최대 10초 기다립니다. git은 SIGTERM을 받으면 자기 `index.lock`을 지웁니다. 그래도 살아 있을 때만 SIGKILL을 보냅니다.
 중단한 명령의 작업 tree는 반쯤 바뀐 채 남을 수 있습니다. 도구는 lock이나 변경을 지우지 않습니다.
 Timeout은 `git_failed`(exit 5)로 보고하며 message에 중단 사실과 반쯤 적용됐을 수 있다는 점을 적습니다. details는 `operation`, `timeout_seconds`, `interrupted`(`SIGTERM` 또는 `SIGKILL`), `index_lock`(경로 또는 null), `index_lock_left`입니다. 경로는 `git rev-parse --git-path index.lock`으로 확인합니다.
 Seat에 `index.lock`이 있으면 배정 검사·반납 검사의 reason에 "seat has <경로> left by an interrupted Git command"를 더하고, Git 준비는 같은 문장으로 `workspace_dirty`를 반환합니다. 운영자 정리는 7절 "중단된 Git 단계의 정리"를 따릅니다.
-Start의 Git 준비(첫 준비·재시도·재배정·read-only)는 마지막에 한 번 `git submodule update --init --recursive`(timeout 600초)를 실행해 seat의 모든 submodule을 초기화하고 현재 HEAD의 gitlink에 맞춥니다. 실패하면 git_failed로 start가 멈추고 기록한 Git 기준과 배정은 유지합니다. 반납 검사는 바꾸지 않으며, Worker가 건드리지 않은 submodule은 깨끗하므로 반납됩니다. Submodule의 원격 접속·인증·protocol 허용은 사용자 Git 설정을 따릅니다.
+Start의 Git 준비(첫 준비·재시도·재배정·read-only)는 마지막에 한 번 `git submodule update --init --recursive`(timeout 600초)를 실행해 seat의 모든 submodule을 초기화하고 현재 HEAD의 gitlink에 맞춥니다. 실패하면 git_failed로 start가 멈추고 기록한 Git 기준과 배정은 유지합니다. 이 update가 끝나면 위 "seat의 변경"의 표지를 지웁니다. 반납 검사는 바꾸지 않으며, Worker가 건드리지 않은 submodule은 깨끗하므로 반납됩니다. update 전에 준비가 끊긴 seat도 표지가 있어 흔적이 변경이 아니므로 반납됩니다(CR이 in-progress라는 이유는 별개입니다). Submodule의 원격 접속·인증·protocol 허용은 사용자 Git 설정을 따릅니다.
 Git 준비는 submodule 초기화 앞에서 seat의 이전 `cr/*`도 정리합니다(`git_ops.prune_integrated`). 지우는 대상과 조건은 [CR 계약의 branch 수명](../../skills/project-item/references/cr.md#crid-branch의-수명)이 소유합니다. 이 정리는 실패한 Git 명령(`git_failed`)을 건너뛰어 start를 막지 않습니다. 시간 한도 초과 같은 다른 오류는 그대로 start의 오류입니다.
 Main 갱신은 `fetch origin main` 뒤 local main을 origin/main으로 fast-forward하는 것과 같은 결과를 냅니다.
 Local main이 origin/main보다 앞서 있으면 그대로 두고 그 tip을 기준으로 삼으며, 갈라졌으면 `git_failed`로 거절합니다.
@@ -621,7 +635,7 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | liveness(cwd=None, config_path=None, socket=None) | Session이 있는 slot(`leader`, seat 번호)마다 판정한 `session_id`와 `state`(`alive`·`stopped`·`unknown`) 반환. tmux 실행 근거와 CLI process만 조회하고 provider를 호출하지 않음 |
 | project_liveness(project, socket=None, view=None) | `liveness`와 같되 이미 `load_registry`로 얻은 project를 받음. `view`(`server_view`의 반환)를 주면 그 읽기로 판정하고 tmux를 다시 읽지 않음 |
 | server_view(projects, socket=None) | 이미 `load_registry`로 얻은 project들의 tmux 서버를 한 번 읽은 snapshot을 반환. `project_liveness`·`project_pending_releases`의 `view`로 넘김. 읽는 tmux process는 project·slot 수와 무관하게 둘입니다. 서버의 session·window·pane과 각 project의 현재 run window option을 읽고, owner·server identity·pointer 판정은 `get_current`와 같은 함수를 지남. 읽은 뒤의 변화는 보지 않으므로 다시 보려면 새로 만듦. 반환값은 불투명한 객체 |
-| crontab_sections() | 사용자 crontab의 project 구역을 순서대로 `{project, begin, end, jobs: [{id, command}], error}`로 반환([cron](#cron)의 형식). `begin`·`end`는 구역의 시작·끝 줄 그대로입니다. 구역이 깨져 있으면(끝 줄 없음·중복·낯선 줄) `error`가 그 코드(`cron_invalid`)이고 `jobs`는 비어 있으며 다른 구역은 그대로 읽습니다. crontab이 아직 없으면 빈 목록, 읽지 못하면 `crontab_unreadable`·`crontab_unavailable` 오류입니다. 쓰지 않습니다. 설치기가 `uninstall`·`check`에서 남은 구역을 알릴 때 씁니다(설치 계약 5.4절·7.3절) |
+| crontab_sections() | 사용자 crontab의 project 구역을 순서대로 `{project, begin, end, jobs: [{id, command, program}], error}`로 반환([cron](#cron)의 형식). `begin`·`end`는 구역의 시작·끝 줄 그대로이고, `program`은 작업 명령이 실행하는 프로그램(첫 단어. 앞의 `env`와 `NAME=값` 단어는 건너뜀)이거나 읽을 수 없으면 None입니다. 이 명령 줄을 읽는 규칙은 `cron.command_program` 하나입니다. 구역이 깨져 있으면(끝 줄 없음·중복·낯선 줄) `error`가 그 코드(`cron_invalid`)이고 `jobs`는 비어 있으며 다른 구역은 그대로 읽습니다. crontab이 아직 없으면 빈 목록, 읽지 못하면 `crontab_unreadable`·`crontab_unavailable` 오류입니다. 쓰지 않습니다. 설치기가 `uninstall`·`check`에서 남은 구역을 알릴 때 씁니다(설치 계약 5.4절·7.3절) |
 | cron_listing(project) | `project`(`load_registry`가 준 항목)의 cron 작업을 `{project, jobs: [{id, schedule, description, command, next_run, last_run}]}`로 반환합니다. `agent-session cron ls --project`와 같은 값입니다([cron](#cron)). crontab을 읽지 못하거나 그 project의 구역이 깨졌으면 `SessionError`(`crontab_unavailable`, `crontab_unreadable`, `cron_invalid`)입니다. 쓰지 않습니다. Board의 cron 창이 읽을 때 씁니다 |
 | pane_slot(pane, tmux=None) | tmux pane이 든 관리 window의 `(project_id, slot)`을 반환. slot은 `leader`·`seat-N`이고 target이 slot이 아니면 None. 관리 window가 아니면(project_id option이 없거나 JSON이 아님) None. window option만 한 번의 tmux 호출로 읽음. Board가 지금 보는 창의 project·slot을 알 때 씀. Rust sidebar는 같은 option을 같은 규칙으로 읽습니다(제품 지도의 "Rust sidebar와 Python이 같은 규칙을 읽습니다" 절) |
 | caller(project, tmux=None, store=None) | 이 명령을 실행하는 쪽을 `(slot, session_id)`로 반환. slot은 `leader`·`seat-N`·`operator`(관리 실행 밖 CLI, session_id는 None)·`unmanaged-agent`(이 project의 구성원이 아닌 agent). 환경의 대화 ID를 state의 binding과 대조하고, 없으면 관리 실행의 tmux pane으로 판정. project 도구의 유일한 caller 규칙 |
@@ -634,7 +648,8 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | pending_releases(cwd=None, config_path=None, socket=None) | 반납 대기인 seat를 `{JOB ID: {seat, since, reasons}}`로 반환. tmux 실행 근거만 읽고, 읽을 수 없는 run은 나열하지 않음 |
 | project_pending_releases(project, socket=None, view=None) | `pending_releases`와 같되 이미 `load_registry`로 얻은 project를 받음. `view`(`server_view`의 반환)를 주면 그 읽기로 판정 |
 | finish_release(cwd, job_id, config_path=None, socket=None) | JOB의 반납 대기를 마침. CR이 in-progress를 떠난 뒤에 호출. 대기가 없으면 None, 있으면 `{job_id, seat, released, reasons}`. 반납 조건은 stop과 같고 맞지 않으면 배정을 보존하고 이유를 반환 |
-| Tmux | tmux control 클래스. 소비자는 socket 경로를 주어 만들고 option 조회·pane 조작에 씀 |
+| Tmux | tmux control 클래스. 소비자는 socket 경로를 주어 만들고 option 조회·pane 조작에 씀. 실행하는 tmux는 호출 환경의 PATH가 아니라 설치기의 기록입니다(`Tmux.program()`이 그 실행 파일을 돌려줌. 설치 계약 `docs/project-team/install-contract.md` 6.2절) |
+| COMPANY_TMUX | 사내 tmux의 디렉터리(`/primehome/tools/Inhouse/tmux/latest/bin`). 설치기가 tmux를 고르는 후보로 읽는 단 하나의 정의입니다. 정의는 `agent_session/tmux_program.py`(설치 계약 `docs/project-team/install-contract.md` 6.2절) |
 | PANE_ID_OPTION | 관리 window의 pane을 가리키는 tmux window option 이름(`@agent_session_pane_id`). 정의는 `agent_session/tmux.py`. tmux 설정 파일은 import할 수 없어 같은 문자열을 주석과 함께 씀 |
 
 `PANE_ID_OPTION`·`RemoteSeat`·`SessionError`·`Tmux`는 이름과 형식을 제공하는 값이고, 나머지는 함수입니다.
@@ -1250,7 +1265,7 @@ Git 명령이 timeout이나 외부 종료로 끊기면 seat에 `index.lock`과 �
 
 1. 그 seat를 쓰는 git process가 없음을 확인하십시오(`ps`로 해당 seat 경로의 git과 그 hook·하위 process).
 2. Reason이나 `git_failed` details의 `index_lock` 경로를 확인하고 그 파일을 지우십시오.
-3. Start의 Git 단계는 깨끗한 tree에서 시작합니다. `git status`의 변경이 중단된 단계(예: origin/main으로의 fast-forward)의 것뿐인지 확인한 뒤 되돌리십시오. 작업 내용이 섞여 있으면 먼저 보존하십시오.
+3. Start의 Git 단계는 깨끗한 tree에서 시작합니다. `git status`의 변경이 중단된 단계(예: origin/main으로의 fast-forward)의 것뿐인지 확인한 뒤 되돌리십시오. 작업 내용이 섞여 있으면 먼저 보존하십시오. submodule의 gitlink 차이뿐이고 그 안의 변경이 없으면, 도구가 자기 준비의 흔적으로 알아봅니다(4절 "seat의 변경"). 되돌리지 않고 같은 start를 다시 실행하면 됩니다.
 4. 같은 `start --job <CR>`를 다시 실행하십시오.
 
 Process가 남았거나 변경의 출처를 확인하지 못하면 lock과 tree를 그대로 두십시오.
@@ -1429,9 +1444,9 @@ M H DOM MON DOW 명령
 
 **기본 점검 작업**: project의 작업 `check`는 30분마다(`13,43 * * * *`, `:00`·`:30`을 피함) 그 release의 `bin/agent-session --config <등록 파일> [--socket-name|--socket-path ...] check --project NAME`을 실행합니다. cron이 출력을 메일로 보내지 않도록 `>/dev/null 2>&1`을 붙이며, 결과는 `last_run`이 보입니다.
 
-**check 줄이 쓰는 tmux**(SESSION-016): cron의 PATH는 `/usr/bin:/bin`이라 시스템 tmux가 잡히고, 이것이 server(사내 tmux)와 맞지 않으면 모든 호출이 `lost server`로 실패합니다. 그래서 줄을 만드는 쪽(`cron.check_command`, 한 곳)이 Leader를 시작한 환경의 PATH에서 처음 찾은 `tmux`의 디렉터리(절대 경로, symlink는 풀지 않아 `latest`를 따라감)를 줄 앞에 `env PATH=<그 디렉터리>:/usr/bin:/bin`으로 적습니다. 줄은 cron의 `/bin/sh`에서도, 사람이 어느 shell에서 복사해 실행해도 같게 동작합니다. 그 디렉터리가 `/usr/bin`이나 `/bin`이면 cron이 같은 tmux를 찾으므로 `env`를 붙이지 않습니다. tmux를 찾지 못했으면 붙이지 않고, 그 줄의 run은 `tmux_unavailable`로 기록됩니다. Leader 시작(start·restart·resume의 새 run)은 이 server에 이미 닿은 환경에서 실행하므로 그 tmux는 server와 맞습니다. 사용자의 PATH나 login 설정은 쓰지 않습니다.
+**check 줄이 쓰는 tmux**(SESSION-016, TMUX-004): 줄은 프로그램과 인자뿐입니다(`env PATH=...` 같은 환경의 사본이 없습니다). cron의 PATH는 `/usr/bin:/bin`이라 시스템 tmux가 잡히고, 이것이 server(사내 tmux)와 맞지 않으면 모든 호출이 `lost server`로 실패하므로, 어느 tmux를 쓸지는 호출한 process의 PATH가 아니라 release의 기록(`tools/tmux.env`)이 정합니다. `agent-session`이 그 기록을 읽어 tmux를 실행하므로 cron에서도 사용자 shell에서도 줄이 같게 동작합니다(설치 계약 `docs/project-team/install-contract.md` 6.2절). 기록이 비었거나 기록한 tmux가 없어지면 그 줄의 run은 `tmux_unavailable`로 기록됩니다. 줄 형식을 읽는 곳은 줄을 쓰는 `cron.py` 하나입니다. 설치기는 줄을 해석하지 않고 `crontab_sections`가 작업마다 주는 `program`을 씁니다.
 
-**Leader 시작**: Claude·Codex 모두 Leader를 시작(start·restart·resume의 새 run)할 때 `check` 작업이 없으면 만듭니다. 있으면 일정과 설명은 그대로 두고(사람이 바꿨을 수 있음) 명령만 이 release의 것(위 tmux 접두 포함)으로 맞춥니다. 옛 명령과 사람이 앞에 붙인 `PATH=` 접두도 이때 새 명령으로 바뀝니다. `cron add`로 넣은 다른 작업의 명령은 바꾸지 않습니다. 결과의 `cron`은 `{"check": "added" | "present" | "updated"}`이고 crontab을 읽거나 쓰지 못하면 Leader 시작은 막지 않고 `{"check": "failed", "error": ...}`를 적습니다(다음 시작이 다시 시도). Worker 시작은 crontab을 건드리지 않습니다.
+**Leader 시작**: Claude·Codex 모두 Leader를 시작(start·restart·resume의 새 run)할 때 `check` 작업이 없으면 만듭니다. 있으면 일정과 설명은 그대로 두고(사람이 바꿨을 수 있음) 명령만 이 release의 것으로 맞춥니다. 옛 release가 쓴 `env PATH=<tmux 디렉터리>:/usr/bin:/bin` 접두와 사람이 앞에 붙인 `PATH=` 접두도 이때 새 명령으로 바뀝니다(옛 줄의 이전은 이 한 번의 갱신이 전부입니다. `upgrade`는 crontab을 고치지 않습니다). `cron add`로 넣은 다른 작업의 명령은 바꾸지 않습니다. 결과의 `cron`은 `{"check": "added" | "present" | "updated"}`이고 crontab을 읽거나 쓰지 못하면 Leader 시작은 막지 않고 `{"check": "failed", "error": ...}`를 적습니다(다음 시작이 다시 시도). Worker 시작은 crontab을 건드리지 않습니다.
 
 ## 8. CR과 실행 입력
 

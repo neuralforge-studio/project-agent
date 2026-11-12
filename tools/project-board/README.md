@@ -62,6 +62,7 @@ instead of creating a virtual environment.
 project-board toggle                          # show or hide the tmux sidebar
 project-board --config PATH toggle            # use a specific project registry
 project-board-sidebar [--config PATH]         # run the sidebar in the current pane (tmux runs this)
+project-board-sidebar tmux-program             # print the tmux it runs, as JSON (the installer's record; install contract 6.2)
 project-board popup --project PROJECT_ID      # show that project's unfinished decisions
 project-board cr --project PROJECT_ID --state open  # show a CR list
 project-board cron --project PROJECT_ID       # show that project's cron jobs (read-only)

@@ -111,8 +111,53 @@ def is_git(root):
     return (Path(root) / ".git").exists()
 
 
+ALIGNED_REF = "refs/agent-session/aligned"
+
+
+def _aligned(root):
+    """The commit whose submodule gitlinks the seat's submodules are aligned to while a preparation is
+    unfinished, else None."""
+    return git(root, "for-each-ref", "--format=%(objectname)", ALIGNED_REF) or None
+
+
+def _begin(root):
+    """Start of a preparation: record the HEAD the seat is aligned to, unless an unfinished one already did.
+
+    The preparation switches HEAD and aligns the submodules afterwards (`submodule update`). A preparation
+    that ends in between (a start timeout) leaves submodules at this commit's gitlinks while HEAD points at
+    others. The record is how `dirty` tells that trace from a person moving a submodule: the submodule must
+    still be exactly at this commit's gitlink."""
+    if _aligned(root) is None:
+        git(root, "update-ref", ALIGNED_REF, "HEAD")
+
+
+def _finish(root):
+    git(root, "update-ref", "-d", ALIGNED_REF)
+
+
+def _left_by_preparation(root, entry):
+    """True for an unstaged change of a submodule that differs only by its checked-out commit, where
+    that commit is the one the unfinished preparation left (its recorded commit's gitlink)."""
+    fields = entry.split(" ", 8)
+    if len(fields) < 9 or fields[0] != "1" or fields[1] != ".M" or fields[2] != "SC..":
+        return False
+    aligned = _aligned(root)
+    if aligned is None:
+        return False
+    path = fields[8]
+    recorded = git(root, "ls-tree", "-z", aligned, "--", path).split("\t")[0].split(" ")
+    if recorded[:2] != ["160000", "commit"]:
+        return False
+    return git(root, "-C", path, "rev-parse", "HEAD") == recorded[2]
+
+
 def dirty(root):
-    return git(root, "status", "--porcelain", "--untracked-files=all")
+    """The seat's changes that are not the trace of an unfinished preparation, one per line; empty when clean.
+
+    The one definition of "the seat has changes" (preparation, assignment and release checks). A submodule
+    left at its old commit by a preparation that ended before `submodule update` is not a change."""
+    entries = git(root, "status", "--porcelain=v2", "-z", "--untracked-files=all").split("\0")
+    return "\n".join(entry for entry in entries if entry and not _left_by_preparation(root, entry))
 
 
 def sync_main(root):
@@ -243,8 +288,10 @@ def prune_integrated(root, keep):
 def prepare(context, project, store):
     """Prepare the seat's Git state, then align its submodules with the HEAD gitlinks."""
     baseline = _prepare_git(context, project, store)
-    prune_integrated(_root(context, project), f'cr/{context["job"]["job_id"]}')
-    git(_root(context, project), "submodule", "update", "--init", "--recursive")
+    root = _root(context, project)
+    prune_integrated(root, f'cr/{context["job"]["job_id"]}')
+    git(root, "submodule", "update", "--init", "--recursive")
+    _finish(root)
     return baseline
 
 
@@ -270,6 +317,7 @@ def _prepare_git(context, project, store):
     locked = lock_reason(root)
     if locked:
         raise SessionError("workspace_dirty", locked, 3, {"index_lock": str(index_lock(root))})
+    _begin(root)
     state_hash = store.read()[seat]["git_hash"]
     base = job.get("base")
     if base is None and state_hash:

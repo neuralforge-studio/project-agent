@@ -27,6 +27,12 @@ if [[ -z "$PY" ]]; then
     echo "The configured Python interpreter is unavailable." >&2
     exit 5
 fi
+. "$SCRIPT_DIR/../../tools/tmux-launcher.sh"
+project_agent_select_tmux "$SCRIPT_DIR/../../tools"
+if [[ -z "$TMUX_BIN" ]]; then
+    echo "No tmux of the minimum version is recorded for this release." >&2
+    exit 5
+fi
 export PYTHONNOUSERSITE=1
 unset PYTHONHOME
 exec "$PY" -S "$SCRIPT_DIR/tmux_decide_status.py" "$@"
