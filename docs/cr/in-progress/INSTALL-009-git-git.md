@@ -3,6 +3,7 @@
 - Opened: 2026-11-13
 - Scope: project-agent
 - Severity: S1
+- Base: 229ce7d4fa57e6654e7cfb1fc6e25c9709b53c7f 2026-11-13T01:06:33+09:00
 
 ## Symptom
 2026-11-13에 0.12.0 release를 검증했습니다(clone, release commit 4e9044f, host load 약 65, TMPDIR는 NFS). `python -m pytest -q -n 8 install/tests`가 1 failed, 317 passed, 2 skipped였습니다.

@@ -3,6 +3,7 @@
 - Opened: 2026-11-13
 - Scope: project-agent
 - Severity: S1
+- Base: 229ce7d4fa57e6654e7cfb1fc6e25c9709b53c7f 2026-11-13T01:06:33+09:00
 
 ## Symptom
 2026-11-13에 0.12.0 release를 검증했습니다(clone, release commit 4e9044f, TMPDIR=`/primehome/swain/tmp`, NFS). `(cd tools/project-board/rust && cargo test --offline --locked)`가 96 passed, 1 failed였습니다.
