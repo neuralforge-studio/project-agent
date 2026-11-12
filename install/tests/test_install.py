@@ -627,7 +627,7 @@ def test_the_release_holds_the_product_paths_and_no_tests_or_cr(home, source, na
                 and not entry.startswith("docs/cr/") and "/tests/" not in entry and "__pycache__" not in entry
                 and not re.search(r"(^|/)(test_[^/]*\.py|conftest\.py)$", entry)}
     files = release_files(home, name)
-    assert files - {"tools/python.env", "tools/project-board/bin/project-board-sidebar"} == expected   # the build's two files
+    assert files - {"tools/python.env", "tools/tmux.env", "tools/project-board/bin/project-board-sidebar"} == expected   # what the installer writes
     assert {"VERSION", "tools/agent-session/bin/agent-session", "skills/project-team/SKILL.md",
             "integrations/tmux/project-agent.conf", "install/project-agent-install"} <= files
 

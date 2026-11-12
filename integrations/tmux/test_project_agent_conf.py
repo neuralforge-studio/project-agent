@@ -622,10 +622,13 @@ def read_collecting_errors(tmux, conf):
 
 def with_minimum(tmp_path, version):
     """A copy of the integration files whose minimum tmux version is `version`."""
-    target = tmp_path / "copy"
-    target.mkdir()
+    root = tmp_path / "copy"
+    target = root / "integrations" / "tmux"
+    target.mkdir(parents=True)
     for name in FILES:
         shutil.copy2(TMUX_DIR / name, target / name)
+    (root / "tools").mkdir()
+    shutil.copy2(TMUX_LAUNCHER, root / "tools")            # the scripts read it from `../../tools`
     conf = target / "project-agent.conf"
     conf.write_text(MINIMUM.sub("set-option -g @project_agent_tmux_min '%s'" % version, conf.read_text()))
     return conf
