@@ -789,7 +789,7 @@ def _window_pane(control: Tmux, window: str) -> str | None:
     return None
 
 
-def _window_command(socket: str, args: list[str], kind: str) -> list[str]:
+def _window_command(tmux: str, socket: str, args: list[str], kind: str) -> list[str]:
     """The command of a Board window: it marks its own pane, then becomes `args`.
 
     The mark is made by the pane itself because `new-pane -W` returns only when the pane ends, so
@@ -799,7 +799,7 @@ def _window_command(socket: str, args: list[str], kind: str) -> list[str]:
     loaded host and the pane is empty until its screen is drawn (BOARD-025).
     """
     pane = '"$TMUX_PANE"'
-    script = (f"tmux -S {shlex.quote(socket)} set-option -p -t {pane} remain-on-exit off \\; "
+    script = (f"{shlex.quote(tmux)} -S {shlex.quote(socket)} set-option -p -t {pane} remain-on-exit off \\; "
               f"set-option -p -t {pane} {PANE_WINDOW} 1 \\; "
               f"set-option -p -t {pane} {PANE_WINDOW_KIND} {kind} \\; "
               f"set-option -pu -t {pane} {PANE_WINDOW_LINK}; "
@@ -864,7 +864,7 @@ def _popup(control: Tmux, client: str, args: list[str], title: str, size: str, k
                 return reused
         link = str(_private_dir(control) / (uuid.uuid4().hex[:16] + ".win"))
         environment = ["-e", f"PROJECT_BOARD_CLIENT={client}", "-e", f"{window_link.SOCKET_ENV}={link}"]
-        command_line = _window_command(control.effective_socket(), args, kind)
+        command_line = _window_command(control.program(), control.effective_socket(), args, kind)
         if pane is not None:
             old = _window_options(control, pane)[1]
             if old:                                     # the process that is replaced leaves its socket file behind
@@ -875,7 +875,7 @@ def _popup(control: Tmux, client: str, args: list[str], title: str, size: str, k
             control.command("respawn-pane", "-k", "-t", pane, *environment, *command_line)
             control.command("select-pane", "-t", pane, "-T", title)
             return _ok({"client": client, "pane": pane})
-        command = ["tmux", "-S", control.effective_socket(), "new-pane", "-W", "-t", window,
+        command = [control.program(), "-S", control.effective_socket(), "new-pane", "-W", "-t", window,
                    "-x", size, "-y", size, "-X", margin, "-Y", margin, "-T", title, *environment, *command_line]
         # tmux ends a pane it closes (the border's close button, `kill-window`) with SIGHUP, and `-W` then
         # returns 129. That is a person closing the window, not a failure, so BOARD-011 records none.

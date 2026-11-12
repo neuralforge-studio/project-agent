@@ -366,10 +366,11 @@ def test_the_sections_of_the_crontab_are_listed_with_their_jobs_and_marker_lines
     add_job(found["beta"], crontab)
     assert api.crontab_sections() == [
         {"project": "alpha", "begin": "# >>> project-agent: alpha >>>", "end": "# <<< project-agent: alpha <<<",
-         "error": None, "jobs": [{"id": "check", "command": "/r/1/bin/agent-session check --project alpha"},
-                                 {"id": "report", "command": "/r/1/bin/report 50%"}]},
+         "error": None, "jobs": [{"id": "check", "command": "/r/1/bin/agent-session check --project alpha",
+                                  "program": "/r/1/bin/agent-session"},
+                                 {"id": "report", "command": "/r/1/bin/report 50%", "program": "/r/1/bin/report"}]},
         {"project": "beta", "begin": "# >>> project-agent: beta >>>", "end": "# <<< project-agent: beta <<<",
-         "error": None, "jobs": [{"id": "check", "command": "/bin/true"}]}]
+         "error": None, "jobs": [{"id": "check", "command": "/bin/true", "program": "/bin/true"}]}]
 
 
 def test_a_damaged_section_is_listed_with_its_error_and_the_others_stay_readable(crontab_file):
@@ -378,7 +379,7 @@ def test_a_damaged_section_is_listed_with_its_error_and_the_others_stay_readable
                             "# job check: d\n* * * * * /x\n# <<< project-agent: ok <<<\n")
     listed = api.crontab_sections()
     assert [(item["project"], item["error"]) for item in listed] == [("bad", "cron_invalid"), ("ok", None)]
-    assert listed[0]["jobs"] == [] and listed[1]["jobs"] == [{"id": "check", "command": "/x"}]
+    assert listed[0]["jobs"] == [] and listed[1]["jobs"] == [{"id": "check", "command": "/x", "program": "/x"}]
 
 
 def test_sections_of_a_crontab_that_cannot_be_read_are_an_error_not_an_empty_list(crontab_file, monkeypatch):
@@ -389,44 +390,49 @@ def test_sections_of_a_crontab_that_cannot_be_read_are_an_error_not_an_empty_lis
     assert error.value.code == "crontab_unreadable"
 
 
-# SESSION-016: the check job reaches the Leader's tmux under cron's PATH
+# TMUX-004: the check line is the program and its arguments; the one reading of a job command is `command_program`
 
-def fake_tmux_dir(tmp_path, name, body="exit 0"):
-    directory = tmp_path / name
-    directory.mkdir()
-    (directory / "tmux").write_text(f"#!/bin/sh\n{body}\n")
-    (directory / "tmux").chmod(0o755)
-    return directory
-
-
-def test_the_check_line_puts_the_tmux_of_the_leader_start_ahead_of_crons_path(projects, tmp_path, monkeypatch):
+def test_the_check_line_is_the_program_and_its_arguments_whatever_the_path_is(projects, tmp_path, monkeypatch):
     _, found = projects
-    directory = fake_tmux_dir(tmp_path, "in house")                      # a space: the line must still be one word
-    monkeypatch.setenv("PATH", f"{directory}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
     command = cron.check_command(found["alpha"], socket_path="/tmp/tmux-1/default")
-    assert command.startswith(f"env 'PATH={directory}:/usr/bin:/bin' ")
+    assert command.startswith(str(Path(cron.__file__).resolve().parents[1] / "bin" / "agent-session") + " --config ")
     assert " --socket-path /tmp/tmux-1/default check --project alpha >/dev/null 2>&1" in command
+    assert "env" not in command.split() and "PATH=" not in command
 
 
-def test_the_check_line_has_no_env_without_a_tmux_or_when_cron_finds_it_anyway(projects, tmp_path, monkeypatch):
-    _, found = projects
-    monkeypatch.setenv("PATH", str(tmp_path))                            # no tmux in it
-    assert cron.check_command(found["alpha"]).startswith(str(Path(cron.__file__).resolve().parents[1] / "bin"))
-    monkeypatch.setattr(cron.shutil, "which", lambda name: "/usr/bin/tmux")
-    assert not cron.check_command(found["alpha"]).startswith("env ")
+@pytest.mark.parametrize("command, program", [
+    ("/rel/bin/agent-session --config /c check --project a >/dev/null 2>&1", "/rel/bin/agent-session"),
+    ("env PATH=/x:/usr/bin:/bin /old/agent-session check", "/old/agent-session"),
+    ("env 'PATH=/in house:/usr/bin:/bin' /old/agent-session check", "/old/agent-session"),
+    ("/usr/bin/env A=1 B='two words' /old/tool", "/old/tool"),
+    ("PATH=/keep/me:/bin /home/user/report.sh", "/home/user/report.sh"),
+    ("'/path with space/prog' arg", "/path with space/prog"),
+    ("env A=1", None),
+    ("", None),
+    ("unterminated 'quote", None),
+])
+def test_command_program_is_the_first_word_after_env_and_assignments(command, program):
+    assert cron.command_program(command) == program
+
+
+def test_the_api_gives_each_job_its_program(crontab_file):
+    from agent_session import api
+    crontab_file.write_text("# >>> project-agent: a >>>\n# job check: x\n13 * * * * env PATH=/x /rel/agent-session check\n"
+                            "# <<< project-agent: a <<<\n")
+    jobs = api.crontab_sections()[0]["jobs"]
+    assert [(job["id"], job["program"]) for job in jobs] == [("check", "/rel/agent-session")]
 
 
 def test_ensure_replaces_an_old_command_and_a_hand_written_path_prefix_and_keeps_the_users_jobs(
-        projects, crontab, tmp_path, monkeypatch):
+        projects, crontab):
     _, found = projects
-    # In front of the PATH of the test, which holds the `crontab` shim: the real crontab is never reached.
-    monkeypatch.setenv("PATH", f"{fake_tmux_dir(tmp_path, 'mine')}:{os.environ['PATH']}")
     cron.add(found["alpha"], crontab, "report", "0 9 * * *", "보고", "PATH=/keep/me:/bin /home/user/report.sh")
     cron.add(found["alpha"], crontab, "check", "13,43 * * * *", "점검",
              "PATH=/primehome/tools/Inhouse/tmux/latest/bin:/usr/bin:/bin /old/release/agent-session check")
     assert cron.ensure_check(found["alpha"], crontab) == {"check": "updated"}
     jobs = {job["id"]: job["command"] for job in cron.listing(found["alpha"], crontab)["jobs"]}
     assert jobs["check"] == cron.check_command(found["alpha"]) and "/old/release" not in jobs["check"]
-    assert jobs["check"].startswith(f"env PATH={tmp_path / 'mine'}:/usr/bin:/bin ")
+    assert "PATH=" not in jobs["check"]
     assert jobs["report"] == "PATH=/keep/me:/bin /home/user/report.sh"
     assert cron.ensure_check(found["alpha"], crontab) == {"check": "present"}

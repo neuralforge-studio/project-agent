@@ -25,6 +25,7 @@ sys.path.insert(0, str(TMUX_DIR.parents[1] / "tools" / "tests"))  # tmux_test_se
 import tmux_test_server  # noqa: E402
 FILES = ("project-agent.conf", "project-agent-main.conf", "project_agent_bind.sh", "project_agent_run.sh", "project_board_visibility.sh", "tmux_project_board.sh", "tmux_decide_status.sh", "tmux_decide_status.py")
 LAUNCHER = TMUX_DIR.parents[1] / "tools" / "python-launcher.sh"
+TMUX_LAUNCHER = TMUX_DIR.parents[1] / "tools" / "tmux-launcher.sh"
 PRODUCT_PREFIX = "tmux_project_board.sh toggle"
 PRODUCT_MOUSE = "tmux_project_board.sh click"
 MOUSE_DEFAULT = r"select-pane -t = \; send-keys -M"
@@ -121,6 +122,7 @@ def make_release(root, tag, log):
     board.parent.mkdir(parents=True)
     board.write_text('#!/bin/sh\necho "%s board $*" >> "%s"\n' % (tag, log))
     shutil.copy2(LAUNCHER, root / "tools")
+    shutil.copy2(TMUX_LAUNCHER, root / "tools")
     python = root / "installed-python"
     python.write_text('#!/bin/sh\necho "%s decide-python $1 $(basename "$2") nousersite=$PYTHONNOUSERSITE" >> "%s"\n' % (tag, log))
     (root / "tools" / "python.env").write_text("PROJECT_AGENT_PYTHON=%s\nPROJECT_AGENT_PYTHONPATH=\n" % python)
@@ -658,7 +660,9 @@ def test_the_refusal_names_the_minimum_and_the_company_tmux():
     minimum = MINIMUM.search(conf).group(1)
     found = REFUSAL.search(conf)
     assert found and found.group(1) == minimum
-    assert found.group(2) == "/primehome/tools/Inhouse/tmux/latest/bin"
+    sys.path.insert(0, str(TMUX_DIR.parents[1] / "tools" / "agent-session"))
+    from agent_session.tmux_program import COMPANY_TMUX          # the one definition (TMUX-004); the message copies it
+    assert found.group(2) == COMPANY_TMUX
 
 
 def old_tmux():

@@ -8,10 +8,11 @@ from .config import RemoteSeat, load_registry, registry_path, resolve_project
 from .errors import SessionError
 from .state import StateStore, binding_identity, select_target
 from .tmux import PANE_ID_OPTION, Tmux
+from .tmux_program import COMPANY_TMUX
 
 # The public names. spec 5 (docs/project-team/spec.md) records each one's input and result.
 __all__ = (
-    "PANE_ID_OPTION", "RemoteSeat", "SessionError", "Tmux",
+    "COMPANY_TMUX", "PANE_ID_OPTION", "RemoteSeat", "SessionError", "Tmux",
     "caller", "check_binding", "crontab_sections", "finish_release", "liveness", "load_registry", "pane_slot",
     "pending_releases", "project_liveness", "project_pending_releases", "project_state",
     "read_state", "registry_path", "require_live", "resolve_project", "server_view",
@@ -19,8 +20,9 @@ __all__ = (
 
 
 def crontab_sections():
-    """The project sections in the user's crontab, in order: `{project, begin, end, jobs: [{id, command}], error}`
-    (`begin` and `end` are the section's marker lines, exactly as they stand in the crontab).
+    """The project sections in the user's crontab, in order: `{project, begin, end, jobs: [{id, command, program}], error}`
+    (`begin` and `end` are the section's marker lines, exactly as they stand in the crontab; `program` is the
+    program the job's command runs, read by `cron.command_program`, or None).
 
     `error` is None, or the code of a section that cannot be read (incomplete, repeated or with a line that is
     not a job; its jobs are then empty). A crontab that cannot be read raises `SessionError`

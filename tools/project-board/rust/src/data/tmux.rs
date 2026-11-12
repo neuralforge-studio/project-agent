@@ -170,7 +170,7 @@ impl Tmux {
     }
 
     fn command(&self, arguments: &[String]) -> Command {
-        let mut command = Command::new("tmux");
+        let mut command = crate::tmuxprog::command();
         if let Some(socket) = &self.socket {
             command.arg("-S").arg(socket);
         }

@@ -8,7 +8,6 @@ prints the commands that remove them, `check` names a section whose command poin
 
 import os
 import re
-import shlex
 
 from . import runs
 
@@ -24,29 +23,13 @@ def read(source_root):
         return [], error.code
 
 
-ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-
-
-def _command_path(command):
-    """The program of a job command: its first word after a leading `env` and `NAME=value` words (the check
-    line `agent-session` writes is `env PATH=... <release>/bin/agent-session ...`; a person may write `PATH=... program`)."""
-    try:
-        words = shlex.split(command)
-    except ValueError:
-        return None
-    if words and words[0] in ("env", "/usr/bin/env"):
-        words = words[1:]
-    while words and ASSIGNMENT.match(words[0]):
-        words = words[1:]
-    return words[0] if words else None
-
-
 def missing_programs(sections):
-    """`[(project, job id, path)]` for the jobs whose program does not exist any more."""
+    """`[(project, job id, path)]` for the jobs whose program does not exist any more. The program of a job is the
+    one `agent_session.api.crontab_sections` gives (`cron.command_program`, the one reading of a command line)."""
     found = []
     for section in sections:
         for job in section["jobs"]:
-            path = _command_path(job["command"])
+            path = job["program"]
             if path and os.path.isabs(path) and not os.path.exists(path):
                 found.append((section["project"], job["id"], path))
     return found

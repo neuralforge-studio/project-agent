@@ -18,7 +18,9 @@
 # usage: project_board_visibility.sh --socket SOCKET_PATH
 [ "${1:-}" = "--socket" ] && [ -n "${2:-}" ] || { echo "usage: $0 --socket SOCKET_PATH" >&2; exit 2; }
 socket=$2
-tm() { tmux -S "$socket" "$@"; }
+. "${0%/*}/../../tools/tmux-launcher.sh"
+project_agent_select_tmux "${0%/*}/../../tools"
+tm() { "$TMUX_BIN" -S "$socket" "$@"; }
 
 shown=" $(tm list-clients -F '#{window_id}' 2>/dev/null | tr '\n' ' ')"
 now=$(date +%s)

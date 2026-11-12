@@ -9,6 +9,11 @@ import subprocess
 from .errors import SessionError
 
 
+# The directories in front of the remote host's PATH: the one place that says which tmux (and CLIs) the remote
+# runtime and the SSH display command find there. The local installer's record (`tmux_program`) cannot name a tmux
+# of another host, so a remote runtime, which has no such record, uses the `tmux` first in this PATH.
+REMOTE_PATH = ("$HOME/.local/bin", "/opt/homebrew/bin")
+
 BOOTSTRAP = """import base64,fcntl,hashlib,io,json,os,pathlib,sys,zipfile
 r=json.load(sys.stdin)
 b=base64.b64decode(r.pop('source'))
@@ -25,10 +30,10 @@ with (d.parent/(d.name+'.lock')).open('a') as lock:
    z.extractall(d)
   (d/'ready').touch()
 sys.path.insert(0,str(d/'agent-session'))
-os.environ['PATH']=str(pathlib.Path.home()/'.local/bin')+':/opt/homebrew/bin:/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin:'+os.environ.get('PATH','')
+os.environ['PATH']=os.path.expandvars('@REMOTE_PATH@:/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin:')+os.environ.get('PATH','')
 from agent_session.remote_runtime import respond
 respond(r,d)
-"""
+""".replace("@REMOTE_PATH@", ":".join(REMOTE_PATH))
 
 # Repository-relative documents that a remote Worker follows (shipped under `guidance/`).
 # Every link of these documents that points into skills or docs/project-team must name a

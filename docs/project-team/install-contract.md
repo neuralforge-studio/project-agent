@@ -26,7 +26,7 @@
 
 | 경로 | 종류 | 내용 |
 | --- | --- | --- |
-| `~/.local/lib/project-agent/releases/<version>-<hash>/` | 디렉터리 | 불변 release. 도구, skill, 문서, tmux 통합 파일, 설치기(`install/`)를 담고 test·`__pycache__`·`docs/cr`는 담지 않습니다. Board sidebar의 Rust source(`tools/project-board/rust/`의 추적 파일: `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml`, `src/`. `target/`은 제외)와, 설치기가 그 source로 build한 binary `tools/project-board/bin/project-board-sidebar`(실행 권한)를 더합니다(2.1절). 설치 interpreter와 그 library 경로를 적은 `tools/python.env`를 더합니다(6.1절). 외부 package는 담지 않습니다(사용자 결정 D-20261109-01 waive). 만들 때 설치 interpreter로 미리 compile하고(`__pycache__`), 시동 번들(6.1절)을 `tools/__pycache__`에 쓰고, 쓰기 권한을 모두 뺍니다. 그래야 실행이 release에 파일을 더하지 않습니다. |
+| `~/.local/lib/project-agent/releases/<version>-<hash>/` | 디렉터리 | 불변 release. 도구, skill, 문서, tmux 통합 파일, 설치기(`install/`)를 담고 test·`__pycache__`·`docs/cr`는 담지 않습니다. Board sidebar의 Rust source(`tools/project-board/rust/`의 추적 파일: `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml`, `src/`. `target/`은 제외)와, 설치기가 그 source로 build한 binary `tools/project-board/bin/project-board-sidebar`(실행 권한)를 더합니다(2.1절). 설치 interpreter와 그 library 경로를 적은 `tools/python.env`를 더하고, 쓸 tmux의 실행 파일과 library 경로를 적은 `tools/tmux.env`를 더합니다(6.1절, 6.2절). 외부 package는 담지 않습니다(사용자 결정 D-20261109-01 waive). 만들 때 설치 interpreter로 미리 compile하고(`__pycache__`), 시동 번들(6.1절)을 `tools/__pycache__`에 쓰고, 쓰기 권한을 모두 뺍니다. 그래야 실행이 release에 파일을 더하지 않습니다. |
 | `~/.local/lib/project-agent/current` | symlink | 활성 release를 가리킵니다. 원자적으로 바꿉니다. |
 | `~/.local/lib/project-agent/tmux.conf` | 파일 | tmux include의 고정 대상입니다. `source-file -q ~/.local/lib/project-agent/current/integrations/tmux/project-agent.conf` 한 줄을 담습니다. 설치 때 한 번 쓰고 갱신하지 않습니다. |
 | `~/.local/lib/project-agent/install.json` | 파일 | 설치 기록 |
@@ -139,12 +139,12 @@ tmux 통합 파일은 읽힐 때 tmux server에 binding과 hook을 넣습니다(
 
 통합 파일의 본체(`integrations/tmux/project-agent-main.conf`)는 tmux 3.8 이상에서만 읽힙니다. 이름 붙은 hook index(`client-attached[project-agent]`)가 3.8에서 동작하고, 이 host에서 실행해 본 2.7(`{ }` 명령 블록을 읽지 못함)과 3.6a(이름 붙은 hook index를 받지 못함)에서는 동작하지 않기 때문입니다. 3.6a와 3.8 사이(3.7 계열)는 이 host에 없어 검증하지 않았으므로 지원하지 않습니다. 근거 표는 CR TMUX-002의 Result입니다. 이 값을 안내하는 문서(안내문 1절)는 이 절을 link하고 값을 다시 쓰지 않습니다.
 
-`agent-session`도 같은 최소 버전을 요구합니다. run을 띄울 때 server 전체 hook `pane-died[agent-session]`(이름 붙은 hook index, 5.3절)을 쓰기 때문입니다. `start`·`restart`·`resume`은 시작 전에, 실행 중인 server의 `#{version}`(server가 없으면 PATH의 첫 `tmux -V`)을 최소 버전과 비교합니다. 낮으면 JSON 오류 `tmux_too_old`(종료 코드 5)로 거절하고 아무것도 만들지 않습니다. 오류의 message와 details는 이 tmux의 버전, 최소 버전, 사내 tmux 경로(`/primehome/tools/Inhouse/tmux/latest/bin`을 PATH 앞에 둠)를 담습니다. `stop`·`send` 등은 hook이 필요 없어 낮은 tmux에서도 동작합니다. 최소 버전의 값은 아래 3항의 한 원본(`project-agent.conf`)에서 읽으며, 이 파일이 없는 tree(원격 runtime의 bundle)에서는 검사하지 않습니다.
+`agent-session`도 같은 최소 버전을 요구합니다. run을 띄울 때 server 전체 hook `pane-died[agent-session]`(이름 붙은 hook index, 5.3절)을 쓰기 때문입니다. `start`·`restart`·`resume`은 시작 전에, 실행 중인 server의 `#{version}`(server가 없으면 쓸 tmux의 `-V`. 쓸 tmux는 6.2절의 기록이 정합니다)을 최소 버전과 비교합니다. 낮으면 JSON 오류 `tmux_too_old`(종료 코드 5)로 거절하고 아무것도 만들지 않습니다. 오류의 message와 details는 쓰는 tmux의 경로(`program`)와 버전, 최소 버전, 사내 tmux의 디렉터리(`company_tmux`)를 담습니다. `stop`·`send` 등은 hook이 필요 없어 낮은 tmux에서도 동작합니다. 최소 버전의 값은 아래 3항의 한 원본(`project-agent.conf`)에서 읽으며, 이 파일이 없는 tree(원격 runtime의 bundle)에서는 검사하지 않습니다.
 
 1. **판정은 tmux가 읽는 첫 파일이 합니다.** `tmux.conf`(2절의 고정 파일)가 읽는 `project-agent.conf`는 tmux 2.x도 parse하는 문법만 씁니다. 실행 중인 tmux의 `#{version}`을 최소 버전과 비교해, 최소 버전 이상이면 `source-file -F`로 본체를 읽고 아니면 읽지 않습니다. 고정 파일은 바뀌지 않으므로 이미 설치한 사람도 release를 갱신하면(`upgrade`) 적용됩니다.
 2. **최소 버전보다 낮은 tmux가 설정을 읽으면** parse 오류 대신 오류 한 줄을 냅니다. 한 줄은 최소 버전과 사내 tmux 경로(`/primehome/tools/Inhouse/tmux/latest/bin`을 PATH 앞에 둠)를 담고, tmux가 설정 오류를 첫 client에 보이는 방식으로 보입니다. binding·hook과 `@project_agent_*` option은 남지 않습니다.
 3. **코드의 원본**은 `project-agent.conf`의 `set-option -g @project_agent_tmux_min '<버전>'` 한 줄입니다. 판정이 이 값을 쓰고(읽은 뒤 option은 지웁니다), 설치기 `check`·`install`이 같은 줄을 읽습니다. 이 절의 "최소 버전" 줄과 같은지는 `install/tests`가 검사합니다. 3.8 이상이면 `#{version}`이 `3.8`, `3.6a`, `next-3.9`처럼 `major.minor`로 시작하는 문자열이고, 그렇지 않은 tmux(`master`, 빈 값)는 낮은 것으로 봅니다.
-4. 설치기는 PATH에서 처음 찾은 `tmux`의 `-V`를 최소 버전과 비교합니다. `install`은 낮으면 같은 사실과 해소 방법을 안내하고 설치는 진행합니다. `check`는 실패(종료 코드 1)로 알립니다(7절). PATH에 `tmux`가 없으면 `check`·`install`은 안내만 하고 실패가 아닙니다. 설치기는 PATH를 고치지 않습니다(4절).
+4. 설치기는 6.2절의 순서로 최소 버전 이상인 tmux를 골라 release에 기록하고, `check`는 기록한 tmux가 최소 버전 이상으로 실행되는지 확인합니다(7절). 고를 tmux가 없으면 `install`·`upgrade`는 같은 사실과 해소 방법을 안내하고 진행합니다(기록은 비어 있고 그 release의 tmux 동작은 `tmux_unavailable`로 실패합니다). 설치기는 PATH를 고치지 않습니다(4절). 사용자가 자기 shell에서 부르는 tmux(그 tmux가 연 server에 binding과 Board가 들어갑니다)는 사용자의 PATH가 정합니다. 위 2항의 오류 한 줄이 그 안내입니다.
 
 ## 4. 설치가 절대 건드리지 않는 것
 
@@ -315,6 +315,29 @@ set-option -ag status-right '#{E:@project_agent_decide_status}'
 - 생성 명령의 시동(PERF-004): run을 시작할 때 생성하는 Python 명령(Claude의 등록 hook, `launch.sh`의 `mark_process`, `controller.sh`의 controller)은 `python -S -c "...from agent_session.internal import ..."`로 시작합니다. 표준 library만 쓰는 경로라 site 처리를 하지 않습니다. 이 명령에는 번들 reader를 앞에 읽는 진입 script가 없으므로, 번들은 [`agent_session/__init__.py`](../../tools/agent-session/agent_session/__init__.py)가 연결합니다. 패키지를 처음 import할 때 다른 모듈을 import하기 전에 `tools/bundle_boot.py`를 읽어 `_project_agent_bundle`을 부릅니다. 그래서 명령의 `-c` 프로그램과 인자(entry 이름, 인자 순서)는 그대로이고 hook마다 모듈 파일을 하나씩 여는 비용만 사라집니다. reader가 이미 설치되어 있으면(세 CLI의 진입점) 다시 설치하지 않고, `bundle_boot.py`가 없거나(원격 runtime의 복사본) 번들이 맞지 않으면(개발 checkout, 다른 interpreter) 일반 import로 동작합니다. 바뀐 명령은 새 run에만 적용되며, 떠 있는 run의 명령은 자기 release에 고정되어 그대로입니다.
 - `PROJECT_AGENT_PYTHON`이 없거나 실행할 수 없는 파일이면 `agent-session`은 JSON 오류 `python_unavailable`(종료 코드 5)을, 버전이 3.10 미만이면 `python_version`을 출력합니다. `project-item`, `project-board`와 `tmux_decide_status.sh`는 stderr에 한 줄을 쓰고 종료 코드 5로 끝납니다.
 
+### 6.2 tmux 선택
+
+project-agent가 쓰는 tmux는 호출한 process의 PATH가 아니라 release의 기록 하나가 정합니다(TMUX-004). 이 host에는 서로 통신하지 못하는 tmux 둘이 있고(시스템 tmux와 사내 tmux), cron처럼 사용자 설정을 읽지 않는 환경의 PATH는 사용자의 shell과 다릅니다. 호출 환경마다 PATH를 맞추는 방식은 그 환경이 하나 늘 때마다 같은 사실을 한 곳 더 복사해야 했습니다(SESSION-016의 crontab `env PATH=`).
+
+**기록**: 설치기가 release를 만들 때 `tools/tmux.env`를 씁니다(`python.env`와 같은 자리와 형식). 한 줄에 `NAME=값` 하나이고 값은 따옴표 없이 줄 끝까지입니다.
+
+| 이름 | 뜻 |
+| --- | --- |
+| `PROJECT_AGENT_TMUX` | 쓸 tmux 실행 파일의 절대 경로. symlink(`.../tmux/latest/bin/tmux`)는 풀지 않아 새 버전을 따라갑니다. 빈 값은 설치기가 최소 버전 이상인 tmux를 찾지 못했다는 뜻입니다. |
+| `PROJECT_AGENT_TMUX_LD_LIBRARY_PATH` | 그 tmux가 빈 환경에서 뜨는 데 필요한 library 디렉터리(`:`로 이음). 필요 없으면 빈 값. 사내 tmux는 libevent·ncurses를 자기 library 디렉터리에서 찾으므로 필요합니다. |
+
+**읽는 규칙**(모든 읽는 쪽이 같습니다): 환경 변수에 값이 있으면 이름마다 환경 변수가 이깁니다(빈 값은 없는 것). 값이 없는 이름은 `tools/tmux.env`에서 읽습니다. 파일을 shell로 `source`하지 않고 위 두 이름의 줄만 읽으며, 마지막 줄이 이깁니다. 파일이 없는 tree(개발 checkout, 원격 runtime의 bundle)는 PATH의 `tmux`를 씁니다. 파일이 있는데 `PROJECT_AGENT_TMUX`가 비어 있으면(환경 변수도 없으면) tmux를 쓰는 모든 동작이 `tmux_unavailable`(종료 코드 5)로 실패합니다. 기록한 파일이 없거나 실행되지 않아도 같은 오류이고 오류의 details가 그 경로를 담습니다. library 디렉터리는 그 tmux를 실행할 때 `LD_LIBRARY_PATH` 앞에 붙입니다.
+
+**읽는 쪽**: 같은 규칙이 세 곳에 있습니다. 원본은 Python `agent_session/tmux_program.py`이고, shell script(`tools/tmux-launcher.sh`: `project_agent_run.sh`, `project_agent_bind.sh`, `project_board_visibility.sh`, `tmux_decide_status.sh`)와 Rust sidebar(`tmux-program` 하위 명령으로 선택을 보임)가 따릅니다. 세 곳이 같은 답을 내는지는 [`test_tmux_record.py`](../../tools/project-board/tests/test_tmux_record.py)가 같은 사례로 검사합니다(제품 지도의 중복 예외). Board의 Python, `agent-session`, 설치기의 server 조회, cron의 `check`, tmux server가 부르는 hook은 모두 위 읽는 쪽 중 하나를 거칩니다. tmux가 server 안에서 실행하는 `run-shell` 작업은 그 server의 환경(library 경로 포함)을 이어받으므로 library 디렉터리를 따로 붙이지 않고 기록한 실행 파일 경로만 씁니다.
+
+**고르는 때와 후보**: 설치기가 `install`·`upgrade`에서 한 번 고릅니다. 후보의 순서는 (1) 설치기 환경의 `PROJECT_AGENT_TMUX`(사용자가 직접 지정. 쓸 수 없으면 `tmux_environment`로 거절합니다), (2) PATH의 첫 `tmux`(사용자가 이미 server를 여는 tmux이므로 server와 통신이 맞습니다), (3) 사내 tmux(`agent_session.api.COMPANY_TMUX`의 `tmux`. 이 상수는 한 곳에만 있습니다)입니다. 각 후보를 빈 환경(`PATH=/usr/bin:/bin`)에서 `-V`로 시험하고, 뜨지 않으면 `ldd`가 풀어 준 시스템 밖 library 디렉터리를 `LD_LIBRARY_PATH`로 주어 다시 시험합니다. 처음으로 뜨고 최소 버전(3.2절) 이상인 후보를 기록합니다. 근거: 선택을 server에서 얻는 방식은 server가 이미 떠 있어야 하는데, cron의 `check`는 server에 닿으려면 먼저 tmux가 필요합니다. 코드의 상수는 사내 경로를 모르는 host(macOS 등)에서 틀립니다.
+
+**바꾸는 방법**: release는 불변이므로 기록도 release에 속합니다. 다른 tmux를 쓰려면 `PROJECT_AGENT_TMUX=<경로>`를 주고 새 release를 설치합니다(`upgrade`). 이미 `current`인 release(같은 commit)는 다시 만들지 않으므로 바뀌지 않고, 이미 있지만 `current`가 아닌 release를 다른 tmux로 다시 설치하려 하면 `release_conflict`(종료 코드 3)입니다. 그러니 새 commit의 release가 필요합니다. tmux가 같은 경로에서 새 버전이 되는 경우(`latest` link)는 기록을 바꿀 필요가 없습니다. 기록한 tmux가 지워졌거나 낮아지면 `check`가 실패로 알립니다(7절).
+
+**원격 seat**: 원격 host의 tmux는 로컬 설치가 정할 수 없습니다. 원격 runtime은 기록 파일이 없는 tree이므로 PATH의 `tmux`를 쓰고, 그 PATH 앞에 `remote.py`의 `REMOTE_PATH`(`$HOME/.local/bin`, `/opt/homebrew/bin`)를 둡니다. 원격 runtime을 띄우는 bootstrap과 SSH 표시 명령(`tmux attach-session`)이 같은 상수를 씁니다.
+
+**이전**: 이미 설치된 환경은 이 기록이 없는 release를 씁니다. `check`는 안내만 하고, 그 release는 PATH의 `tmux`를 씁니다. `upgrade`로 새 release를 설치하면 기록이 생기고, 다음 Leader 시작이 crontab의 `check` 줄을 새 줄(`env PATH=` 없음)로 바꿉니다(spec의 check 절).
+
 ## 7. 명령의 동작
 
 설치기는 `install/project-agent-install <명령>`입니다(개발 checkout과 `current/install/` 양쪽). 표준 library만 씁니다. `install`·`upgrade`는 release로 만들 Git checkout을 `--source PATH`로 받고(기본: 설치기가 있는 checkout), `install`은 `--adopt-dev-links CHECKOUT`도 받으며(2절 규칙 8), 모든 명령은 `--json`으로 결과를 JSON 하나로 출력합니다. 종료 코드는 0 완료(할 일이 없는 경우 포함), 1 `check` 실패, 2 옵션 오류, 3 아무것도 바꾸기 전의 거절(충돌, 떠 있는 run, 없는 VERSION, 어긋난 설치 기록 등), 4 바꾸는 중 실패·중단입니다(`install`·`upgrade`·`rollback`은 되돌린 뒤, `uninstall`은 되돌리지 않고 다음 `uninstall`을 기다립니다. 규칙 5).
@@ -341,11 +364,11 @@ release 이름 `<version>-<hash>`: `<version>`은 원본 root의 `VERSION` 첫 �
 - `current`의 `tools/project-board/bin/project-board-sidebar`가 있고 `--version`이 `project-board-sidebar <버전>`을 출력하며 0으로 끝납니다. 없거나 실행할 수 없거나 다른 출력이면 실패이고 그 경로를 알립니다.
 - tmux 블록이 기록된 파일에 있습니다. symlink 때문에 건너뛴 경우는 실패가 아니라 안내입니다.
 - `~/.local/bin`이 PATH에 있습니다. 없으면 안내입니다(실패가 아닙니다).
-- PATH에서 처음 찾은 `tmux`가 최소 버전(3.2절) 이상입니다. 낮으면 실패이고, 그 tmux의 버전과 경로, 최소 버전, 해소 방법(사내 tmux 경로를 PATH 앞에 둠)을 알립니다. PATH에 `tmux`가 없으면 안내입니다(실패가 아닙니다).
+- `current`의 `tools/tmux.env`(6.2절)가 가리키는 tmux가 빈 환경(`PATH`만 있음)에서 실행되고 최소 버전(3.2절) 이상입니다. 실행되지 않거나 낮거나 기록이 비어 있으면 실패이고, 그 tmux의 경로·버전·최소 버전과 해소 방법(다시 설치)을 알립니다. `tools/tmux.env`가 없는 release(이 기록을 도입하기 전에 만든 release)는 안내입니다(실패가 아닙니다).
 - 건너뛴 tmux binding이 있으면 "binding 건너뜀"으로 알립니다(3.1절). 실패가 아닙니다.
 - release의 launcher로 설치 interpreter를 빈 환경(`PATH`만 있음. 사용자의 `LD_LIBRARY_PATH`가 library 경로의 누락을 가리지 않습니다)에서 실행해 `sys.prefix`가 `PROJECT_AGENT_PYTHON_PREFIX`(설치 때의 값)와 같은지 확인합니다. 다르거나 뜨지 않으면 실패이고, 실제 `sys.prefix`와 설치 때의 값을 알립니다.
 - `project-board`가 쓰는 `textual`이 같은 방식으로 실행한 설치 interpreter에 `tools/project-board/requirements.txt`의 버전으로 있는지 안내합니다. 없거나 버전이 다르면 안내만 합니다(실패가 아닙니다).
-- 사용자 crontab의 project 구역 작업이 가리키는 프로그램(작업 명령의 첫 단어. 앞의 `env`와 `NAME=값` 단어는 건너뜁니다. 절대 경로)이 없으면 그 project와 작업 ID와 경로를 알립니다(7.3절). 실패가 아닙니다. crontab을 읽을 수 없으면 읽지 못했다고 알립니다(실패가 아닙니다). `crontab` 명령이 없으면 알리지 않습니다.
+- 사용자 crontab의 project 구역 작업이 가리키는 프로그램(`agent_session.api.crontab_sections`가 작업마다 주는 `program`. 절대 경로)이 없으면 그 project와 작업 ID와 경로를 알립니다(7.3절). 실패가 아닙니다. crontab을 읽을 수 없으면 읽지 못했다고 알립니다(실패가 아닙니다). `crontab` 명령이 없으면 알리지 않습니다.
 - 사용자가 소유 경로를 다른 것으로 바꿨으면 그 경로를 알리고 `check`는 실패로 끝납니다(위 첫 항목). `upgrade`와 `uninstall`은 그런 경로를 바꾸거나 지우지 않고 알립니다. 원격 runtime의 skill link가 같은 규칙을 씁니다([remote_runtime.py:74-90](../../tools/agent-session/agent_session/remote_runtime.py)) .
 
 ### 7.1 떠 있는 run
@@ -408,7 +431,7 @@ Leader를 시작하면 `agent-session`이 사용자 crontab에 project 구역의
 - 명령을 출력하지 않고 `crontab -e`로 손으로 고치라고 알리는 구역: 깨진 구역(끝 줄이 없거나 중복. 범위 삭제가 crontab의 끝까지 지울 수 있습니다), 이름에 `'` 또는 `!`가 있는 구역(두 shell이 다르게 읽어 한 명령이 같은 뜻이 될 수 없습니다).
 - 명령은 `agent-session cron rm`이 아니라 `crontab`과 `sed`만 씁니다. `uninstall`이 `agent-session` shim과 release를 지우므로, 지운 뒤에는 `agent-session`을 부를 수 없기 때문입니다.
 - `uninstall`은 이 명령을 실행하지 않고 출력만 합니다. 근거: (1) crontab은 사용자의 파일이고 설치 기록의 소유가 아닙니다. 설치기가 고치는 기존 파일은 사용자 tmux 설정의 include 한 줄 하나로 한정합니다(결정 D-20261109-09). (2) crontab은 cron이 지금도 읽는 실행 중 상태이고, 3.1절의 binding·hook과 같이 `uninstall`은 실행 중 상태를 바꾸지 않습니다(3.1절 5항). tmux binding을 되돌리는 명령을 출력하는 방식과 같습니다.
-- `check`는 구역의 작업마다 명령의 프로그램(첫 단어. 앞의 `env`와 `NAME=값` 단어는 건너뜁니다. Leader 시작이 쓰는 줄은 `env PATH=... <release>/bin/agent-session ...`이고 사람이 `PATH=... 프로그램`으로 쓸 수도 있습니다)이 절대 경로이고 그 경로가 없으면 알립니다. 알림에 `agent-session cron rm --project <이름> --id <작업 ID>`와, Leader를 다시 시작하면 명령이 현재 release로 바뀐다는 점을 적습니다. `check`는 crontab을 읽기만 합니다.
+- `check`는 구역의 작업마다 명령의 프로그램(`crontab_sections`의 `program`. 명령 줄을 읽는 규칙은 줄을 쓰는 `cron.py` 하나가 소유하고 설치기는 줄을 해석하지 않습니다. Leader 시작이 쓰는 줄은 `<release>/bin/agent-session ...`이고, 이전 release가 쓴 `env PATH=... <release>/bin/agent-session ...`이나 사람이 쓴 `PATH=... 프로그램`도 `cron.py`가 같은 규칙으로 읽습니다)이 절대 경로이고 그 경로가 없으면 알립니다. 알림에 `agent-session cron rm --project <이름> --id <작업 ID>`와, Leader를 다시 시작하면 명령이 현재 release로 바뀐다는 점을 적습니다. `check`는 crontab을 읽기만 합니다.
 
 ## 8. 인수 test 명세
 
@@ -472,8 +495,11 @@ Leader를 시작하면 `agent-session`이 사용자 crontab에 project 구역의
 | T40 | 설치된 상태에서 binary를 (a) 지움 (b) 실행할 수 없는 파일로 바꿈 (c) 다른 프로그램으로 바꿈 | `check` | 없음 | 종료 코드 1. 출력이 binary 경로를 알림. snapshot 전체가 같음 |
 | T41 | 깨끗한 HOME. (a) `PROJECT_AGENT_CARGO`가 없는 파일 (b) `PROJECT_AGENT_RUST_VENDOR`가 없는 디렉터리 (c) 변수 없음 | `install`(`--dry-run` 포함) | (a)(b) 없음 | (a)(b) 종료 코드 3(`cargo_missing`, `vendor_missing`). 출력이 변수 이름과 경로를 알림. cargo를 실행하지 않음. snapshot 전체가 같음. (c) cargo는 사내 경로, PATH 순으로 찾고, vendored 디렉터리는 crate의 `.cargo/config.toml`의 값을 씀(`--config`를 주지 않음). 변수가 빈 값이면 없는 것으로 봄 |
 | T42 | 깨끗한 HOME. 진짜 cargo(`slow`)와 crate의 기본 vendored 디렉터리 | `install` | T1과 같음 | 진짜 build한 binary가 실행되어 `--version`이 `project-board-sidebar <버전>`을 냄. `check` 통과. `~/.cargo`와 임시 디렉터리가 남지 않음 |
+| T43 | 깨끗한 HOME. 가짜 cargo. (a) PATH 첫 `tmux`가 최소 버전 이상 (b) PATH 첫 `tmux`가 낮고 사내 tmux가 있음 (c) 설치기 환경의 `PROJECT_AGENT_TMUX`가 최소 버전 이상 (d) `PROJECT_AGENT_TMUX`가 낮거나 없는 파일 (e) 쓸 수 있는 tmux가 하나도 없음 | `install`(`--dry-run` 포함) | (a)~(c) T1과 같음. (d) 없음 | (a)(c) release의 `tools/tmux.env`가 그 tmux의 절대 경로를 적음. (b) 사내 tmux의 경로와 그것이 빈 환경에서 뜨는 데 필요한 library 경로를 적음. (d) 종료 코드 3(`tmux_environment`), snapshot 전체가 같음. (e) 설치는 진행하고 출력이 이유와 해소 방법을 알림. `tools/tmux.env`의 `PROJECT_AGENT_TMUX`가 빔. 후보는 `PROJECT_AGENT_TMUX`, PATH의 첫 `tmux`, 사내 tmux 순서. 파일은 release의 다른 파일과 같이 불변 |
+| T44 | 설치된 상태. `tools/tmux.env`가 (a) 최소 버전 이상의 tmux (b) 낮은 tmux (c) 없는 파일 (d) 빈 program (e) 파일 자체가 없는 옛 release를 가리킴 | `check` | 없음 | (a) 통과. (b)(c)(d) 종료 코드 1, 출력이 기록한 tmux의 경로·버전·최소 버전과 해소 방법을 알림. (e) 종료 코드 0이고 안내만. 사용자의 PATH에 어떤 tmux가 있든 결과가 같음. snapshot 전체가 같음 |
+| T45 | 설치된 상태(T1). 격리 tmux server에 Leader가 있고, cron의 PATH 앞에 server에 닿지 못하는 `tmux`를 둠 | Leader 시작이 둔 crontab의 `check` 줄을 `env -i HOME=… PATH=<틀린 tmux>:/usr/bin:/bin /bin/sh -c '<줄>'`로 실행 | `<base>/agent/cron/check.json` | 줄에 `env`·`PATH=`가 없음. 종료 코드 0이고 run 기록이 `ok`이며 `code`가 없음 |
 
-기대 변경 목록의 "정확히"는 T1~T18과 T20~T42에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding은 TMUX-001이 구현했습니다([test](../../integrations/tmux/test_project_agent_conf.py)).
+기대 변경 목록의 "정확히"는 T1~T18과 T20~T45에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding은 TMUX-001이 구현했습니다([test](../../integrations/tmux/test_project_agent_conf.py)).
 
 ## 9. 이 계약과 어긋나는 현재 동작
 
