@@ -33,9 +33,13 @@ SESSION-015로 project마다 사용자 crontab에 project 구역이 생겼습니
    - 창은 열 때와 project를 옮길 때 읽습니다.
 4. **읽기 비용**: sidebar는 모든 project의 cron을 `crontab -l` process 하나로 읽습니다. project마다 process를 만들지 않고, 2초 파일 읽기에 process를 더하지 않습니다(10초 실행 상태 읽기와 같은 주기·같은 가시성 규칙). sidebar가 처음 보이기까지의 시간이 늘지 않습니다(첫 그림이 crontab 읽기를 기다리지 않아도 됩니다).
 5. **원본 하나**: 구역 형식과 다음 실행 규칙은 `agent_session/cron.py`가 소유합니다. Rust의 읽기는 그 규칙을 따르고 일치 test가 지킵니다(fixture를 복사하지 않고 그 파일을 읽습니다). Python cron 창은 `agent_session.api`에 더하는 공개 함수로 읽고 `agent_session.cron`을 직접 import하지 않습니다.
+   - Rust의 cron 읽기는 [제품 지도](../../project-team/README.md)의 "예외: Rust sidebar와 Python이 같은 규칙을 읽습니다" 표에 행으로 더합니다(Python 원본, Rust 구현, 일치 test 위치).
+6. **창 알림 client의 일치**: Rust `rust/src/window.rs`와 Python `project_board.tmux_control._reuse`는 같은 규약(TUI 계획 5절)의 두 client입니다. 같은 시나리오에서 두 client가 같은 결과를 내는지 비교하는 일치 test를 둡니다. 시나리오는 같은 종류의 창, 다른 종류, 시작 중, `ok`·`busy`·`invalid`·`closing`·JSON 아님, 죽은 창이고, cron 창 종류도 포함합니다. 이 test는 Python 쪽이 바뀌면 실패해야 합니다(`test_rust_switch.py`처럼 Python 결과를 기준으로 삼음).
+   - 근거: BOARD-018 검토(2026-11-12)에서 Rust 창 알림 test가 Python과 비교하지 않고 가짜 창만 상대한다는 빈틈을 찾았습니다. 읽기 규칙(`test_rust_equivalence.py`)과 전환(`test_rust_switch.py`)은 Python과 비교합니다.
 
 ## Disposition
 - 2026-11-12 Leader: 구현한다. 사용자 결정 D-20261111-04 decided C와 사용자 후속 요청("그냥 cron이 몇개 있는지만 보이는게 더 깔끔할까? D:?  C:?", 원문은 Symptom)입니다. 남은 시간의 반올림, `C:0`·`C:!` 색, cron 창의 틀(CR 창 재사용)은 승인한 요청 안의 세부라서 Leader가 정했습니다. BOARD-018(Rust sidebar)을 통합한 뒤 todo로 옮겨 시작합니다.
+- 2026-11-12 Leader: BOARD-018을 통합했습니다(2bcd290). Contract 5에 중복 예외 표의 행을 더하고, Contract 6(창 알림 client 일치 test)을 더했습니다. 근거는 BOARD-018 검토에서 찾은 빈틈과 사용자 지시 "판단의 주요관점은 ** Root cause & SSOT **"입니다. Rust와 Python 두 곳에 있는 규칙은 Python이 바뀌면 test가 Rust 쪽 수정을 요구해야 합니다.
 
 ## Implementation
 읽을 문서: [Board TUI 계획](../../project-board-tui-plan.md) 2·3·5절, [동작 명세 7절 cron](../../project-team/spec.md#cron), `tools/agent-session/agent_session/cron.py`, `tools/agent-session/tests/fixtures/cron_next_run.json`, `tools/project-board/rust/`(BOARD-018 통합본)와 BOARD-018 CR Result, BOARD-022·BOARD-025 CR(process 수, 떠 있는 창 알림), `tools/project-board/README.md`, [project-team Worker 절](../../../skills/project-team/SKILL.md).
@@ -45,9 +49,10 @@ SESSION-015로 project마다 사용자 crontab에 project 구역이 생겼습니
 3. Rust 일치 test: `cron_next_run.json`의 `next_run`·`invalid` 전부, 구역 해석(정상·없음·빈 crontab·깨진 구역·다른 project 구역·구역 밖 사용자 줄)이 Python `cron.split`·`listing`과 같은지. 남은 시간 문자열의 경계(30초, 59분, 60분, 61분, 23시간 59분, 24시간, 47시간)를 손으로 쓴 기대값으로 확인합니다.
 4. Python cron 창(`project-board` 하위 명령): CR 창 틀 재사용, 작업 목록과 본문, `◀ project ▶`, 작업 없음, 마지막 실행 없음. Textual test로 확인합니다.
 5. process 수 test: `test_sidebar_binary.py`의 shim 방식으로 `crontab` 호출이 10초 주기에 하나이고 2초 주기에는 없으며, 보이지 않는 동안 0인지 셉니다.
-6. 문서: TUI 계획 2절(데이터 원본 표에 cron 행), 3절(화면 예시, 색, tooltip, 클릭 표), 5절(cron 창 알림), project-board README, 필요하면 명세 7절의 Board 읽기 문장.
+6. 문서: TUI 계획 2절(데이터 원본 표에 cron 행), 3절(화면 예시, 색, tooltip, 클릭 표), 5절(cron 창 알림), project-board README, 제품 지도의 중복 예외 표(cron 읽기 행, 창 알림 행의 검증 문장), 필요하면 명세 7절의 Board 읽기 문장.
+7. 창 알림 일치 test(Contract 6): 같은 fixture tmux server와 같은 창 process에서 Python `_reuse`와 Rust `window::tell`의 결과(알림 여부, 시작 여부, 오류 알림, title)를 비교합니다.
 
-의존: BOARD-018(Rust sidebar) 통합 뒤 시작합니다. 시작 시점의 `origin/main` 기준입니다.
+의존: BOARD-018(Rust sidebar)은 통합됐습니다(2bcd290). 시작 시점의 `origin/main` 기준입니다. TMUX-004(쓸 tmux를 정하는 원본)가 이 CR보다 먼저 통합되면 `origin/main`을 merge해서 Rust의 tmux 호출이 그 규칙을 따르게 합니다.
 
 위험 등급: 중간(Rust·Python 두 언어의 같은 규칙, 새 창).
 
