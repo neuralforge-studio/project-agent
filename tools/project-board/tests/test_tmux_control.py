@@ -1464,6 +1464,35 @@ def test_another_item_of_the_same_kind_is_told_to_the_open_window_and_starts_not
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
+def test_a_window_that_another_release_started_is_started_again_in_the_same_place_not_told(floating, monkeypatch):
+    """BOARD-028: a window's process runs the code it imported, so a click from another release does not reuse it:
+    the pane starts again from that release (the launcher of this code) in the same place, and says which release
+    started it, so the next click of that release reuses it."""
+    server = floating(board=LISTENING_BOARD)
+    assert server.open("cr")["ok"] is True
+    (first,) = _wait_lines(server, "starts", 1)
+    ((pane, placed),) = server.floating().items()
+
+    def wait_for_link():
+        deadline = time.monotonic() + 20
+        while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    wait_for_link()
+    assert server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_RELEASE) == ""    # a checkout
+    monkeypatch.setattr(tmux_control, "RELEASE", "0.2.0-bbbbbbbbbbbb")                              # this code is another release
+    result = tmux_control.open_cr_popup(None, "Alpha", "todo", server.client, server.socket)
+    assert result["ok"] is True and "reused" not in result["data"]
+    starts = _wait_lines(server, "starts", 2)
+    assert starts[1].split()[0] != first.split()[0] and starts[1].split()[1:] == ["cr", "--project", "Alpha", "--state", "todo"]
+    assert server.floating() == {pane: placed}
+    assert server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_RELEASE) == "0.2.0-bbbbbbbbbbbb"
+    wait_for_link()
+    assert tmux_control.open_cr_popup(None, "Beta", "open", server.client, server.socket)["data"]["reused"] is True
+    assert len(_lines_of(server, "starts")) == 2
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 def test_a_cron_window_is_a_floating_pane_like_the_cr_window_and_is_told_the_next_project(floating):
     """BOARD-027: 80% like the CR window, started as `cron --project`, told `{"kind": "cron", "project"}` when open,
     and a window of another kind is started again in the same place."""
@@ -1551,10 +1580,10 @@ def test_a_board_window_says_what_it_is_starting_before_its_screen_is_drawn(floa
     assert tmux_control.STARTING in server.tmux("capture-pane", "-p", "-t", pane)
 
 
-def _notify_as_the_plan_says(server, window, kind, request_line):
+def _notify_as_the_plan_says(server, window, kind, request_line, release=""):
     """The client side of the plan ("열려 있는 창에 새 내용 알리기"), written from its text with raw tmux commands
-    and a plain socket (the way a client in another language does it). Returns the reply, or None where the plan
-    says to start the window."""
+    and a plain socket (the way a client in another language does it). `release` is the client's own release.
+    Returns the reply, or None where the plan says to start the window."""
     rows = server.tmux("list-panes", "-t", window, "-F", "#{pane_id}\t#{@project_board_window}").splitlines()
     panes = [row.split("\t")[0] for row in rows if row.split("\t")[1:] == ["1"]]
     if not panes:
@@ -1563,11 +1592,12 @@ def _notify_as_the_plan_says(server, window, kind, request_line):
     deadline = time.monotonic() + command_timeout()
     while True:
         window_kind = server.tmux("show-options", "-pqv", "-t", pane, "@project_board_window_kind")
+        started_by = server.tmux("show-options", "-pqv", "-t", pane, "@project_board_window_release")
         link = server.tmux("show-options", "-pqv", "-t", pane, "@project_board_window_link")
-        if window_kind != kind or link or time.monotonic() > deadline:
+        if window_kind != kind or started_by != release or link or time.monotonic() > deadline:
             break
         time.sleep(0.05)
-    if window_kind != kind or not link:
+    if window_kind != kind or started_by != release or not link:
         return None
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -1599,6 +1629,8 @@ def test_a_client_that_follows_the_plan_with_raw_tmux_and_a_socket_reaches_the_w
     assert _lines_of(server, "starts") == [first]
     # the other kind is not told: the plan says to start the window again
     assert _notify_as_the_plan_says(server, server.window, "decision", b"{}\n") is None
+    # nor is a window that another release started
+    assert _notify_as_the_plan_says(server, server.window, "cr", line, release="0.2.0-bbbbbbbbbbbb") is None
 
 def _boards_on(name, windows, monkeypatch):
     """A server of one session with `windows` windows, one client and a stand-in Board TUI. The client visits

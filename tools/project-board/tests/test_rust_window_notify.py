@@ -109,6 +109,7 @@ SCENARIOS = {
     "a string": {"reply": b'"ok"\n'},
     "an empty reply": {"reply": b""},
     "another kind of window": {"reply": OK, "kind": "other"},
+    "a window of another release": {"reply": OK, "release": "0.1.0-aaaaaaaaaaaa"},
     "the window is still starting": {"reply": OK, "link": "none"},
     "nothing listens": {"reply": OK, "link": "gone"},
     "a file that is not a socket": {"reply": OK, "link": "file"},
@@ -172,6 +173,7 @@ def run_scenario(side, name, server_info, binary, scenario, kind, tmp_path):
             tmux(tmux_name, "set-option", "-p", "-t", pane, "@project_board_window", "1")
             tmux(tmux_name, "set-option", "-p", "-t", pane, "@project_board_window_kind",
                  scenario.get("kind", kind) if scenario.get("kind") != "other" else ("decision" if kind != "decision" else "cr"))
+            tmux(tmux_name, "set-option", "-p", "-t", pane, "@project_board_window_release", scenario.get("release", ""))
             mode = scenario.get("link", "listening")
             fake = FakeWindow(scenario["reply"])
             link = {"listening": fake.path, "none": "", "gone": str(tmp_path / "gone.win")}.get(mode)
@@ -218,3 +220,6 @@ def test_the_scenarios_are_not_vacuous(server, binary, tmp_path, monkeypatch):
     assert seen["busy with a message"]["title"] == TITLE_BEFORE
     assert seen["invalid"]["outcome"] == "fallback" and seen["invalid"]["received"] == [{**REQUESTS["cron"], "client": server[1]}]
     assert seen["another kind of window"] == {"outcome": "fallback", "message": None, "title": TITLE_BEFORE, "received": []}
+    other_release = run_scenario("python", "a window of another release", server, binary,
+                                 SCENARIOS["a window of another release"], "cron", tmp_path)
+    assert other_release == {"outcome": "fallback", "message": None, "title": TITLE_BEFORE, "received": []}

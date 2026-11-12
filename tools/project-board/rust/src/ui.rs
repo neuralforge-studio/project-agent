@@ -413,8 +413,14 @@ fn project_widgets(facts: &Facts, number: usize, project: &Project, out: &mut Ve
 /// Place everything for a screen of `screen_w` x `screen_h` cells. The scroll bars of `#projects` appear
 /// when the content is larger than its viewport; each one shrinks the viewport of the other.
 pub fn layout(facts: &Facts, screen_w: usize, screen_h: usize) -> Layout {
-    let top_text = facts.snapshot.error.as_deref().or(facts.notice).unwrap_or("");
-    let top_lines = wrap(top_text, screen_w);
+    // a snapshot error and a notice (the click socket, a restart that is needed: BOARD-028) are both shown
+    let mut top_lines: Vec<String> = Vec::new();
+    for text in [facts.snapshot.error.as_deref(), facts.notice].into_iter().flatten() {
+        top_lines.extend(wrap(text, screen_w));
+    }
+    if top_lines.is_empty() {
+        top_lines = wrap("", screen_w); // the blank first row
+    }
     let mut per_project: Vec<Vec<Widget>> = Vec::new();
     for (number, project) in facts.snapshot.projects.iter().enumerate() {
         let mut widgets = Vec::new();
@@ -925,6 +931,20 @@ mod tests {
         let live = Liveness::new();
         let expanded: HashSet<String> = expanded.iter().map(|s| s.to_string()).collect();
         layout(&Facts { snapshot, liveness: &live, expanded: &expanded, active: None, notice: None, loaded: true, cron: &CronView::new(), now: NOW }, w, h)
+    }
+
+    #[test]
+    fn a_notice_is_shown_with_a_registry_error_and_without_one_the_first_row_stays_blank() {
+        let live = Liveness::new();
+        let expanded = HashSet::new();
+        let top = |error: Option<&str>, notice: Option<&str>| {
+            let snapshot = Snapshot { error: error.map(String::from), projects: vec![project("falcon")] };
+            layout(&Facts { snapshot: &snapshot, liveness: &live, expanded: &expanded, active: None, notice, loaded: true, cron: &CronView::new(), now: NOW }, 40, 20).top_lines
+        };
+        assert_eq!(top(None, None), vec![String::new()]);
+        assert_eq!(top(None, Some("재시작 필요")), vec!["재시작 필요".to_string()]);
+        assert_eq!(top(Some("registry_invalid"), None), vec!["registry_invalid".to_string()]);
+        assert_eq!(top(Some("registry_invalid"), Some("재시작 필요")), vec!["registry_invalid".to_string(), "재시작 필요".to_string()]);
     }
 
     #[test]
