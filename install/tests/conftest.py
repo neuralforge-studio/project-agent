@@ -8,6 +8,7 @@ import pytest
 
 from harness import Home, build_product_repository, release_name
 import private_root  # noqa: E402  (harness puts tools/tests on sys.path)
+import real_crontab  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -27,6 +28,7 @@ def home():
 def pytest_configure(config):
     config.addinivalue_line("markers", "mutates: the test commits to or edits its source repository")
     config.addinivalue_line("markers", "slow: runs the real cargo build of the Rust sidebar (about a minute)")
+    real_crontab.block()  # TEST-015: no test or child of the run can use the real crontab, whatever PATH it sets
     private_root.configure(config, temp=True)  # the `pi-*` directories below go inside the run's private root
 
 

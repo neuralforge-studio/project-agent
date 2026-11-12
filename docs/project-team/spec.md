@@ -538,7 +538,7 @@ Claude provider는 이렇게 만든 seat의 workspace trust를 기록합니다(5
 공통 workspace 검사:
 
 - Git work tree이며 origin URL이 base와 같습니다.
-- 추적·비추적 변경이 없습니다.
+- 추적·비추적 변경이 없습니다. "변경"의 정의는 4절 "Git 준비"의 "seat의 변경"이 소유합니다.
 - 현재 HEAD가 origin의 어떤 ref(`refs/remotes/origin/`)에 포함됩니다. 다른 remote는 세지 않습니다.
 - Local `cr/<ID>`가 있으면 `origin/cr/<ID>`와 같습니다.
 
@@ -549,6 +549,7 @@ CLI 프로세스가 존재한다는 이유만으로 시작 성공을 반환하�
 초기 등록이 아직 진행 중이면 남은 timeout 안에서 확인합니다.
 Provider 실행 전 실패한 예약이면 같은 run에서 Git 준비부터 재개합니다.
 이 경우 Worker가 아직 작업하지 않았으므로 별도 handoff를 요구하지 않습니다.
+그 run의 대기 process가 죽었으면(pane이 죽었고 기록한 대기 process와 그 process group이 모두 없음) 같은 run을 재개하지 않고 새 run으로 교체합니다. Provider를 띄우기 전이라 시도한 CLI가 없고, 그 run에서는 `launch`가 끝내 `target_changed`로 실패하기 때문입니다. 새 run은 위 Git 준비의 재시도 규칙으로 준비한 뒤 시작합니다. 대기 process의 종료를 확인하지 못하면(기록이 없음) 교체하지 않고 지금처럼 재개를 시도합니다. 판정은 `lifecycle._waiting_ended` 한 곳이 소유합니다. Leader도 같습니다.
 Provider 실행 여부가 불명확하면 미시작으로 추측하지 않고 오류를 반환합니다.
 실제 종료가 확인됐으면 같은 seat에서 CR을 이어받는 새 대화로 시작할 수 있습니다.
 보류로 todo에 있는 CR은 새 run을 만들기 직전에 in-progress로 옮깁니다.
@@ -583,14 +584,27 @@ CR의 `- Base: <commit> <ISO 시각>` header가 준비 이력입니다. 이 head
 - CR Base와 state hash가 다르면 baseline_mismatch이며 덮어쓰지 않습니다.
 - 새 기준으로 다시 시작하려면 Leader가 CR의 Base를 지우고 Disposition에 이유를 적습니다.
 
-공통 Git 명령은 `-c submodule.recurse=false`로 하위 저장소를 자동 갱신하지 않습니다.
+공통 Git 명령은 `-c submodule.recurse=false`로 하위 저장소를 자동 갱신하지 않습니다. 그래서 base를 checkout하면 gitlink가 바뀐 submodule은 마지막 `submodule update`까지 옛 commit에 남고, `git status`는 그것을 변경으로 보여 줍니다.
+
+#### seat의 변경
+
+"seat에 변경이 있다"는 판정은 `git_ops.dirty` 한 곳이 소유합니다. 준비의 clean 확인, 배정 검사, 반납 검사가 모두 이것을 씁니다(새로 clone한 seat의 확인은 준비 전이라 표지가 없어 해당 없음). `git status`의 변경에서 다음 하나를 뺀 나머지가 변경입니다.
+
+- 준비 도중에 남은 submodule gitlink 차이: 아직 끝나지 않은 준비가 있고(아래 표지가 있음), 그 submodule의 안쪽 변경이 없고(commit만 다름), 지금 checkout된 commit이 표지가 기록한 commit의 gitlink와 같은 것.
+
+표지는 seat의 `refs/agent-session/aligned` ref입니다. 값은 "submodule이 gitlink에 맞춰 있는 commit"입니다. Git 준비가 시작할 때 표지가 없으면 그때의 HEAD로 만들고(Git 명령을 하나 더 쓰며 작업 tree를 훑지 않음), 마지막 `submodule update`가 끝나면 지웁니다. 표지가 이미 있으면(이전 준비가 끊김) 바꾸지 않습니다. 그래서 같은 start를 다시 실행하면 자기 흔적을 변경으로 보지 않고 이어서 끝내며, `stop`·반납 검사도 그 흔적 때문에 막히지 않습니다.
+
+- 준비를 마친 seat(표지 없음)의 gitlink 차이는 모두 변경입니다. Worker나 사람이 submodule을 옮긴 것이기 때문입니다.
+- 준비가 끊긴 seat에서도 사람이 submodule을 다른 commit으로 옮겼거나 그 안의 파일을 고쳤으면 변경입니다. 표지의 gitlink와 다르거나 `SC..` 밖이기 때문입니다.
+- 표지는 사용자 변경을 가리지 않습니다. 이 ref는 `git status`·origin 포함 검사·push에 나타나지 않습니다.
+
 Git 준비와 seat 검사(배정·반납)의 Git 명령은 모두 timeout 600초를 씁니다. Seat 생성 clone만 3600초입니다.
 start의 Git 명령은 시작하기 전에 명령 전체 한도(`--timeout`)도 확인합니다(위 "한도를 넘긴 start").
 Timeout이 나면 git에 먼저 SIGTERM을 보내 최대 10초 기다립니다. git은 SIGTERM을 받으면 자기 `index.lock`을 지웁니다. 그래도 살아 있을 때만 SIGKILL을 보냅니다.
 중단한 명령의 작업 tree는 반쯤 바뀐 채 남을 수 있습니다. 도구는 lock이나 변경을 지우지 않습니다.
 Timeout은 `git_failed`(exit 5)로 보고하며 message에 중단 사실과 반쯤 적용됐을 수 있다는 점을 적습니다. details는 `operation`, `timeout_seconds`, `interrupted`(`SIGTERM` 또는 `SIGKILL`), `index_lock`(경로 또는 null), `index_lock_left`입니다. 경로는 `git rev-parse --git-path index.lock`으로 확인합니다.
 Seat에 `index.lock`이 있으면 배정 검사·반납 검사의 reason에 "seat has <경로> left by an interrupted Git command"를 더하고, Git 준비는 같은 문장으로 `workspace_dirty`를 반환합니다. 운영자 정리는 7절 "중단된 Git 단계의 정리"를 따릅니다.
-Start의 Git 준비(첫 준비·재시도·재배정·read-only)는 마지막에 한 번 `git submodule update --init --recursive`(timeout 600초)를 실행해 seat의 모든 submodule을 초기화하고 현재 HEAD의 gitlink에 맞춥니다. 실패하면 git_failed로 start가 멈추고 기록한 Git 기준과 배정은 유지합니다. 반납 검사는 바꾸지 않으며, Worker가 건드리지 않은 submodule은 깨끗하므로 반납됩니다. Submodule의 원격 접속·인증·protocol 허용은 사용자 Git 설정을 따릅니다.
+Start의 Git 준비(첫 준비·재시도·재배정·read-only)는 마지막에 한 번 `git submodule update --init --recursive`(timeout 600초)를 실행해 seat의 모든 submodule을 초기화하고 현재 HEAD의 gitlink에 맞춥니다. 실패하면 git_failed로 start가 멈추고 기록한 Git 기준과 배정은 유지합니다. 이 update가 끝나면 위 "seat의 변경"의 표지를 지웁니다. 반납 검사는 바꾸지 않으며, Worker가 건드리지 않은 submodule은 깨끗하므로 반납됩니다. update 전에 준비가 끊긴 seat도 표지가 있어 흔적이 변경이 아니므로 반납됩니다(CR이 in-progress라는 이유는 별개입니다). Submodule의 원격 접속·인증·protocol 허용은 사용자 Git 설정을 따릅니다.
 Git 준비는 submodule 초기화 앞에서 seat의 이전 `cr/*`도 정리합니다(`git_ops.prune_integrated`). 지우는 대상과 조건은 [CR 계약의 branch 수명](../../skills/project-item/references/cr.md#crid-branch의-수명)이 소유합니다. 이 정리는 실패한 Git 명령(`git_failed`)을 건너뛰어 start를 막지 않습니다. 시간 한도 초과 같은 다른 오류는 그대로 start의 오류입니다.
 Main 갱신은 `fetch origin main` 뒤 local main을 origin/main으로 fast-forward하는 것과 같은 결과를 냅니다.
 Local main이 origin/main보다 앞서 있으면 그대로 두고 그 tip을 기준으로 삼으며, 갈라졌으면 `git_failed`로 거절합니다.
@@ -1251,7 +1265,7 @@ Git 명령이 timeout이나 외부 종료로 끊기면 seat에 `index.lock`과 �
 
 1. 그 seat를 쓰는 git process가 없음을 확인하십시오(`ps`로 해당 seat 경로의 git과 그 hook·하위 process).
 2. Reason이나 `git_failed` details의 `index_lock` 경로를 확인하고 그 파일을 지우십시오.
-3. Start의 Git 단계는 깨끗한 tree에서 시작합니다. `git status`의 변경이 중단된 단계(예: origin/main으로의 fast-forward)의 것뿐인지 확인한 뒤 되돌리십시오. 작업 내용이 섞여 있으면 먼저 보존하십시오.
+3. Start의 Git 단계는 깨끗한 tree에서 시작합니다. `git status`의 변경이 중단된 단계(예: origin/main으로의 fast-forward)의 것뿐인지 확인한 뒤 되돌리십시오. 작업 내용이 섞여 있으면 먼저 보존하십시오. submodule의 gitlink 차이뿐이고 그 안의 변경이 없으면, 도구가 자기 준비의 흔적으로 알아봅니다(4절 "seat의 변경"). 되돌리지 않고 같은 start를 다시 실행하면 됩니다.
 4. 같은 `start --job <CR>`를 다시 실행하십시오.
 
 Process가 남았거나 변경의 출처를 확인하지 못하면 lock과 tree를 그대로 두십시오.

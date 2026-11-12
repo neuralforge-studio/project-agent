@@ -27,7 +27,7 @@ project-agent는 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로
 python -m pytest -q -n 8 tools/agent-session/tests
 python -m pytest -q tools/project-item/tests
 python -m pytest -q tools/project-board/tests
-python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py tools/test_release_files.py tools/test_tmux_test_server.py
+python -m pytest -q integrations/tmux tools/test_python_launcher.py tools/test_distribution_boundary.py tools/test_private_root.py tools/test_release_files.py tools/test_tmux_test_server.py tools/test_real_crontab.py
 python -m pytest -q -n 8 install/tests
 (cd tools/project-board/rust && cargo test --offline --locked)
 ```
@@ -54,6 +54,7 @@ python -m pytest -q -n 8 install/tests
   - tmux server: 모든 test server는 [`tools/tests/tmux_test_server.py`](tools/tests/tmux_test_server.py)의 `claim`으로 이름을 받고 `release`로 끝냅니다. `release`는 server와 pane의 process, `/tmp/tmux-<uid>`의 socket 파일, Board가 server마다 만드는 `/tmp/project-board-<uid>-<server pid>`를 지웁니다. `claim`은 소유 pytest process가 사라지면(SIGKILL·SIGTERM 포함) 같은 정리를 하는 watchdog을 함께 띄웁니다. Test에서 `kill-server`를 직접 부르지 않습니다.
   - 임시 디렉터리: `tools/conftest.py`가 만드는 `TMPDIR/pt-*`는 통과한 run이 끝날 때 지웁니다. 실패·중단한 run의 것은 조사용으로 남고, 다음 run이 시작할 때 소유 run이 끝난 것 중 최근 5개만 남기고 지웁니다. 진행 중인 run의 것은 지우지 않습니다. 소유자 표시가 없는 옛 디렉터리는 24시간 넘게 손대지 않았을 때만 지웁니다. 규칙과 이유는 [`tools/tests/private_root.py`](tools/tests/private_root.py)가 소유합니다.
   - 실제 HOME: `tools/conftest.py`와 `install/tests/conftest.py`가 run마다 HOME을 `<basetemp>-home`(보통 `TMPDIR/pt-*` 안)으로 바꿔 run과 자식 process(xdist worker 포함)의 `~`를 거기로 보냅니다. Test는 실제 HOME의 `~/.cache/project-item/locks` 같은 곳에 파일을 만들지 않고, 실제 운영 잠금과 디렉터리를 공유하지 않습니다. 통과한 run은 그 HOME을 지웁니다. 이 격리는 [`tools/test_private_root.py`](tools/test_private_root.py)가 검사합니다. HOME이 따로 필요한 test는 `monkeypatch.setenv`로 바꿉니다. HOME에서 위치를 정하는 읽기 전용 도구 위치(`PYTHONUSERBASE`: `pip install --user`한 pytest·xdist·textual, `RUSTUP_HOME`: rustup proxy의 toolchain)는 HOME을 바꾸기 전 값으로 고정합니다(이미 값이 있으면 그대로 둡니다). `CARGO_HOME`은 고정하지 않아 cargo cache는 run의 HOME에 생깁니다.
+  - 실제 crontab: 사용자 crontab(`crontab -l`)은 HOME 밖의 사용자 spool이라 HOME 격리가 덮지 못합니다. 제품은 PATH에서 찾은 `crontab`만 쓰고 test는 그 자리에 shim([`tools/tests/fake_crontab.py`](tools/tests/fake_crontab.py))을 둡니다. 그러나 test가 PATH를 `<디렉터리>:/usr/bin:/bin`처럼 통째로 바꾸면 shim이 가려져 `/usr/bin/crontab`이 실제 spool에 닿습니다. 그래서 `tools/conftest.py`·`install/tests/conftest.py`·`integrations/tmux/conftest.py`가 Linux에서 run의 pytest process에 `PR_SET_NO_NEW_PRIVS`를 걸어([`tools/tests/real_crontab.py`](tools/tests/real_crontab.py)) 실제 `crontab`을 읽기·쓰기 모두 `Permission denied`로 막습니다. 이 flag는 xdist worker와 test가 띄우는 모든 자식 process에 상속되고 풀 수 없으며, shim(일반 script)에는 영향이 없습니다. PATH를 어떻게 바꾼 test도 실제 crontab을 바꾸지 못하고 제품의 `crontab_unreadable` 오류가 납니다(Leader 시작의 `ensure_check`는 이 오류로 시작을 멈추지 않으므로 그 test는 crontab 내용을 확인하는 단언에서 실패합니다). Linux가 아니면 막을 수 없어 경고를 냅니다. 이 경우 run 전후의 `crontab -l`을 직접 비교합니다. 이 차단은 [`tools/test_real_crontab.py`](tools/test_real_crontab.py)가 검사하며, 읽기만 합니다. `cargo test`(Rust sidebar)는 pytest process가 아니라 이 차단 밖입니다. Rust sidebar는 `crontab -l`로 읽기만 하고 쓰는 코드가 없습니다. Rust test가 crontab을 쓰게 되면 이 규칙의 대상입니다.
 - CLI smoke: `tools/<도구>/bin/<도구> --help`.
 
 ## 관련 문서
