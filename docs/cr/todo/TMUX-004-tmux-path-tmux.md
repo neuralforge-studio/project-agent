@@ -38,6 +38,8 @@ project-agent 구성 요소는 쓸 tmux를 각자 정합니다. 호출한 proces
   - SESSION-016의 cron 실패와 그 수정이 낳은 설치기 회귀는 같은 설계에서 나왔습니다. 쓸 tmux를 호출 환경의 PATH에 맡기는 설계와, crontab 줄을 두 곳에서 해석하는 설계입니다.
   - 원본의 위치는 Worker가 근거와 함께 정합니다. 사용자 결정이 필요한 trade-off가 나오면 결정 항목으로 올립니다.
   - Rust sidebar도 바뀌므로 BOARD-018(Rust sidebar)을 통합한 뒤 todo로 옮겨 시작합니다.
+- 2026-11-12 Leader: BOARD-018을 통합했습니다(2bcd290). 시작합니다. BOARD-027(Board `C:n`·cron 창)이 같은 때 Rust sidebar(`window.rs` 등)를 고치므로, 먼저 통합된 쪽을 `origin/main`에서 merge해 맞춥니다.
+- 2026-11-12 Leader: open -> todo.
 
 ## Implementation
 읽을 문서:

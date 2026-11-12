@@ -40,6 +40,7 @@ SESSION-015로 project마다 사용자 crontab에 project 구역이 생겼습니
 ## Disposition
 - 2026-11-12 Leader: 구현한다. 사용자 결정 D-20261111-04 decided C와 사용자 후속 요청("그냥 cron이 몇개 있는지만 보이는게 더 깔끔할까? D:?  C:?", 원문은 Symptom)입니다. 남은 시간의 반올림, `C:0`·`C:!` 색, cron 창의 틀(CR 창 재사용)은 승인한 요청 안의 세부라서 Leader가 정했습니다. BOARD-018(Rust sidebar)을 통합한 뒤 todo로 옮겨 시작합니다.
 - 2026-11-12 Leader: BOARD-018을 통합했습니다(2bcd290). Contract 5에 중복 예외 표의 행을 더하고, Contract 6(창 알림 client 일치 test)을 더했습니다. 근거는 BOARD-018 검토에서 찾은 빈틈과 사용자 지시 "판단의 주요관점은 ** Root cause & SSOT **"입니다. Rust와 Python 두 곳에 있는 규칙은 Python이 바뀌면 test가 Rust 쪽 수정을 요구해야 합니다.
+- 2026-11-12 Leader: open -> todo.
 
 ## Implementation
 읽을 문서: [Board TUI 계획](../../project-board-tui-plan.md) 2·3·5절, [동작 명세 7절 cron](../../project-team/spec.md#cron), `tools/agent-session/agent_session/cron.py`, `tools/agent-session/tests/fixtures/cron_next_run.json`, `tools/project-board/rust/`(BOARD-018 통합본)와 BOARD-018 CR Result, BOARD-022·BOARD-025 CR(process 수, 떠 있는 창 알림), `tools/project-board/README.md`, [project-team Worker 절](../../../skills/project-team/SKILL.md).
