@@ -24,11 +24,20 @@ def read(source_root):
         return [], error.code
 
 
+ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
 def _command_path(command):
+    """The program of a job command: its first word after a leading `env` and `NAME=value` words (the check
+    line `agent-session` writes is `env PATH=... <release>/bin/agent-session ...`; a person may write `PATH=... program`)."""
     try:
         words = shlex.split(command)
     except ValueError:
         return None
+    if words and words[0] in ("env", "/usr/bin/env"):
+        words = words[1:]
+    while words and ASSIGNMENT.match(words[0]):
+        words = words[1:]
     return words[0] if words else None
 
 

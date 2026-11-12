@@ -18,9 +18,14 @@ USER_BOTTOM = "# mine\n*/5 * * * * /usr/bin/ping-me\n"
 RELEASE = "/gone/releases/0.0.0-dead"
 
 
-def section(name, program="%s/bin/agent-session" % RELEASE):
-    return ("# >>> project-agent: %s >>>\n# job check: describe\n13,43 * * * * %s --config /c.json check "
-            "--project %s >/dev/null 2>&1\n# <<< project-agent: %s <<<\n" % (name, program, name, name))
+def section(name, program="%s/bin/agent-session" % RELEASE, prefix=""):
+    return ("# >>> project-agent: %s >>>\n# job check: describe\n13,43 * * * * %s%s --config /c.json check "
+            "--project %s >/dev/null 2>&1\n# <<< project-agent: %s <<<\n" % (name, prefix, program, name, name))
+
+
+# The shapes of a check line: the plain one, the one `agent-session` writes (SESSION-016) and a hand-written prefix.
+ENV_PATH = "env PATH=/primehome/tools/Inhouse/tmux/latest/bin:/usr/bin:/bin "
+PATH_ONLY = "PATH=/primehome/tools/Inhouse/tmux/latest/bin:/usr/bin:/bin "
 
 
 def notes_of(result):
@@ -141,13 +146,26 @@ def test_t34_a_broken_section_is_not_given_a_removal_command_and_an_unreadable_c
 def test_t35_check_names_a_section_whose_release_is_gone(home, source):
     assert home.run("install", source=source).returncode == 0
     alive = str(home.path(LIB + "/current/tools/agent-session/bin/agent-session"))
-    home.crontab.write_text(USER_TOP + section("gone") + section("here", program=alive))
+    text = USER_TOP + section("gone") + section("here", program=alive)
+    home.crontab.write_text(text)
     result = home.run("check", "--json")
     assert result.returncode == 0, result.stdout                      # a notice, not a failure
     found = crontab_notes(result)
     assert len(found) == 1 and "gone" in found[0] and RELEASE in found[0] and "here" not in found[0]
     assert "agent-session cron rm --project gone --id check" in found[0]
-    assert home.crontab.read_text() == USER_TOP + section("gone") + section("here", program=alive)   # read only
+    assert home.crontab.read_text() == text                           # read only
+
+
+@pytest.mark.parametrize("prefix", [ENV_PATH, PATH_ONLY, "env A=1 B='x y' "], ids=["env", "assignment", "several"])
+def test_t35_check_reads_the_program_behind_env_and_assignments(home, source, prefix):
+    assert home.run("install", source=source).returncode == 0
+    alive = str(home.path(LIB + "/current/tools/agent-session/bin/agent-session"))
+    text = USER_TOP + section("gone", prefix=prefix) + section("here", program=alive, prefix=prefix)
+    home.crontab.write_text(text)
+    found = crontab_notes(home.run("check", "--json"))
+    assert len(found) == 1 and "gone" in found[0] and RELEASE in found[0] and "here" not in found[0]
+    assert "agent-session cron rm --project gone --id check" in found[0]
+    assert home.crontab.read_text() == text
 
 
 def test_t35_check_is_quiet_without_sections_and_tells_an_unreadable_crontab(home, source):
