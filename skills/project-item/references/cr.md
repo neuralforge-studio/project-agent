@@ -162,7 +162,7 @@ CR은 project-team의 JOB을 겸합니다. 기능·리팩터링·조사 작업�
 - Read-only CR(조사)은 결과를 `## Result`에 씁니다. Leader는 결과에 따라 CR을 옮깁니다: 문제를 확인하고 고치기로 하면 todo, 판정이 더 필요하면 open, 문제가 없으면 done(Outcome waived)입니다.
 - Write CR의 Worker는 제출할 때마다 `## Result`에 들여쓰지 않은 제출 행 `- 제출 commit: <40자리 hash>`를 한 줄 씁니다. Hash는 backtick으로 감싸도 됩니다. 검증 명령·비교 기준 같은 다른 hash는 이 행에 쓰지 않습니다. 들여쓴 행과 code fence 안의 행은 제출 행이 아닙니다.
 - Leader는 검토 결과(인수·수정 요청)를 Disposition에 쓸 때 검토한 제출 hash를 함께 적습니다. 앞 7자리 이상이면 됩니다. Project Board는 마지막 제출 행의 hash가 Disposition에 없으면 review 대기로 표시합니다([판정 규칙](../../../tools/project-board/README.md#review-wait)).
-- Write CR의 작업 branch는 `cr/<ID>`입니다. 보류(in-progress→todo)하면 branch를 origin에 게시한 상태로 둡니다. 다시 배정하면 그 branch를 이어받습니다.
+- Write CR의 작업 branch는 `cr/<ID>`입니다. 언제 만들고 언제 지우는지는 [`cr/<ID>` branch의 수명](#crid-branch의-수명)이 정합니다.
 - 새 기준으로 다시 시작하려면 Leader가 `- Base:`를 지우고 Disposition에 이유를 적습니다.
 
 - 위 절은 이 순서로 씁니다. 절 이름은 바꾸지 않습니다. 같은 이름의 절을 두 번 쓰지 않습니다.
@@ -171,6 +171,23 @@ CR은 project-team의 JOB을 겸합니다. 기능·리팩터링·조사 작업�
 - Severity는 영향 기준입니다. S1은 기능 결함이나 release 차단, S2는 계약 위반이지만 우회 가능, S3은 정리·문서·비용입니다.
 - 파일명은 `<AREA>-<NNN>-<슬러그>.md`입니다. 번호는 AREA마다 3자리이고 그 저장소 안에서 재사용하지 않습니다. 새 번호는 `project-item new cr`가 정합니다. 병합된 항목의 번호와 파일은 살려둡니다.
 - 2026-10-20 이전의 ID와 파일은 바꾸지 않습니다. 이 형식은 새 항목과 2026-10-20 이관 항목(`- Migrated:` 헤더)에 적용합니다. 이관 항목은 작업할 때 이 형식으로 정리합니다.
+
+## `cr/<ID>` branch의 수명
+
+Write CR의 `cr/<ID>` branch의 수명 규칙은 여기가 원본입니다. [project-team skill](../../project-team/SKILL.md)과 [동작 명세](../../../docs/project-team/spec.md#git-준비)는 이 규칙을 link하고 복사하지 않습니다. 지우는 일은 CR 상태 전이와 branch 준비가 이미 있는 두 도구가 합니다. 새 상태나 header는 없습니다.
+
+| 시점 | 처리 |
+| --- | --- |
+| 배정 | `agent-session start`가 seat에 만듭니다(Base에서 새로 만들거나 `origin/cr/<ID>`를 이어받습니다). |
+| 보류(in-progress→todo) | 지우지 않습니다. origin에 게시한 채로 두고, 다시 배정하면 이어받습니다. |
+| 통합(in-progress→done, Outcome fixed) | `project-item move`가 이동을 마친 뒤 origin의 `cr/<ID>`를 지웁니다. 이 base 저장소의 local `cr/<ID>`도 같은 조건으로 지웁니다. |
+| 다음 start | seat는 branch를 준비한 뒤 tip이 `origin/main`의 조상인 local `cr/*`를 지웁니다. 이 JOB의 branch는 남깁니다. 준비가 HEAD를 main이나 이 JOB의 branch로 옮긴 뒤에 하므로 보통 HEAD가 붙은 branch는 Git이 거절하므로 남습니다. origin에서 사라진 branch의 remote-tracking ref도 `git remote prune origin`으로 지웁니다. |
+
+- **조건**: branch의 tip이 최신 `origin/main`의 조상일 때만 지웁니다. 지우는 것은 history가 `origin/main`에 이미 있는 ref뿐이므로 commit을 잃지 않습니다. origin의 삭제는 읽은 tip을 `--force-with-lease`로 걸어 확인 뒤 push된 commit을 지우지 않습니다.
+- **지우지 않는 경우**: 보류한 CR, 통합하지 않고 닫은 CR(done의 `waived` 등, `deferred`, open), Read-only CR(branch가 없습니다), tip이 `origin/main`의 조상이 아닌 branch입니다. 인수한 hash 뒤에 push된 commit이 있으면 origin의 branch를 남기고 `project-item move`가 이유를 출력합니다.
+- **실패**: origin 삭제가 실패해도(접속·권한·lease 실패) 통합과 done 기록은 그대로입니다. `move`는 경고와 다시 지우는 명령 `project-item drop-branch <ID>`를 출력합니다. 이 명령은 done의 `fixed` Write CR에만 같은 조건으로 지우고, 지우지 못하면 exit 1입니다. Seat 정리의 실패는 start를 막지 않습니다.
+- **이미 쌓인 branch**: 이 규칙을 시행하기 전에 통합한 CR의 origin branch는 자동으로 지우지 않습니다. 일괄 정리는 되돌리기 어려운 원격 삭제라서 project마다 사용자 결정을 받습니다. Seat의 local branch는 다음 start가 위 조건으로 지웁니다.
+- **구현**: origin·base의 삭제는 `project_item.branch.drop_integrated` 한 함수가 하고, `move`와 `drop-branch`가 부릅니다. Seat의 정리는 `agent_session.git_ops.prune_integrated`입니다. 통합 명령을 따로 만들면 이 함수를 부릅니다.
 
 ## 다른 project에 요청할 때
 

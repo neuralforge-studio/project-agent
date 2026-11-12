@@ -40,7 +40,7 @@ Start가 `needs_user_action`과 `dialog`를 반환하면 그 window와 dialog �
 4. 판정을 기록한 CR을 todo로 옮깁니다. Todo에 있다는 사실이 승인입니다.
 5. `agent-session start --job <CR-ID>`로 Worker를 시작합니다. CR은 in-progress로 옮겨집니다.
 6. Review를 시작할 때 `agent-session review --job <CR-ID>`를 실행합니다. Worker가 CR의 `## Result`에 쓴 제출 hash와 검증 결과를 review합니다. Review는 제출 commit과 그 검증 결과를 확인하는 일입니다. 통합 뒤 별도 전체 검증으로 CR과 seat를 붙잡지 않습니다. 인수하면 통합·done·종료를 이어서 합니다. 검토 결과는 검토한 제출 hash와 함께 Disposition에 기록합니다. 인수는 `project-item accept <CR-ID> --commit <제출 hash> [--note N]`로 기록하고, 수정 요청은 직접 씁니다. 수정이 필요하면 같은 CR에 feedback을 보냅니다. Feedback을 보내면 review 표시는 자동으로 지워집니다. Review를 멈추고 다른 일을 하면 `agent-session review --clear`를 실행합니다.
-7. Write CR은 검토한 hash를 통합하고 원격 반영을 확인한 뒤 done(Outcome fixed)으로 옮깁니다. 인수 기록(`accept`)이 없거나 제출 hash가 `origin/main`에 없으면 `project-item move`가 `review_missing`으로 거절합니다. 예: `project-item move <CR-ID> done --outcome fixed --by Leader --note "<통합 hash>"`. Read-only CR은 결과에 따라 todo(고치기로 함)·open(판정 필요)·done(Outcome waived, 문제 없음)으로 옮깁니다. 보류는 todo, 재판정은 open입니다.
+7. Write CR은 검토한 hash를 통합하고 원격 반영을 확인한 뒤 done(Outcome fixed)으로 옮깁니다. 인수 기록(`accept`)이 없거나 제출 hash가 `origin/main`에 없으면 `project-item move`가 `review_missing`으로 거절합니다. 예: `project-item move <CR-ID> done --outcome fixed --by Leader --note "<통합 hash>"`. 이 이동이 끝나면 `move`가 origin의 `cr/<ID>`도 지웁니다. 못 지웠으면 done은 그대로이고 `move`가 알리는 `project-item drop-branch <CR-ID>`로 다시 지웁니다. 규칙은 [CR 계약의 branch 수명](../project-item/references/cr.md#crid-branch의-수명)이 정합니다. Read-only CR은 결과에 따라 todo(고치기로 함)·open(판정 필요)·done(Outcome waived, 문제 없음)으로 옮깁니다. 보류는 todo, 재판정은 open입니다.
 8. Worker의 정리 완료를 확인한 뒤 stop으로 실제 종료와 반납을 확인합니다.
 
 ```sh

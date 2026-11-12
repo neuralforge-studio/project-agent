@@ -116,6 +116,8 @@ def test_first_preparation_leaves_the_seat_as_the_main_switch_sequence_did(tmp_p
     advance(source)
     context, store, project = setup_job(tmp_path, seat)
     oracle = old_first_preparation(tmp_path, seat, "cr/TOOL-001")
+    if seat_start == "old-branch":
+        git(oracle, "branch", "-D", "cr/OLD-001")           # the one change since: a merged old branch is dropped
     git_ops.prepare(context, project, store)
     assert seat_result(seat) == seat_result(oracle)
     assert git(seat, "rev-parse", "main") == git(oracle, "rev-parse", "main") != initial
@@ -129,6 +131,7 @@ def test_first_preparation_creates_a_missing_local_main_from_origin_as_before(tm
     advance(source)
     context, store, project = setup_job(tmp_path, seat, mode)
     oracle = old_first_preparation(tmp_path, seat, "cr/TOOL-001" if mode == "write" else None)
+    git(oracle, "branch", "-D", "cr/OLD-001")               # the one change since: a merged old branch is dropped
     git_ops.prepare(context, project, store)
     assert seat_result(seat) == seat_result(oracle)
     assert git(seat, "config", "branch.main.remote") == "origin"
@@ -178,6 +181,40 @@ def test_first_preparation_updates_the_work_tree_once(tmp_path, repo, cr_bases):
     with git_ops.observing(observe):
         git_ops.prepare(context, project, store)
     assert steps.count("switch") == 1 and "merge" not in steps and "checkout" not in steps
+
+
+def test_the_next_start_drops_what_integrated_crs_left_in_the_seat(tmp_path, repo, cr_bases):
+    source, seat, _ = repo
+    origin = tmp_path / "origin.git"
+    # OLD-001 was integrated and its origin branch deleted; HEAD of the returned seat is still on it.
+    # PARK-001 is parked (pushed, not on main). LOCAL-001 has a commit that was never pushed.
+    for name in ("OLD-001", "PARK-001"):
+        git(source, "switch", "-q", "-c", f"cr/{name}", "main")
+        (source / f"{name}.txt").write_text("work\n")
+        git(source, "add", ".")
+        git(source, "commit", "-qm", name)
+        git(source, "push", "-q", "origin", f"cr/{name}")
+    git(source, "push", "-q", "origin", "cr/OLD-001:main")
+    git(source, "switch", "-q", "main")
+    git(seat, "fetch", "-q", "origin")
+    for name in ("OLD-001", "PARK-001"):
+        git(seat, "branch", f"cr/{name}", f"refs/remotes/origin/cr/{name}")
+    git(seat, "branch", "cr/LOCAL-001", "refs/remotes/origin/main")
+    git(seat, "switch", "-q", "cr/LOCAL-001")
+    (seat / "local.txt").write_text("x\n")
+    git(seat, "add", ".")
+    git(seat, "commit", "-qm", "local only")
+    git(seat, "switch", "-q", "cr/OLD-001")
+    git(origin, "branch", "-D", "cr/OLD-001")
+    context, store, project = setup_job(tmp_path, seat)
+
+    git_ops.prepare(context, project, store)
+
+    assert git(seat, "branch", "--list", "cr/*", "--format=%(refname:short)").split() == [
+        "cr/LOCAL-001", "cr/PARK-001", "cr/TOOL-001"]
+    assert git(seat, "branch", "-r", "--list", "origin/cr/*", "--format=%(refname:short)").split() == [
+        "origin/cr/PARK-001"]
+    assert git(seat, "symbolic-ref", "HEAD") == "refs/heads/cr/TOOL-001"
 
 
 def test_retry_preserves_base_and_unfinished_work(tmp_path, repo, cr_bases):
@@ -785,3 +822,21 @@ def test_edited_content_of_a_submodule_is_a_change_even_after_an_interrupted_pre
         git_ops.prepare(context, project, store)
     (seat / "external/liba/lib.txt").write_text("edited\n")
     assert git_ops.dirty(seat) != ""
+
+
+def test_pruning_old_cr_branches_leaves_the_marker_and_the_retry_alone(tmp_path, submodule_repo, cr_bases, monkeypatch):
+    """TEAM-003 prunes `cr/*` before `submodule update`; the marker is not a branch, so a start that ends after
+    the prune keeps it and the retry finishes."""
+    source, seat, libs = submodule_repo
+    bump(source, libs["liba"], "liba")
+    git(seat, "branch", "cr/OLD-001", "HEAD")                   # integrated: its tip is on origin/main
+    context, store, project = setup_job(tmp_path, seat)
+    end_before(monkeypatch, "submodule", "update")
+    with pytest.raises(SessionError):
+        git_ops.prepare(context, project, store)
+    assert git(seat, "branch", "--list", "cr/OLD-001") == ""
+    assert git(seat, "for-each-ref", git_ops.ALIGNED_REF) != ""
+    retry, _, _ = setup_job(tmp_path, seat, base=cr_bases[-1])
+    git_ops.prepare(retry, project, store)
+    assert settled(seat) and git(seat, "for-each-ref", git_ops.ALIGNED_REF) == ""
+    assert git(seat, "branch", "--show-current") == "cr/TOOL-001"
