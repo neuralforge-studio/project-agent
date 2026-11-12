@@ -8,7 +8,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import guard, registry, render, store
+from . import branch, guard, registry, render, store
 from .cr import acceptance
 from .kinds import CR, DECIDE, KINDS, kind_of_id
 from .errors import ItemError
@@ -192,6 +192,46 @@ def _finish_release(project, cr_id: str) -> None:
             print(f"  - {reason}")
 
 
+def _drop_branch(project, cr_id: str) -> bool:
+    """Delete the integrated CR's `cr/<ID>` (rule: cr.md, section "cr/<ID> branch의 수명") and say what
+    happened. A failure is a warning: the CR stays done. True when no branch is left on origin."""
+    result = branch.drop_integrated(project.base, cr_id)
+    name = result["branch"]
+    if result["remote"] == "deleted":
+        print(f"deleted origin/{name}")
+    elif result["remote"] == "absent":
+        print(f"origin has no {name}")
+    for reason in result["reasons"]:
+        print(f"warning: {reason}", file=sys.stderr)
+    if result["remote"] in ("kept", "failed"):
+        print(f"warning: origin/{name} was not deleted; the CR stays done. Run "
+              f"`project-item drop-branch {cr_id}` to try again.", file=sys.stderr)
+    if result["local"] == "deleted":
+        print(f"deleted local {name}")
+    return result["remote"] in ("deleted", "absent")
+
+
+def cmd_drop_branch(args) -> int:
+    """Delete the `cr/<ID>` of a CR that was integrated (done, Outcome fixed): the retry of the delete
+    that `move` makes, with the same checks."""
+    project = _select(args)
+    kind = kind_of_id(args.id)
+    if kind is not CR:
+        raise ItemError("invalid_input", "drop-branch takes a CR ID.")
+    if project.seats:
+        actor, _ = registry.caller(project)
+        if actor not in ("leader", "operator"):
+            raise ItemError("role_denied", f"Only the current Leader or an operator may delete the branch of "
+                            f"{args.id}; the caller is {actor}.")
+    state, path = store.find(kind, registry.item_root(project, "cr"), args.id)
+    parsed = CR.fmt.parse_text(path.read_text(encoding="utf-8"), path, state)
+    if state != "done" or (parsed.headers.get("Outcome") or "").split()[:1] != ["fixed"] \
+            or parsed.headers.get("Mode", "write") == "read-only":
+        raise ItemError("not_integrated", f"{args.id} is not an integrated Write CR (done/ with Outcome "
+                        "fixed); its branch is not deleted.")
+    return 0 if _drop_branch(project, args.id) else 1
+
+
 def cmd_move(args) -> int:
     project = _select(args)
     kind = kind_of_id(args.id)
@@ -200,15 +240,20 @@ def cmd_move(args) -> int:
         raise ItemError("agent_session_only", "In a team project, `agent-session start --job <CR-ID>` "
                         "moves a CR to in-progress with its seat assignment.")
     left_in_progress = False
+    integrates = False
     with store.root_lock(root):
         if project.seats:
-            left_in_progress = kind is CR and store.find(kind, root, args.id)[0] == "in-progress"
+            source_state, source = store.find(kind, root, args.id)
+            left_in_progress = kind is CR and source_state == "in-progress"
+            integrates = guard.closes_integrated(kind, source_state, source, args.state, args.outcome)
             guard.check_move(project, kind, root, args.id, args.state, args.outcome, args.by)
             if kind is DECIDE and args.state == "done" and store.find(kind, root, args.id)[0] == "answered":
                 guard.require_leader(project)
         target = store.move_locked(kind, root, args.id, args.state, outcome=args.outcome, by=args.by,
                                    note=args.note)
     print(f"moved {target}")
+    if integrates:
+        _drop_branch(project, args.id)          # after the root lock: Git on the network must not hold it
     if left_in_progress:
         _finish_release(project, args.id)       # after the root lock: the release reads the CR again
     try:
@@ -328,6 +373,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--by", help="decider; writes one Disposition entry")
     p.add_argument("--note", help="reason or the user's words for the Disposition entry (needs --by)")
     p.set_defaults(run=cmd_move)
+
+    p = sub.add_parser("drop-branch", parents=[common],
+                       help="delete the cr/<ID> branch of an integrated Write CR (exit 1 when it is kept)")
+    p.add_argument("id")
+    p.set_defaults(run=cmd_drop_branch)
 
     p = sub.add_parser("answer", parents=[common], help="record one answer to an open decision")
     p.add_argument("id")

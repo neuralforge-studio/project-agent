@@ -6,10 +6,9 @@ Both rules apply only to a project with seats. The caller rule is agent-session'
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
-from . import registry, store
+from . import branch, registry, store
 from .cr import accepted, section_text, submitted_hash
 from .kinds import CR, Kind
 from .errors import ItemError
@@ -31,13 +30,20 @@ def _is_leader_name(by: str | None) -> bool:
 
 def _origin_main_has(base: Path, commit: str) -> str | None:
     """None when origin/main of the base holds the commit, else why not."""
-    fetched = subprocess.run(["git", "-C", str(base), "fetch", "--quiet", "origin", "main"],
-                             capture_output=True, text=True)
-    if fetched.returncode:
-        return f"origin/main could not be fetched: {fetched.stderr.strip()}"
-    found = subprocess.run(["git", "-C", str(base), "merge-base", "--is-ancestor", commit,
-                            "refs/remotes/origin/main"], capture_output=True, text=True)
-    return None if found.returncode == 0 else f"the submitted commit {commit} is not on origin/main"
+    try:
+        branch.fetch_main(base)
+    except branch.GitFailed as error:
+        return f"origin/main could not be fetched: {error}"
+    return None if branch.on_origin_main(base, commit) else f"the submitted commit {commit} is not on origin/main"
+
+
+def closes_integrated(kind: Kind, source_state: str, path: Path, state: str, outcome: str | None) -> bool:
+    """True for the move that integrates a Write CR: in-progress to done with Outcome fixed."""
+    if not (kind is CR and source_state == "in-progress" and state == "done"
+            and (outcome or "").split()[:1] == ["fixed"]):
+        return False
+    parsed = CR.fmt.parse_text(path.read_text(encoding="utf-8"), path, source_state)
+    return parsed.headers.get("Mode", "write") != "read-only"
 
 
 def _review_missing(project, text: str) -> list[str]:
@@ -68,9 +74,7 @@ def check_move(project, kind: Kind, root: Path, item_id: str, state: str, outcom
                             f"out of {source_state}/; the caller is {actor}.")
         if _is_leader_name(by) and actor != "leader":
             raise ItemError("role_denied", "--by Leader is accepted only from the current Leader.")
-    if kind is CR and source_state == "in-progress" and state == "done" and (outcome or "").split()[:1] == ["fixed"]:
-        text = path.read_text(encoding="utf-8")
-        if CR.fmt.parse_text(text, path, source_state).headers.get("Mode", "write") != "read-only":
-            missing = _review_missing(project, text)
-            if missing:
-                raise ItemError("review_missing", f"{item_id} was not reviewed: " + "; ".join(missing))
+    if closes_integrated(kind, source_state, path, state, outcome):
+        missing = _review_missing(project, path.read_text(encoding="utf-8"))
+        if missing:
+            raise ItemError("review_missing", f"{item_id} was not reviewed: " + "; ".join(missing))

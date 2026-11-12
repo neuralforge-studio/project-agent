@@ -294,3 +294,98 @@ def test_ls_marks_an_in_progress_cr_whose_seat_waits_for_release(team, capsys):
     assert code == 0 and "[release pending: seat 2 stopped]" in out
     team.monkeypatch.setattr(registry, "pending_releases", lambda project: {})
     assert "release pending" not in team.run(capsys, "ls", "cr")[1]
+
+
+# ---------------------------------------------------------------- the cr/<ID> branch of an integrated CR
+def publish_branch(team, commit):
+    """Push `commit` to origin as cr/TOOL-001 (the Worker's push)."""
+    git(team.work, "push", "-q", "-f", "origin", f"{commit}:refs/heads/cr/TOOL-001")
+
+
+def origin_has_branch(team):
+    return bool(git(team.origin, "branch", "--list", "cr/TOOL-001").strip())
+
+
+def integrate(team, capsys, push_after=False, reject_deletes=False):
+    """A submitted, accepted commit on origin/main with its branch on origin; then the Leader's move to done."""
+    submitted = team.submit()
+    publish_branch(team, submitted)
+    team.cr(result=f"- 제출 commit: {submitted}")
+    team.caller("leader")
+    assert team.run(capsys, "accept", "TOOL-001", "--commit", submitted)[0] == 0
+    if push_after:                                       # a push after the accepted commit
+        (team.work / "b.txt").write_text("late\n")
+        git(team.work, "add", "b.txt")
+        git(team.work, "commit", "-qm", "late")
+        publish_branch(team, git(team.work, "rev-parse", "HEAD").strip())
+    if reject_deletes:                                   # installed after the test's own pushes
+        hook = team.origin / "hooks" / "pre-receive"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+    return finish(team, capsys)
+
+
+def test_an_integrated_branch_is_deleted_from_origin_and_the_base_at_done(team, capsys):
+    git(team.project["base"], "fetch", "-q", "origin")
+    git(team.project["base"], "branch", "cr/TOOL-001", "refs/remotes/origin/main")     # the base's own copy
+    code, out, err = integrate(team, capsys)
+    assert code == 0, err
+    assert team.state() == "done"
+    assert not origin_has_branch(team)
+    assert "deleted origin/cr/TOOL-001" in out and "deleted local cr/TOOL-001" in out
+    assert not git(team.project["base"], "branch", "--list", "cr/TOOL-001").strip()
+    assert "refs/remotes/origin/cr/TOOL-001" not in git(team.project["base"], "for-each-ref")
+
+
+def test_a_commit_pushed_after_the_accepted_one_keeps_the_branch_and_says_why(team, capsys):
+    code, out, err = integrate(team, capsys, push_after=True)
+    assert code == 0, err                                # the integration and done stand
+    assert team.state() == "done"
+    assert origin_has_branch(team)
+    assert "not on origin/main" in err and "project-item drop-branch TOOL-001" in err
+
+
+def test_a_cr_that_is_not_integrated_keeps_its_branch(team, capsys):
+    submitted = team.submit()
+    publish_branch(team, submitted)
+    team.caller("leader")
+    for extra, args in (("", ("todo",)),                                        # parked
+                        ("", ("done", "--outcome", "waived", "--by", "Leader", "--note", "n")),
+                        ("", ("deferred", "--outcome", "moved p X-001", "--by", "Leader", "--note", "n")),
+                        ("", ("open", "--by", "Leader", "--note", "n"))):
+        team.cr(extra=extra)
+        code, out, err = team.run(capsys, "move", "TOOL-001", *args)
+        assert code == 0, err
+        assert origin_has_branch(team) and "branch" not in out
+        next(team.project["cr"].glob("*/TOOL-001-a.md")).unlink()
+
+
+def test_a_failed_delete_keeps_the_done_record_and_drop_branch_retries_it(team, capsys):
+    code, out, err = integrate(team, capsys, reject_deletes=True)
+    assert code == 0, err
+    assert team.state() == "done" and origin_has_branch(team)
+    assert "project-item drop-branch TOOL-001" in err
+    (team.origin / "hooks" / "pre-receive").unlink()
+    code, out, err = team.run(capsys, "drop-branch", "TOOL-001")
+    assert code == 0, err
+    assert not origin_has_branch(team) and "deleted origin/cr/TOOL-001" in out
+
+
+def test_drop_branch_refuses_what_is_not_an_integrated_write_cr(team, capsys):
+    team.caller("leader")
+    for state, extra in (("in-progress", ""), ("todo", ""), ("done", "- Mode: read-only\n")):
+        team.cr(state=state, extra=extra)
+        code, _, err = team.run(capsys, "drop-branch", "TOOL-001")
+        assert code == 2 and "not_integrated" in err
+        next(team.project["cr"].glob("*/TOOL-001-a.md")).unlink()
+    team.cr(state="done")
+    team.path.write_text(team.path.read_text().replace("- Severity: S2\n", "- Severity: S2\n- Outcome: waived\n"))
+    assert team.run(capsys, "drop-branch", "TOOL-001")[0] == 2
+
+
+def test_drop_branch_is_for_the_leader_or_an_operator(team, capsys):
+    team.cr(state="done")
+    team.path.write_text(team.path.read_text().replace("- Severity: S2\n", "- Severity: S2\n- Outcome: fixed\n"))
+    team.caller("seat-0")
+    code, _, err = team.run(capsys, "drop-branch", "TOOL-001")
+    assert code == 2 and "role_denied" in err

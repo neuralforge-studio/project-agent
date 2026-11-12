@@ -591,6 +591,7 @@ Timeout이 나면 git에 먼저 SIGTERM을 보내 최대 10초 기다립니다. 
 Timeout은 `git_failed`(exit 5)로 보고하며 message에 중단 사실과 반쯤 적용됐을 수 있다는 점을 적습니다. details는 `operation`, `timeout_seconds`, `interrupted`(`SIGTERM` 또는 `SIGKILL`), `index_lock`(경로 또는 null), `index_lock_left`입니다. 경로는 `git rev-parse --git-path index.lock`으로 확인합니다.
 Seat에 `index.lock`이 있으면 배정 검사·반납 검사의 reason에 "seat has <경로> left by an interrupted Git command"를 더하고, Git 준비는 같은 문장으로 `workspace_dirty`를 반환합니다. 운영자 정리는 7절 "중단된 Git 단계의 정리"를 따릅니다.
 Start의 Git 준비(첫 준비·재시도·재배정·read-only)는 마지막에 한 번 `git submodule update --init --recursive`(timeout 600초)를 실행해 seat의 모든 submodule을 초기화하고 현재 HEAD의 gitlink에 맞춥니다. 실패하면 git_failed로 start가 멈추고 기록한 Git 기준과 배정은 유지합니다. 반납 검사는 바꾸지 않으며, Worker가 건드리지 않은 submodule은 깨끗하므로 반납됩니다. Submodule의 원격 접속·인증·protocol 허용은 사용자 Git 설정을 따릅니다.
+Git 준비는 submodule 초기화 앞에서 seat의 이전 `cr/*`도 정리합니다(`git_ops.prune_integrated`). 지우는 대상과 조건은 [CR 계약의 branch 수명](../../skills/project-item/references/cr.md#crid-branch의-수명)이 소유합니다. 이 정리는 실패한 Git 명령(`git_failed`)을 건너뛰어 start를 막지 않습니다. 시간 한도 초과 같은 다른 오류는 그대로 start의 오류입니다.
 Main 갱신은 `fetch origin main` 뒤 local main을 origin/main으로 fast-forward하는 것과 같은 결과를 냅니다.
 Local main이 origin/main보다 앞서 있으면 그대로 두고 그 tip을 기준으로 삼으며, 갈라졌으면 `git_failed`로 거절합니다.
 Local main이 없으면 origin/main을 추적하는 main을 `branch --track main refs/remotes/origin/main`으로 만듭니다.

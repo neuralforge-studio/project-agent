@@ -215,9 +215,35 @@ def _resume_branch(root, job, base_hash, published_first):
     git(root, "merge-base", "--is-ancestor", base_hash, "HEAD")
 
 
+def prune_integrated(root, keep):
+    """Drop what earlier CRs left in the seat: local `cr/*` branches whose tip is on origin/main, and the
+    remote-tracking refs of branches that origin no longer has. `keep` (this JOB's branch, whatever its
+    mode) and a branch that HEAD is on stay. The rule is cr.md, section "cr/<ID> branch의 수명".
+
+    Best effort: only a failed Git command is skipped, so a cleanup never fails a start. A branch is deleted
+    only after the ancestor test, so no commit of origin/main's history is lost."""
+    try:
+        git(root, "remote", "prune", "origin")
+        merged = git(root, "branch", "--merged", "refs/remotes/origin/main", "--format=%(refname:short)",
+                     "--list", "cr/*")
+    except SessionError as error:
+        if error.code != "git_failed":
+            raise
+        return
+    for name in merged.split():
+        if name == keep:
+            continue
+        try:
+            git(root, "branch", "-D", name)      # refuses the branch HEAD is on
+        except SessionError as error:
+            if error.code != "git_failed":
+                raise
+
+
 def prepare(context, project, store):
     """Prepare the seat's Git state, then align its submodules with the HEAD gitlinks."""
     baseline = _prepare_git(context, project, store)
+    prune_integrated(_root(context, project), f'cr/{context["job"]["job_id"]}')
     git(_root(context, project), "submodule", "update", "--init", "--recursive")
     return baseline
 

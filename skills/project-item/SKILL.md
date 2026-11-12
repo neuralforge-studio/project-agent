@@ -63,6 +63,7 @@ CR은 JOB을 겸합니다. project-team의 `agent-session start --job <CR-ID>`�
   - in-progress의 CR을 done·todo·open·deferred로 옮기는 호출자는 그 project의 현재 Leader(실제 실행 대조 통과)나 operator(관리 session·agent가 아닌 CLI)입니다. Worker와 다른 agent session은 `role_denied`로 거절합니다.
   - `--by Leader`는 현재 Leader만 쓸 수 있습니다. 다른 호출자는 `role_denied`입니다.
   - Write CR의 in-progress→done(`Outcome: fixed`)은 review 기록이 있어야 합니다. `## Result`의 마지막 `- 제출 commit: <40자리 hash>`가 있고, `## Disposition`에 `project-item accept`가 쓴 그 hash의 인수 기록이 있고, 그 hash가 base 저장소의 `origin/main`에 있어야 합니다. 하나라도 없으면 `review_missing`으로 거절하고 파일을 바꾸지 않습니다. Read-only CR과 fixed가 아닌 Outcome은 이 확인을 하지 않습니다.
+  - 같은 이동(Write CR의 in-progress→done, `fixed`)이 끝나면 `move`가 origin의 `cr/<ID>`를 지웁니다. 조건·지우지 않는 경우·실패했을 때는 [CR 계약의 branch 수명](references/cr.md#crid-branch의-수명)이 정합니다.
 - 다른 project의 요청자는 `new cr`로 그 project의 open에 만들기만 합니다.
 
 `move`의 동작 단계·오류 code·잠금은 [project-item README](../../tools/project-item/README.md)가 설명합니다.
@@ -79,6 +80,7 @@ CR은 JOB을 겸합니다. project-team의 `agent-session start --job <CR-ID>`�
 | 사용자의 결정 답변을 접수합니다. | `project-item answer` |
 | Worker의 제출을 인수합니다. Leader만 합니다. | `project-item accept` |
 | 판정이나 결과에 따라 항목의 상태를 옮깁니다. | `project-item move` |
+| 통합한 Write CR의 origin `cr/<ID>`를 다시 지웁니다(`move`의 삭제가 실패했을 때). | `project-item drop-branch` |
 | 항목 파일을 직접 고친 뒤 형식을 확인합니다. | `project-item check` |
 | 결정 페이지를 다시 씁니다. | `project-item render decide` |
 | 관리 Leader가 없는 project에 알릴 담당 session을 찾습니다. | `project-item owner` |

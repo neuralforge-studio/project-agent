@@ -38,7 +38,7 @@ it in `api.py`.
 | --- | --- | --- |
 | Public API | `api.py` | lists what a consumer may use; owns no logic |
 | Domain core | `errors.py`, `cr.py`, `decide.py`, `kinds.py`, `read.py` | formats, transitions, the rules a move applies (`prepare_move`, `check_outcome` of each format module), reads (sections, CR states, decision stage). Imports neither `render` nor `cli` (tested) |
-| Files and project | `store.py`, `assign.py`, `guard.py`, `registry.py` | files, the root lock, git, project selection and caller checks; `store.move_locked` applies the core rules and moves the file |
+| Files and project | `store.py`, `assign.py`, `guard.py`, `branch.py`, `registry.py` | files, the root lock, git, project selection and caller checks, the `cr/<ID>` branch of an integrated CR; `store.move_locked` applies the core rules and moves the file |
 | Output | `render.py`, `cli.py` | the decision page and the command line |
 
 `project_item.registry.ItemError` remains importable; `errors.ItemError` is the definition.
@@ -56,6 +56,7 @@ table names the commands only.
 | `answer` | record the answer of an open decision and move it to `answered/` |
 | `accept` | record the Leader's acceptance of a submitted CR commit in the Disposition |
 | `move` | check the transition and the destination format, then move |
+| `drop-branch` | delete the `cr/<ID>` branch of an integrated Write CR (done, Outcome `fixed`) from `origin` and the base; the retry of the delete that `move` makes. Exit 1 when the branch is kept or the delete failed |
 | `check` | format check and duplicate IDs; exit 1 on a violation |
 | `render` | write the decision page |
 | `owner` | live interactive Claude Code sessions under the base or a seat |
@@ -84,6 +85,11 @@ has more than one file in any state.
 6. A CR that leaves `in-progress/` in a team project also finishes the release of its seat when the
    Worker was stopped earlier (`agent_session.api.finish_release`), after the move and outside the item
    lock. It prints `released seat N` or why the seat stays assigned. The move stands in both cases.
+7. A write CR that goes from `in-progress/` to `done/` with `fixed` in a team project also has its `cr/<ID>`
+   deleted from `origin` and from the base (`project_item/branch.py`), after the move and outside the item
+   lock, when the tip is on `origin/main`. A branch that is kept or a delete that failed prints a warning and
+   the `project-item drop-branch` command; the move stands. The rule is owned by `cr.md`, section
+   "`cr/<ID>` branch의 수명".
 
 ## Errors
 
@@ -101,8 +107,9 @@ Errors print `project-item: <code>: <message>` and exit 2.
 | `target_exists`, `git_mv_failed`, `move_failed` | the move could not take place; the text, path and index did not change |
 | `move_partial` | the move failed and could not be undone; the message names the paths and index entries that are left |
 | `agent_session_only` | in a team project, only `agent-session start` moves a CR to `in-progress` |
-| `role_denied` | the caller may not do this. In a team project, `answer` and `accept` need the current Leader. A move out of `in-progress` needs the current Leader or an operator; `--by Leader` needs the current Leader |
+| `role_denied` | the caller may not do this. In a team project, `answer` and `accept` need the current Leader. A move out of `in-progress` and `drop-branch` need the current Leader or an operator; `--by Leader` needs the current Leader |
 | `review_missing` | a write CR does not go from `in-progress` to `done` with `fixed` without the recorded submission, the Leader's acceptance and the commit on `origin/main` |
+| `not_integrated` | `drop-branch` of a CR that is not a Write CR in `done/` with Outcome `fixed` |
 | `not_team_project`, `commit_invalid` | `accept` outside a team project, or `--commit` is not the 40-hex submitted commit |
 | `decide_not_open`, `answer_empty`, `answer_invalid`, `answer_too_large` | `answer` rejects the decision state or the answer text |
 | `registry_invalid`, `registry_not_found` | registry errors from agent-session |
