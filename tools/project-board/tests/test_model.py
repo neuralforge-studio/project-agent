@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from board_testing import BASE_HASH, LEADER_ID, WORKER_IDS, Board, leader, session
+from board_testing import (BASE_HASH, LEADER_ID, WORKER_IDS, Board, cron_run, cron_section, isolate_crontab, leader,
+                           session)
 from project_board import model
 
 NOW = dt.datetime(2026, 11, 5, 10, 30, tzinfo=dt.timezone.utc)
@@ -512,3 +513,48 @@ def test_the_decision_snapshot_has_every_projects_decisions_and_nothing_else(boa
     data = model.decision_snapshot(board.config)
     assert [(item["id"], [d["id"] for d in item["decide"]], item["crs"]) for item in data["projects"]] == [
         ("Alpha", ["D-20261107-01"], None), ("Beta", [], None)]
+
+
+# ------------------------------------------------------------ the cron window (BOARD-027)
+REMAINING = json.loads((Path(__file__).parent / "fixtures" / "cron_remaining.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("case", REMAINING["cases"], ids=lambda case: f"{case['now']}->{case['next']}")
+def test_the_time_left_to_a_run_is_the_largest_unit_rounded_down(case):
+    """The expected texts are written by hand in the fixture the Rust sidebar reads too."""
+    assert model.remaining_text(case["next"], dt.datetime.fromisoformat(case["now"])) == case["text"]
+    assert model.remaining_text(dt.datetime.fromisoformat(case["next"]), dt.datetime.fromisoformat(case["now"])) == case["text"]
+
+
+def test_the_cron_view_lists_the_jobs_of_one_project_and_every_registered_project_for_the_arrows(board, tmp_path, monkeypatch):
+    crontab = isolate_crontab(tmp_path, monkeypatch)
+    alpha, _beta = board.project("Alpha", seats=0), board.project("Beta", seats=0)
+    crontab.write_text("0 23 * * * /home/user/nightly.sh\n"
+                       + cron_section("Alpha", ("check", "점검", "13,43 * * * *", "/bin/check 100\\%"),
+                                      ("report", "보고", "0 9 * * 1-5", "/bin/report")))
+    cron_run(alpha, "check", "2026-11-12T01:13:20Z", True, "ok")
+    now = dt.datetime(2026, 11, 12, 10, 20, 30)
+    view = model.cron_view(board.config, "Alpha", now)
+    assert view["order"] == ["Alpha", "Beta"] and view["error"] is None and view["project"] == "Alpha"
+    check, report = view["jobs"]
+    assert (check["id"], check["description"], check["schedule"]) == ("check", "점검", "13,43 * * * *")
+    assert check["command"] == "/bin/check 100%"                                  # `\%` is `%` as in `cron ls`
+    assert check["last_run"] == {"at": "2026-11-12T01:13:20Z", "ok": True, "result": "ok"}
+    assert report["last_run"] is None
+    assert check["remaining"] == model.remaining_text(check["next_run"], now)
+    assert model.cron_view(board.config, "Beta")["jobs"] == []                    # no section: no jobs, no error
+
+
+def test_the_cron_view_says_why_the_jobs_cannot_be_read_and_still_lists_the_projects(board, tmp_path, monkeypatch):
+    crontab = isolate_crontab(tmp_path, monkeypatch)
+    board.project("Alpha", seats=0), board.project("Beta", seats=0)
+    monkeypatch.setenv("FAKE_CRONTAB_FAIL", "read")
+    view = model.cron_view(board.config, "Alpha")
+    assert view["jobs"] == [] and view["order"] == ["Alpha", "Beta"]
+    assert "crontab" in view["error"] and "simulated failure" in view["error"]
+    monkeypatch.delenv("FAKE_CRONTAB_FAIL")
+    crontab.write_text("# >>> project-agent: Alpha >>>\n" + cron_section("Beta", ("check", "점검", "13 * * * *", "/x")))
+    broken, fine = model.cron_view(board.config, "Alpha"), model.cron_view(board.config, "Beta")
+    assert broken["jobs"] == [] and "section" in broken["error"]
+    assert fine["error"] is None and [job["id"] for job in fine["jobs"]] == ["check"]   # another project is not affected
+    assert model.cron_view(board.config, "Nobody")["error"] == "Project를 찾을 수 없습니다."

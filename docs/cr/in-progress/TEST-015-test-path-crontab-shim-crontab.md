@@ -23,6 +23,8 @@
 
 ## Disposition
 - 2026-11-12 Leader 판정: 구현한다. 근거가 있는 결함입니다(SESSION-016 검증 중 실제 crontab에 test 구역이 써졌고, test run은 알리지 못했습니다). TEST-014(실제 HOME의 lock 파일)와 같은 규칙의 빈틈입니다. 공통 test helper를 바꾸면 다섯 명령을 모두 다시 돌려야 해서 host 부하가 큽니다. 그래서 BOARD-018(Rust sidebar)을 통합한 뒤 todo로 옮겨 시작합니다.
+- 2026-11-12 Leader: BOARD-018을 통합하고 0.11.0을 release했습니다. 시작합니다. TMUX-004가 같은 때 crontab `check` 줄과 설치기의 crontab 해석을 고치므로, 먼저 통합된 쪽을 `origin/main`에서 merge해 맞춥니다.
+- 2026-11-12 Leader: open -> todo.
 
 ## Implementation
 읽을 문서: [README 검증](../../../README.md#검증)의 자원 규칙, [TEST-014 CR](../done/TEST-014-test-home-cache-project-item-locks-lock.md)과 `tools/tests/private_root.py`(HOME 격리 방식), `tools/agent-session/agent_session/cron.py`, `tools/agent-session/tests/test_cron.py`·`test_check.py`의 `crontab` shim, `install/tests`의 `fake_crontab`, [project-team Worker 절](../../../skills/project-team/SKILL.md).

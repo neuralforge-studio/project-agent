@@ -404,7 +404,7 @@ Turn 관찰 hook(Stop·StopFailure·SessionEnd)은 canonical state를 쓰지 않
 마무리는 먼저 대상 제어 잠금 없이 그 slot의 현재 실행 포인터가 이 run과 이 pane을 가리키는지 읽습니다. 아니면 잠금을 잡지 않고 `not_current`로 끝납니다. `stop`이 반납한 run의 pane이 죽어도 이 hook이 돌지만, 그 run은 이미 현재가 아니고 다시 현재가 되지 않습니다. 이 확인에 잠금을 쓰면 바로 이어지는 `start`가 그 slot을 "target control is busy"로 건너뛰어 다른 seat를 받습니다(TEST-006). 포인터를 읽지 못하면 현재로 보고 아래 절차로 갑니다. 현재인 run(사용자 `/exit`)은 대상 제어 잠금 안에서 다음을 모두 확인한 run만 마무리합니다. 하나라도 아니면 아무것도 바꾸지 않고 이유(`finished: false`, `reason`)만 남깁니다.
 
 - 그 slot의 현재 실행 포인터가 이 run과 이 pane을 가리킵니다(`not_current`). 로컬이고 게시를 마친(`registered`·`ready`) run입니다(`not_published`). 등록하지 못한 run은 start가 근거를 읽으므로 지금처럼 둡니다. 원격 seat는 SSH 표시 창의 종료가 Worker의 종료가 아니므로 다룰 수 없습니다.
-- 명령이 제어하는 run이 아닙니다(`control_active`): stopping이 아니고, control_pending이 false이며, 살아 있는 controller가 없습니다. stop·restart·shutdown은 자기 잠금 안에서 stopping을 쓰고 끝냅니다. 그래서 실행 중인 stop·restart의 중복 마무리와, restart가 새 run을 띄우는 window의 정리가 없고, shutdown이 끝낸 run(resume이 이어받음)은 정리하지 않습니다. 잠금이 잡혀 있으면 5초 기다리고, 그래도 잡혀 있으면 그 명령에 맡기고 끝납니다.
+- 명령이 제어하는 run이 아닙니다(`control_active`): stopping이 아니고, control_pending이 false이며, 살아 있는 controller가 없습니다. stop·restart·shutdown은 자기 잠금 안에서 stopping을 쓰고 끝냅니다. 그래서 실행 중인 stop·restart의 중복 마무리와, restart가 새 run을 띄우는 window의 정리가 없고, shutdown이 끝낸 run(resume이 이어받음)은 정리하지 않습니다. 잠금이 잡혀 있으면 5초 기다리고, 그래도 잡혀 있으면 그 명령에 맡기고 끝납니다(`finish-result.json`의 `reason`은 `lock_timeout`). 이 결과는 마무리가 실패했다는 뜻이 아니라 stop·restart가 그 run의 종료 확인을 맡고 있다는 뜻입니다. 그 명령이 종료를 확인하지 못하면 아무도 마무리하지 않으므로, 명령의 종료 판정은 이 마무리와 같은 근거여야 합니다(7절 session cron·process 규칙).
 - 종료를 확인했습니다(`termination_unconfirmed`). pane이 dead이고 provider의 관찰이 stop과 같은 기준으로 종료를 보고합니다. Claude는 종료한 CLI가 SessionEnd hook을 실행하지 못했을 수 있으므로, pane이 dead이고 CLI·process group·추적한 background PID가 모두 없으면(forced shutdown의 확인과 같은 근거) 종료입니다. 최대 15초 기다려 process group이 정리되는 것을 봅니다. background 대화로 옮겨진 run은 이 기준을 쓰지 않습니다. 확인하지 못하면 보존합니다.
 
 확인하면 먼저 `agent/runs/<run_id>/ended.json`에 종료 근거를 씁니다. 근거는 run_id·target·job_id·session_id·`cli_pid`·`cli_birth`·process group·`basis`(`provider` 또는 `process`)·`ended_at`입니다. 그 뒤 stopping을 쓰고 이름을 바꾸고(`-exited-`), stop의 반납 판정을 그대로 적용합니다.
@@ -621,6 +621,7 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | project_liveness(project, socket=None, view=None) | `liveness`와 같되 이미 `load_registry`로 얻은 project를 받음. `view`(`server_view`의 반환)를 주면 그 읽기로 판정하고 tmux를 다시 읽지 않음 |
 | server_view(projects, socket=None) | 이미 `load_registry`로 얻은 project들의 tmux 서버를 한 번 읽은 snapshot을 반환. `project_liveness`·`project_pending_releases`의 `view`로 넘김. 읽는 tmux process는 project·slot 수와 무관하게 둘입니다. 서버의 session·window·pane과 각 project의 현재 run window option을 읽고, owner·server identity·pointer 판정은 `get_current`와 같은 함수를 지남. 읽은 뒤의 변화는 보지 않으므로 다시 보려면 새로 만듦. 반환값은 불투명한 객체 |
 | crontab_sections() | 사용자 crontab의 project 구역을 순서대로 `{project, begin, end, jobs: [{id, command, program}], error}`로 반환([cron](#cron)의 형식). `begin`·`end`는 구역의 시작·끝 줄 그대로이고, `program`은 작업 명령이 실행하는 프로그램(첫 단어. 앞의 `env`와 `NAME=값` 단어는 건너뜀)이거나 읽을 수 없으면 None입니다. 이 명령 줄을 읽는 규칙은 `cron.command_program` 하나입니다. 구역이 깨져 있으면(끝 줄 없음·중복·낯선 줄) `error`가 그 코드(`cron_invalid`)이고 `jobs`는 비어 있으며 다른 구역은 그대로 읽습니다. crontab이 아직 없으면 빈 목록, 읽지 못하면 `crontab_unreadable`·`crontab_unavailable` 오류입니다. 쓰지 않습니다. 설치기가 `uninstall`·`check`에서 남은 구역을 알릴 때 씁니다(설치 계약 5.4절·7.3절) |
+| cron_listing(project) | `project`(`load_registry`가 준 항목)의 cron 작업을 `{project, jobs: [{id, schedule, description, command, next_run, last_run}]}`로 반환합니다. `agent-session cron ls --project`와 같은 값입니다([cron](#cron)). crontab을 읽지 못하거나 그 project의 구역이 깨졌으면 `SessionError`(`crontab_unavailable`, `crontab_unreadable`, `cron_invalid`)입니다. 쓰지 않습니다. Board의 cron 창이 읽을 때 씁니다 |
 | pane_slot(pane, tmux=None) | tmux pane이 든 관리 window의 `(project_id, slot)`을 반환. slot은 `leader`·`seat-N`이고 target이 slot이 아니면 None. 관리 window가 아니면(project_id option이 없거나 JSON이 아님) None. window option만 한 번의 tmux 호출로 읽음. Board가 지금 보는 창의 project·slot을 알 때 씀. Rust sidebar는 같은 option을 같은 규칙으로 읽습니다(제품 지도의 "Rust sidebar와 Python이 같은 규칙을 읽습니다" 절) |
 | caller(project, tmux=None, store=None) | 이 명령을 실행하는 쪽을 `(slot, session_id)`로 반환. slot은 `leader`·`seat-N`·`operator`(관리 실행 밖 CLI, session_id는 None)·`unmanaged-agent`(이 project의 구성원이 아닌 agent). 환경의 대화 ID를 state의 binding과 대조하고, 없으면 관리 실행의 tmux pane으로 판정. project 도구의 유일한 caller 규칙 |
 | require_live(project, slot, identity, tmux=None) | Leader·Worker caller의 slot이 아직 그 대화의 살아 있는 관리 CLI를 가졌는지 확인. 아니면 `caller_not_running` 오류. 반환값 없음 |
@@ -639,7 +640,7 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 `PANE_ID_OPTION`·`RemoteSeat`·`SessionError`·`Tmux`는 이름과 형식을 제공하는 값이고, 나머지는 함수입니다.
 agent-session 내부 모듈은 서로의 밑줄 이름을 import하지 않습니다. 함께 쓰는 helper는 소유 모듈의 공개 이름입니다.
 
-`read_state`·`project_state`·`check_binding`·`crontab_sections`·`liveness`·`project_liveness`·`server_view`·`pending_releases`·`project_pending_releases`·`caller`·`require_live`는 읽기 전용이고, `finish_release`는 반납 대기를 마치는 쓰기 호출입니다(project-item이 CR을 옮긴 직후 부름).
+`read_state`·`project_state`·`check_binding`·`crontab_sections`·`cron_listing`·`liveness`·`project_liveness`·`server_view`·`pending_releases`·`project_pending_releases`·`caller`·`require_live`는 읽기 전용이고, `finish_release`는 반납 대기를 마치는 쓰기 호출입니다(project-item이 CR을 옮긴 직후 부름).
 호출자는 선택한 등록 파일과 socket을 전달할 수 있습니다.
 전달하지 않은 등록 경로는 CLI와 같은 표준 경로 규칙을 적용합니다.
 상태 손상·미등록·현재 소유자 불일치·관찰 불가를 구분해 공통 오류로 반환합니다.
@@ -1025,7 +1026,8 @@ Claude Worker에 background 작업이 남으면 idle이 되지 않아 종료 요
 
 session cron은 run이 exit handoff를 껐는지에 따라 셉니다. 근거는 그 run의 `launch.sh`(window option `launch_file`)에 `export CLAUDE_DISABLE_ADOPT=1`이 있는지입니다(3절 방지).
 - 껐으면 session cron은 CLI와 함께 사라지므로 background로 세지 않습니다. session cron만 남은 run도 idle이면 종료 요청을 보내고, CLI가 끝나면(pane dead, `cli_pid`·`cli_birth` 일치 process 없음, process group 없음) 마지막 Stop 보고에 cron이 남아 있어도 종료로 판정해 반납합니다. 이미 `stopping`이 남은 run을 다시 stop해도 같습니다. stop·restart·shutdown·`finish_ended`가 같은 판정(`providers/claude.py`의 `report_background`)을 씁니다.
-- 근거가 없으면(옛 run, 읽을 수 없는 `launch.sh`) 지금처럼 session cron을 background로 셉니다.
+- 근거가 없으면(옛 run, 읽을 수 없는 `launch.sh`) CLI가 살아 있는 동안은 지금처럼 session cron을 background로 셉니다. CLI가 이미 끝났으면(`cli_pid`·`cli_birth` 일치 process 없음) 세지 않습니다. exit handoff가 일어났다면 그 사실은 옛 transcript의 `continued-in` 기록이며(3절 감지) 종료 판정이 그 기록을 먼저 읽으므로, 기록이 없는 끝난 CLI의 cron은 이어받을 곳이 없습니다.
+- 종료 판정은 provider 보고 안의 남은 작업보다 process 사실이 우선합니다. Claude run은 pane이 dead이고 CLI·process group·추적한 background PID가 모두 없으며 대화가 옮겨지지 않았으면, 마지막 Stop 보고에 background 작업이나 cron이 남아 있어도 종료입니다(`basis`: `process`). stop·restart·start와 `finish_ended`(3절)가 이 판정 하나를 씁니다. 끝난 CLI의 보고는 그 CLI가 가졌던 작업이므로 더 이상 일하지 않습니다.
 - background shell·task(`background_tasks`)는 어느 경우에나 종료를 막는 background로 셉니다.
 
 Worker는 아래 반납 검사를 추가로 확인합니다.
@@ -1277,6 +1279,15 @@ Controller가 살아 있어도 다음을 모두 만족하면 자기 run의 windo
 다른 controller, 결과가 없거나 미완료인 controller, pending이 남은 window는 보존합니다.
 다른 대상 제어는 기본적으로 최종 결과까지 기다리고 반환합니다.
 
+#### run을 시작한 코드와 제어하는 코드가 다를 때
+
+한 run의 CLI와 hook·launch script는 그 run을 시작한 코드(agent 저장소의 동결 사본, 옛 release)이고, controller와 `finish-ended` hook은 그 시점의 현재 release입니다. 이 workstation의 관리 run은 둘이 다를 수 있습니다. 현재 release가 옛 run을 제어할 때의 규칙은 다음과 같습니다.
+
+- 종료 판정은 run을 시작한 코드의 버전이나 환경 선언(`launch.sh`의 `CLAUDE_DISABLE_ADOPT` 줄)이 아니라 지금 확인할 수 있는 사실로 합니다. 사실은 process 생존, 대화의 `continued-in` 기록, hook이 남긴 관찰값(`hook_observations`)입니다. 선언은 CLI가 살아 있는 동안의 예측에만 씁니다(7절 session cron).
+- 옛 run의 hook이 쓰는 관찰값과 window option은 현재 코드가 읽을 수 있어야 합니다. 형식 version(`agent_session`·`tmux_options`)이 바뀌지 않는 한 호환입니다.
+- 현재 release가 종료를 확인하면 새 대화를 시작합니다. 확인하지 못하면 `timeout`·`conversation_backgrounded` 등의 오류를 `control-result.json`에 남기고, `stopping`과 state의 이전 대화 연결(session)을 지우지 않습니다. 이전 대화는 보존됩니다.
+- 그 상태를 복구하는 사람은 `control-result.json`의 `details`(`stopping_kept`, `exit_wait`)를 읽습니다. `exit_wait`의 `cli_alive`·`group_alive`·`tracked_alive`가 모두 false이고 `pane_dead`가 true이면 CLI는 끝난 것이며, 남은 `background`는 끝난 CLI의 마지막 보고입니다. 그때는 위 규칙에 따라 같은 release에서 `agent-session start --job <leader 또는 CR>`가 새 대화로 진행합니다. 하나라도 살아 있으면 그 process를 확인하고 끝낸 뒤 다시 실행합니다(7절 수동 복구).
+
 Claude 종료는 pane dead·CLI·추적한 자식과 background 종료를 확인합니다.
 Codex는 공유 engine의 active turn·pending 입력·background도 확인합니다.
 분리된 자식을 process group 검사만으로 종료 처리하지 않습니다.
@@ -1414,7 +1425,7 @@ M H DOM MON DOW 명령
 
 **다음 실행 시각**은 `agent_session/cron.py`의 `Schedule.next_run`이 한 곳에서 정합니다(주어진 시각보다 엄밀히 뒤의 첫 일치 분, 8년 안에 없으면 없음). 다른 언어의 읽는 쪽(Board의 sidebar)은 같은 결과를 내야 하고 [`tests/fixtures/cron_next_run.json`](../../tools/agent-session/tests/fixtures/cron_next_run.json)의 손으로 쓴 사례(시각은 시간대 없는 local 분)로 일치를 지킵니다.
 
-`ls` 결과는 `{project, jobs: [{id, schedule, description, command, next_run, last_run}]}`입니다. `next_run`은 local 시각 `YYYY-MM-DDTHH:MM`(없으면 null), `last_run`은 그 작업의 명령이 남긴 `{at(UTC), ok, result[, code]}`(없으면 null)입니다. `--summary`는 sidebar가 2초 주기에서 읽는 값으로 `{project, count, next_run}`(작업 수와 가장 가까운 다음 실행)만 냅니다. Board는 이 명령을 부르거나, `crontab -l`을 직접 읽어 위 형식을 해석하고 위 규칙으로 다음 실행을 계산할 수 있습니다.
+`ls` 결과는 `{project, jobs: [{id, schedule, description, command, next_run, last_run}]}`입니다. `next_run`은 local 시각 `YYYY-MM-DDTHH:MM`(없으면 null), `last_run`은 그 작업의 명령이 남긴 `{at(UTC), ok, result[, code]}`(없으면 null)입니다. `--summary`는 `{project, count, next_run}`(작업 수와 가장 가까운 다음 실행)만 냅니다. Board는 이 명령을 부르거나, `crontab -l`을 직접 읽어 위 형식을 해석하고 위 규칙으로 다음 실행을 계산할 수 있습니다. 실제로 Board의 Rust sidebar는 10초마다 `crontab -l` 하나로 모든 project의 구역을 직접 읽어 작업 수(`C:n`)와 다음 실행(tooltip)을 보이고, Python cron 창은 `agent_session.api.cron_listing`(`ls`와 같은 값)으로 읽습니다.
 
 **기본 점검 작업**: project의 작업 `check`는 30분마다(`13,43 * * * *`, `:00`·`:30`을 피함) 그 release의 `bin/agent-session --config <등록 파일> [--socket-name|--socket-path ...] check --project NAME`을 실행합니다. cron이 출력을 메일로 보내지 않도록 `>/dev/null 2>&1`을 붙이며, 결과는 `last_run`이 보입니다.
 

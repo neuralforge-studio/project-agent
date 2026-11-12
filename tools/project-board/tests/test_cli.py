@@ -23,14 +23,17 @@ def test_sidebar_actions_keep_the_client_identity(monkeypatch):
     called = []
     monkeypatch.setattr(tmux_control, "open_popup", lambda *args: called.append(("decision", args)) or {"ok": True})
     monkeypatch.setattr(tmux_control, "open_cr_popup", lambda *args: called.append(("cr", args)) or {"ok": True})
+    monkeypatch.setattr(tmux_control, "open_cron_popup", lambda *args: called.append(("cron", args)) or {"ok": True})
     monkeypatch.setattr(tmux_control, "toggle_expanded_project", lambda project_id: called.append(("fold", project_id)) or {"ProjectB"})
     config = ["--config", "/tmp/projects.json"]
     assert cli.main([*config, "open-decision", "--project", "Falcon2", "--client", "/dev/ttys1"]) == 0
     assert cli.main([*config, "open-cr", "--project", "Falcon2", "--state", "open", "--client", "/dev/ttys2"]) == 0
+    assert cli.main([*config, "open-cron", "--project", "Falcon2", "--client", "/dev/ttys3"]) == 0
     assert cli.main([*config, "toggle-fold", "--project", "ProjectB"]) == 0
     assert called == [
         ("decision", ("/tmp/projects.json", "Falcon2", None, "/dev/ttys1")),
         ("cr", ("/tmp/projects.json", "Falcon2", "open", "/dev/ttys2")),
+        ("cron", ("/tmp/projects.json", "Falcon2", "/dev/ttys3")),
         ("fold", "ProjectB"),
     ]
 
@@ -67,3 +70,10 @@ def test_popup_commands_run_the_matching_tui(monkeypatch):
         ("decision", ("/tmp/projects.json", "Falcon2", "D-1"), link),
         ("cr", ("/tmp/projects.json", "Falcon2", "todo"), link),
     ]
+
+
+def test_the_cron_command_runs_the_cron_window_and_marks_its_link(monkeypatch):
+    called = []
+    monkeypatch.setattr(tui, "run_cron_popup", lambda *args, **kwargs: called.append((args, kwargs)) or 0)
+    assert cli.main(["--config", "/tmp/projects.json", "cron", "--project", "Falcon2"]) == 0
+    assert called == [(("/tmp/projects.json", "Falcon2"), {"mark_link": tmux_control.mark_window_ready})]

@@ -3,7 +3,8 @@
 //!
 //! `layout` turns the facts into widgets placed on a virtual canvas, `paint` draws the canvas through the
 //! scroll offsets into a ratatui buffer. Both are pure, so the cells can be compared with what Textual drew.
-use crate::model::{Liveness, Project, Seat, Snapshot};
+use crate::cron::{self, Civil};
+use crate::model::{CronView, Liveness, Project, Seat, Snapshot};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -129,6 +130,8 @@ pub struct Active {
 pub enum Role {
     Name,
     Decision,
+    /// The project's cron jobs (BOARD-027), on the row of `D`.
+    Cron,
     /// 0 open, 1 todo, 2 in-progress
     Count(usize),
     Fold,
@@ -150,6 +153,7 @@ pub enum Action {
     Project(String),
     Cr(String, &'static str),
     Decision(String),
+    Cron(String),
     Seat(String, usize),
 }
 
@@ -218,6 +222,10 @@ pub struct Facts<'a> {
     pub notice: Option<&'a str>,
     /// A snapshot has been read; until then an empty list is not yet "no project".
     pub loaded: bool,
+    /// Every project's cron jobs once the crontab has been read; a project that is missing has not been read yet.
+    pub cron: &'a CronView,
+    /// The local minute the tooltip of the cron count measures the time to the next run from.
+    pub now: Civil,
 }
 
 fn count_label(project: &Project, index: usize) -> String {
@@ -232,6 +240,31 @@ fn decide_label(project: &Project) -> String {
         Some(decide) => decide.open.to_string(),
         None => if project.errors.iter().any(|e| e.source == "decide") { "!".into() } else { "-".into() },
     }
+}
+
+/// `C:n` beside `D:n` (BOARD-027): the number of cron jobs in the project's crontab section. A project with jobs opens
+/// the cron window; `C:0` is the grey of an empty seat, `C:!` the colour of `D:!`, and `C:-` is a crontab not read yet.
+fn cron_button(facts: &Facts, number: usize, project: &Project) -> Widget {
+    let (label, fg, enabled, tooltip) = match facts.cron.get(&project.id) {
+        None => ("-".to_string(), SEAT_EMPTY, false, "cron을 읽는 중입니다".to_string()),
+        Some(entry) if entry.error.is_some() => ("!".to_string(), DECISION, false, entry.error.clone().unwrap_or_default()),
+        Some(entry) if entry.schedules.is_empty() => ("0".to_string(), SEAT_EMPTY, false, "cron 작업 없음".to_string()),
+        Some(entry) => {
+            let next = match cron::nearest(&entry.schedules, &facts.now) {
+                Some(next) => format!("{} 뒤", cron::remaining(&next, &facts.now)),
+                None => "없음".to_string(),
+            };
+            (entry.schedules.len().to_string(), COUNT, true, format!("cron {}개, 다음 실행 {next}", entry.schedules.len()))
+        }
+    };
+    let mut widget = button(project, number, Role::Cron, "C".into(), format!("C:{label}"), 1);
+    widget.trail = 1;
+    widget.auto_width += 1;
+    widget.enabled = enabled;
+    widget.fg = fg;
+    widget.tooltip = Some(tooltip);
+    widget.action = Some(Action::Cron(project.id.clone()));
+    widget
 }
 
 fn seat_liveness<'a>(facts: &'a Facts, project: &Project, seat: &Seat) -> Option<&'a str> {
@@ -288,7 +321,8 @@ fn project_widgets(facts: &Facts, number: usize, project: &Project, out: &mut Ve
 
     let label = decide_label(project);
     let mut decision = button(project, number, Role::Decision, "D".into(), format!("D:{label}"), 1);
-    decision.fill = true;
+    decision.trail = 1;
+    decision.auto_width += 1;
     decision.enabled = project.decide.as_ref().map_or(false, |d| d.visible() > 0);
     decision.fg = if !matches!(label.as_str(), "-" | "!" | "0") { DECISION_OPEN } else { DECISION };
     let stages = project.decide.as_ref().map(|d| d.stages).unwrap_or([0; 4]);
@@ -298,6 +332,7 @@ fn project_widgets(facts: &Facts, number: usize, project: &Project, out: &mut Ve
     );
     decision.action = Some(Action::Decision(project.id.clone()));
     out.push(decision);
+    out.push(cron_button(facts, number, project));
 
     for (index, (short, state)) in [("O", "open"), ("T", "todo"), ("I", "in-progress")].into_iter().enumerate() {
         let label = count_label(project, index);
@@ -410,6 +445,17 @@ pub fn layout(facts: &Facts, screen_w: usize, screen_h: usize) -> Layout {
     result
 }
 
+/// The widgets that share a row, side by side: `D` and `C`, then `O`, `T`, `I` and the fold button.
+const ROWS: usize = 2;
+
+fn row_of(role: &Role) -> Option<usize> {
+    match role {
+        Role::Decision | Role::Cron => Some(0),
+        Role::Count(_) | Role::Fold => Some(1),
+        _ => None,
+    }
+}
+
 fn place(per_project: &[Vec<Widget>], view_w: usize, view_h: usize, loaded: bool) -> Layout {
     let mut layout = Layout { view_w, view_h, ..Layout::default() };
     let mut y = 0;
@@ -447,31 +493,29 @@ fn place(per_project: &[Vec<Widget>], view_w: usize, view_h: usize, loaded: bool
         return layout;
     }
     for widgets in per_project {
-        let auto = widgets.iter().filter(|w| !matches!(w.key.role, Role::Error(_)))
-            .map(|w| match w.key.role {
-                Role::Count(_) | Role::Fold => 0,
-                _ => w.auto_width,
-            })
+        let auto = widgets.iter().filter(|w| !matches!(w.key.role, Role::Error(_)) && row_of(&w.key.role).is_none())
+            .map(|w| w.auto_width)
             .max().unwrap_or(0);
-        let counts: usize = widgets.iter().filter(|w| matches!(w.key.role, Role::Count(_) | Role::Fold))
-            .map(|w| w.auto_width).sum();
-        let block = view_w.max(auto).max(counts);
+        let rows_width = (0..ROWS).map(|row| widgets.iter().filter(|w| row_of(&w.key.role) == Some(row)).map(|w| w.auto_width).sum::<usize>())
+            .max().unwrap_or(0);
+        let block = view_w.max(auto).max(rows_width);
         layout.block_width.push(block);
-        let mut x = 0;
-        let mut counts_row: Option<usize> = None;
+        let mut x = [0; ROWS];
+        let mut shared_row: [Option<usize>; ROWS] = [None; ROWS];
         for widget in widgets {
             let mut widget = widget.clone();
             match widget.key.role {
-                Role::Count(_) | Role::Fold => {
-                    let row = *counts_row.get_or_insert_with(|| {
+                _ if row_of(&widget.key.role).is_some() => {
+                    let group = row_of(&widget.key.role).unwrap_or(0);
+                    let row = *shared_row[group].get_or_insert_with(|| {
                         let row = y;
                         y += 1;
                         row
                     });
                     widget.y = row;
-                    widget.x = x;
+                    widget.x = x[group];
                     widget.width = widget.auto_width;
-                    x += widget.auto_width;
+                    x[group] += widget.auto_width;
                 }
                 Role::Error(_) => {
                     widget.lines = wrap(&widget.label, block);
@@ -820,7 +864,10 @@ pub fn runs(buf: &Buffer) -> Vec<Vec<(String, Option<String>, String, bool, bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CrCounts, Decide, Leader, ProjectError};
+    use crate::model::{CrCounts, CronEntry, Decide, Leader, ProjectError};
+
+    /// Thursday 2026-11-12 10:00 (local), the time the cron tooltips count from.
+    const NOW: Civil = Civil { year: 2026, month: 11, day: 12, hour: 10, minute: 0 };
 
     // The expected texts are those of the Textual sidebar's tests (0.7.1 `test_tui.py`).
     #[test]
@@ -877,7 +924,7 @@ mod tests {
     fn laid_out(snapshot: &Snapshot, expanded: &[&str], w: usize, h: usize) -> Layout {
         let live = Liveness::new();
         let expanded: HashSet<String> = expanded.iter().map(|s| s.to_string()).collect();
-        layout(&Facts { snapshot, liveness: &live, expanded: &expanded, active: None, notice: None, loaded: true }, w, h)
+        layout(&Facts { snapshot, liveness: &live, expanded: &expanded, active: None, notice: None, loaded: true, cron: &CronView::new(), now: NOW }, w, h)
     }
 
     #[test]
@@ -895,6 +942,9 @@ mod tests {
         assert_eq!(id(0, 0), "nothing");
         assert_eq!(id(24, 1), "project-0-name");
         assert_eq!(id(0, 2), "project-0-D");
+        // BOARD-027: `D` and `C` share the row; `D` is no longer as wide as the block
+        assert_eq!([5, 6, 11, 12].map(|x| id(x, 2)), ["project-0-D", "project-0-C", "project-0-C", "nothing"]);
+        assert_eq!(id(24, 2), "nothing");
         assert_eq!([0, 5, 6, 11, 12, 17, 18, 20].map(|x| id(x, 3)),
                    ["project-0-O", "project-0-O", "project-0-T", "project-0-T", "project-0-I", "project-0-I", "project-0-seats", "project-0-seats"]);
         assert_eq!(id(21, 3), "nothing");
@@ -917,6 +967,46 @@ mod tests {
         let label = |id: &str| layout.widgets.iter().find(|w| w.id == id).map(|w| (w.label.clone(), w.enabled)).unwrap();
         assert_eq!(label("project-0-O"), ("O:!".into(), false));
         assert_eq!(label("project-0-D"), ("D:-".into(), false));
+    }
+
+    fn cron_widget(entry: Option<CronEntry>) -> Widget {
+        let snapshot = Snapshot { error: None, projects: vec![project("falcon")] };
+        let mut cron = CronView::new();
+        if let Some(entry) = entry {
+            cron.insert("falcon".into(), entry);
+        }
+        let (live, expanded) = (Liveness::new(), HashSet::new());
+        let facts = Facts { snapshot: &snapshot, liveness: &live, expanded: &expanded, active: None, notice: None, loaded: true, cron: &cron, now: NOW };
+        layout(&facts, 25, 20).widgets.into_iter().find(|w| w.id == "project-0-C").unwrap()
+    }
+
+    fn entry(schedules: &[&str]) -> Option<CronEntry> {
+        Some(CronEntry { schedules: schedules.iter().map(|s| s.to_string()).collect(), error: None })
+    }
+
+    #[test]
+    fn the_cron_count_is_pressable_with_jobs_grey_without_and_marked_when_it_cannot_be_read() {
+        // jobs: the ordinary colour of the counts and pressable; the tooltip is the time to the nearest next run
+        let with = cron_widget(entry(&["13,43 * * * *", "0 3 * * *"]));
+        assert_eq!((with.label.as_str(), with.enabled, with.fg), ("C:2", true, COUNT));
+        assert_eq!(with.tooltip.as_deref(), Some("cron 2개, 다음 실행 13m 뒤"));
+        assert_eq!(with.action, Some(Action::Cron("falcon".into())));
+        // no jobs: the grey of an empty seat, nothing to open
+        let none = cron_widget(entry(&[]));
+        assert_eq!((none.label.as_str(), none.enabled, none.fg), ("C:0", false, SEAT_EMPTY));
+        assert_eq!(none.tooltip.as_deref(), Some("cron 작업 없음"));
+        // unreadable: the colour of `D:!`, and the reason as the tooltip
+        let broken = cron_widget(Some(CronEntry { schedules: Vec::new(), error: Some("crontab 명령을 쓸 수 없습니다".into()) }));
+        assert_eq!((broken.label.as_str(), broken.enabled, broken.fg), ("C:!", false, DECISION));
+        assert_eq!(broken.tooltip.as_deref(), Some("crontab 명령을 쓸 수 없습니다"));
+        // not read yet
+        let unread = cron_widget(None);
+        assert_eq!((unread.label.as_str(), unread.enabled), ("C:-", false));
+        // jobs that never run again
+        assert_eq!(cron_widget(entry(&["0 0 30 2 *"])).tooltip.as_deref(), Some("cron 1개, 다음 실행 없음"));
+        // the time is measured from `now`: an hour and a bit away is `1h`, two days away `2d`
+        assert_eq!(cron_widget(entry(&["5 11 * * *"])).tooltip.as_deref(), Some("cron 1개, 다음 실행 1h 뒤"));
+        assert_eq!(cron_widget(entry(&["0 10 14 11 *"])).tooltip.as_deref(), Some("cron 1개, 다음 실행 2d 뒤"));
     }
 
     #[test]
@@ -955,7 +1045,7 @@ mod tests {
         let live = Liveness::new();
         let expanded: HashSet<String> = expanded.iter().map(|s| s.to_string()).collect();
         let active = Active { project_id: "falcon".into(), slot: Some(slot.into()) };
-        layout(&Facts { snapshot: &snapshot, liveness: &live, expanded: &expanded, active: Some(&active), notice: None, loaded: true }, 25, 20)
+        layout(&Facts { snapshot: &snapshot, liveness: &live, expanded: &expanded, active: Some(&active), notice: None, loaded: true, cron: &CronView::new(), now: NOW }, 25, 20)
     }
 
     #[test]
@@ -1003,7 +1093,7 @@ mod tests {
     }
 
     fn layout_of(snapshot: &Snapshot, live: &Liveness, expanded: &HashSet<String>, active: Option<&Active>) -> Layout {
-        layout(&Facts { snapshot, liveness: live, expanded, active, notice: None, loaded: true }, 40, 20)
+        layout(&Facts { snapshot, liveness: live, expanded, active, notice: None, loaded: true, cron: &CronView::new(), now: NOW }, 40, 20)
     }
 
     #[test]
@@ -1011,7 +1101,7 @@ mod tests {
         let empty = Snapshot::default();
         let live = Liveness::new();
         let expanded = HashSet::new();
-        let before = layout(&Facts { snapshot: &empty, liveness: &live, expanded: &expanded, active: None, notice: None, loaded: false }, 25, 10);
+        let before = layout(&Facts { snapshot: &empty, liveness: &live, expanded: &expanded, active: None, notice: None, loaded: false, cron: &CronView::new(), now: NOW }, 25, 10);
         assert!(before.widgets.is_empty());
         let after = laid_out(&empty, &[], 25, 10);
         assert_eq!(after.widgets[0].lines, ["등록된 project가", "없습니다."]);

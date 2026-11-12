@@ -5,6 +5,7 @@
 //! One `Reader` is shared by the threads of the sidebar: `snapshot` (every 2 seconds) and `liveness` (every 10
 //! seconds, and slow when it waits for a remote seat) lock separate state, and meet only in the release holds
 //! that `liveness` writes and `snapshot` reads.
+mod crontab;
 pub mod dump;
 mod err;
 mod exec;
@@ -21,7 +22,7 @@ mod stamp;
 mod state;
 mod tmux;
 
-use crate::model::{Liveness, Snapshot};
+use crate::model::{CronView, Liveness, Snapshot};
 use registry::Project;
 use stamp::{mtime_ns, now_ns, settled, sig_of, Sig};
 use std::collections::{HashMap, HashSet};
@@ -111,6 +112,15 @@ impl Reader {
         let judged = live::judge(&projects, self.config.as_deref());
         *self.releases.lock().unwrap() = judged.releases;
         judged.liveness
+    }
+
+    /// Every project's cron jobs from one `crontab -l` (BOARD-027). A registry that cannot be read gives an empty view.
+    pub fn cron(&self) -> CronView {
+        let Ok(projects) = self.registry() else {
+            return CronView::new();
+        };
+        let ids: Vec<&str> = projects.iter().map(|project| project.id.as_str()).collect();
+        crontab::view(crontab::read(), &ids)
     }
 }
 

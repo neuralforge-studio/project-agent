@@ -1,0 +1,23 @@
+{
+  "comment": "The time left to a job's next run, as the Board shows it (docs/project-board-tui-plan.md, cron). `now` is local wall-clock time with seconds and `next` a local minute (a `next_run`), both without a zone. The difference is rounded UP to whole minutes, then the largest unit that fits is kept and rounded down: 1440 minutes or more is Nd, 60 minutes or more is Nh, otherwise Nm. A difference of zero or less is 0m. Written by hand; the Python window (project_board.model.remaining_text) and the Rust sidebar both read this file.",
+  "cases": [
+    {"now": "2026-11-12T10:00:30", "next": "2026-11-12T10:01", "text": "1m"},
+    {"now": "2026-11-12T10:00:00", "next": "2026-11-12T10:01", "text": "1m"},
+    {"now": "2026-11-12T10:00:00", "next": "2026-11-12T10:03", "text": "3m"},
+    {"now": "2026-11-12T10:00:30", "next": "2026-11-12T10:03", "text": "3m"},
+    {"now": "2026-11-12T10:00:00", "next": "2026-11-12T10:59", "text": "59m"},
+    {"now": "2026-11-12T10:00:30", "next": "2026-11-12T10:59", "text": "59m"},
+    {"now": "2026-11-12T10:00:30", "next": "2026-11-12T11:00", "text": "1h"},
+    {"now": "2026-11-12T10:00:00", "next": "2026-11-12T11:00", "text": "1h"},
+    {"now": "2026-11-12T10:00:00", "next": "2026-11-12T11:01", "text": "1h"},
+    {"now": "2026-11-12T10:00:00", "next": "2026-11-12T12:00", "text": "2h"},
+    {"now": "2026-11-12T10:00:00", "next": "2026-11-13T09:59", "text": "23h"},
+    {"now": "2026-11-12T10:00:00", "next": "2026-11-13T10:00", "text": "1d"},
+    {"now": "2026-11-12T10:00:00", "next": "2026-11-14T09:00", "text": "1d"},
+    {"now": "2026-11-12T10:00:00", "next": "2026-11-14T10:00", "text": "2d"},
+    {"now": "2026-11-30T23:59:30", "next": "2026-12-01T00:00", "text": "1m"},
+    {"now": "2026-12-31T23:00:00", "next": "2027-01-01T00:00", "text": "1h"},
+    {"now": "2026-11-12T10:00:00", "next": "2026-11-12T10:00", "text": "0m"},
+    {"now": "2026-11-12T10:00:30", "next": "2026-11-12T10:00", "text": "0m"}
+  ]
+}

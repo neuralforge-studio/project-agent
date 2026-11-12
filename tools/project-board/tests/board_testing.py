@@ -138,6 +138,32 @@ class Board:
         return path
 
 
+def isolate_crontab(tmp_path, monkeypatch):
+    """No test reaches the user's crontab: `crontab` is the shim over a file of the test (tools/tests/fake_crontab.py).
+    Returns the file that plays the crontab (it does not exist yet: a user without a crontab)."""
+    import fake_crontab
+    path = tmp_path / "fake-crontab" / "crontab.txt"
+    for name, value in fake_crontab.install(path.parent / "bin", path).items():
+        monkeypatch.setenv(name, value)
+    return path
+
+
+def cron_section(name, *jobs):
+    """A project's crontab section (docs/project-team/spec.md, cron); a job is `(id, description, schedule, command)`."""
+    lines = [f"# >>> project-agent: {name} >>>"]
+    for job_id, description, schedule, command in jobs:
+        lines += [f"# job {job_id}: {description}", f"{schedule} {command}"]
+    return "\n".join(lines + [f"# <<< project-agent: {name} <<<", ""])
+
+
+def cron_run(base, job_id, at, ok, result, code=None):
+    """The kept last run of a job: `<base>/agent/cron/<id>.json`."""
+    directory = Path(base) / "agent" / "cron"
+    directory.mkdir(parents=True, exist_ok=True)
+    value = {"at": at, "ok": ok, "result": result, **({"code": code} if code else {})}
+    (directory / f"{job_id}.json").write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+
+
 def session(index, connected_at="2026-11-05T08:00:00Z"):
     value = {"session_id": WORKER_IDS[index], "endpoint": ENDPOINT}
     if connected_at:

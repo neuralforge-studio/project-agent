@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import datetime as dt
 import io
 import os
 import re
@@ -182,9 +183,12 @@ READING_CR = "CR 목록을 읽는 중…"
 CR_GROUPS = (("open", "Open"), ("todo", "Todo"), ("in-progress", "In-Progress"), ("done", "Done"))
 
 
-class CRPopupApp(App):
-    """A read-only CR reader in a client-local tmux popup. One window shows the four states as foldable
-    groups and ◀▶ moves between the registered projects (BOARD-021)."""
+class _ListWindow(App):
+    """The frame of a read-only Board window that lists items on the left and shows the selected one on the right,
+    under `◀ project ▶` (the CR window, the cron window). The widget IDs keep the `cr-` prefix of the first of them.
+
+    The window listens on `link` for a click that tells it what to show next (BOARD-025); a subclass answers the
+    request (`_on_request`) and reads and shows its items (`refresh_items`)."""
 
     CSS = """
     Screen { background: #111c28; }
@@ -206,8 +210,9 @@ class CRPopupApp(App):
     .narrow.list-open #cr-detail { display: none; }
     """ + NAV_CSS + LIST_ITEM_CSS
     BINDINGS = [("escape", "quit", "닫기")]
+    reading_list = ""                             # what the right side says while the list is read
 
-    def __init__(self, config: str | None, project_id: str, state: str, *, load: bool = True,
+    def __init__(self, config: str | None, project_id: str, *, load: bool = True,
                  link: str | None = None, mark_link: LinkMarker | None = None):
         super().__init__()
         self.config = config
@@ -215,19 +220,13 @@ class CRPopupApp(App):
         self.mark_link = mark_link
         self._server: asyncio.AbstractServer | None = None
         self._tasks: set[asyncio.Task] = set()
-        self._warmed = False                      # the other projects' CRs were read ahead (`_warm`)
-        self._unmounted: set[str] = set()         # folded groups whose rows are not mounted yet
         self.project_id = project_id
-        self.focus_state: str | None = state      # the group to show first; only the first load uses it
         self.load = load
-        self.project: dict | None = None
         self.order: list[str] = []
         self.items: list[dict] = []
         self.selected_id: str | None = None
-        self.collapsed: set[str] = {"done"}      # BOARD-026: the many done CRs start folded
         self._targets: dict[int, str | None] = {}
         self._load_generation = 0
-        self._title_task: asyncio.Task | None = None
         self._closing = False
 
     def compose(self) -> ComposeResult:
@@ -239,7 +238,7 @@ class CRPopupApp(App):
         with Horizontal(id="cr-main"):
             yield VerticalScroll(id="cr-items")
             with VerticalScroll(id="cr-detail"):
-                yield Static(READING_CR)
+                yield Static(self.reading_list)
         with Horizontal(id="cr-actions"):
             yield Button("목록", id="cr-show-list")
             yield Button("닫기", id="cr-close")
@@ -253,8 +252,6 @@ class CRPopupApp(App):
     def on_unmount(self) -> None:
         self._closing = True
         self._load_generation += 1
-        if self._title_task is not None:
-            self._title_task.cancel()
         window_link.stop(self._server, self.link)
 
     def _queue(self, coroutine) -> None:
@@ -273,6 +270,74 @@ class CRPopupApp(App):
             await asyncio.to_thread(self.mark_link, self.link)
 
     def _on_request(self, request: dict) -> dict:
+        raise NotImplementedError
+
+    async def refresh_items(self) -> None:
+        raise NotImplementedError
+
+    async def _reload(self) -> None:
+        """Show that the list is being read, then read it."""
+        self.query_one("#cr-title", Static).update(READING)
+        await self._show_message(self.reading_list)
+        await self.refresh_items()
+
+    async def _show_message(self, message: str) -> None:
+        self._load_generation += 1
+        detail = self.query_one("#cr-detail", VerticalScroll)
+        await detail.remove_children()
+        await detail.mount(Static(message))
+
+    async def _move(self, step: int) -> None:
+        target = self._targets.get(step)
+        if target is None:
+            return
+        self.project_id = target
+        self.selected_id = None
+        await self.refresh_items()
+
+    async def _pressed(self, button_id: str) -> None:
+        """A button that is not the frame's own (a list row, a group header)."""
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        if button_id in ("cr-prev", "cr-next"):
+            await self._move(-1 if button_id == "cr-prev" else 1)
+        elif button_id == "cr-show-list":
+            self.toggle_class("list-open")
+        elif button_id == "cr-close":
+            self.exit()
+        else:
+            await self._pressed(button_id)
+
+    def on_resize(self, event) -> None:
+        narrow = event.size.width < 70
+        self.set_class(narrow, "narrow")
+        if not narrow:
+            self.remove_class("list-open")
+
+
+class CRPopupApp(_ListWindow):
+    """A read-only CR reader in a client-local tmux popup. One window shows the four states as foldable
+    groups and ◀▶ moves between the registered projects (BOARD-021)."""
+
+    reading_list = READING_CR
+
+    def __init__(self, config: str | None, project_id: str, state: str, *, load: bool = True,
+                 link: str | None = None, mark_link: LinkMarker | None = None):
+        super().__init__(config, project_id, load=load, link=link, mark_link=mark_link)
+        self._warmed = False                      # the other projects' CRs were read ahead (`_warm`)
+        self._unmounted: set[str] = set()         # folded groups whose rows are not mounted yet
+        self.focus_state: str | None = state      # the group to show first; only the first load uses it
+        self.project: dict | None = None
+        self.collapsed: set[str] = {"done"}      # BOARD-026: the many done CRs start folded
+        self._title_task: asyncio.Task | None = None
+
+    def on_unmount(self) -> None:
+        if self._title_task is not None:
+            self._title_task.cancel()
+        super().on_unmount()
+
+    def _on_request(self, request: dict) -> dict:
         project, state = request.get("project"), request.get("state")
         if (request.get("kind") != "cr" or not isinstance(project, str) or state not in model.CR_STATES
                 or not isinstance(request.get("client", ""), str)):
@@ -285,12 +350,6 @@ class CRPopupApp(App):
         self.query_one("#cr-project", Static).update(project)
         self._queue(self._reload())
         return window_link.reply()
-
-    async def _reload(self) -> None:
-        """Show that the list is being read, then read it."""
-        self.query_one("#cr-title", Static).update(READING)
-        await self._show_message(READING_CR)
-        await self.refresh_items()
 
     async def refresh_items(self) -> None:
         project_id = self.project_id
@@ -459,12 +518,6 @@ class CRPopupApp(App):
             pass
         await asyncio.sleep(0.02)
 
-    async def _show_message(self, message: str) -> None:
-        self._load_generation += 1
-        detail = self.query_one("#cr-detail", VerticalScroll)
-        await detail.remove_children()
-        await detail.mount(Static(message))
-
     async def _show_cr(self) -> None:
         item = next((row for row in self.items if row["id"] == self.selected_id), None)
         if item is None or self.project is None:
@@ -492,16 +545,7 @@ class CRPopupApp(App):
         await detail.mount(Markdown(source, open_links=False) if source is not None else Static(message))
         detail.scroll_home(animate=False)
 
-    async def _move(self, step: int) -> None:
-        target = self._targets.get(step)
-        if target is None:
-            return
-        self.project_id = target
-        self.selected_id = None
-        await self.refresh_items()
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        button_id = event.button.id or ""
+    async def _pressed(self, button_id: str) -> None:
         if button_id.startswith("cr-item-"):
             index = int(button_id.removeprefix("cr-item-"))
             self.selected_id = self.items[index]["id"]
@@ -510,17 +554,124 @@ class CRPopupApp(App):
             self.remove_class("list-open")
         elif button_id.startswith("cr-group-"):
             await self._fold(button_id.removeprefix("cr-group-"))
-        elif button_id in ("cr-prev", "cr-next"):
-            await self._move(-1 if button_id == "cr-prev" else 1)
-        elif button_id == "cr-show-list":
-            self.toggle_class("list-open")
-        elif button_id == "cr-close":
-            self.exit()
 
-    def on_resize(self, event) -> None:
-        narrow = event.size.width < 70
-        self.set_class(narrow, "narrow")
-        if not narrow:
+
+READING_CRON = "cron 작업을 읽는 중…"
+LAST_RUN_FAILED = ("실패", "#ff8f8f")
+
+
+def _local_minute(moment: dt.datetime) -> str:
+    return moment.strftime("%Y-%m-%d %H:%M")
+
+
+def cron_detail(job: dict) -> Content:
+    """The selected job as plain text (a description or a result may hold `[`, which is not markup here): ID,
+    description, schedule, next run with the time left, the last run, and the whole command."""
+    following = job.get("next_run")
+    if following:
+        left = f" ({job['remaining']} 뒤)" if job.get("remaining") else ""
+        next_text = f"{_local_minute(dt.datetime.fromisoformat(following))}{left}"
+    else:
+        next_text = "없음"
+    last = job.get("last_run")
+    parts: list = [(job["id"], "bold"), "\n", job["description"], "\n\n",
+                   ("일정      ", "bold"), job["schedule"], "\n",
+                   ("다음 실행  ", "bold"), next_text, "\n",
+                   ("마지막 실행 ", "bold")]
+    if last:
+        at = dt.datetime.fromisoformat(str(last["at"]).replace("Z", "+00:00")).astimezone()
+        parts += [_local_minute(at), " ", ("성공", "#9be28f") if last["ok"] else LAST_RUN_FAILED]
+        if last.get("result"):
+            parts += ["\n", ("결과      ", "bold"), str(last["result"])]
+        if last.get("code"):
+            parts += ["\n", ("오류 코드  ", "bold"), str(last["code"])]
+    else:
+        parts.append("아직 없음")
+    parts += ["\n\n", ("명령", "bold"), "\n", job["command"]]
+    return Content.assemble(*parts)
+
+
+class CronPopupApp(_ListWindow):
+    """A read-only list of a project's cron jobs (BOARD-027): each job's schedule, next and last run, and command.
+    Jobs are added and removed with `agent-session cron add|rm`. ◀▶ moves between every registered project; the
+    jobs are read when the window opens and when it changes project."""
+
+    reading_list = READING_CRON
+
+    def _on_request(self, request: dict) -> dict:
+        project = request.get("project")
+        if (request.get("kind") != "cron" or not isinstance(project, str)
+                or not isinstance(request.get("client", ""), str)):
+            return window_link.reply(False, "invalid", "cron 창이 받을 수 없는 요청입니다.")
+        if self._closing:
+            return window_link.reply(False, "closing", "cron 창이 닫히는 중입니다.")
+        self.project_id = project
+        self.selected_id = None
+        self.query_one("#cr-project", Static).update(project)
+        self._queue(self._reload())
+        return window_link.reply()
+
+    async def refresh_items(self) -> None:
+        project_id = self.project_id
+        try:
+            data = await asyncio.to_thread(model.cron_view, self.config, project_id)
+            if not self._closing and project_id == self.project_id:
+                await self.apply_view(data)
+        except Exception as error:
+            if not self._closing:
+                await self._show_message(f"cron을 읽을 수 없습니다: {error}")
+
+    async def apply_view(self, data: dict) -> None:
+        self.order = data.get("order") or []
+        self.query_one("#cr-project", Static).update(self.project_id)
+        self._targets = _set_nav(self.query_one("#cr-prev", Button), self.query_one("#cr-next", Button),
+                                 self.order, self.project_id, set(self.order))
+        listing = self.query_one("#cr-items", VerticalScroll)
+        await listing.remove_children()
+        self.items = data.get("jobs") or []
+        error = data.get("error")
+        title = "cron을 읽을 수 없습니다" if error else f"cron {len(self.items)}개"
+        self.query_one("#cr-title", Static).update(title)
+        if error:
+            await self._show_message(f"cron을 읽을 수 없습니다: {error}")
+            return
+        if not self.items:
+            await self._show_message("작업 없음")
+            return
+        await listing.mount(*[Button(self._row_label(item), id=f"cr-item-{index}", classes="list-item")
+                              for index, item in enumerate(self.items)])
+        if not any(item["id"] == self.selected_id for item in self.items):
+            self.selected_id = self.items[0]["id"]
+        self._mark_selected()
+        await self._show_job()
+        listing.scroll_home(animate=False)
+
+    def _row_label(self, item: dict) -> Content:
+        last = item.get("last_run")
+        failed = LAST_RUN_FAILED if last and not last.get("ok") else None
+        return _item_label(item["id"] == self.selected_id, item["id"], failed, item["description"])
+
+    def _mark_selected(self) -> None:
+        for index, item in enumerate(self.items):
+            for button in self.query(f"#cr-item-{index}"):
+                button.label = self._row_label(item)
+                button.set_class(item["id"] == self.selected_id, "selected")
+
+    async def _show_job(self) -> None:
+        item = next((row for row in self.items if row["id"] == self.selected_id), None)
+        if item is None:
+            return
+        self._load_generation += 1
+        detail = self.query_one("#cr-detail", VerticalScroll)
+        await detail.remove_children()
+        await detail.mount(Static(cron_detail(item)))
+        detail.scroll_home(animate=False)
+
+    async def _pressed(self, button_id: str) -> None:
+        if button_id.startswith("cr-item-"):
+            self.selected_id = self.items[int(button_id.removeprefix("cr-item-"))]["id"]
+            self._mark_selected()
+            await self._show_job()
             self.remove_class("list-open")
 
 
@@ -935,6 +1086,11 @@ class PopupApp(App):
 
 def run_cr_popup(config: str | None, project_id: str, state: str, mark_link: LinkMarker | None = None) -> int:
     CRPopupApp(config, project_id, state, link=os.environ.get(window_link.SOCKET_ENV), mark_link=mark_link).run()
+    return 0
+
+
+def run_cron_popup(config: str | None, project_id: str, mark_link: LinkMarker | None = None) -> int:
+    CronPopupApp(config, project_id, link=os.environ.get(window_link.SOCKET_ENV), mark_link=mark_link).run()
     return 0
 
 

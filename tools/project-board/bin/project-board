@@ -19,7 +19,7 @@ unset PYTHONHOME
 # (sync, click, toggle) and the commands the sidebar runs for its clicks (BOARD-018) are standard library only and run
 # at every window change or click: they skip the site step and start from the bundle (`-m project_board`, after the
 # bundle reader).
-# The two windows (cr, popup) start from the bundle as well: textual and what it imports are in it (guarded by
+# The three windows (cr, cron, popup) start from the bundle as well: textual and what it imports are in it (guarded by
 # their package metadata), and the interpreter's installed packages come last on the path because `-S` skips the
 # site step that would add them. A window is opened by a click and imports about 400 modules otherwise; on NFS
 # every module is a file to open. Where textual is not found that way (another layout of the installed packages)
@@ -27,13 +27,13 @@ unset PYTHONHOME
 command="${1:-}"
 [[ "$command" != --config ]] || command="${3:-}"
 case "$command" in
-    sync|click|toggle|open-decision|open-cr|toggle-fold|liveness)
+    sync|click|toggle|open-decision|open-cr|open-cron|toggle-fold|liveness)
         exec "$PY" -S -c "$PROJECT_AGENT_BOOT
 import sys
 _project_agent_bundle(sys.argv.pop(1))
 import runpy
 runpy.run_module('project_board', run_name='__main__', alter_sys=True)" "$PROJECT_AGENT_LAUNCHER_DIR" "$@" ;;
-    cr|popup)
+    cr|cron|popup)
         exec "$PY" -S -c "$PROJECT_AGENT_BOOT
 import sys
 _project_agent_bundle(sys.argv.pop(1))

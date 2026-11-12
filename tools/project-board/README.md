@@ -65,19 +65,21 @@ project-board-sidebar [--config PATH]         # run the sidebar in the current p
 project-board-sidebar tmux-program             # print the tmux it runs, as JSON (the installer's record; install contract 6.2)
 project-board popup --project PROJECT_ID      # show that project's unfinished decisions
 project-board cr --project PROJECT_ID --state open  # show a CR list
+project-board cron --project PROJECT_ID       # show that project's cron jobs (read-only)
 ```
 
-The sidebar refreshes source files every 2 seconds, run liveness and the window it is in every 10
-seconds. Its first read opens the files in parallel, so a 16 x 16 Board is drawn with current data
+The sidebar refreshes source files every 2 seconds, run liveness, the window it is in and the
+projects' cron jobs every 10 seconds (`crontab -l`, one process for every project; see the cron
+count below). Its first read opens the files in parallel, so a 16 x 16 Board is drawn with current data
 within a second. A later refresh parses again only the CR and decision files whose size or
 modification time changed, and lists a directory tree again only when the modification time of one
 of its directories changed (the same for the registry file). It writes to the terminal only the
 cells that changed; a popup reads only its own project.
 The sidebar keeps clicks and scrolling responsive during reads. It switches a client to a project or a
 Worker pane itself (`rust/src/switch.rs`, the same rules as `tmux_control.switch_project` and
-`switch_seat`, compared by `tests/test_rust_switch.py`). A CR or decision click tells an open window of the same kind what to show over
+`switch_seat`, compared by `tests/test_rust_switch.py`). A CR, decision or cron click tells an open window of the same kind what to show over
 its socket (`rust/src/window.rs`, the BOARD-025 line); otherwise, and for the fold button, it runs a
-`project-board` subcommand from the start bundle (`open-decision`, `open-cr`, `toggle-fold`); the `liveness`
+`project-board` subcommand from the start bundle (`open-decision`, `open-cr`, `open-cron`, `toggle-fold`); the `liveness`
 subcommand judges the runs of SSH seats for it. Every periodic read starts one tmux process
 (the run liveness two). Decision
 answers require the `operator` caller classification from `agent-session`; a managed or
@@ -97,7 +99,13 @@ half a second, every attached client shows `Board 끄는 중 3/8` (or `켜는 �
 which disappears by itself when the work is done. The pane's own first picture, a second or more
 later, is the Board's start-up and not part of that count. A window with too little space for
 the chosen width shows a smaller Board pane; another window with room restores that width.
-Each project shows its decision count above the CR counts. Seats start folded. Click
+Each project shows its decision count (`D:n`) and its cron job count (`C:n`) above the CR counts.
+`C:n` is the number of jobs in the project's section of the user's crontab (the section and the next
+run rule belong to `agent_session.cron`; the sidebar follows them in `rust/src/cron.rs`, held to
+them by `tests/test_rust_cron.py`). `C:0` (no section or no crontab) is grey and opens nothing; `C:!`
+is a crontab that cannot be read or a broken section of that project. The tooltip of `C:n` gives the
+time to the nearest next run in one unit (`cron 2개, 다음 실행 3m 뒤`). Pressing `C:n` opens the
+read-only cron window (`project-board cron`). Seats start folded. Click
 `▸` to expand one project's seats, or `▾` to fold them. The fold state is shared by
 Board panes in the same tmux server and survives window changes and Board off/on. Use Tab
 and Enter for the same action from the keyboard. The list scrolls vertically when many

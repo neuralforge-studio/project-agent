@@ -13,8 +13,8 @@ from .tmux_program import COMPANY_TMUX
 # The public names. spec 5 (docs/project-team/spec.md) records each one's input and result.
 __all__ = (
     "COMPANY_TMUX", "PANE_ID_OPTION", "RemoteSeat", "SessionError", "Tmux",
-    "caller", "check_binding", "crontab_sections", "finish_release", "liveness", "load_registry", "pane_slot",
-    "pending_releases", "project_liveness", "project_pending_releases", "project_state",
+    "caller", "check_binding", "cron_listing", "crontab_sections", "finish_release", "liveness", "load_registry",
+    "pane_slot", "pending_releases", "project_liveness", "project_pending_releases", "project_state",
     "read_state", "registry_path", "require_live", "resolve_project", "server_view",
 )
 
@@ -29,6 +29,18 @@ def crontab_sections():
     (`crontab_unavailable`, `crontab_unreadable`); no crontab yet is an empty list. Read only."""
     from . import cron              # only the installer calls this; other consumers do not import the cron modules
     return cron.crontab_sections()
+
+
+def cron_listing(project):
+    """The project's cron jobs, the value of `agent-session cron ls --project NAME`: `{project, jobs: [{id,
+    schedule, description, command, next_run, last_run}]}`. `project` comes from `load_registry`.
+
+    `next_run` is the next local minute that matches (`null` when none does in eight years) and `last_run` the
+    job's kept last run `{at, ok, result[, code]}` or None. A project without a section has no jobs. A crontab
+    that cannot be read (`crontab_unavailable`, `crontab_unreadable`) and a section that is damaged
+    (`cron_invalid`) raise `SessionError`. Read only."""
+    from . import cron              # only the cron readers call this; other consumers do not import the cron modules
+    return cron.listing(config.require_base(project), cron.crontab_for())
 
 
 def pane_slot(pane, tmux=None):

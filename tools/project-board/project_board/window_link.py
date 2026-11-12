@@ -1,13 +1,13 @@
 """The line between a click and a Board window that is already open (BOARD-025).
 
-A Board window (the CR list or the decisions) is a process that takes seconds to start on a loaded host.
+A Board window (the CR list, the decisions or the cron jobs) is a process that takes seconds to start on a loaded host.
 Opening another item while it is open must not start it again, so the window listens on a local socket
 and the click sends it what to show: one JSON object and a newline each way. `tmux_control` is the client,
 `tui` the server; this module owns the message so that the two cannot drift.
 
-Request: `{"kind": "cr" | "decision", "project": ID, "state": ..., "decision": ..., "client": NAME}`; `state`
-(a CR state) belongs to a CR window and `decision` (an ID or null) to a decision window; `client` is the tmux
-client that clicked (informational).
+Request: `{"kind": "cr" | "decision" | "cron", "project": ID, "state": ..., "decision": ..., "client": NAME}`;
+`state` (a CR state) belongs to a CR window, `decision` (an ID or null) to a decision window and a cron window
+takes only the project; `client` is the tmux client that clicked (informational).
 Reply: `{"ok": true}` or `{"ok": false, "code": ..., "message": ...}`; `code` is `busy` while the window
 cannot change what it shows (an answer is being sent) and `invalid` for a request it does not understand.
 
@@ -25,7 +25,7 @@ import stat
 from typing import Awaitable, Callable
 
 SOCKET_ENV = "PROJECT_BOARD_WINDOW_SOCKET"     # where a Board window listens (set by tmux_control when it starts one)
-KINDS = ("cr", "decision")
+KINDS = ("cr", "decision", "cron")
 TIMEOUT = 2
 MAX_LINE = 4096
 
@@ -53,9 +53,12 @@ def send(path: str, request: dict, timeout: float = TIMEOUT) -> dict:
                 break
             response += block
     try:
-        return json.loads(response.split(b"\n", 1)[0])
+        result = json.loads(response.split(b"\n", 1)[0])
     except ValueError as error:
         raise OSError(f"the Board window gave no reply: {error}") from error
+    if not isinstance(result, dict):
+        raise OSError("the Board window gave no reply: it is not a JSON object")
+    return result
 
 
 async def serve(path: str, handler: Handler) -> asyncio.AbstractServer:

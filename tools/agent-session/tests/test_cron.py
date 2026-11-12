@@ -436,3 +436,39 @@ def test_ensure_replaces_an_old_command_and_a_hand_written_path_prefix_and_keeps
     assert "PATH=" not in jobs["check"]
     assert jobs["report"] == "PATH=/keep/me:/bin /home/user/report.sh"
     assert cron.ensure_check(found["alpha"], crontab) == {"check": "present"}
+
+
+# BOARD-027: the jobs of one project as a reader outside agent-session (the Board's cron window) sees them
+
+def test_the_jobs_of_a_project_are_listed_like_cron_ls_for_a_reader_outside_agent_session(projects, crontab, crontab_file,
+                                                                                         capsys):
+    from agent_session import api
+    config, found = projects
+    crontab_file.write_text(USER)
+    assert api.cron_listing(found["alpha"]) == {"project": "alpha", "jobs": []}      # no section, other lines kept
+    add_job(found["alpha"], crontab, command="/r/1/bin/agent-session check --project alpha")
+    add_job(found["beta"], crontab, job_id="other")
+    cron.record_run(found["alpha"], "check", False, "tmux 없음", at=1_700_000_000, code="tmux_unavailable")
+    listed = api.cron_listing(found["alpha"])
+    code, out = run(config, "ls", "--project", "alpha", capsys=capsys)
+    assert code == 0 and listed == out["data"]
+    [job] = listed["jobs"]
+    assert (job["id"], job["schedule"], job["description"]) == ("check", "13,43 * * * *", "점검")
+    assert job["command"] == "/r/1/bin/agent-session check --project alpha"
+    assert job["last_run"] == {"at": "2023-11-14T22:13:20Z", "ok": False, "result": "tmux 없음", "code": "tmux_unavailable"}
+    assert dt.datetime.fromisoformat(job["next_run"]).minute in (13, 43)
+
+
+def test_the_jobs_of_a_project_that_cannot_be_read_are_an_error_not_an_empty_list(projects, crontab_file, monkeypatch):
+    from agent_session import api
+    _, found = projects
+    monkeypatch.setenv("FAKE_CRONTAB_FAIL", "read")
+    with pytest.raises(SessionError) as error:
+        api.cron_listing(found["alpha"])
+    assert error.value.code == "crontab_unreadable"
+    monkeypatch.delenv("FAKE_CRONTAB_FAIL")
+    crontab_file.write_text("# >>> project-agent: alpha >>>\n" + USER)
+    with pytest.raises(SessionError) as error:                                 # alpha's section is damaged
+        api.cron_listing(found["alpha"])
+    assert error.value.code == "cron_invalid"
+    assert api.cron_listing(found["beta"]) == {"project": "beta", "jobs": []}    # beta has no section: no jobs

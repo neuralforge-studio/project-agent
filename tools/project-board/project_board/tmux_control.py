@@ -41,7 +41,7 @@ WINDOW_RESTORE = "@project_board_restore"
 PANE_MARK = "@project_board_managed"
 PANE_SOCKET = "@project_board_click_socket"
 PANE_WINDOW = "@project_board_window"
-PANE_WINDOW_KIND = "@project_board_window_kind"        # `cr` or `decision`: what the pane's process was started as
+PANE_WINDOW_KIND = "@project_board_window_kind"        # `cr`, `decision` or `cron`: what the pane's process was started as
 PANE_WINDOW_LINK = "@project_board_window_link"        # the socket it listens on, set by the process once it does
 WINDOW_SEEN = "@project_board_seen"
 SIDEBAR_WIDTH = 25
@@ -835,7 +835,7 @@ def _reuse(control: Tmux, pane: str, kind: str, request: dict, title: str) -> di
         result = window_link.send(link, request)
     except OSError:
         return None
-    if result.get("ok"):
+    if result.get("ok") is True:                      # the protocol says `{"ok": true}`; the Rust client reads it the same way
         control.command("select-pane", "-t", pane, "-T", title)
         return _ok({"pane": pane, "reused": True})
     if result.get("code") == "busy":
@@ -932,6 +932,23 @@ def open_cr_popup(config, project_id: str, state: str, client: str | None = None
         command.extend(("cr", "--project", project_id, "--state", state))
         return _popup(control, selected, command, f"CR · {project_id}", "80%", "cr",
                       {"kind": "cr", "project": project_id, "state": state})
+    except SessionError as error:
+        return _session_error(error)
+    except (OSError, ValueError) as error:
+        return _fail("popup_unavailable", str(error))
+
+
+def open_cron_popup(config, project_id: str, client: str | None = None, socket=None) -> dict:
+    """Open a project's cron jobs in the Board window of the specified client's window (BOARD-027)."""
+    try:
+        control = _control(socket)
+        selected = _client(control, client)
+        command = [str(LAUNCHER)]
+        if config:
+            command.extend(("--config", str(config)))
+        command.extend(("cron", "--project", project_id))
+        return _popup(control, selected, command, f"Cron · {project_id}", "80%", "cron",
+                      {"kind": "cron", "project": project_id})
     except SessionError as error:
         return _session_error(error)
     except (OSError, ValueError) as error:
