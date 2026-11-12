@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 import board_testing  # noqa: F401  (adds the Board tool to sys.path)
+from wait_limit import command_timeout
 import rust_binary
 from project_board import model  # noqa: F401  (puts agent_session on sys.path)
 from agent_session import cron
@@ -105,7 +106,7 @@ def rust_side(binary, tmp_path, text, now):
     command = [str(binary), "dump", "cron", "--crontab", str(path), "--now", now.strftime("%Y-%m-%dT%H:%M")]
     for project_id in PROJECTS:
         command += ["--project", project_id]
-    out = json.loads(subprocess.run(command, capture_output=True, text=True, check=True, timeout=30).stdout)
+    out = json.loads(subprocess.run(command, capture_output=True, text=True, check=True, timeout=command_timeout()).stdout)
     return {project_id: ({"error": True} if "error" in value else value) for project_id, value in out.items()}
 
 

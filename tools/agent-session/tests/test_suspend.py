@@ -163,7 +163,7 @@ def test_all_targets_wait_under_one_deadline(session_env, monkeypatch, trace):
     env.manager().start(cr)
     marks = [busy(env, "seat-0"), busy(env, "leader", base=other)]
     with pytest.raises(SessionError) as error:
-        fleet(env, timeout=3).shutdown(everything=True)
+        fleet(env, timeout=3).shutdown(everything=True)   # short limit: the busy target never rests, so the wait ends only by its limit
     assert (error.value.code, error.value.exit_code) == ("shutdown_incomplete", 4)
     # The two busy targets of different projects were waited on at the same time, not one after the other.
     first = (when(trace, "begin", "fixture", "seat-0"), when(trace, "end", "fixture", "seat-0"))
@@ -179,7 +179,7 @@ def test_without_force_a_working_target_keeps_running_and_nothing_is_recorded_fo
     leader, worker, cr = started(env)
     busy(env, "seat-0")
     with pytest.raises(SessionError) as error:
-        fleet(env, timeout=2).shutdown(project="fixture")
+        fleet(env, timeout=2).shutdown(project="fixture")   # short limit: the busy target never rests, so the wait ends only by its limit
     assert (error.value.code, error.value.exit_code) == ("shutdown_incomplete", 4)
     row = error.value.details["projects"][0]
     assert [item["slot"] for item in row["busy"]] == ["seat-0"]
@@ -198,7 +198,7 @@ def test_force_signals_only_the_cli_whose_birth_matches_and_records_forced(sessi
     cli = claude_project(env, monkeypatch)
     leader, worker, cr = started(env)
     busy(env, "seat-0")
-    result = fleet(env, timeout=2).shutdown(project="fixture", force=True)
+    result = fleet(env, timeout=2).shutdown(project="fixture", force=True)   # short limit: the busy target never rests, so the wait ends only by its limit; --force acts at that limit
     saved = records(env)
     assert saved["seat-0"]["forced"] is True and saved["leader"]["forced"] is False
     assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is True
@@ -213,12 +213,12 @@ def test_an_idle_cli_with_a_background_task_has_not_rested_until_it_is_forced(se
     marker = env.base / "agent" / "fixture-background-seat-0"
     marker.write_text("task\n")
     with pytest.raises(SessionError) as error:
-        fleet(env, timeout=2).shutdown(project="fixture")
+        fleet(env, timeout=2).shutdown(project="fixture")   # short limit: the busy target never rests, so the wait ends only by its limit
     assert [item["slot"] for item in error.value.details["projects"][0]["busy"]] == ["seat-0"]
     assert signals(cli) == [{"signal": "SIGTERM"}]                           # the Leader's only; the Worker was not asked
     assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is False
     # The provider still reports the task after the CLI dies; a forced end is confirmed from the processes.
-    result = fleet(env, timeout=2).shutdown(project="fixture", force=True)
+    result = fleet(env, timeout=2).shutdown(project="fixture", force=True)   # short limit: the busy target never rests, so the wait ends only by its limit; --force acts at that limit
     assert records(env)["seat-0"]["forced"] is True and not result["projects"][0]["busy"]
     assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is True
     marker.unlink()
@@ -230,7 +230,7 @@ def test_an_idle_cli_with_only_a_session_cron_rests_and_ends_without_force(sessi
     leader, worker, cr = started(env)
     marker = env.base / "agent" / "fixture-cron-seat-0"
     marker.write_text("")
-    result = fleet(env, timeout=5).shutdown(project="fixture")
+    result = fleet(env).shutdown(project="fixture")
     saved = records(env)
     assert saved["seat-0"]["forced"] is False and not result["projects"][0]["busy"]
     assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is True
@@ -245,7 +245,7 @@ def test_force_does_not_signal_a_process_with_a_different_birth(session_env, mon
     busy(env, "seat-0")
     env.tmux.write_meta(worker["window_id"], {"cli_birth": "linux:another-boot:1"})
     with pytest.raises(SessionError) as error:
-        fleet(env, timeout=2).shutdown(project="fixture", force=True)
+        fleet(env, timeout=2).shutdown(project="fixture", force=True)   # short limit: the busy target never rests, so the wait ends only by its limit; --force acts at that limit
     row = error.value.details["projects"][0]
     assert [(item["slot"], item["error"]["code"]) for item in row["unknown"]] == [("seat-0", "target_changed")]
     assert "seat-0" not in records(env)
@@ -330,7 +330,7 @@ class ControlClient:
         self.path = env.root / "client.out"
         self.process = subprocess.Popen(["tmux", "-L", env.socket_name, "-C", "attach", "-t", "harness"],
                                         stdin=subprocess.PIPE, stdout=self.path.open("w"), stderr=subprocess.DEVNULL)
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + command_timeout()
         while time.monotonic() < deadline:
             if Tmux(socket_name=env.socket_name).notify("hello", 1):
                 return
@@ -342,7 +342,7 @@ class ControlClient:
 
     def close(self):
         self.process.stdin.close()
-        self.process.wait(timeout=10)
+        self.process.wait(timeout=command_timeout())
 
 
 def test_alarms_message_every_client_and_flag_the_working_windows(session_env, monkeypatch):
@@ -354,8 +354,8 @@ def test_alarms_message_every_client_and_flag_the_working_windows(session_env, m
     client = ControlClient(env)
     try:
         with pytest.raises(SessionError) as error:
-            fleet(env, timeout=4).shutdown(project="fixture")
-        deadline = time.monotonic() + 5
+            fleet(env, timeout=4).shutdown(project="fixture")   # short limit: the busy target never rests, so the wait ends only by its limit; the alarms follow the limit
+        deadline = time.monotonic() + command_timeout()
         while len(client.lines()) < 3 and time.monotonic() < deadline:
             time.sleep(0.1)
         lines = client.lines()
@@ -380,7 +380,7 @@ def test_the_force_alarm_names_the_kill_time(session_env, monkeypatch):
     started(env)
     busy(env, "seat-0")
     monkeypatch.setattr(suspend, "WARN_LEAD", 1)
-    log = fleet(env, timeout=4).shutdown(project="fixture", force=True)["alarms"]
+    log = fleet(env, timeout=4).shutdown(project="fixture", force=True)["alarms"]   # short limit: the busy target never rests, so the wait ends only by its limit; the alarms follow the limit
     assert "강제 종료 시각" in log[0]["text"]
     assert "강제 종료합니다" in log[1]["text"] + log[2]["text"]
 
@@ -406,7 +406,7 @@ def test_failing_alarms_do_not_change_the_verdict(session_env, monkeypatch):
 
     monkeypatch.setattr(Tmux, "notify", fail)
     monkeypatch.setattr(Tmux, "ring_bell", fail)
-    result = fleet(env, timeout=3).shutdown(project="fixture", force=True)
+    result = fleet(env, timeout=3).shutdown(project="fixture", force=True)   # short limit: the busy target never rests, so the wait ends only by its limit; the alarms follow the limit
     assert {item["slot"] for item in result["projects"][0]["recorded"]} == {"seat-0", "leader"}
     assert len(result["alarms"]) >= 2 and all(entry["errors"] for entry in result["alarms"])
 
@@ -468,7 +468,7 @@ def test_a_forced_shutdown_is_told_to_the_resumed_conversation(session_env, monk
     claude_project(env, monkeypatch)
     started(env)
     busy(env, "seat-0")
-    fleet(env, timeout=2).shutdown(project="fixture", force=True)
+    fleet(env, timeout=2).shutdown(project="fixture", force=True)   # short limit: the busy target never rests, so the wait ends only by its limit; --force acts at that limit
     (env.base / "agent/fixture-busy-seat-0").unlink()
     kill_server(env)
     fleet(env).resume(project="fixture")

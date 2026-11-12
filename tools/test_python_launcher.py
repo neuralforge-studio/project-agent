@@ -9,6 +9,8 @@ import time
 
 import pytest
 
+from wait_limit import command_timeout  # tools/conftest.py puts tools/tests on sys.path
+
 TOOLS = Path(__file__).resolve().parent
 ENTRIES = {name: TOOLS / name / "bin" / name for name in ("agent-session", "project-item", "project-board")}
 
@@ -42,7 +44,7 @@ def run(entry, *args, env=None, link_dir=None):
     if link_dir is not None:
         path = link_dir / entry.name
         path.symlink_to(entry)
-    return subprocess.run([str(path), *args], env=child_env(env), capture_output=True, text=True, timeout=60)
+    return subprocess.run([str(path), *args], env=child_env(env), capture_output=True, text=True, timeout=command_timeout())
 
 
 @pytest.fixture
@@ -128,7 +130,7 @@ def test_a_tree_without_the_bundle_reader_imports_module_by_module(name, tmp_pat
     tools = tmp_path / "tools"
     shutil.copytree(TOOLS, tools, ignore=shutil.ignore_patterns("tests", "test_*.py", "conftest.py", "__pycache__",
                                                                 "bundle_boot.py", "python.env"))
-    result = subprocess.run([str(tools / name / "bin" / name), "--help"], env=child_env(), capture_output=True, text=True, timeout=60)
+    result = subprocess.run([str(tools / name / "bin" / name), "--help"], env=child_env(), capture_output=True, text=True, timeout=command_timeout())
     assert result.returncode == 0, result.stderr
     assert "usage" in result.stdout.lower()
 
@@ -137,11 +139,11 @@ def test_a_tree_without_the_bundle_reader_imports_module_by_module(name, tmp_pat
 def test_entry_point_runs_from_its_own_directory_and_through_a_linked_directory(name, tmp_path):
     """The directory of the entry point and of the launcher is found without `dirname`."""
     entry = ENTRIES[name]
-    result = subprocess.run(["bash", entry.name, "--help"], cwd=entry.parent, env={**os.environ, **USER_DIRS}, capture_output=True, text=True, timeout=60)
+    result = subprocess.run(["bash", entry.name, "--help"], cwd=entry.parent, env={**os.environ, **USER_DIRS}, capture_output=True, text=True, timeout=command_timeout())
     assert result.returncode == 0, result.stderr
     (tmp_path / "tools").symlink_to(TOOLS)
     linked = tmp_path / "tools" / name / "bin" / name
-    result = subprocess.run([str(linked), "--help"], env={**os.environ, **USER_DIRS}, capture_output=True, text=True, timeout=60)
+    result = subprocess.run([str(linked), "--help"], env={**os.environ, **USER_DIRS}, capture_output=True, text=True, timeout=command_timeout())
     assert result.returncode == 0, result.stderr
 
 
@@ -303,7 +305,7 @@ def test_valid_view_of_the_users_status_line_does_not_change_the_result(release,
         entry = release_entry(release, "tmux_decide_status.sh")
         # The planted view is effective for an unisolated run, so the assertion below is not vacuous.
         direct = subprocess.run([str(entry)], env={**os.environ, "PROJECT_AGENT_PYTHON": str(fake_python)},
-                                capture_output=True, text=True, timeout=60)
+                                capture_output=True, text=True, timeout=command_timeout())
         assert direct.stdout == "USER-STATUS-LINE"
         result = run(entry, env={"PROJECT_AGENT_PYTHON": str(fake_python)})
         assert result.stdout.startswith("ARGV1="), variable

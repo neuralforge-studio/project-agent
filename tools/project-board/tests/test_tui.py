@@ -8,6 +8,7 @@ import threading
 import pytest
 
 from board_testing import Board, click_socket, cron_run, cron_section, isolate_crontab, leader, session, wait_until
+from wait_limit import command_timeout
 from project_board import model, window_link
 from project_board.tui import CRPopupApp, CronPopupApp, CSVScreen, PopupApp
 from textual.widgets import Button, DataTable, Markdown, Static, TextArea
@@ -408,7 +409,7 @@ def test_popup_renders_markdown_and_csv_and_closes_editor_after_acceptance(tmp_p
     def sender(config, project, decision, draft):
         sent.append((project, decision, draft))
         started.set()
-        release.wait(timeout=5)
+        release.wait(timeout=command_timeout())
         decision_path.rename(base / "agent/decide/answered" / decision_path.name)
         return {"ok": True, "data": {"accepted": True, "notification": {"status": "sent"}}, "error": None}
 
@@ -977,7 +978,7 @@ def test_an_open_cr_window_shows_that_it_is_reading_until_the_list_arrives(tmp_p
     read = model.popup_snapshot
 
     def slow(*args):
-        release.wait(10)
+        release.wait(command_timeout())
         return read(*args)
 
     async def check():
@@ -1046,7 +1047,7 @@ def test_a_decision_window_does_not_change_what_it_shows_while_an_answer_is_sent
 
     def sender(*args):
         sent.append(args)
-        release.wait(10)
+        release.wait(command_timeout())
         return {"ok": False, "error": {"message": "x"}}
     app = PopupApp(str(board.config), "Alpha", load=False, link=link, answer_sender=sender)
 

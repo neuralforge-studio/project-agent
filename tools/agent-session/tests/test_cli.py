@@ -13,6 +13,7 @@ TOOL = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL))
 from agent_session import cli
 from agent_session.errors import SessionError
+from wait_limit import command_timeout
 
 
 class FakeManager:
@@ -285,13 +286,13 @@ def test_command_logs_use_stderr_and_self_control_keeps_acceptance_semantics(cap
 def test_entry_points_work_outside_the_source_tree_without_pythonpath(tmp_path):
     env = dict(os.environ, PYTHONPATH="/not-the-source")
     entry = subprocess.run([sys.executable, str(TOOL / "agent_session.py"), "--help"],
-                           cwd=tmp_path, env=env, capture_output=True, text=True, timeout=10)
+                           cwd=tmp_path, env=env, capture_output=True, text=True, timeout=command_timeout())
     assert entry.returncode == 0 and "usage:" in entry.stdout
     assert not entry.stderr
     link = tmp_path / "agent-session"
     link.symlink_to(TOOL / "bin/agent-session")
     launched = subprocess.run([str(link), "--help"], cwd=tmp_path, env=env,
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, timeout=command_timeout())
     assert launched.returncode == 0 and "usage:" in launched.stdout
     assert not launched.stderr
 
@@ -305,7 +306,7 @@ def test_launcher_missing_wsl_interpreter_returns_structured_error(tmp_path):
     env = dict(os.environ, HOME=str(tmp_path), WSL_DISTRO_NAME="test-wsl",
                PATH=str(binary) + os.pathsep + os.environ["PATH"])
     result = subprocess.run([str(TOOL / "bin/agent-session"), "--help"],
-                            env=env, capture_output=True, text=True, timeout=10)
+                            env=env, capture_output=True, text=True, timeout=command_timeout())
     assert result.returncode == 5
     assert json.loads(result.stdout)["error"]["code"] == "python_unavailable"
     assert not result.stderr

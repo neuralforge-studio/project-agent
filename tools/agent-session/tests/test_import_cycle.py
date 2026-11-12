@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from wait_limit import command_timeout
+
 TOOLS = Path(__file__).resolve().parents[2]
 
 # (test id, tool directory put on sys.path, module imported first)
@@ -38,7 +40,7 @@ if {lazy!r}:
 def test_first_import_succeeds_in_a_new_interpreter(tool, module):
     # agent-session must not pull in project-item until jobs.item_api() runs.
     program = _PROGRAM.format(path=str(TOOLS / tool), module=module, lazy=tool == "agent-session")
-    result = subprocess.run([sys.executable, "-I", "-c", program], capture_output=True, text=True, timeout=60)
+    result = subprocess.run([sys.executable, "-I", "-c", program], capture_output=True, text=True, timeout=command_timeout())
     assert result.returncode == 0, f"import {module} failed:\n{result.stderr}"
 
 

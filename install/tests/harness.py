@@ -19,6 +19,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools" / "tests"))  # tmux_test_server, shared by every tool's tests
 import fake_crontab  # noqa: E402
 import tmux_test_server  # noqa: E402
+from wait_limit import command_timeout  # noqa: E402,F401  (the one wait limit; tests import it from here)
 # PROJECT_AGENT_INSTALLER points the tests at another copy of the installer (to show that a test fails on an
 # older one); by default it is the checkout's.
 INSTALLER = Path(os.environ.get("PROJECT_AGENT_INSTALLER") or REPO / "install" / "project-agent-install")
@@ -26,8 +27,9 @@ LIB = ".local/lib/project-agent"
 # The wait limit of one installer command is a ceiling for a hung command; it asserts no speed. An `install`
 # copies and checks a whole release, so its time follows the host's load. Measured on this workstation
 # (TEST-013) at load 55-60: `install` 97 s and `check` 23 s alone; the 0.9.0 gate (load 90-140, two `-n 8`
-# suites at once) exceeded the earlier 300 s. 900 s is three times that 300 s.
-INSTALLER_TIMEOUT = 900
+# suites at once) exceeded the earlier 300 s. Four times the fixture limit (240 s, 960 s) is over three times that 300 s,
+# and an installer test takes no number of its own: AGENT_SESSION_TEST_TIMEOUT moves both (tools/tests/wait_limit.py).
+INSTALLER_TIMEOUT = 4 * command_timeout()
 # The names the contract gives (section 2). Written here, not imported from the installer.
 SHIMS = (".local/bin/agent-session", ".local/bin/project-item", ".local/bin/project-board")
 CLAUDE_LINKS = (".claude/skills/project-team", ".claude/skills/project-item")
@@ -43,7 +45,7 @@ GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_AUT
 
 
 def git(root, *args):
-    result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=60,
+    result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=command_timeout(),
                             env={**os.environ, **GIT_ENV})
     assert result.returncode == 0, result.stderr
     return result.stdout.strip()
@@ -311,7 +313,7 @@ class Runs:
 
     def tmux(self, *args, check=True):
         result = subprocess.run(["tmux", "-S", str(self.socket), "-f", os.devnull, *args], capture_output=True,
-                                text=True, timeout=30, env=self.home.env)
+                                text=True, timeout=command_timeout(), env=self.home.env)
         assert not check or result.returncode == 0, result.stderr
         return result
 
@@ -322,7 +324,7 @@ class Runs:
 
     def call(self, tool, *args):
         command = [str(self.home.home / ".local/bin" / tool), *args]
-        return subprocess.run(command, capture_output=True, text=True, timeout=120, cwd=self.base, env=self.cli_env())
+        return subprocess.run(command, capture_output=True, text=True, timeout=command_timeout(), cwd=self.base, env=self.cli_env())
 
     def agent(self, *args):
         return self.call("agent-session", "--socket-path", str(self.socket), *args)
@@ -336,7 +338,7 @@ class Runs:
         """Start the Leader with the `agent-session` of a checkout (not a release): the frozen-copy case."""
         library = Path(root) / "tools" / "agent-session"
         result = subprocess.run([str(library / "bin" / "agent-session"), "--socket-path", str(self.socket), "start",
-                                 "--job", "leader"], capture_output=True, text=True, timeout=120, cwd=self.base,
+                                 "--job", "leader"], capture_output=True, text=True, timeout=command_timeout(), cwd=self.base,
                                 env={**self.cli_env(), "FAKE_PROVIDER_LIB": str(library), "PYTHONDONTWRITEBYTECODE": "1"})
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout)["data"]

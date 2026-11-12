@@ -11,10 +11,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_session import process
 from agent_session.errors import SessionError
+from wait_limit import command_timeout
 
 
-def wait_for(predicate, seconds=5):
-    deadline = time.monotonic() + seconds
+def wait_for(predicate):
+    deadline = time.monotonic() + command_timeout()
     while time.monotonic() < deadline:
         value = predicate()
         if value:
@@ -46,7 +47,7 @@ def test_group_and_descendants_are_observed_without_signalling():
         if grandchild is not None:
             os.kill(grandchild, 15)
         child.terminate()
-        child.wait(timeout=5)
+        child.wait(timeout=command_timeout())
     wait_for(lambda: not process.group_alive(child.pid))
 
 

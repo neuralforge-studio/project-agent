@@ -14,6 +14,7 @@ import threading
 import pytest
 
 from board_testing import Board, click_socket, cron_section, isolate_crontab, wait_until
+from wait_limit import command_timeout
 from project_board import model
 from project_board.tui import CRPopupApp, CronPopupApp, PopupApp
 from textual.widgets import Static, TextArea
@@ -22,7 +23,7 @@ from textual.widgets import Static, TextArea
 def ask(path, line: bytes):
     """What a client does: connect, write one line, read one line."""
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(5)
+        connection.settimeout(command_timeout())
         connection.connect(path)
         connection.sendall(line)
         reply = b""
@@ -93,7 +94,7 @@ def test_a_decision_window_follows_the_documented_request_and_reply(tmp_path, re
 
     def sender(*args):
         sent.append(args)
-        release.wait(10)
+        release.wait(command_timeout())
         return {"ok": False, "error": {"message": "x"}}
     app = PopupApp(str(data.config), "Alpha", load=False, link=link, answer_sender=sender)
 

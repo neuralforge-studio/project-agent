@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "tests"))
 import tmux_test_server  # noqa: E402
+from wait_limit import command_timeout  # noqa: E402
 
 pytestmark = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 
@@ -52,8 +53,8 @@ def alive(pid):
     return Path(f"/proc/{pid}/stat").read_text().split()[2] != "Z" if Path(f"/proc/{pid}").exists() else True
 
 
-def wait_until(predicate, seconds=10):
-    deadline = time.monotonic() + seconds
+def wait_until(predicate):
+    deadline = time.monotonic() + command_timeout()
     while time.monotonic() < deadline:
         if predicate():
             return True
@@ -83,7 +84,7 @@ def test_a_killed_owner_leaves_no_server_pane_process_or_socket_file(sig):
     try:
         assert server_alive(name) and alive(pane)
         owner.send_signal(sig)
-        owner.wait(timeout=10)
+        owner.wait(timeout=command_timeout())
         assert wait_until(lambda: gone(name, pane))
     finally:
         owner.kill()

@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_session.errors import SessionError
 from agent_session.providers.websocket import WebSocketRPC
+from wait_limit import command_timeout
 
 
 class Wire:
@@ -88,14 +89,14 @@ def server(tmp_path, handler):
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(path))
     listener.listen()
-    listener.settimeout(3)
+    listener.settimeout(command_timeout())
     errors = []
 
     def worker():
         try:
             conn, _ = listener.accept()
             with conn:
-                conn.settimeout(3)
+                conn.settimeout(command_timeout())
                 handler(Wire(conn))
         except Exception as error:
             errors.append(error)
@@ -107,7 +108,7 @@ def server(tmp_path, handler):
     try:
         yield "unix://" + str(path)
     finally:
-        thread.join(4)
+        thread.join(command_timeout())
         assert not thread.is_alive(), "The fixture did not finish"
         if errors:
             raise errors[0]

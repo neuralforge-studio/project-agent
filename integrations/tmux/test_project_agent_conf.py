@@ -23,6 +23,7 @@ import pytest
 TMUX_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TMUX_DIR.parents[1] / "tools" / "tests"))  # tmux_test_server, shared by every tool's tests
 import tmux_test_server  # noqa: E402
+from wait_limit import command_timeout  # noqa: E402
 FILES = ("project-agent.conf", "project-agent-main.conf", "project_agent_bind.sh", "project_agent_run.sh", "project_board_visibility.sh", "tmux_project_board.sh", "tmux_decide_status.sh", "tmux_decide_status.py")
 LAUNCHER = TMUX_DIR.parents[1] / "tools" / "python-launcher.sh"
 TMUX_LAUNCHER = TMUX_DIR.parents[1] / "tools" / "tmux-launcher.sh"
@@ -56,7 +57,7 @@ class Server:
     def run(self, *args, check=True):
         env = {**{key: value for key, value in os.environ.items() if key != "TMUX"}, **USER_DIRS}
         proc = subprocess.run([self.binary, "-L", self.name, "-f", "/dev/null", *args], env=env,
-                              capture_output=True, text=True, timeout=20)
+                              capture_output=True, text=True, timeout=command_timeout())
         if check and proc.returncode:
             raise AssertionError("tmux %s: %s" % (" ".join(args), proc.stderr))
         return proc.stdout.rstrip("\n") if check else proc
@@ -81,7 +82,7 @@ class Server:
 
     def kill(self):
         if self.binary != "tmux":      # the cleanup of tmux_test_server speaks to the server with PATH's tmux, which an older server refuses
-            subprocess.run([self.binary, "-L", self.name, "kill-server"], capture_output=True, timeout=10)
+            subprocess.run([self.binary, "-L", self.name, "kill-server"], capture_output=True, timeout=command_timeout())
         tmux_test_server.release(self.name)
 
 
@@ -176,8 +177,8 @@ def assert_no_view(tmux, *panes):
         assert tmux.run("capture-pane", "-M", "-p", "-t", target).strip() == ""
 
 
-def wait_for(path, text, timeout=10):
-    deadline = time.time() + timeout
+def wait_for(path, text):
+    deadline = time.time() + command_timeout()
     while time.time() < deadline:
         if path.exists() and text in path.read_text():
             return
@@ -394,7 +395,7 @@ def test_a_failing_board_key_tells_the_user_without_covering_a_pane(server, tmp_
 
 def run_script(*args, socket="/nonexistent/socket"):
     return subprocess.run([str(TMUX_DIR / "project_agent_run.sh"), *args[:1], socket, *args[1:]],
-                          capture_output=True, text=True, timeout=20)
+                          capture_output=True, text=True, timeout=command_timeout())
 
 
 def test_the_run_script_prints_nothing_and_exits_zero_whatever_the_job_does():
@@ -495,7 +496,7 @@ def test_a_window_change_starts_sync_only_when_the_window_lacks_its_board_pane(s
     assert syncs() == 1
     tmux.run("set-option", "-g", "@project_board_width", "99")
     move(with_board)
-    wait_for_count = time.time() + 10
+    wait_for_count = time.time() + command_timeout()
     while syncs() < 2 and time.time() < wait_for_count:
         time.sleep(0.1)
     assert syncs() == 2                      # a width other than the saved one is reconciled
@@ -529,7 +530,7 @@ def test_visibility_script_wakes_only_the_ready_panes_whose_window_state_changed
         script = TMUX_DIR / "project_board_visibility.sh"
 
         def run():
-            subprocess.run([str(script), "--socket", socket], check=True, timeout=20)
+            subprocess.run([str(script), "--socket", socket], check=True, timeout=command_timeout())
             time.sleep(0.6)                                    # a signal is handled by the shell between sleeps
 
         def got(key):
@@ -589,7 +590,7 @@ def test_decide_status_entry_expands_to_the_decision_script(server, tmp_path, mo
     if user_view:
         cache = tmp_path / "planted-cache"
         cache.mkdir()
-        (cache / "tmux-decide-status.view").write_text("%d\nUSER-STATUS-LINE" % (time.time() + 3600))
+        (cache / "tmux-decide-status.view").write_text("%d\nUSER-STATUS-LINE" % (time.time() + 3600))  # not a wait: the expiry stamp of a cache view that is still valid
         monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
     log = tmp_path / "log"
     release = make_release(tmp_path / "releases" / "r1", "r1", log)
@@ -599,11 +600,10 @@ def test_decide_status_entry_expands_to_the_decision_script(server, tmp_path, mo
     tmux.run("set-option", "-g", "status-right", "#{E:@project_agent_decide_status}")
     tmux.run("set-option", "-g", "status-interval", "1")
     # A client that renders status-right is what runs `#()` jobs.
-    deadline = time.time() + 10
     attach = subprocess.Popen(["script", "-qc", "tmux -L %s attach-session -t home" % tmux.name, "/dev/null"],
                               stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        wait_for(log, "r1 decide-python -S tmux_decide_status.py nousersite=1", timeout=max(1, deadline - time.time()))
+        wait_for(log, "r1 decide-python -S tmux_decide_status.py nousersite=1")
     finally:
         attach.kill()
         attach.wait()

@@ -43,10 +43,10 @@ def result_file(env, run_id):
     return env.base / "agent" / "runs" / run_id / "finish-result.json"
 
 
-def finished(env, run_id, limit=30):
+def finished(env, run_id):
     """The wrap-up's saved result, once the server's hook ran it."""
     path = result_file(env, run_id)
-    deadline = time.monotonic() + limit
+    deadline = time.monotonic() + command_timeout()
     while time.monotonic() < deadline:
         if path.is_file():
             return json.loads(path.read_text(encoding="utf-8"))
@@ -246,7 +246,7 @@ def test_the_hook_keeps_the_hooks_of_a_persons_configuration(session_env):
     hooks = env.tmux.command("show-hooks", "-g", "pane-died")
     assert "pane-died[person]" in hooks and EXIT_HOOK in hooks
     kill_cli(env, worker["window_id"])
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + command_timeout()
     while not mark.exists() and time.monotonic() < deadline:
         time.sleep(0.1)
     assert mark.exists()

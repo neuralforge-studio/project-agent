@@ -20,25 +20,9 @@ from agent_session_fake_provider import FakeProvider
 PROJECT_ITEM = TOOL.parent / "project-item"
 sys.path.insert(0, str(PROJECT_ITEM))
 import tmux_test_server  # noqa: E402
+from wait_limit import command_timeout  # noqa: E402,F401  (the one wait limit; tests import it from here)
 from project_item import store as item_store  # noqa: E402
 from project_item.kinds import CR  # noqa: E402
-
-
-# The wait limit is a ceiling for a command that never finishes, so a hung test fails instead of
-# stalling the run; it asserts no speed. A fixture `start` runs a real tmux pane and a Python child that
-# imports agent_session, so its time follows the host's load. Measured on this workstation:
-# - TEST-003: with three `-n 8` suites at once on a host at load 75-100 on 64 cores, one command took
-#   p50 9.8 s, p99 29.8 s and at most 38.0 s over 1350 commands, so 15 s failed about 95 of 704 tests.
-# - TEST-013: with `-n 8` agent-session and `-n 8` install tests at once at load 50-100, a `start` took
-#   p50 24.6 s, p99 61.0 s and at most 80.3 s over 386 starts, and a two-slot `resume` 43 s, which shares
-#   one limit across its slots. 120 s left 1.5 times the maximum, and the 0.9.0 gate (load 92-143) passed it.
-# 240 s is three times the TEST-013 maximum.
-DEFAULT_TIMEOUT = 240
-
-
-def command_timeout():
-    """The wait limit for one fixture Manager command; AGENT_SESSION_TEST_TIMEOUT overrides it."""
-    return float(os.environ.get("AGENT_SESSION_TEST_TIMEOUT", DEFAULT_TIMEOUT))
 
 
 def git(root, *args):

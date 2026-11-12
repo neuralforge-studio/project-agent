@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from harness import INSTALLER, LIB
+from harness import INSTALLER, LIB, command_timeout
 
 sys.path.insert(0, str(INSTALLER.parent))
 from project_agent_install import release as releases  # noqa: E402
@@ -70,7 +70,7 @@ def test_python_env_names_the_interpreter_its_prefix_and_the_library_path_it_nee
 
 def clean_run(home, command):
     """The user's login environment is gone: only HOME and a minimal PATH."""
-    return subprocess.run(command, capture_output=True, text=True, timeout=120,
+    return subprocess.run(command, capture_output=True, text=True, timeout=command_timeout(),
                           env={**EMPTY, "HOME": str(home.home)})
 
 

@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-from harness import LIB
+from harness import LIB, command_timeout
 
 USER_TOP = "MAILTO=me@example.invalid\n0 3 * * * /usr/bin/backup --all\n"
 USER_BOTTOM = "# mine\n*/5 * * * * /usr/bin/ping-me\n"
@@ -50,7 +50,7 @@ SHELLS = [pytest.param(["sh", "-c"], "", id="sh"),
 
 
 def run_shell(home, command, shell=("sh", "-c"), prefix=""):
-    done = subprocess.run([*shell, prefix + command], capture_output=True, text=True, timeout=60, env=home.env)
+    done = subprocess.run([*shell, prefix + command], capture_output=True, text=True, timeout=command_timeout(), env=home.env)
     assert done.returncode == 0, done.stderr
     assert not list(home.home.glob(".project-agent-crontab.*")), "the saved copy of the crontab was left behind"
 
@@ -91,7 +91,7 @@ def test_t34_a_command_whose_crontab_cannot_be_read_writes_nothing(home, source,
     assert home.run("install", source=source).returncode == 0
     home.crontab.write_text(section("alpha"))
     command, = removal_commands(home.run("uninstall", "--json"))
-    done = subprocess.run([*shell, prefix + command], capture_output=True, text=True, timeout=60,
+    done = subprocess.run([*shell, prefix + command], capture_output=True, text=True, timeout=command_timeout(),
                           env={**home.env, "FAKE_CRONTAB_FAIL": "read"})
     assert home.crontab.read_text() == section("alpha")
     assert not list(home.home.glob(".project-agent-crontab.*")) and done.stderr

@@ -12,6 +12,8 @@ import time
 
 import pytest
 
+from wait_limit import command_timeout  # tools/conftest.py puts tools/tests on sys.path
+
 
 def test_temporary_directories_are_outside_the_shared_user_root(tmp_path, request):
     root = request.config.option.basetemp
@@ -178,7 +180,7 @@ def test_a_passing_run_leaves_nothing_in_the_real_home_and_removes_its_own(tmp_p
         env.pop(name, None)
     env.update(EXPECT_USERBASE=str(real_home / ".local"), EXPECT_RUSTUP=str(real_home / ".rustup"))
     done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *extra],
-                          cwd=project, env=env, capture_output=True, text=True, timeout=120)
+                          cwd=project, env=env, capture_output=True, text=True, timeout=command_timeout())
     assert done.returncode == 0, done.stdout + done.stderr
     assert list(real_home.iterdir()) == []                 # the real HOME of the run is untouched
     assert list(temp.iterdir()) == []                      # the private root and its HOME are gone
@@ -197,5 +199,5 @@ def test_a_tool_location_that_is_already_set_stays(tmp_path):
            "PYTHONUSERBASE": str(tmp_path / "ub"), "RUSTUP_HOME": str(tmp_path / "ru")}
     env.update(EXPECT_USERBASE=env["PYTHONUSERBASE"], EXPECT_RUSTUP=env["RUSTUP_HOME"])
     done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
-                          cwd=project, env=env, capture_output=True, text=True, timeout=120)
+                          cwd=project, env=env, capture_output=True, text=True, timeout=command_timeout())
     assert done.returncode == 0, done.stdout + done.stderr

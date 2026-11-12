@@ -24,6 +24,7 @@ import pytest
 import board_testing  # noqa: F401  (adds the Board tool to sys.path)
 from board_testing import attached as _attached, release_clients as _release_clients, tmux as _tmux
 import tmux_test_server
+from wait_limit import command_timeout
 from project_board import tmux_control
 from board_testing import Board, session
 from agent_session.tmux import Tmux
@@ -237,10 +238,10 @@ def test_remote_seat_switch_uses_its_local_display_window_for_only_clicking_clie
         for process, master, _client in clients:
             process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             os.close(master)
         tmux_test_server.release(name)
 
@@ -276,7 +277,7 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
 
         def toggle_from_client(project_id):
             try:
-                barrier.wait(timeout=5)
+                barrier.wait(timeout=command_timeout())
                 tmux_control.toggle_expanded_project(project_id, socket_path)
             except Exception as error:
                 failures.append(error)
@@ -285,9 +286,9 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
                    for project_id in ("two", "three")]
         for worker in workers:
             worker.start()
-        barrier.wait(timeout=5)
+        barrier.wait(timeout=command_timeout())
         for worker in workers:
-            worker.join(timeout=5)
+            worker.join(timeout=command_timeout())
         assert not failures
         assert not any(worker.is_alive() for worker in workers)
         assert _folds(name) == {"one", "two", "three"}
@@ -345,10 +346,10 @@ def test_global_sidebar_tracks_attached_windows_and_preserves_existing_panes(mon
         for process, master, _client in clients:
             process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             os.close(master)
         tmux_test_server.release(name)
 
@@ -388,10 +389,10 @@ def test_sidebar_restores_split_layout_and_focus_after_selecting_board(monkeypat
         for process, master, _client in clients:
             process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             os.close(master)
         tmux_test_server.release(name)
 
@@ -440,10 +441,10 @@ def test_sidebar_keeps_resized_width_across_window_changes(monkeypatch):
         for process, master, _client in clients:
             process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             os.close(master)
         tmux_test_server.release(name)
 
@@ -495,10 +496,10 @@ def test_kept_board_panes_are_bounded_and_the_longest_unseen_window_goes_first(m
         for process, master, _client in clients:
             process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             os.close(master)
         tmux_test_server.release(name)
 
@@ -544,10 +545,10 @@ def test_sidebar_keeps_requested_width_after_a_narrow_window(monkeypatch):
         for process, master, _client in clients:
             process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             os.close(master)
         tmux_test_server.release(name)
 
@@ -594,10 +595,10 @@ def test_sidebar_keeps_requested_width_after_a_split_window(monkeypatch):
         for process, master, _client in clients:
             process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             os.close(master)
         tmux_test_server.release(name)
 
@@ -643,7 +644,8 @@ def _resize_client(name, client, window, columns):
     process, master, _tty = client
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, columns, 0, 0))
     os.killpg(process.pid, signal.SIGWINCH)
-    for _ in range(100):
+    deadline = time.monotonic() + command_timeout()
+    while time.monotonic() < deadline:
         if _tmux(name, "display-message", "-p", "-t", window, "#{window_width}") == str(columns):
             return
         time.sleep(0.05)
@@ -698,10 +700,10 @@ def test_a_width_dragged_with_the_mouse_is_saved_after_the_terminal_was_resized(
         for process, master, _client in clients:
             process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             os.close(master)
         tmux_test_server.release(name)
 
@@ -728,9 +730,8 @@ def test_managed_pane_death_removes_board_and_restore_state(monkeypatch):
         assert board in _pane_geometry(name, window)
         pid = int(_tmux(name, "display-message", "-p", "-t", managed, "#{pane_pid}"))
         os.kill(pid, signal.SIGTERM)
-        for _ in range(50):
-            if board not in _pane_geometry(name, window):
-                break
+        deadline = time.monotonic() + command_timeout()
+        while board in _pane_geometry(name, window) and time.monotonic() < deadline:
             time.sleep(0.05)
         assert board not in _pane_geometry(name, window)
         assert _tmux(name, "show-options", "-wqv", "-t", window, "@project_board_pane") == ""
@@ -739,10 +740,10 @@ def test_managed_pane_death_removes_board_and_restore_state(monkeypatch):
         for process, master, _client in clients:
             process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             os.close(master)
         tmux_test_server.release(name)
 
@@ -767,7 +768,7 @@ def test_click_socket_receives_the_exact_client_and_rejects_stale_window(monkeyp
 
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
-    assert ready.wait(2)
+    assert ready.wait(command_timeout())
     assert stat.S_ISSOCK(click_path.stat().st_mode)
 
     class FakeControl:
@@ -787,7 +788,7 @@ def test_click_socket_receives_the_exact_client_and_rejects_stale_window(monkeyp
     control = FakeControl()
     monkeypatch.setattr(tmux_control, "_control", lambda _socket: control)
     assert tmux_control.route_click("/dev/ttys1", "%4", 2, 3)["ok"] is True
-    thread.join(timeout=2)
+    thread.join(timeout=command_timeout())
     assert received == [{"client": "/dev/ttys1", "x": 2, "y": 3}]
     control.current = "@2"
     stale = tmux_control.route_click("/dev/ttys1", "%4", 2, 3)
@@ -831,10 +832,10 @@ def test_project_click_switches_only_selected_client_to_session_current_window(t
         for process, master, _client in clients:
             process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             os.close(master)
         tmux_test_server.release(name)
 
@@ -869,7 +870,7 @@ def test_a_failing_board_window_never_covers_the_work_pane_and_the_client_is_tol
         else:
             result = tmux_control._popup(control, client, command, "fake", "50%", "cr", {})
             assert result["ok"] is True and result["data"]["client"] == client
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + command_timeout()
         mode = ""
         while time.monotonic() < deadline:
             mode = _tmux(name, "display-message", "-p", "-t", "work", "#{pane_mode}")
@@ -890,10 +891,10 @@ def test_a_failing_board_window_never_covers_the_work_pane_and_the_client_is_tol
         if process is not None:
             process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=2)
+                process.wait(timeout=command_timeout())
             os.close(master)
         tmux_test_server.release(name)
 
@@ -957,7 +958,7 @@ class _Floating:
         return tmux_control.open_popup(None, project, "D-1", self.client, self.socket)
 
     def started(self):
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + command_timeout()
         path = self.tmp_path / "started"
         while time.monotonic() < deadline:
             if path.exists() and path.read_text().endswith("\n"):
@@ -977,8 +978,8 @@ class _Floating:
         self.mouse(button + 32, x1, y1)
         self.mouse(button, x1, y1, up=True)
 
-    def wait_gone(self, pane, timeout=5):
-        deadline = time.monotonic() + timeout
+    def wait_gone(self, pane):
+        deadline = time.monotonic() + command_timeout()
         while time.monotonic() < deadline:
             if pane not in self.tmux("list-panes", "-a", "-F", "#{pane_id}").split():
                 return True
@@ -1049,6 +1050,18 @@ def test_the_board_window_is_moved_and_resized_with_the_mouse_by_tmux_defaults(f
     assert server.floating()[pane] == (left + 2, top + 1, width, height)
 
 
+def eventually(condition):
+    """True once `condition()` holds, polled for at most the wait limit; the last answer if it never does.
+
+    A drag reaches tmux through the client's pty, so what it changes lands after the write returns. A test that
+    expects the change waits for it here and asserts after, never after a fixed sleep a loaded host can outrun.
+    """
+    deadline = time.monotonic() + command_timeout()
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return condition()
+
+
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 @pytest.mark.parametrize("focus", ["window", "behind"])
 def test_moving_or_resizing_the_board_window_never_changes_the_saved_sidebar_width(floating, focus):
@@ -1068,15 +1081,14 @@ def test_moving_or_resizing_the_board_window_never_changes_the_saved_sidebar_wid
 
     server.drag((left + 5, top), (left + 11, top + 2))                                           # move
     server.drag((left + 6 + width + 1, top + 2 + height + 1), (left + 6 + width - 5, top + 2 + height - 2))   # resize
-    time.sleep(0.5)
-    assert server.floating()[pane] == (left + 6, top + 2, width - 6, height - 3)
-    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == saved
+    assert eventually(lambda: server.floating()[pane] == (left + 6, top + 2, width - 6, height - 3))
+    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == saved      # the drags have landed: it did not change
 
     border = int(server.tmux("display-message", "-p", "-t", sidebar, "#{pane_width}"))
     row = top + 2 + height + 2                                                                   # below the window
     server.drag((border + 1, row), (border + 4, row))                                            # the sidebar's own border
-    time.sleep(0.5)
-    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == str(border + 3) != saved
+    assert eventually(lambda: server.tmux("show-options", "-gqv", tmux_control.WIDTH) == str(border + 3))
+    assert str(border + 3) != saved
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
@@ -1099,7 +1111,7 @@ def test_while_the_board_window_is_open_the_pane_behind_it_takes_input_and_the_s
     assert server.tmux("display-message", "-p", "-t", server.work, "#{pane_active}") == "1"
     assert pane in server.floating() and server.tmux("display-message", "-p", "-t", pane, "#{pane_z}") == "0"
     os.write(server.master, b"typed behind\r")                       # what a person types to the pane behind
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + command_timeout()
     while time.monotonic() < deadline and "typed behind" not in server.tmux("capture-pane", "-p", "-t", server.work):
         time.sleep(0.05)
     assert "typed behind" in server.tmux("capture-pane", "-p", "-t", server.work)
@@ -1124,7 +1136,7 @@ def test_a_click_on_the_sidebar_reaches_the_board_while_its_window_is_open(float
         with socket.socket(socket.AF_UNIX) as listener:
             listener.bind(str(click_path))
             os.chmod(click_path, 0o600)
-            listener.settimeout(15)
+            listener.settimeout(command_timeout())
             listener.listen(2)
             while True:
                 try:
@@ -1136,15 +1148,14 @@ def test_a_click_on_the_sidebar_reaches_the_board_while_its_window_is_open(float
                     connection.sendall(b'{"ok":true,"data":null,"error":null}\n')
 
     threading.Thread(target=serve, daemon=True).start()
-    for _ in range(100):
-        if click_path.exists():
-            break
+    deadline = time.monotonic() + command_timeout()
+    while not click_path.exists() and time.monotonic() < deadline:
         time.sleep(0.05)
     assert server.open()["ok"] is True
     ((pane, (left, top, _, _)),) = server.floating().items()
     server.mouse(0, 3, 4)
     server.mouse(0, 3, 4, up=True)
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + command_timeout()
     while time.monotonic() < deadline and not received:
         time.sleep(0.1)
     assert received == [{"client": server.client, "x": 2, "y": 3}]
@@ -1189,7 +1200,7 @@ def test_two_clicks_at_once_open_one_window(floating):
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(timeout=20)
+        thread.join(timeout=command_timeout())
     assert [result["ok"] for result in results] == [True] * 3
     assert len(server.floating()) == 1
 
@@ -1331,9 +1342,8 @@ def test_the_snapshot_reads_what_the_per_window_options_hold(monkeypatch):
         clients.append(_attached(name, "one"))
         _tmux(name, "set-option", "-g", "remain-on-exit", "on")
         dead = _tmux(name, "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "two:0", "true")
-        for _ in range(100):
-            if _tmux(name, "display-message", "-p", "-t", dead, "#{pane_dead}") == "1":
-                break
+        deadline = time.monotonic() + command_timeout()
+        while _tmux(name, "display-message", "-p", "-t", dead, "#{pane_dead}") != "1" and time.monotonic() < deadline:
             time.sleep(0.05)
         socket_path = _tmux(name, "display-message", "-p", "#{socket_path}")
         monkeypatch.setattr(tmux_control, "_sidebar_command", lambda _config: ["sleep", "60"])
@@ -1409,8 +1419,8 @@ def _lines_of(server, name):
     return path.read_text().splitlines() if path.exists() else []
 
 
-def _wait_lines(server, name, count, timeout=20):
-    deadline = time.monotonic() + timeout
+def _wait_lines(server, name, count):
+    deadline = time.monotonic() + command_timeout()
     while time.monotonic() < deadline:
         if len(_lines_of(server, name)) >= count:
             return _lines_of(server, name)
@@ -1425,7 +1435,7 @@ def test_another_item_of_the_same_kind_is_told_to_the_open_window_and_starts_not
     assert server.open("cr")["ok"] is True
     (first,) = _wait_lines(server, "starts", 1)
     ((pane, placed),) = server.floating().items()
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + command_timeout()
     while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
         time.sleep(0.05)
 
@@ -1444,7 +1454,7 @@ def test_another_item_of_the_same_kind_is_told_to_the_open_window_and_starts_not
     assert starts[1].split()[1:] == ["popup", "--project", "Alpha", "--decision", "D-1"]
     assert starts[1].split()[0] != first.split()[0] and server.floating() == {pane: placed}
     # and it is the one a decision click reaches next
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + command_timeout()
     while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
         time.sleep(0.05)
     assert tmux_control.open_popup(None, "Beta", None, server.client, server.socket)["data"]["reused"] is True
@@ -1464,7 +1474,7 @@ def test_a_window_that_another_release_started_is_started_again_in_the_same_plac
     ((pane, placed),) = server.floating().items()
 
     def wait_for_link():
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + command_timeout()
         while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
             time.sleep(0.05)
 
@@ -1496,7 +1506,7 @@ def test_a_cron_window_is_a_floating_pane_like_the_cr_window_and_is_told_the_nex
     assert (placed[2] + 2, placed[3] + 2) == (window_width * 80 // 100, window_height * 80 // 100)
     assert server.tmux("display-message", "-p", "-t", pane, "#{pane_title}") == "Cron · Falcon2"
     assert server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_KIND) == "cron"
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + command_timeout()
     while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
         time.sleep(0.05)
 
@@ -1534,7 +1544,7 @@ def test_a_window_that_cannot_change_what_it_shows_is_not_replaced(floating):
     server = floating(board=LISTENING_BOARD)
     assert server.open("decision")["ok"] is True
     (first,) = _wait_lines(server, "starts", 1)
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + command_timeout()
     ((pane, _),) = server.floating().items()
     while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
         time.sleep(0.05)
@@ -1551,7 +1561,7 @@ def test_a_window_process_that_is_gone_is_started_again(floating):
     assert server.open("cr")["ok"] is True
     server.started()
     ((pane, placed),) = server.floating().items()
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + command_timeout()
     while not server.tmux("show-options", "-pqv", "-t", pane, tmux_control.PANE_WINDOW_LINK) and time.monotonic() < deadline:
         time.sleep(0.05)
     (server.tmp_path / "started").unlink()
@@ -1579,7 +1589,7 @@ def _notify_as_the_plan_says(server, window, kind, request_line, release=""):
     if not panes:
         return None
     pane = panes[0]
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + command_timeout()
     while True:
         window_kind = server.tmux("show-options", "-pqv", "-t", pane, "@project_board_window_kind")
         started_by = server.tmux("show-options", "-pqv", "-t", pane, "@project_board_window_release")
@@ -1591,7 +1601,7 @@ def _notify_as_the_plan_says(server, window, kind, request_line, release=""):
         return None
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(2)
+            connection.settimeout(command_timeout())
             connection.connect(link)
             connection.sendall(request_line)
             reply = b""

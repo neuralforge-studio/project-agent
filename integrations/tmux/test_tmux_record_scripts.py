@@ -10,6 +10,8 @@ import subprocess
 
 import pytest
 
+from wait_limit import command_timeout
+
 TMUX_DIR = Path(__file__).resolve().parent
 TOOLS = TMUX_DIR.parents[1] / "tools"
 SCRIPTS = ("project_agent_bind.sh", "project_agent_run.sh", "project_board_visibility.sh", "tmux_decide_status.sh",
@@ -49,7 +51,7 @@ def run(tmp_path, command):
     """The script as the server runs it: a PATH that holds a different tmux, and nothing else of the user's."""
     env = {"PATH": "%s:/usr/bin:/bin" % (tmp_path / "wrong"), "HOME": str(tmp_path / "home"),
            "XDG_CACHE_HOME": str(tmp_path / "cache")}
-    return subprocess.run(command, env=env, capture_output=True, text=True, timeout=60, cwd=str(tmp_path))
+    return subprocess.run(command, env=env, capture_output=True, text=True, timeout=command_timeout(), cwd=str(tmp_path))
 
 
 def calls(log):

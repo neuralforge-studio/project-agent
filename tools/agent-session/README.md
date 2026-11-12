@@ -125,8 +125,8 @@ Provider 실행 전 준비 실패는 원인을 고친 뒤 같은 start로 재시
 
 테스트는 서로 독립이므로 `-n 8`로 병렬 실행합니다. 직렬 실행은 `-n 0`입니다. Fixture는 git 저장소를
 pytest 프로세스(xdist worker)마다 한 번 만들고, 테스트마다 그 복사본을 씁니다.
-Fixture의 명령당 대기 한도(`AGENT_SESSION_TEST_TIMEOUT`(초), 기본 240)는 끝나지 않는 명령을 실패로
-바꾸는 상한이고 속도를 단언하지 않습니다. 기본값은 `-n 8` agent-session과 `-n 8` install test를 동시에 돌려(load 50~100) 잰 `start` 최대 80초의
+Test의 대기 한도(`tools/tests/wait_limit.py`의 `command_timeout()`, `AGENT_SESSION_TEST_TIMEOUT`(초), 기본 240)는
+끝나지 않는 명령을 실패로 바꾸는 상한이고 속도를 단언하지 않습니다. 성공을 기다리는 test는 이 값만 쓰고 숫자를 따로 주지 않습니다. 기본값은 `-n 8` agent-session과 `-n 8` install test를 동시에 돌려(load 50~100) 잰 `start` 최대 80초의
 약 3배입니다. 평소 운영 부하(seat 여럿이 동시에 검증)에서는 지정하지 않아도 됩니다.
 Host가 이보다 심하게 느릴 때만 이 값을 늘립니다. `tools/conftest.py`는 `--basetemp`가 없을 때 실행마다 `TMPDIR` 아래 전용 임시
 디렉터리를 쓰고, 통과하면 지웁니다. 실패하면 조사를 위해 남기고 다음 실행이 오래된 것을 정리합니다([README의 검증](../../README.md#검증)).

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from project_item_testing import git, git_init
+from wait_limit import command_timeout  # tools/conftest.py puts tools/tests on sys.path
 from project_item import store
 from project_item.kinds import CR, DECIDE
 from project_item.registry import ItemError
@@ -476,7 +477,7 @@ def test_late_render_does_not_restore_an_old_page(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_pause", pause)
     late = threading.Thread(target=lambda: render.render("demo", root), name="late")
     late.start()
-    first_read.wait(5)
+    first_read.wait(command_timeout())
 
     def move_and_render():
         store.answer_decide(root, "D-20261104-01", "A")

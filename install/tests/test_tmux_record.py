@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from harness import INSTALLER, LIB, REPO
+from harness import INSTALLER, LIB, REPO, command_timeout
 
 sys.path.insert(0, str(INSTALLER.parent))
 from project_agent_install import runs as installer_runs, tmuxrecord  # noqa: E402
@@ -64,10 +64,10 @@ def test_an_old_tmux_in_path_is_skipped_and_the_company_tmux_is_recorded_with_it
     assert values["PROJECT_AGENT_TMUX"] == COMPANY
     library = values["PROJECT_AGENT_TMUX_LD_LIBRARY_PATH"]
     assert library                                  # libevent and ncurses are outside the system's directories
-    cron_like = subprocess.run([COMPANY, "-V"], capture_output=True, text=True, timeout=30,
+    cron_like = subprocess.run([COMPANY, "-V"], capture_output=True, text=True, timeout=command_timeout(),
                                env={"PATH": "/usr/bin:/bin", "LD_LIBRARY_PATH": library})
     assert cron_like.returncode == 0 and cron_like.stdout.startswith("tmux ")
-    withoutlib = subprocess.run([COMPANY, "-V"], capture_output=True, text=True, timeout=30, env={"PATH": "/usr/bin:/bin"})
+    withoutlib = subprocess.run([COMPANY, "-V"], capture_output=True, text=True, timeout=command_timeout(), env={"PATH": "/usr/bin:/bin"})
     assert withoutlib.returncode != 0               # so the library path in the record is what makes it start
     assert home.run("check").returncode == 0
 
@@ -193,7 +193,7 @@ def test_t45_the_check_line_of_an_installed_release_reaches_the_recorded_tmux_in
     (wrong / "tmux").write_text("#!/bin/sh\necho 'lost server' >&2\nexit 1\n")
     (wrong / "tmux").chmod(0o755)
     cron = subprocess.run(["env", "-i", "HOME=%s" % home.home, "PATH=%s:/usr/bin:/bin" % wrong, "/bin/sh", "-c", line],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=command_timeout())
     assert (cron.returncode, cron.stdout, cron.stderr) == (0, "", "")
     import json
     kept = json.loads((runs.base / "agent" / "cron" / "check.json").read_text())

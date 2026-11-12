@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-from harness import (LIB, REAL_CARGO, REPO, assert_changes, commit_change, install_paths, release_name)
+from harness import (INSTALLER_TIMEOUT, LIB, REAL_CARGO, REPO, assert_changes, commit_change, install_paths, release_name)
 
 BINARY = "tools/project-board/bin/project-board-sidebar"
 CRATE_FILES = ("Cargo.toml", "Cargo.lock", ".cargo/config.toml", "src/main.rs")
@@ -252,7 +252,7 @@ def test_t42_the_real_cargo_builds_a_sidebar_that_runs(home, source, name):
     env = {"PROJECT_AGENT_CARGO": REAL_CARGO, "PROJECT_AGENT_RUST_VENDOR": ""}
     before = home.snapshot()
     # a real build takes 40 s on a quiet host and 5 minutes on a loaded one (host load above 60)
-    result = home.run("install", source=source, env=env, timeout=1800)
+    result = home.run("install", source=source, env=env, timeout=2 * INSTALLER_TIMEOUT)
     assert result.returncode == 0, result.stdout + result.stderr
     assert_changes(before, home.snapshot(), created=install_paths(name) | {".tmux.conf"}, trees=[tree(name)])
     version = sidebar(home, name)

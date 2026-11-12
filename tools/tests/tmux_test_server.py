@@ -24,6 +24,8 @@ import signal
 import subprocess
 import uuid
 
+from wait_limit import command_timeout
+
 # The end of a server, for ``release`` and the watchdog alike. Argument 1 is the socket path. Besides
 # the socket file, it removes the runtime directory Project Board's tmux_control makes for each server
 # (``/tmp/project-board-<uid>-<server pid>``, see ``_private_dir``). The product removes a dead
@@ -87,7 +89,7 @@ def release_path(path):
         except ProcessLookupError:
             pass
         watchdog.wait()
-    subprocess.run(["sh", "-c", CLEANUP, "sh", path], capture_output=True, timeout=10)
+    subprocess.run(["sh", "-c", CLEANUP, "sh", path], capture_output=True, timeout=command_timeout())
 
 
 def release_all():

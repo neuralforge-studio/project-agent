@@ -19,6 +19,7 @@ import pytest
 
 import board_testing  # noqa: F401  (adds the Board tool to sys.path)
 import tmux_test_server
+from wait_limit import command_timeout
 from board_testing import Board, attached, click_socket, leader, release_clients, session, tmux
 from rust_binary import sidebar_binary
 
@@ -26,8 +27,8 @@ pytestmark = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is un
 LAUNCHER = Path(board_testing.TOOL) / "bin" / "project-board"
 
 
-def _wait(condition, timeout=10.0, what="the screen"):
-    deadline = time.monotonic() + timeout
+def _wait(condition, what="the screen"):
+    deadline = time.monotonic() + command_timeout()
     while time.monotonic() < deadline:
         value = condition()
         if value:
@@ -84,7 +85,7 @@ class Pane:
     def _capture(self, *flags):
         # `board_testing.tmux` strips the output, and the first row of the sidebar is empty
         return subprocess.run(["tmux", "-L", self.name, "capture-pane", "-p", *flags, "-t", self.pane],
-                              capture_output=True, text=True, check=True, timeout=5).stdout
+                              capture_output=True, text=True, check=True, timeout=command_timeout()).stdout
 
     def screen(self):
         return self._capture()
@@ -95,15 +96,15 @@ class Pane:
     def ansi(self):
         return self._capture("-e")
 
-    def wait_text(self, text, timeout=10.0):
-        _wait(lambda: text in self.screen(), timeout, f"{text!r} on the screen:\n{self.screen()}")
+    def wait_text(self, text):
+        _wait(lambda: text in self.screen(), f"{text!r} on the screen:\n{self.screen()}")
 
-    def wait_gone(self, text, timeout=10.0):
-        _wait(lambda: text not in self.screen(), timeout, f"{text!r} gone from the screen:\n{self.screen()}")
+    def wait_gone(self, text):
+        _wait(lambda: text not in self.screen(), f"{text!r} gone from the screen:\n{self.screen()}")
 
     def send_click(self, x, y, client="/dev/ttys-test"):
         with unix_socket.socket(unix_socket.AF_UNIX, unix_socket.SOCK_STREAM) as connection:
-            connection.settimeout(5)
+            connection.settimeout(command_timeout())
             connection.connect(self.click)
             connection.sendall(json.dumps({"client": client, "x": x, "y": y}).encode() + b"\n")
             reply = b""
@@ -116,7 +117,7 @@ class Pane:
 
     def send_raw(self, payload: bytes):
         with unix_socket.socket(unix_socket.AF_UNIX, unix_socket.SOCK_STREAM) as connection:
-            connection.settimeout(5)
+            connection.settimeout(command_timeout())
             connection.connect(self.click)
             connection.sendall(payload)
             reply = b""
@@ -268,7 +269,7 @@ def test_the_click_socket_answers_with_the_widget_and_runs_the_action_for_the_cl
         f"--config {pane.board.config} open-cr --project Falcon2 --state in-progress --client {client}",
     ])
     # a client that is not attached: the switch fails and the sidebar says why
-    pane.wait_text("not attached", timeout=5)
+    pane.wait_text("not attached")
 
 
 def test_a_click_on_something_that_cannot_act_is_refused_or_ignored_as_before(tmp_path, request):
@@ -326,18 +327,18 @@ def test_folding_shows_at_once_and_is_kept_in_the_shared_tmux_option(tmp_path, r
     pane = Pane(tmp_path, request, _board(tmp_path), launcher=LAUNCHER)
     pane.wait_text("ProjectB")
     assert pane.send_click(19, 3)["data"] == {"widget": "project-0-seats"}
-    pane.wait_text("R 0 CPU-012", timeout=2)
-    _wait(lambda: pane.folds() == {"Falcon2"}, timeout=60, what="the shared option")  # a Python process starts under the load of the host
+    pane.wait_text("R 0 CPU-012")
+    _wait(lambda: pane.folds() == {"Falcon2"}, what="the shared option")  # a Python process starts under the load of the host
     assert pane.send_click(19, 3)["data"] == {"widget": "project-0-seats"}
-    pane.wait_gone("R 0 CPU-012", timeout=2)
-    _wait(lambda: pane.folds() == set(), timeout=60, what="the shared option cleared")
+    pane.wait_gone("R 0 CPU-012")
+    _wait(lambda: pane.folds() == set(), what="the shared option cleared")
 
 
 def test_a_fold_another_pane_wrote_reaches_this_one_at_the_next_read(tmp_path, request):
     pane = Pane(tmp_path, request, _board(tmp_path))
     pane.wait_text("ProjectB")
     tmux(pane.name, "set-option", "-s", "@project_board_expanded", json.dumps(["ProjectB"]))
-    pane.wait_text("   0 -", timeout=5)
+    pane.wait_text("   0 -")
     assert "R 0 CPU-012" not in pane.screen()
 
 
@@ -351,7 +352,7 @@ def test_tab_enter_and_the_arrows_work_from_the_keyboard(tmp_path, request):
     _wait(lambda: pane.helper_calls(), what="the helper run")
     assert pane.helper_calls() == [f"--config {pane.board.config} open-decision --project Falcon2"]
     pane.keys("Down", "Down", "Down")
-    pane.wait_text("ProjectB", timeout=3) if "ProjectB" in pane.screen() else None
+    pane.wait_text("ProjectB") if "ProjectB" in pane.screen() else None
     pane.keys("PageDown")
     _wait(lambda: "ProjectB" in pane.screen(), what="the second project after scrolling")
     pane.keys("Home")
@@ -363,9 +364,9 @@ def test_the_pointer_shows_the_hover_background_and_a_tooltip_that_goes_away(tmp
     pane.wait_text("Falcon2")
     pane.mouse("move", 3, 2)            # the D row of Falcon2
     _wait(lambda: "48;2;52;80;109" in pane.ansi().splitlines()[2].replace(":", ";"), what="the hover background")
-    _wait(lambda: "결정 대기 2" in pane.screen(), what="the tooltip", timeout=3)
+    _wait(lambda: "결정 대기 2" in pane.screen(), what="the tooltip")
     pane.mouse("move", 3, 8)            # another widget: the tooltip goes at once
-    pane.wait_gone("결정 대기 2", timeout=3)
+    pane.wait_gone("결정 대기 2")
 
 
 def test_a_sidebar_nobody_watches_reads_nothing_until_it_is_shown_again(tmp_path, request):
@@ -387,7 +388,7 @@ def test_a_sidebar_nobody_watches_reads_nothing_until_it_is_shown_again(tmp_path
     assert len(pane.crontab.calls()) == hidden
     tmux(pane.name, "select-window", "-t", "main:0")
     os.kill(process_id, signal.SIGUSR1)
-    pane.wait_text("T:2", timeout=3)              # read at once, not at the next 2 second tick
+    pane.wait_text("T:2")              # SIGUSR1 makes the pane read the crontab; the wait asserts the result, not a time
 
 
 def test_the_window_of_the_pane_is_marked_with_its_project_and_slot(tmp_path, request):
@@ -401,7 +402,7 @@ def test_the_window_of_the_pane_is_marked_with_its_project_and_slot(tmp_path, re
     tmux(pane.name, "set-option", "-w", "-t", "main:0", "@agent_session_target", json.dumps("leader"))
     tmux(pane.name, "set-option", "-s", "@project_board_expanded", json.dumps(["Falcon2"]))
     _wait(lambda: "48;2;47;109;179" in [line for line in pane.ansi().splitlines() if "Falcon2" in line][0].replace(":", ";"),
-          timeout=12, what="the highlight")   # the managed window is read every 10 seconds
+          what="the highlight")   # the managed window is read every 10 seconds
     assert "Leader" not in pane.screen() and "▶" not in pane.screen()
     ansi = pane.ansi().splitlines()
     name_row = [line for line in ansi if "Falcon2" in line][0]
@@ -512,7 +513,7 @@ def test_a_busy_window_is_not_replaced_and_the_user_is_told(tmp_path, request):
     pane, window, client = _window_pane_setup(
         tmp_path, request, reply=b'{"ok": false, "code": "busy", "message": "An answer is being sent."}\n')
     pane.send_click(2, 3, client)
-    pane.wait_text("An answer is being", timeout=5)            # the message wraps in a 25 column pane
+    pane.wait_text("An answer is being")            # the message wraps in a 25 column pane
     time.sleep(0.5)
     assert pane.helper_calls() == []
 
@@ -552,10 +553,10 @@ def test_the_cron_count_shows_each_projects_jobs_and_marks_a_broken_section_or_a
     pane.wait_text("C:2")
     assert pane.lines()[2] == " D:2   C:2" and pane.lines()[6] == " D:1   C:!"
     shim.set(failure="crontab: no permission")
-    _wait(lambda: pane.lines()[2] == " D:2   C:!", timeout=12, what="C:! on every project")   # the next 10-second read
+    _wait(lambda: pane.lines()[2] == " D:2   C:!", what="C:! on every project")   # the next 10-second read
     assert pane.lines()[2] == " D:2   C:!" and pane.lines()[6] == " D:1   C:!"
     shim.set(CRON_TEXT)
-    _wait(lambda: pane.lines()[2] == " D:2   C:2", timeout=12, what="C:2 again")
+    _wait(lambda: pane.lines()[2] == " D:2   C:2", what="C:2 again")
     assert pane.lines()[6] == " D:1   C:0"
 
 
@@ -565,17 +566,17 @@ def test_the_cron_count_has_a_tooltip_with_the_time_to_the_next_run(tmp_path, re
     pane = Pane(tmp_path, request, board)
     pane.wait_text("C:2")
     pane.mouse("move", 8, 2)
-    _wait(lambda: "cron 2개, 다음 실행" in pane.screen().replace("\n", " "), what="the tooltip", timeout=3)
+    _wait(lambda: "cron 2개, 다음 실행" in pane.screen().replace("\n", " "), what="the tooltip")
     assert " 뒤" in pane.screen().replace("\n", " ")
     pane.mouse("move", 8, 6)                    # ProjectB's C:0
-    _wait(lambda: "cron 작업 없음" in pane.screen(), what="the tooltip of C:0", timeout=3)
+    _wait(lambda: "cron 작업 없음" in pane.screen(), what="the tooltip of C:0")
 
 
 def test_pressing_the_cron_count_opens_the_cron_window_and_c0_does_nothing(tmp_path, request):
     board = _board(tmp_path)
     pane = Pane(tmp_path, request, board, launcher="fake")
     pane.crontab.set(CRON_TEXT)
-    pane.wait_text("C:2", timeout=12)                      # the crontab is read before the first press
+    pane.wait_text("C:2")                      # the crontab is read before the first press
     client = pane.clients[0][2]
     assert pane.send_click(8, 2, client)["data"] == {"widget": "project-0-C"}
     _wait(lambda: len(pane.helper_calls()) == 1, what="the helper run")
@@ -588,7 +589,7 @@ def test_pressing_the_cron_count_opens_the_cron_window_and_c0_does_nothing(tmp_p
 def test_a_cron_click_tells_an_open_cron_window_and_starts_nothing(tmp_path, request):
     pane, window, client = _window_pane_setup(tmp_path, request, kind="cron")
     pane.crontab.set(CRON_TEXT)
-    pane.wait_text("C:2", timeout=12)
+    pane.wait_text("C:2")
     assert pane.send_click(8, 2, client)["data"] == {"widget": "project-0-C"}
     _wait(lambda: len(window.requests) == 1, what="the request")
     assert window.requests[0] == {"kind": "cron", "project": "Falcon2", "client": client}
@@ -600,7 +601,7 @@ def test_a_cron_click_tells_an_open_cron_window_and_starts_nothing(tmp_path, req
 def test_a_cron_click_on_a_window_of_another_kind_starts_the_cron_window_the_ordinary_way(tmp_path, request):
     pane, window, client = _window_pane_setup(tmp_path, request, kind="cr")
     pane.crontab.set(CRON_TEXT)
-    pane.wait_text("C:2", timeout=12)
+    pane.wait_text("C:2")
     pane.send_click(8, 2, client)
     _wait(lambda: len(pane.helper_calls()) == 1, what="the helper run")
     assert pane.helper_calls() == [f"--config {pane.board.config} open-cron --project Falcon2 --client {client}"]

@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 
 import board_testing  # noqa: F401  (adds the Board tool to sys.path)
+from wait_limit import command_timeout
 import tmux_test_server
 from board_testing import attached, release_clients, tmux
 from project_board import tmux_control
@@ -154,7 +155,7 @@ def outcome_of_python(control, client, kind, request, title):
 def outcome_of_rust(binary, name, client, kind, request, title):
     environment = {**os.environ, "PROJECT_BOARD_SOCKET": str(tmux_test_server.socket_path(name))}
     done = subprocess.run([str(binary), "tell", "--kind", kind, "--client", client, "--title", title,
-                           "--request", json.dumps(request)], capture_output=True, text=True, env=environment, timeout=30)
+                           "--request", json.dumps(request)], capture_output=True, text=True, env=environment, timeout=command_timeout())
     assert done.returncode == 0, done.stderr
     return json.loads(done.stdout)
 
