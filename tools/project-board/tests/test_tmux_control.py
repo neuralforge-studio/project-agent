@@ -1050,6 +1050,18 @@ def test_the_board_window_is_moved_and_resized_with_the_mouse_by_tmux_defaults(f
     assert server.floating()[pane] == (left + 2, top + 1, width, height)
 
 
+def eventually(condition):
+    """True once `condition()` holds, polled for at most the wait limit; the last answer if it never does.
+
+    A drag reaches tmux through the client's pty, so what it changes lands after the write returns. A test that
+    expects the change waits for it here and asserts after, never after a fixed sleep a loaded host can outrun.
+    """
+    deadline = time.monotonic() + command_timeout()
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return condition()
+
+
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
 @pytest.mark.parametrize("focus", ["window", "behind"])
 def test_moving_or_resizing_the_board_window_never_changes_the_saved_sidebar_width(floating, focus):
@@ -1069,15 +1081,14 @@ def test_moving_or_resizing_the_board_window_never_changes_the_saved_sidebar_wid
 
     server.drag((left + 5, top), (left + 11, top + 2))                                           # move
     server.drag((left + 6 + width + 1, top + 2 + height + 1), (left + 6 + width - 5, top + 2 + height - 2))   # resize
-    time.sleep(0.5)
-    assert server.floating()[pane] == (left + 6, top + 2, width - 6, height - 3)
-    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == saved
+    assert eventually(lambda: server.floating()[pane] == (left + 6, top + 2, width - 6, height - 3))
+    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == saved      # the drags have landed: it did not change
 
     border = int(server.tmux("display-message", "-p", "-t", sidebar, "#{pane_width}"))
     row = top + 2 + height + 2                                                                   # below the window
     server.drag((border + 1, row), (border + 4, row))                                            # the sidebar's own border
-    time.sleep(0.5)
-    assert server.tmux("show-options", "-gqv", tmux_control.WIDTH) == str(border + 3) != saved
+    assert eventually(lambda: server.tmux("show-options", "-gqv", tmux_control.WIDTH) == str(border + 3))
+    assert str(border + 3) != saved
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
