@@ -1381,9 +1381,9 @@ agent-session watch --project NAME --minutes 30
 
 **하는 일**: 메시지 전송과 기록뿐입니다. process에 신호를 보내지 않고 state·CR·Git 작업을 바꾸지 않습니다. 정체한 Worker에는 다음을 보냅니다.
 
-- Worker에게 점검 메시지를 `send`로 한 번 보냅니다. 스스로 확인하고 판단하도록 쓰고, 제출해서 Leader 회신을 기다리는 중이면 Leader에게 CR ID와 제출 commit을 짧게 다시 알리라고 포함하며, 근거를 담습니다: CR ID, 마지막 turn 종료·마지막 입력·마지막 보고(Leader에게 한 send) 시각, background 작업의 종류·명령, 자식 process의 pid·실행 시간·CPU 누적·명령(160자까지). 근거는 알려주기 위한 것이고 판정에는 쓰지 않습니다.
+- Worker에게 점검 메시지를 `send`로 한 번 보냅니다. 스스로 확인하고 판단하도록 쓰고, 제출과 보고를 마쳐 Leader 회신을 기다리는 중이면 같은 제출을 다시 보고하지 않도록 합니다. 새 제출·새 외부 차단·종료 준비 완료는 보고하도록 하며, 근거를 담습니다: CR ID, 마지막 turn 종료·마지막 입력·마지막 보고(Leader에게 한 send) 시각, background 작업의 종류·명령, 자식 process의 pid·실행 시간·CPU 누적·명령(160자까지). 근거는 알려주기 위한 것이고 판정에는 쓰지 않습니다.
 - Leader에게 같은 근거를 담아 알립니다. 제출 뒤 review를 기다리는 Worker면 Leader가 review 대기 CR을 확인하게 하는 문구가 들어 있습니다.
-- 정체한 Leader에는 점검 메시지를 한 번 보냅니다. in-progress CR 목록을 담고 review 대기 CR(제출 행의 hash가 Disposition에 없는 것)을 먼저 처리하라고 씁니다. Worker가 Leader에게 다시 알린 메시지도 Leader를 깨웁니다.
+- 정체한 Leader에는 점검 메시지를 한 번 보냅니다. in-progress CR 목록을 담고 review 대기 CR(제출 행의 hash가 Disposition에 없는 것)을 먼저 처리하라고 씁니다.
 - 발신자는 operator입니다. 메시지 첫 줄에 로컬 operator 입력임이 적히고 본문은 `[agent-session watch]`로 시작합니다. 사용자 승인이 아닙니다.
 
 **반복 방지**: window option `watch`(`resting.nudged_at`·`resting.notified_at`)에 보낸 기록만 둡니다. 판정에는 쓰지 않고 한 정체에 한 번만 보내려는 용도입니다. 보낸 시각(`nudged_at`) 뒤에 대화 기록이 더 생기면 새 상태이므로 그 기록을 지웁니다. 같은 정체가 이어지는 동안은 instance에게 다시 보내지 않습니다. Worker 정체를 Leader에게는 마지막 알림 뒤 `--minutes`가 지날 때마다 다시 알립니다. 점검 메시지는 입력이므로 받은 instance의 대화 기록에 남아 새 상태가 되고, 그 뒤 다시 정체하면 다시 깨웁니다. 전달이 accepted가 아니면 기록하지 않아 다음 점검이 다시 시도합니다(Leader가 없거나 Worker가 준비 중인 경우 등). 이전 판정의 옛 기록 key는 읽을 때 버립니다. 기록은 run의 window에 있으므로 새 run은 처음부터 봅니다. 같은 project의 watch는 `agent/watch.lock`으로 동시에 하나만 돕니다(둘째는 `control_busy`를 그 project의 `error`로 보고하고 아무것도 보내지 않습니다).
@@ -1400,7 +1400,7 @@ project의 주기 점검입니다. project의 crontab `check` 작업이 30분마
 
 `watch`의 실행(`Watch.run`)에 두 가지를 더한 것입니다.
 
-1. Worker는 `watch`와 같습니다. 대화 기록이 `--minutes` 넘게 갱신되지 않은 in-progress Worker를 깨우고 Leader에게 근거와 함께 알립니다. 제출해서 Leader 회신을 기다리는 Worker도 이 판정이 잡습니다(회신을 기다리는 동안 기록이 갱신되지 않으므로). 점검 메시지는 Worker에게 Leader에게 제출 hash를 다시 알리라고 합니다.
+1. Worker는 `watch`와 같습니다. 대화 기록이 `--minutes` 넘게 갱신되지 않은 in-progress Worker를 깨우고 Leader에게 근거와 함께 알립니다. 제출해서 Leader 회신을 기다리는 Worker도 이 판정이 잡습니다(회신을 기다리는 동안 기록이 갱신되지 않으므로). 제출과 보고를 마쳤으면 같은 제출은 다시 보고하지 않습니다.
 2. Leader는 in-progress CR이 아니라 **처리할 일**(`check.CheckMixin.leader_findings`)로 판정합니다. 아래가 모두 project-item의 상태·파일과 `state.json`·tmux 사실을 읽어 코드로 판정한 것입니다.
    - review 대기 CR: in-progress CR 가운데 `## Result`의 마지막 제출 행 hash를 `## Disposition`이 인용하지 않은 것(read-only CR은 Result가 비어 있지 않은 것). 규칙의 원본은 `project_item.cr.review_waiting`이고 Board의 review wait와 같습니다.
    - 반납 대기 seat(`pending_releases`).

@@ -152,7 +152,7 @@ def last(monkeypatch):
     return holder
 
 
-def test_a_worker_that_waits_for_the_leader_is_woken_and_told_to_remind_the_leader(session_env, last, monkeypatch):
+def test_a_worker_waiting_for_the_leader_is_woken_without_duplicate_report(session_env, last, monkeypatch):
     env = session_env
     leader, cr, worker, now = started(env)
     with monkeypatch.context() as actor:                  # it reported and the Leader has not answered
@@ -166,7 +166,8 @@ def test_a_worker_that_waits_for_the_leader_is_woken_and_told_to_remind_the_lead
     worker_text, leader_text = messages(env, SLOT), messages(env, "leader")
     assert len(worker_text) == 1 and len(leader_text) == 1
     text = worker_text[0]["text"]
-    assert cr in text and "Leader에게 CR ID와 제출 commit을 짧게 다시 알리십시오" in text and "대화 기록 마지막" in text
+    assert cr in text and "같은 제출을 다시 보고하지 마십시오" in text and "대화 기록 마지막" in text
+    assert "새로운 외부 차단" in text and "Leader에게 보고하십시오" in text
     assert "자식 process가 없습니다" in text
     assert "seat 0" in leader_text[0]["text"] and "Disposition에 없는 CR" in leader_text[0]["text"]
     # The same stall later: the Worker is not woken again, the Leader is reminded after each threshold.

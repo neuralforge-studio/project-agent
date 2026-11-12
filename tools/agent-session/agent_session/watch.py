@@ -40,9 +40,10 @@ LEADER = "leader"
 WORKER_NOTICE = (
     "[agent-session watch] 자동 점검 메시지입니다. {job} CR이 in-progress인데 이 세션의 대화 기록이 {minutes}분 넘게 "
     "갱신되지 않았습니다. 아래 근거를 보고 작업이 실제로 진행 중인지 확인하십시오. "
-    "제출해서 Leader 회신을 기다리는 중이면 `agent-session send --job leader`로 Leader에게 CR ID와 제출 commit을 "
-    "짧게 다시 알리십시오. 멈춘 대기(예: 자기 shell과도 맞아 끝나지 않는 `pgrep -f` loop)이면 원인을 풀고 이어서 "
-    "진행하고, 막혔다면 이유를 Leader에게 보고하십시오. 같은 정체 상태에서는 이 메시지를 다시 보내지 않습니다.\n{evidence}")
+    "제출과 보고를 마쳐 Leader 회신을 기다리는 중이면 같은 제출을 다시 보고하지 마십시오. "
+    "멈춘 대기(예: 자기 shell과도 맞아 끝나지 않는 `pgrep -f` loop)이면 원인을 풀고 이어서 진행하십시오. "
+    "새 제출, 새로운 외부 차단 또는 종료 준비 완료는 Leader에게 보고하십시오. "
+    "같은 정체 상태에서는 이 메시지를 다시 보내지 않습니다.\n{evidence}")
 CHECK_LEADER_NOTICE = (
     "[agent-session check] 자동 점검 메시지입니다. Leader의 대화 기록이 {minutes}분 넘게 갱신되지 않았는데 처리할 일이 있습니다. "
     "아래 근거를 보고 필요한 조치를 하십시오(project-team skill의 Leader 절). 같은 상태에서는 이 메시지를 다시 보내지 않습니다.\n"
