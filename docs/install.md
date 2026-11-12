@@ -179,7 +179,7 @@ agent/decide/decide.html
 - 설치와 갱신은 새 release를 만들 때 Board sidebar를 build합니다(1분 안팎, 설치 계약 2.1절). build가 실패하면 `current`와 기존 release는 그대로이고 새 release는 남지 않습니다. 되돌리기는 이미 build된 release로 돌아가므로 build하지 않습니다.
 - 갱신은 이전 release를 지우지 않습니다. `rollback`은 바로 이전 release 하나로만 돌아갑니다.
 - `prune`은 `current`, 바로 이전 release, 떠 있는 run이 쓰는 release를 남기고 나머지를 지웁니다.
-- 갱신·`prune` 뒤에는 Board를 닫고 다시 엽니다. 이미 떠 있는 Board는 시작한 release의 파일을 계속 씁니다.
+- 이미 떠 있는 Board sidebar는 몇 초 안에 새 release의 sidebar로 스스로 바뀝니다(같은 pane·크기·위치). 떠 있는 Board 창(CR·결정·cron)은 다음에 열 때 새 release로 다시 시작합니다. Board가 "재시작 필요"를 보이면 새 release의 sidebar로 바꾸지 못한 것이므로 Board를 껐다 켭니다(prefix `B` 두 번). 동작은 [설치 계약 7.1절](project-team/install-contract.md#71-떠-있는-run)이 정합니다.
 - 떠 있는 run이 있고 새 release와 형식 버전이 다르면 `upgrade`와 `rollback`은 `formats_differ`로 거절합니다. 출력에 나온 run을 `agent-session restart --job <leader 또는 CR ID>`로 다시 시작합니다. 이미 `current`를 쓰는 run은 `agent-session stop`으로 끝낸 뒤 다시 실행합니다([계약 7.1.1절](project-team/install-contract.md#711-떠-있는-run과-형식-버전), [버전 규칙](project-team/release.md)).
 
 ## 7. 제거

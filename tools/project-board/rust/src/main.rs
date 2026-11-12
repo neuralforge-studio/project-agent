@@ -4,6 +4,7 @@ mod data;
 #[cfg(test)]
 mod golden;
 mod model;
+mod release;
 mod render_cmd;
 mod switch;
 mod tmuxio;
@@ -14,7 +15,8 @@ mod window;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("--version") => println!("project-board-sidebar {}", env!("CARGO_PKG_VERSION")),
+        Some("--version") => println!("{}", release::version_line()),
+        Some("release") => std::process::exit(release::print()),
         Some("dump") => std::process::exit(data::dump::run(&args[1..])),
         Some("switch-project") | Some("switch-seat") => std::process::exit(switch::run(&args)),
         Some("tmux-program") => std::process::exit(tmuxprog::print()),

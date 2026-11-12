@@ -306,6 +306,13 @@ def _require_compatible(env, root, target_root, target_name):
                              "stop`)." % target_name, {"runs": refused})
 
 
+# Contract 7.1, item 4: runs keep their release, the sidebar and its windows are not runs.
+BOARD_NOTE = ("Runs that are up keep the release they started with. The Project Board sidebar and its windows are not "
+              "runs: an open sidebar switches itself to %s, and a window that is up is started again from it the next "
+              "time it is opened. A sidebar that cannot switch says that a restart is needed; turn Project Board off and "
+              "on again (prefix B twice) then.")
+
+
 def plan_upgrade(env, source, python, tmux, root):
     installed = _require_record(env)
     _require_current(env, installed)
@@ -339,8 +346,7 @@ def plan_upgrade(env, source, python, tmux, root):
     plan.steps.append(actions.swap_link(places, "current", "releases/" + source.name))
     plan.steps.append(actions.replace_record(places, records.encode(new)))
     _changed_notes(env, installed, plan)
-    plan.notes.append("Runs that are up keep the release they started with. Reopen Project Board to use the new "
-                      "release.")
+    plan.notes.append(BOARD_NOTE % "the new release")
     return plan
 
 
@@ -357,8 +363,7 @@ def plan_rollback(env, root):
     plan.steps.append(actions.swap_link(places, "current", "releases/" + previous))
     plan.steps.append(actions.replace_record(places, records.encode(new)))
     _changed_notes(env, installed, plan)
-    plan.notes.append("Runs that are up keep the release they started with. Reopen Project Board to use %s."
-                      % previous)
+    plan.notes.append(BOARD_NOTE % previous)
     return plan
 
 

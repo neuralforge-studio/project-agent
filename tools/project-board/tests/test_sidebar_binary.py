@@ -39,7 +39,7 @@ def _wait(condition, timeout=10.0, what="the screen"):
 class Pane:
     """The sidebar running as the only pane of the window a client shows."""
 
-    def __init__(self, tmp_path, request, board, size=(25, 30), launcher=None, attach=True, env=None, path=None):
+    def __init__(self, tmp_path, request, board, size=(25, 30), launcher=None, attach=True, env=None, path=None, binary=None):
         self.name = tmux_test_server.claim("sidebar-test")
         request.addfinalizer(self.close)
         self.clients = []
@@ -63,7 +63,7 @@ class Pane:
         for key, value in variables.items():
             command += ["-e", f"{key}={value}"]
         # tmux ignores `-e PATH=`; a program that needs another PATH is run through env
-        command += ["env", f"PATH={path}"] + [str(sidebar_binary()), "--config", str(board.config)]
+        command += ["env", f"PATH={path}"] + [str(binary or sidebar_binary()), "--config", str(board.config)]
         tmux(self.name, *command)
         tmux(self.name, "set-option", "-g", "window-size", "manual")
         if attach:
@@ -440,7 +440,7 @@ class FakeBoardWindow:
     """What a Board window is to a click (docs/project-board-tui-plan.md, BOARD-025): a pane marked as a window, whose process
     listens on a socket and answers one JSON line with one JSON line."""
 
-    def __init__(self, pane, tmp_path, kind="cr", reply=None, link=True):
+    def __init__(self, pane, tmp_path, kind="cr", reply=None, link=True, release=""):
         self.requests = []
         self.reply = reply if reply is not None else b'{"ok": true}\n'
         self.path = f"/tmp/pb-win-{os.getpid()}-{id(self) % 100000}.win"
@@ -453,6 +453,7 @@ class FakeBoardWindow:
         self.window_pane = tmux(pane.name, "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "main", "sleep", "300")
         tmux(pane.name, "set-option", "-p", "-t", self.window_pane, "@project_board_window", "1")
         tmux(pane.name, "set-option", "-p", "-t", self.window_pane, "@project_board_window_kind", kind)
+        tmux(pane.name, "set-option", "-p", "-t", self.window_pane, "@project_board_window_release", release)
         if link:
             tmux(pane.name, "set-option", "-p", "-t", self.window_pane, "@project_board_window_link", self.path)
 
@@ -516,11 +517,12 @@ def test_a_busy_window_is_not_replaced_and_the_user_is_told(tmp_path, request):
     assert pane.helper_calls() == []
 
 
-@pytest.mark.parametrize("situation", ["other kind", "still starting", "invalid", "closing", "not json"])
+@pytest.mark.parametrize("situation", ["other kind", "still starting", "invalid", "closing", "not json", "other release"])
 def test_a_window_that_cannot_take_the_item_is_started_the_ordinary_way(tmp_path, request, situation):
     options = {"other kind": {"kind": "decision"}, "still starting": {"link": False},
                "invalid": {"reply": b'{"ok": false, "code": "invalid", "message": "no"}\n'},
-               "closing": {"reply": b'{"ok": false, "code": "closing"}\n'}, "not json": {"reply": b"hello\n"}}[situation]
+               "closing": {"reply": b'{"ok": false, "code": "closing"}\n'}, "not json": {"reply": b"hello\n"},
+               "other release": {"release": "0.1.0-aaaaaaaaaaaa"}}[situation]
     pane, window, client = _window_pane_setup(tmp_path, request, **options)
     pane.send_click(2, 3, client)
     _wait(lambda: len(pane.helper_calls()) == 1, what="the helper run")
