@@ -16,6 +16,7 @@ import uuid
 from agent_session import process, tmux as tmux_module
 from agent_session.tmux import Tmux
 import tmux_test_server
+from wait_limit import command_timeout
 
 PREFIX = tmux_module._PREFIX
 # What a started run keeps in its window: the identity, the waiting pane, and the values a run adds.
@@ -28,7 +29,7 @@ def _json(value):
 
 def _tmux(socket_path, *arguments):
     result = subprocess.run(["tmux", "-S", socket_path, "-f", os.devnull, *map(str, arguments)],
-                            capture_output=True, text=True, timeout=120)
+                            capture_output=True, text=True, timeout=command_timeout())
     if result.returncode:
         raise AssertionError(f"tmux {arguments[:2]}: {result.stderr}")
     return result.stdout.rstrip("\n")

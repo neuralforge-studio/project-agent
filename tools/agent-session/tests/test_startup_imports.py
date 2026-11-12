@@ -11,13 +11,15 @@ from pathlib import Path
 
 import pytest
 
+from wait_limit import command_timeout
+
 TOOLS = Path(__file__).resolve().parents[2]
 
 
 def loaded_after(program):
     """Run `program` in `python -I -S`; it must print a JSON list of the module names to report."""
     code = f"import sys, json\nsys.path.insert(0, {str(TOOLS / 'agent-session')!r})\n{program}\n"
-    result = subprocess.run([sys.executable, "-I", "-S", "-c", code], capture_output=True, text=True, timeout=60)
+    result = subprocess.run([sys.executable, "-I", "-S", "-c", code], capture_output=True, text=True, timeout=command_timeout())
     assert result.returncode == 0, result.stderr
     return set(json.loads(result.stdout))
 

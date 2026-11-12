@@ -20,4 +20,4 @@ def test_environment_variable_raises_every_manager_wait_limit(session_env, monke
 
 def test_explicit_wait_limit_overrides_the_environment_variable(session_env, monkeypatch):
     monkeypatch.setenv("AGENT_SESSION_TEST_TIMEOUT", "360")
-    assert session_env.manager(timeout=3).timeout == 3
+    assert session_env.manager(timeout=3).timeout == 3   # not a wait: the test reads the limit an argument sets back

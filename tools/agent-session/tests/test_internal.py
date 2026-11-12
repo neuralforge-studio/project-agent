@@ -22,6 +22,7 @@ from agent_session.errors import SessionError
 from agent_session.state import StateStore, locked
 from agent_session.tmux import Tmux
 import tmux_test_server  # noqa: E402
+from wait_limit import command_timeout
 
 
 @pytest.fixture
@@ -422,7 +423,7 @@ def test_liveness_reads_tmux_and_process_facts_without_a_provider(native_slot, m
     assert call() == {"0": {"session_id": other, "state": "unknown"}}
     fixture["store"].update(lambda state: state["0"]["session"].update(session_id=previous["session_id"]))
     os.kill(fixture["tmux"].pane_info(previous["pane_id"])["pane_pid"], 15)
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + command_timeout()
     while not fixture["tmux"].pane_info(previous["pane_id"])["pane_dead"]:
         assert time.monotonic() < deadline
         time.sleep(0.05)

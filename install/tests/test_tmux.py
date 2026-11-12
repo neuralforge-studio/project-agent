@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from harness import LIB
+from harness import LIB, command_timeout
 import tmux_test_server  # noqa: E402  (harness puts tools/tests on sys.path)
 
 pytestmark = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is unavailable")
@@ -28,7 +28,7 @@ class Server:
 
     def run(self, *args, check=True):
         result = subprocess.run(["tmux", "-S", str(self.socket), "-f", "/dev/null", *args], capture_output=True,
-                                text=True, timeout=30, env=self.home.env)
+                                text=True, timeout=command_timeout(), env=self.home.env)
         assert not check or result.returncode == 0, result.stderr
         return result.stdout.strip()
 

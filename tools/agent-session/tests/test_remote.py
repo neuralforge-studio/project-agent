@@ -18,6 +18,7 @@ from agent_session import remote, remote_bridge, remote_runtime
 from agent_session.config import Project, RemoteSeat
 from agent_session.errors import SessionError
 from fake_tmux import fake_tmux
+from wait_limit import command_timeout
 
 
 def test_remote_seat_before_any_ssh_launch_uses_only_its_local_waiting_process(monkeypatch):
@@ -311,7 +312,7 @@ def test_dead_report_bridge_reuses_its_token_and_replaces_its_stale_socket(tmp_p
         assert prepared["token"] == settings["token"]
         assert prepared["pid"] != settings["pid"] and process.alive(prepared["pid"], prepared["birth"])
         with socket.socket(socket.AF_UNIX) as client:
-            client.settimeout(5)
+            client.settimeout(command_timeout())
             client.connect(str(listen))
             client.sendall(json.dumps({"token": "wrong", "run_id": run_id}).encode() + b"\n")
             response = json.loads(client.makefile("rb").readline())
@@ -319,7 +320,7 @@ def test_dead_report_bridge_reuses_its_token_and_replaces_its_stale_socket(tmp_p
     finally:
         for child in children:
             child.terminate()
-            child.wait(timeout=5)
+            child.wait(timeout=command_timeout())
         listen.unlink(missing_ok=True)
 
 

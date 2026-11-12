@@ -13,6 +13,8 @@ import time
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "tests"))  # wait_limit, shared by every tool's tests
+from wait_limit import command_timeout  # noqa: E402
 
 SCRIPT = Path(__file__).with_name("tmux_decide_status.py")
 LAUNCHER = Path(__file__).with_name("tmux_decide_status.sh")
@@ -285,7 +287,7 @@ def launcher(status, tmp_path, monkeypatch):
     def run(python=sys.executable):
         env = dict(os.environ, PROJECT_AGENT_PYTHON=str(python))
         return subprocess.run([str(LAUNCHER)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              universal_newlines=True, timeout=60)
+                              universal_newlines=True, timeout=command_timeout())
 
     return run
 

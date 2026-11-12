@@ -29,6 +29,7 @@ import pytest
 
 from board_testing import BASE_HASH, LEADER_ID, WORKER_IDS, Board, cr_text, decide_text, leader, session
 import rust_binary
+from wait_limit import command_timeout
 from project_board import model
 from agent_session.errors import SessionError
 
@@ -98,7 +99,7 @@ def python_reads(config):
 
 def rust_reads(binary, config, env=None):
     result = subprocess.run([str(binary), "dump", "--config", str(config), "--now", NOW_TEXT],
-                            capture_output=True, text=True, timeout=120, env={**os.environ, **(env or {})})
+                            capture_output=True, text=True, timeout=command_timeout(), env={**os.environ, **(env or {})})
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 
@@ -431,7 +432,7 @@ def test_the_standard_registry_places_are_searched_without_a_config(tmp_path, si
 
     def rust(env_home):
         result = subprocess.run([str(sidebar_bin), "dump", "--now", NOW_TEXT], capture_output=True, text=True,
-                                env={**os.environ, "HOME": str(env_home)}, timeout=60)
+                                env={**os.environ, "HOME": str(env_home)}, timeout=command_timeout())
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)["before"]
     assert rust(home) == found
@@ -634,7 +635,7 @@ def test_a_dead_pane_is_stopped(fleet_env, sidebar_bin):
     pid = control.pane_info(control.get_current("p0", "seat-1")["pane_id"])["pane_pid"]
     os.kill(pid, 15)
     import time
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + command_timeout()
     while not control.pane_info(control.get_current("p0", "seat-1")["pane_id"])["pane_dead"]:
         assert time.monotonic() < deadline
         time.sleep(0.05)

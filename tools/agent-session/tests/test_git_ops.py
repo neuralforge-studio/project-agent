@@ -3,6 +3,7 @@
 import contextlib
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 from agent_session import git_ops
 from agent_session.errors import SessionError
 from agent_session.state import StateStore
+from wait_limit import command_timeout
 
 
 def git(path, *args):
@@ -593,15 +595,40 @@ def hold_index_lock_hook(seat, tmp_path):
     return seen, pid
 
 
-def test_timed_out_git_releases_its_lock_and_reports_the_interruption(tmp_path, repo):
+def expire_when_ready(monkeypatch, ready):
+    """Let the next Git run with a limit expire only once the file `ready` exists.
+
+    The tests below check what a timed-out Git leaves behind, so the Git must be running its hook (or
+    ignoring SIGTERM) when its limit ends. A short limit would end at a fixed time, before a loaded host
+    has run it. Here the limit's number stays what the product reports (`timeout_seconds`), and the
+    wait ends when the child says it is ready, however long that takes.
+    """
+    communicate = subprocess.Popen.communicate
+    gate = {"open": True}
+
+    def gated(self, input=None, timeout=None):
+        if timeout is not None and gate["open"]:
+            gate["open"] = False
+            deadline = time.monotonic() + command_timeout()
+            while not Path(ready).exists():
+                assert time.monotonic() < deadline, "The child was never ready."
+                time.sleep(0.05)
+            timeout = 0
+        return communicate(self, input, timeout)
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", gated)
+
+
+def test_timed_out_git_releases_its_lock_and_reports_the_interruption(tmp_path, repo, monkeypatch):
     import os
     import signal
     _, seat, _ = repo
     seen, pid = hold_index_lock_hook(seat, tmp_path)
+    expire_when_ready(monkeypatch, pid)         # the hook writes `seen` and then its pid
     (seat / "data.txt").write_text("edited\n")
     try:
         with pytest.raises(SessionError) as error:
-            git_ops.git(seat, "commit", "-m", "slow", "data.txt", timeout=2)
+            git_ops.git(seat, "commit", "-m", "slow", "data.txt", timeout=2)    # not a wait: the number the error reports; the gate ends the wait
     finally:
         if pid.exists():
             try:
@@ -624,13 +651,14 @@ def test_git_that_ignores_sigterm_is_killed_and_a_left_lock_is_reported(tmp_path
     real = shutil.which("git")
     fake = tmp_path / "bin/git"
     fake.parent.mkdir()
-    fake.write_text(f'#!/bin/sh\ncase "$*" in *rev-parse*) exec {real} "$@";; esac\ntrap "" TERM\nsleep 3\n')
+    fake.write_text(f'#!/bin/sh\ncase "$*" in *rev-parse*) exec {real} "$@";; esac\ntrap "" TERM\ntouch {tmp_path / "ready"}\nwhile :; do sleep 0.1; done\n')
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", f"{fake.parent}:/usr/bin:/bin")
-    monkeypatch.setattr(git_ops, "TERM_GRACE", 0.5)
+    monkeypatch.setattr(git_ops, "TERM_GRACE", 0.5)    # short limit: the Git ignores SIGTERM for ever, so the grace only ends by its limit
+    expire_when_ready(monkeypatch, tmp_path / "ready")
     (seat / ".git/index.lock").write_text("")
     with pytest.raises(SessionError) as error:
-        git_ops.git(seat, "status", timeout=1)
+        git_ops.git(seat, "status", timeout=1)    # not a wait: the number the error reports; the gate ends the wait
     details = error.value.details
     assert details["interrupted"] == "SIGKILL"
     assert details["index_lock_left"] is True and details["index_lock"] == str(seat / ".git/index.lock")

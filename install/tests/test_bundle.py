@@ -15,7 +15,7 @@ import sysconfig
 
 import pytest
 
-from harness import LIB
+from harness import LIB, command_timeout
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from project_agent_install import bundle as bundles  # noqa: E402
@@ -45,7 +45,7 @@ def python_in(directory, home, program, *arguments):
     """`program` in the release's interpreter after the bundle reader, as an entry point starts it."""
     boot = (directory / "tools" / "bundle_boot.py").read_text()
     return subprocess.run([sys.executable, "-S", "-c", "import sys\n" + boot + "\n_project_agent_bundle(sys.argv.pop(1))\n" + program,
-                           str(directory / "tools"), *arguments], capture_output=True, text=True, timeout=60, env=home.env)
+                           str(directory / "tools"), *arguments], capture_output=True, text=True, timeout=command_timeout(), env=home.env)
 
 
 def index_of(path):
@@ -107,7 +107,7 @@ def test_the_entry_points_run_from_the_bundle_not_from_the_sources(release):
         source.write_bytes(b"raise SystemExit('the source file was read')\n")
         try:
             result = subprocess.run([str(directory / "tools" / tool / "bin" / tool), *HELP[tool]], capture_output=True, text=True,
-                                    timeout=60, env=home.env)
+                                    timeout=command_timeout(), env=home.env)
         finally:
             source.write_bytes(saved)
             source.chmod(mode)
@@ -134,7 +134,7 @@ def test_a_bundle_of_another_interpreter_or_none_leaves_the_ordinary_import(rele
     boot = (directory / "tools" / "bundle_boot.py").read_text()
     program = boot + "\n_project_agent_bundle(sys.argv[1])\nimport json\nprint(type(json.__spec__.loader).__name__)\n"
     result = subprocess.run([sys.executable, "-S", "-c", "import sys\n" + program, str(tools)], capture_output=True, text=True,
-                            timeout=60, env=home.env)
+                            timeout=command_timeout(), env=home.env)
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == ["SourceFileLoader"]
 
@@ -144,7 +144,7 @@ def test_optimized_interpreters_do_not_use_the_bundle(release):
     boot = (directory / "tools" / "bundle_boot.py").read_text()
     program = boot + "\n_project_agent_bundle(sys.argv[1])\nimport json\nprint(type(json.__spec__.loader).__name__)\n"
     result = subprocess.run([sys.executable, "-S", "-O", "-c", "import sys\n" + program, str(directory / "tools")],
-                            capture_output=True, text=True, timeout=60, env=home.env)
+                            capture_output=True, text=True, timeout=command_timeout(), env=home.env)
     assert result.stdout.split() == ["SourceFileLoader"], result.stderr
 
 
@@ -183,7 +183,7 @@ def test_a_package_that_was_upgraded_or_removed_is_imported_from_where_it_is_ins
     boot = (directory / "tools" / "bundle_boot.py").read_text()
     result = subprocess.run([sys.executable, "-S", "-c", "import sys\n" + boot + "\n_project_agent_bundle(sys.argv[1])\n" + SITE
                              + "import textual.app\nprint(type(textual.app.__spec__.loader).__name__)\n", str(tools)],
-                            capture_output=True, text=True, timeout=60, env=home.env)
+                            capture_output=True, text=True, timeout=command_timeout(), env=home.env)
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == ["SourceFileLoader"]
 
@@ -200,7 +200,7 @@ GENERATED = ("import sys; sys.path.insert(0, sys.argv[1]); from agent_session.in
 
 def generated_command(tools, tmp_path, home):
     return subprocess.run([sys.executable, "-S", "-c", GENERATED, str(tools / "agent-session")], capture_output=True, text=True,
-                          timeout=60, env=home.env, cwd=tmp_path)
+                          timeout=command_timeout(), env=home.env, cwd=tmp_path)
 
 
 def test_a_generated_command_imports_the_internal_entry_from_the_bundle(release, tmp_path):

@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_session.config import Project
 from agent_session.errors import SessionError
 from agent_session.state import StateStore, binding_identity, empty_state, locked
+from wait_limit import command_timeout
 
 
 def project(tmp_path, provider="codex", count=2):
@@ -184,7 +185,7 @@ store.update(lambda state: state[sys.argv[4]].update(job_id='J-20261103-'+sys.ar
                                   str(value.base), str(value.config_path), str(n)],
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for n in range(4)]
     for child in children:
-        _, error = child.communicate(timeout=20)
+        _, error = child.communicate(timeout=command_timeout())
         assert child.returncode == 0, error
     assert [StateStore(value).read()[str(n)]["job_id"] for n in range(4)] == [f"J-20261103-{n}" for n in range(4)]
 
@@ -197,7 +198,7 @@ def test_lock_wait_is_bounded_and_file_is_retained(tmp_path):
                 pass
         assert error.value.code == "control_busy"
         with pytest.raises(SessionError) as error:
-            with locked(path, timeout=0.01):
+            with locked(path, timeout=0.01):    # short limit: the lock is held for the whole test, so the wait only ends by its limit
                 pass
         assert error.value.code == "lock_timeout"
     with locked(path, blocking=False):
@@ -205,7 +206,7 @@ def test_lock_wait_is_bounded_and_file_is_retained(tmp_path):
 
 
 def test_state_update_uses_its_remaining_timeout(tmp_path):
-    store = StateStore(project(tmp_path), timeout=0.01)
+    store = StateStore(project(tmp_path), timeout=0.01)   # short limit: the lock is held for the whole test
     with locked(store.lock_path):
         with pytest.raises(SessionError) as error:
             store.update(lambda state: state)

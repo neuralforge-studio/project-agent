@@ -21,10 +21,11 @@ SHARED_TESTS = str(TOOL.parent / "tests")  # tmux_test_server, shared by every t
 if SHARED_TESTS not in sys.path:
     sys.path.insert(0, SHARED_TESTS)
 
+from wait_limit import command_timeout
 def tmux(name, *args):
     """Run one tmux command on the test server `-L name`; its output without the final newline."""
     return subprocess.run(["tmux", "-L", name, *args], capture_output=True, text=True,
-                          check=True, timeout=5).stdout.strip()
+                          check=True, timeout=command_timeout()).stdout.strip()
 
 
 def attached(name, session):
@@ -36,7 +37,8 @@ def attached(name, session):
                                stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
                                env={**os.environ, "TERM": "xterm-256color"})
     os.close(slave)
-    for _ in range(50):
+    deadline = time.monotonic() + command_timeout()
+    while time.monotonic() < deadline:
         if client in tmux(name, "list-clients", "-F", "#{client_name}").splitlines():
             return process, master, client
         time.sleep(0.05)
@@ -49,10 +51,10 @@ def release_clients(clients):
     for process, master, _client in clients:
         process.terminate()
         try:
-            process.wait(timeout=2)
+            process.wait(timeout=command_timeout())
         except subprocess.TimeoutExpired:
             process.kill()
-            process.wait(timeout=2)
+            process.wait(timeout=command_timeout())
         os.close(master)
 
 
@@ -178,9 +180,9 @@ def leader(reviewing=None, connected_at="2026-11-04T09:00:00Z"):
     return value
 
 
-async def wait_until(pilot, condition, timeout=10.0):
+async def wait_until(pilot, condition):
     """Wait for an asynchronous screen update to be observable instead of sleeping a fixed time."""
-    deadline = asyncio.get_running_loop().time() + timeout
+    deadline = asyncio.get_running_loop().time() + command_timeout()
     while not condition():
         assert asyncio.get_running_loop().time() < deadline, "timed out waiting for the screen state"
         await pilot.pause(0.01)

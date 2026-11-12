@@ -114,11 +114,11 @@ def test_ssh_seat_control_uses_the_remote_native_run_without_local_fallback(
     monkeypatch.setattr(remote, "run_call", run_call)
     provider.rpc_factory = local_rpc
     if method == "send":
-        invoke = lambda: provider.send(session, "Leader feedback", context, timeout=11)
+        invoke = lambda: provider.send(session, "Leader feedback", context, timeout=11)   # not a wait: the value the remote call must receive
     elif method == "request_exit":
         invoke = lambda: provider.request_exit(context, object())
     else:
-        invoke = lambda: getattr(provider, method)(session, context, context, timeout=11)
+        invoke = lambda: getattr(provider, method)(session, context, context, timeout=11)   # not a wait: the value the remote call must receive
     if disconnected:
         with pytest.raises(SessionError) as caught:
             invoke()

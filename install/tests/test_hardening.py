@@ -86,15 +86,15 @@ def test_a_record_that_names_what_the_installer_does_not_make_is_refused_by_ever
 
 # ---------------------------------------------------------------- 2. 3. the user's tmux file: write, cut, undo
 
-def inject(monkeypatch, limit=2, fail_on=None):
-    """Make actions.raw_write write at most `limit` bytes per call and raise OSError on call number `fail_on`."""
+def inject(monkeypatch, size=2, fail_on=None):
+    """Make actions.raw_write write at most `size` bytes per call and raise OSError on call number `fail_on`."""
     real, calls = actions.raw_write, []
 
     def fake(fd, data):
         calls.append(1)
         if fail_on is not None and len(calls) == fail_on:
             raise OSError(5, "injected write failure")
-        return real(fd, bytes(data[:limit]))
+        return real(fd, bytes(data[:size]))
     monkeypatch.setattr(actions, "raw_write", fake)
     return calls
 
@@ -127,7 +127,7 @@ def cut(places, original, created=False):
 def test_removing_a_block_survives_short_writes_and_leaves_no_temporary_file(home, monkeypatch, original):
     env, places = places_of(home, monkeypatch)
     path = tmux_file(home, original, mode=0o600)
-    calls = inject(monkeypatch, limit=2)
+    calls = inject(monkeypatch, size=2)
     cut(places, original).run(actions.Context(places))
     assert path.read_bytes() == original.replace(BLOCK, b"", 1) and len(calls) > 1
     assert os.stat(path).st_mode & 0o777 == 0o600 and not temporaries(home)
@@ -137,7 +137,7 @@ def test_a_write_failure_while_removing_leaves_the_file_exactly_as_it_was(home, 
     env, places = places_of(home, monkeypatch)
     path = tmux_file(home, MIDDLE)
     before = os.stat(path)
-    inject(monkeypatch, limit=3, fail_on=2)
+    inject(monkeypatch, size=3, fail_on=2)
     with pytest.raises(OSError):
         cut(places, MIDDLE).run(actions.Context(places))
     after = os.stat(path)
@@ -201,7 +201,7 @@ def append_plan(home, monkeypatch, original):
 def test_append_survives_short_writes_and_the_backup_is_the_original(home, monkeypatch, original):
     path = tmux_file(home, original)
     env, plan, backup = append_plan(home, monkeypatch, original)
-    inject(monkeypatch, limit=3)
+    inject(monkeypatch, size=3)
     journal.execute(env, plan)
     assert path.read_bytes() == original + BLOCK and backup.read_bytes() == original and not temporaries(home)
 
@@ -211,7 +211,7 @@ def test_a_failed_append_restores_the_file_and_removes_the_backup(home, monkeypa
     path = tmux_file(home, original)
     before = os.stat(path)
     env, plan, backup = append_plan(home, monkeypatch, original)
-    inject(monkeypatch, limit=3, fail_on=3)                   # the backup is written first; fail in the append
+    inject(monkeypatch, size=3, fail_on=3)                   # the backup is written first; fail in the append
     with pytest.raises(InstallerError):
         journal.execute(env, plan)
     assert path.read_bytes() == original and os.stat(path).st_mtime_ns == before.st_mtime_ns

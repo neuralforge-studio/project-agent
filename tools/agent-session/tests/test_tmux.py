@@ -19,6 +19,7 @@ from agent_session.lifecycle import Manager
 from agent_session.process import alive, birth
 from agent_session.tmux import LAST_ERROR_OPTION, Tmux, quiet_shell
 import tmux_test_server  # noqa: E402
+from wait_limit import command_timeout
 
 
 @pytest.fixture
@@ -39,7 +40,7 @@ def new_window(tmux, tmp_path, run="run-one", target="seat-0", job="J-20261103-0
 
 
 def wait_for(predicate):
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + command_timeout()
     while time.monotonic() < deadline:
         result = predicate()
         if result:
@@ -417,7 +418,7 @@ def test_exit_refuses_tmux_mode_and_preserves_partial_input(tmp_path, tmux, mode
 
     def detach():
         client.stdin.close()
-        client.wait(timeout=10)
+        client.wait(timeout=command_timeout())
 
     request.addfinalizer(detach)
     wait_for(lambda: tmux.command("list-clients", "-F", "#{client_pid}").strip())
@@ -537,7 +538,7 @@ def test_notify_reaches_each_attached_client_and_says_none_when_nobody_is_attach
     client = subprocess.Popen(["tmux", *tmux._argv([])[1:], "-C", "attach", "-t", "demo"],
                               stdin=subprocess.PIPE, stdout=log.open("w"), stderr=subprocess.DEVNULL)
     try:
-        deadline = time.monotonic() + 60               # a loaded machine attaches slowly
+        deadline = time.monotonic() + command_timeout()    # a loaded machine attaches slowly
         while tmux.notify("agent shutdown: 100# #{pane_id}", 1000) != 1:
             assert time.monotonic() < deadline, "The control client did not attach."
             time.sleep(0.1)
@@ -546,7 +547,7 @@ def test_notify_reaches_each_attached_client_and_says_none_when_nobody_is_attach
             time.sleep(0.1)
     finally:
         client.stdin.close()
-        client.wait(timeout=10)
+        client.wait(timeout=command_timeout())
 
 
 def test_bell_is_output_to_the_pane_tty_and_flags_only_that_window(tmux, tmp_path):
@@ -707,7 +708,7 @@ def attach_client(tmux, request):
 
     def detach():
         client.stdin.close()
-        client.wait(timeout=10)
+        client.wait(timeout=command_timeout())
 
     request.addfinalizer(detach)
     wait_for(lambda: tmux.command("list-clients", "-F", "#{client_pid}").strip())
@@ -759,7 +760,7 @@ def test_a_quiet_job_started_by_a_person_also_tells_that_client(tmp_path):
     stub.chmod(0o755)
     text = quiet_shell("echo noisy; exit 5", "popup", "/s", notify_client="/dev/pts/9")
     done = subprocess.run(["sh", "-c", text], env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
-                          capture_output=True, text=True, timeout=10)
+                          capture_output=True, text=True, timeout=command_timeout())
     assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
     set_option, display = log.read_text().splitlines()
     assert re.fullmatch(rf"-S /s set-option -g {LAST_ERROR_OPTION} \S+ \S+ popup failed \(exit 5\)", set_option)

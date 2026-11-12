@@ -315,7 +315,7 @@ def cron_run(env, line, path):
     import os
     import subprocess
     return subprocess.run(["env", "-i", f"HOME={os.environ['HOME']}", f"PATH={path}", "/bin/sh", "-c", line],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=command_timeout())
 
 
 def kept_run(env):

@@ -396,14 +396,15 @@ class Held(FakeProvider):
         return None
 
 lifecycle.get_provider = lambda name: Held(dialog=True)
-lifecycle.Manager({base!r}, {config!r}, socket_name={socket!r}, timeout=300).start("leader")
+lifecycle.Manager({base!r}, {config!r}, socket_name={socket!r}, timeout={timeout!r}).start("leader")
 """
 
 
 def start_controller(env):
     """A start controller in its own process, waiting for a Leader that sits at its startup dialog."""
     code = CONTROLLER.format(tool=str(Path(__file__).resolve().parents[1]), fixtures=str(FIXTURES),
-                             base=str(env.base), config=str(env.config), socket=env.socket_name)
+                             base=str(env.base), config=str(env.config), socket=env.socket_name,
+                             timeout=command_timeout())
     child = subprocess.Popen([sys.executable, "-c", code], stderr=subprocess.DEVNULL)
 
     def at_dialog():
@@ -413,7 +414,7 @@ def start_controller(env):
                         and "trust this folder" in env.tmux.capture_pane(meta["pane_id"]))
         except SessionError:
             return False
-    wait_until(at_dialog, limit=60)
+    wait_until(at_dialog)
     return child
 
 
@@ -439,11 +440,11 @@ def test_registration_publishes_when_the_controller_ends_before_it(session_env, 
     else:
         child = start_controller(env)
         child.send_signal({"sigint": signal.SIGINT, "sigterm": signal.SIGTERM, "sigkill": signal.SIGKILL}[how])
-        child.wait(timeout=60)
+        child.wait(timeout=command_timeout())
     waiting = env.tmux.get_current("fixture", "leader")
     assert waiting["registered"] is False and env.store.read()["leader"] is None
     answer_dialog(env)
-    wait_until(lambda: published_leader(env), limit=60)
+    wait_until(lambda: published_leader(env))
     leader = env.store.read()["leader"]
     assert leader["session_id"] == env.tmux.get_current("fixture", "leader")["session_id"]
     assert re.fullmatch(TIME, leader["connected_at"])
@@ -464,7 +465,7 @@ def test_start_timeout_before_registration_still_publishes_the_registration(sess
         env.manager(timeout=command_timeout() / 3).start("leader")
     assert error.value.code == "timeout"
     answer_dialog(env)
-    wait_until(lambda: published_leader(env), limit=60)
+    wait_until(lambda: published_leader(env))
 
 
 def test_the_start_controller_does_not_publish(session_env, monkeypatch):
@@ -524,7 +525,7 @@ def test_a_registration_that_cannot_publish_is_not_registered(session_env, monke
         with control_lock(env.project, "leader"):
             answer_dialog(env)
             run_id = env.tmux.get_current("fixture", "leader")["run_id"]
-            wait_until(tool_error(env, run_id).is_file, limit=60)
+            wait_until(tool_error(env, run_id).is_file)
         expected = "lock_timeout"
     else:
         with_flags(monkeypatch, "--fail-state-write")
@@ -532,7 +533,7 @@ def test_a_registration_that_cannot_publish_is_not_registered(session_env, monke
             env.manager().start("leader")
         assert error.value.code == "registration_failed"
         run_id = error.value.details["run_id"]
-        wait_until(tool_error(env, run_id).is_file, limit=60)
+        wait_until(tool_error(env, run_id).is_file)
         expected = "state_write_failed"
     assert json.loads(tool_error(env, run_id).read_text())["code"] == expected
     meta = env.tmux.get_current("fixture", "leader")
@@ -572,7 +573,7 @@ def test_a_hook_that_ends_after_it_published_is_not_a_failed_registration(sessio
     env = session_env
 
     def ended_once_published(project, run_id):
-        wait_until(lambda: (env.tmux.get_current("fixture", "leader") or {}).get("ready"), limit=60)
+        wait_until(lambda: (env.tmux.get_current("fixture", "leader") or {}).get("ready"))
         return True
     monkeypatch.setattr(hook_started, "ended", ended_once_published)
     result = env.manager().start("leader")
@@ -744,7 +745,7 @@ def test_commands_do_not_wait_for_a_controller_that_waits_for_registration(sessi
         waiting = outcomes()
     finally:
         child.send_signal(signal.SIGKILL)
-        child.wait(timeout=60)
+        child.wait(timeout=command_timeout())
     assert waiting == outcomes()
     assert "lock_timeout" not in waiting and "control_busy" not in waiting
 
@@ -1168,7 +1169,7 @@ def test_rejected_stop_request_does_not_mark_a_ready_session_stopping(session_en
 def test_stop_that_times_out_on_a_live_cli_lets_it_take_messages_again(session_env, monkeypatch):
     env = session_env
     worker = env.manager().start(env.cr())
-    manager = env.manager(timeout=3)
+    manager = env.manager(timeout=3)   # short limit: the target never ends, so the wait ends only by its limit
     busy = {"known": True, "terminal": False, "active_turn": True, "pending": [], "background": [], "idle": False}
     monkeypatch.setattr(manager.provider, "observe", lambda *args, **kwargs: busy)
     with pytest.raises(SessionError) as error:
@@ -1192,7 +1193,7 @@ def test_codex_stop_preserves_assignment_in_view_mode_and_releases_after_explici
     before = env.store.read()
     env.tmux.command("run-shell", "-t", worker["pane_id"], "printf 'fixture output\\n'")
     with pytest.raises(SessionError) as error:
-        env.manager(timeout=2).control("stop", job=cr)
+        env.manager(timeout=2).control("stop", job=cr)   # short limit: the pane never leaves view mode, so the wait ends only by its limit
     assert (error.value.code, error.value.exit_code) == ("pane_input_blocked", 4)
     assert error.value.details["stopping_restored"] is True
     assert error.value.details["exit_wait"]["exit_requested"] is False
@@ -1312,7 +1313,7 @@ def test_stop_that_times_out_still_closes_the_shared_provider_connection(session
     (env.base / "agent" / "fixture-shell-seat-0").write_text("")
     del events[:]
     with pytest.raises(SessionError) as error:
-        env.manager(timeout=3).control("stop", job=worker["job_id"])
+        env.manager(timeout=3).control("stop", job=worker["job_id"])   # short limit: the target never ends, so the wait ends only by its limit
     assert error.value.code == "timeout"
     assert events.count("open") == events.count("close") == 1 and events[-1] == "close"
 
@@ -1323,7 +1324,7 @@ def test_claude_stop_that_times_out_on_a_background_shell_names_it_without_signa
     worker = env.manager().start(env.cr())
     (env.base / "agent" / "fixture-shell-seat-0").write_text("")
     with pytest.raises(SessionError) as error:
-        env.manager(timeout=3).control("stop", job=worker["job_id"])
+        env.manager(timeout=3).control("stop", job=worker["job_id"])   # short limit: the target never ends, so the wait ends only by its limit
     assert (error.value.code, error.value.exit_code) == ("timeout", 4)
     details = error.value.details
     assert details["stopping_restored"] is True
@@ -1341,7 +1342,7 @@ def test_claude_stop_ends_a_run_whose_last_report_names_only_its_session_cron(se
     record = claude_project(env, monkeypatch)
     worker = env.manager().start(env.cr())
     (env.base / "agent" / "fixture-cron-seat-0").write_text("")      # idle; the Stop report keeps the self-check cron
-    result = env.manager(timeout=20).control("stop", job=worker["job_id"])
+    result = env.manager().control("stop", job=worker["job_id"])
     assert result["stopped"] is True
     assert recorded(record) == [{"signal": "SIGTERM"}]
     assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is True
@@ -1354,12 +1355,12 @@ def test_claude_stop_again_ends_a_run_that_was_left_stopping_with_only_a_session
     (env.base / "agent" / "fixture-cron-seat-0").write_text("")
     pane = env.tmux.pane_info(worker["pane_id"])
     os.kill(int(env.tmux.read_meta(worker["window_id"])["cli_pid"]), signal.SIGTERM)    # the CLI ended on its own
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + command_timeout()
     while not env.tmux.pane_info(worker["pane_id"])["pane_dead"] and time.monotonic() < deadline:
         time.sleep(0.05)
     env.tmux.write_meta(worker["window_id"], {"stopping": True})       # what the timed-out stop left behind
     assert pane["pane_dead"] is False
-    result = env.manager(timeout=20).control("stop", job=worker["job_id"])
+    result = env.manager().control("stop", job=worker["job_id"])
     assert result["stopped"] is True
     assert recorded(record) == [{"signal": "SIGTERM"}]
 
@@ -1377,7 +1378,7 @@ def test_claude_stop_that_times_out_after_the_signal_tells_it_apart_from_the_uns
         env.tmux.write_meta(worker["window_id"], {"run_id": worker["run_id"], "background_pids": [
             {"pid": survivor.pid, "birth": process.birth(survivor.pid)}]})
         with pytest.raises(SessionError) as error:
-            env.manager(timeout=5).control("stop", job=worker["job_id"])
+            env.manager(timeout=5).control("stop", job=worker["job_id"])   # short limit: the tracked process never ends, so the wait ends only by its limit
     finally:
         survivor.kill()
         survivor.wait()
@@ -1416,7 +1417,7 @@ def test_claude_stop_waits_for_the_cli_when_sigterm_drops_it_from_listagents(ses
     env = session_env
     record = claude_project(env, monkeypatch)
     worker = env.manager().start(env.cr())
-    manager = env.manager(timeout=30)
+    manager = env.manager()
     state = listing_drops_the_run(manager, monkeypatch, after_exit=True)
     result = manager.control("stop", job=worker["job_id"])
     assert result["stopped"] is True and result["released"] is False
@@ -1429,7 +1430,7 @@ def test_claude_stop_that_loses_the_listing_before_the_signal_is_still_an_error(
     env = session_env
     record = claude_project(env, monkeypatch)
     worker = env.manager().start(env.cr())
-    manager = env.manager(timeout=30)
+    manager = env.manager()
     listing_drops_the_run(manager, monkeypatch, after_exit=False)
     with pytest.raises(SessionError) as error:
         manager.control("stop", job=worker["job_id"])
@@ -1444,7 +1445,7 @@ def test_claude_stop_does_not_signal_a_cli_whose_birth_differs(session_env, monk
     worker = env.manager().start(env.cr())
     env.tmux.write_meta(worker["window_id"], {"cli_birth": "linux:another-boot:1"})
     with pytest.raises(SessionError) as error:
-        env.manager(timeout=5).control("stop", job=worker["job_id"])
+        env.manager().control("stop", job=worker["job_id"])
     assert error.value.code == "target_changed"
     # The CLI that the run recorded is not confirmed alive, so stop leaves its block for the operator.
     details = error.value.details
@@ -1937,7 +1938,7 @@ def test_sweep_keeps_pending_controlled_shared_or_unconfirmed_windows(session_en
 
 SELF_CONTROL = r'''
 import json, shlex, sys
-library, fixtures, base, config, socket_name, operation, job = sys.argv[1:8]
+library, fixtures, base, config, socket_name, operation, job, limit = sys.argv[1:9]
 sys.path[:0] = [library, fixtures]
 from agent_session.lifecycle import Manager
 from agent_session.tmux import Tmux
@@ -1959,21 +1960,22 @@ def run_fixture_controller(self, script, cwd):
 
 
 Tmux.run_controller = run_fixture_controller
-print(json.dumps(Manager(base, config, socket_name=socket_name, timeout=60).control(operation, job=job)))
+print(json.dumps(Manager(base, config, socket_name=socket_name, timeout=float(limit)).control(operation, job=job)))
 '''
 
 
 def self_control(env, operation, job, session_id):
     """Request control from the managed conversation itself and wait for the controller result."""
     done = subprocess.run([sys.executable, "-c", SELF_CONTROL, str(Path(__file__).resolve().parents[1]),
-                           str(FIXTURES), str(env.base), str(env.config), env.socket_name, operation, job],
+                           str(FIXTURES), str(env.base), str(env.config), env.socket_name, operation, job,
+                           str(command_timeout())],
                           env={**os.environ, "CODEX_THREAD_ID": session_id},
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, timeout=command_timeout())
     assert done.returncode == 0, done.stderr
     accepted = json.loads(done.stdout.splitlines()[-1])
     assert accepted["accepted"] is True and accepted["completed"] is False
     path = Path(accepted["result_file"])
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + command_timeout()
     while time.monotonic() < deadline:
         result = json.loads(path.read_text(encoding="utf-8"))
         if result["data"].get("completed"):
@@ -1982,8 +1984,8 @@ def self_control(env, operation, job, session_id):
     raise AssertionError("The controller did not finish: " + path.read_text(encoding="utf-8"))
 
 
-def wait_until(predicate, limit=15):
-    deadline = time.monotonic() + limit
+def wait_until(predicate):
+    deadline = time.monotonic() + command_timeout()
     while time.monotonic() < deadline:
         if predicate():
             return True
@@ -2421,7 +2423,7 @@ def test_the_most_recent_runs_window_is_the_one_a_slot_takes(session_env, monkey
     chosen = env.manager()._reusable("seat-0")
     assert chosen["window_id"] == second["window_id"]
     # A window whose newer run is the one that ended is the choice; an older one is not tried.
-    os.utime(env.base / "agent/runs" / first["run_id"] / "launch.sh", (time.time() + 60, time.time() + 60))
+    os.utime(env.base / "agent/runs" / first["run_id"] / "launch.sh", (time.time() + 60, time.time() + 60))   # not a wait: a newer mtime than the other launch.sh
     assert env.manager()._reusable("seat-0")["window_id"] == first["window_id"]
 
 
@@ -2509,14 +2511,14 @@ def test_claude_stop_ends_a_run_without_the_adopt_record_whose_cli_left_with_onl
     worker = env.manager().start(env.cr())
     drop_adopt_record(env, worker["window_id"])
     (env.base / "agent" / "fixture-cron-seat-0").write_text("")
-    result = env.manager(timeout=20).control("stop", job=worker["job_id"])
+    result = env.manager().control("stop", job=worker["job_id"])
     assert result["stopped"] is True
     assert recorded(record) == [{"signal": "SIGTERM"}]
 
 
 def end_cli_on_its_own(env, worker):
     os.kill(int(env.tmux.read_meta(worker["window_id"])["cli_pid"]), signal.SIGTERM)
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + command_timeout()
     while not env.tmux.pane_info(worker["pane_id"])["pane_dead"] and time.monotonic() < deadline:
         time.sleep(0.05)
     assert env.tmux.pane_info(worker["pane_id"])["pane_dead"] is True
@@ -2534,7 +2536,7 @@ def test_claude_restart_replaces_a_leader_whose_cli_is_gone_whatever_its_last_st
     (env.base / "agent" / marker).write_text("")
     end_cli_on_its_own(env, leader)
     env.handoff("leader", "Continue the Leader work.")
-    result = env.manager(timeout=20).control("restart", job="leader")
+    result = env.manager().control("restart", job="leader")
     assert result["restarted"] is True and result["run_id"] != leader["run_id"]
     assert result["session"]["session_id"] != leader["session"]["session_id"]
     assert env.manager().store.read()["leader"]["session_id"] == result["session"]["session_id"]

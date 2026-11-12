@@ -10,6 +10,7 @@ import pytest
 from agent_session.errors import SessionError
 from agent_session.lifecycle import Manager
 from fake_tmux import FakeTmux, fake_tmux
+from wait_limit import command_timeout
 
 
 def manager(tmp_path):
@@ -41,10 +42,10 @@ def manager(tmp_path):
     value = Manager.__new__(Manager)
     value.project = SimpleNamespace(base=base, runtime_path=tmp_path / "agent",
                                     project_id="fixture", config_path=tmp_path / "projects.json", seats=(tmp_path / "seat",))
-    value.timeout = 10
-    value.end = time.monotonic() + 10
+    value.timeout = command_timeout()
+    value.end = time.monotonic() + command_timeout()
     value._held = {}
-    value.store = SimpleNamespace(timeout=10, read=lambda: state)
+    value.store = SimpleNamespace(timeout=command_timeout(), read=lambda: state)
     value.tmux = Tmux()
     return value, meta
 

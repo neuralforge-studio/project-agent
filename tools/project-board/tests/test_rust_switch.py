@@ -15,6 +15,7 @@ import shutil
 import stat
 import subprocess
 import textwrap
+import time
 import uuid
 
 import pytest
@@ -22,6 +23,7 @@ import pytest
 import board_testing
 from board_testing import ENDPOINT, Board, attached, leader, release_clients, tmux as run_tmux
 import rust_binary
+from wait_limit import command_timeout
 import tmux_test_server
 from project_board import model, tmux_control  # noqa: E402  (puts agent_session on the path)
 from agent_session.tmux import Tmux  # noqa: E402
@@ -162,7 +164,7 @@ def rust_switch(scene, binary, kind, project, seat, client, config=None, socket=
         command += ["--client", client]
     # The sidebar's tmux is PROJECT_BOARD_SOCKET; AGENT_SESSION_SOCKET points at nothing and must not be used.
     env = {**os.environ, "PROJECT_BOARD_SOCKET": socket, "AGENT_SESSION_SOCKET": "/nonexistent/agent-session.sock"}
-    result = subprocess.run(command, capture_output=True, text=True, env=env, timeout=60)
+    result = subprocess.run(command, capture_output=True, text=True, env=env, timeout=command_timeout())
     if result.returncode == 0:
         assert result.stderr == ""
         return None
@@ -246,10 +248,9 @@ def test_the_client_is_checked_first(scene, sidebar_bin, kind, project, seat, cl
 def test_the_only_attached_client_is_used_when_none_is_selected(scene, sidebar_bin, kind, project, seat):
     release_clients(scene.clients[1:])
     scene.clients = scene.clients[:1]
-    deadline = 50
-    while len(scene.rows()) != 1 and deadline:
-        deadline -= 1
-        subprocess.run(["sleep", "0.1"])
+    deadline = time.monotonic() + command_timeout()
+    while len(scene.rows()) != 1 and time.monotonic() < deadline:
+        time.sleep(0.1)
     assert list(scene.rows()) == [scene.first]
     assert same_outcome(scene, sidebar_bin, kind, project, seat, None)[0] is None
 
@@ -258,10 +259,9 @@ def test_the_only_attached_client_is_used_when_none_is_selected(scene, sidebar_b
 def test_no_attached_client_is_an_error_for_both(scene, sidebar_bin, kind, project, seat):
     release_clients(scene.clients)
     scene.clients = []
-    deadline = 50
-    while scene.rows() and deadline:
-        deadline -= 1
-        subprocess.run(["sleep", "0.1"])
+    deadline = time.monotonic() + command_timeout()
+    while scene.rows() and time.monotonic() < deadline:
+        time.sleep(0.1)
     assert same_outcome(scene, sidebar_bin, kind, project, seat, None)[0] == "Select a tmux client when none or several are attached"
     assert same_outcome(scene, sidebar_bin, kind, project, seat, "/dev/pts/1")[0] == "The selected tmux client is not attached"
 
@@ -317,7 +317,7 @@ def test_a_click_starts_few_tmux_processes_however_many_windows_there_are(scene,
     def rust(kind, *extra):
         def run(env):
             result = subprocess.run([command[0], f"switch-{kind}", *command[1:], *extra, "--client", scene.first],
-                                    capture_output=True, text=True, timeout=60,
+                                    capture_output=True, text=True, timeout=command_timeout(),
                                     env={**env, "PROJECT_BOARD_SOCKET": scene.socket})
             assert result.returncode == 0, result.stderr
         return run

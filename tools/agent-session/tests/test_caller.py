@@ -19,8 +19,8 @@ def move(env, capsys, *args):
 
 def test_caller_names_the_slot_of_each_conversation(session_env, monkeypatch):
     env = session_env
-    leader = env.manager(timeout=180).start("leader")
-    worker = env.manager(timeout=180).start(env.cr())
+    leader = env.manager().start("leader")
+    worker = env.manager().start(env.cr())
     monkeypatch.setenv("AGENT_SESSION_SOCKET", env.tmux.effective_socket())
     for session, slot in ((leader["session"], "leader"), (worker["session"], "seat-0")):
         monkeypatch.setenv("CODEX_THREAD_ID", session["session_id"])
@@ -34,9 +34,9 @@ def test_caller_names_the_slot_of_each_conversation(session_env, monkeypatch):
 
 def test_only_the_leader_and_an_operator_move_an_in_progress_cr(session_env, monkeypatch, capsys):
     env = session_env
-    leader = env.manager(timeout=180).start("leader")
+    leader = env.manager().start("leader")
     cr = env.cr()
-    worker = env.manager(timeout=180).start(cr)
+    worker = env.manager().start(cr)
     monkeypatch.setenv("AGENT_SESSION_SOCKET", env.tmux.effective_socket())
     path = env.cr_state(cr)[1]
     before = path.read_text()

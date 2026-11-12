@@ -577,7 +577,7 @@ def test_send_reports_provider_timeout_when_the_silent_mcp_is_not_reaped(claude,
     context["provider_executable"] = str(silent)
     try:
         with pytest.raises(SessionError) as caught:
-            provider.send({"session_id": IDENTITY}, "peer message", context, timeout=0.5)
+            provider.send({"session_id": IDENTITY}, "peer message", context, timeout=0.5)   # short limit: the silent MCP server never answers, so the call only ends by its limit
     finally:
         for process in spawned:
             original_popen.kill(process)
