@@ -11,6 +11,7 @@
 - SESSION-018
 - TEST-015
 - BOARD-028
+- TEST-016
 
 형식: 변경 없음 (`agent_session` 1, `tmux_options` 1, `item_files` 1)
 
