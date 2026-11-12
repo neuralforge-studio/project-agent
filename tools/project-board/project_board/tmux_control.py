@@ -1,10 +1,11 @@
-"""tmux placement and client-directed actions for the Project Board TUI.
+"""tmux placement and client-directed actions for the Project Board.
 
 The server owns one global toggle. A Board pane is created in a window when an attached
 client first watches it, and stays until the toggle is turned off, the window's managed pane
 dies, or the window closes. Multiple clients watching the same window share that pane; a
 mouse binding sends each click's client and pane-relative coordinates over a local
-socket so actions still target the client that clicked.
+socket so actions still target the client that clicked. The sidebar is the `project-board-sidebar` binary
+(tools/project-board/rust); it runs the actions below through `project-board` subcommands.
 
 A CR or decision window is a floating pane of the clicking client's window (BOARD-020), not a
 popup: a popup is modal, a floating pane lets the sidebar and the work pane behind it be used.
@@ -39,24 +40,25 @@ WINDOW_PANE = "@project_board_pane"
 WINDOW_RESTORE = "@project_board_restore"
 PANE_MARK = "@project_board_managed"
 PANE_SOCKET = "@project_board_click_socket"
-PANE_READY = "@project_board_ready"
 PANE_WINDOW = "@project_board_window"
 PANE_WINDOW_KIND = "@project_board_window_kind"        # `cr` or `decision`: what the pane's process was started as
 PANE_WINDOW_LINK = "@project_board_window_link"        # the socket it listens on, set by the process once it does
 WINDOW_SEEN = "@project_board_seen"
 SIDEBAR_WIDTH = 25
-# The most Board panes kept at once. One Board process holds about 50 MB (RSS, measured) and reads
+# The most Board panes kept at once. One Board process holds about 13 MB (RSS of the Rust sidebar with 10 projects; the Textual one held 50 MB) and reads
 # the project files only while its window is shown, so the bound is memory, not CPU: 8 panes are
-# about 400 MB at most. The windows a user moves among in a working session (a project's Leader and
+# about 100 MB at most. The windows a user moves among in a working session (a project's Leader and
 # Workers) fit; a pane over the bound is removed from the window that no client showed for longest.
 MAX_KEPT = 8
 CLICK_TIMEOUT = 2
 # How long opening a Board window waits for its pane to mark itself; a failed start is reported by its job.
 WINDOW_START = 3
+TOOL = Path(__file__).resolve().parents[1]
+LAUNCHER = TOOL / "bin" / "project-board"
+SIDEBAR_NAME = "project-board-sidebar"
 # How long a click waits for a Board window of the same kind that is still starting, before it starts the window again.
 WINDOW_REUSE_WAIT = 20
 STARTING = "Board 창을 시작하는 중…"
-LAUNCHER = Path(__file__).resolve().parents[1] / "bin" / "project-board"
 
 
 def _ok(data=None) -> dict:
@@ -305,16 +307,6 @@ def _expanded(control: Tmux) -> set[str]:
     return set(values)
 
 
-def expanded_projects(socket=None) -> set[str]:
-    """Read the project folds shared by every Board pane in this tmux server.
-
-    One `show-options` reads the whole value, so no lock is taken: the lock only orders the
-    read-modify-write of `toggle_expanded_project`. Every Board pane reads this on each refresh
-    (BOARD-013), and the lock would start a `display-message` and a `ps` per other tmux server each time.
-    """
-    return _expanded(_control(socket))
-
-
 def toggle_expanded_project(project_id: str, socket=None) -> set[str]:
     """Atomically toggle one project in the server-wide Board fold state."""
     if not isinstance(project_id, str) or not project_id:
@@ -541,11 +533,23 @@ def _remove(control: Tmux, window: str, pane: str, record: _Window, before=(), a
             raise
 
 
+def sidebar_binary() -> Path:
+    """The sidebar binary: `PROJECT_BOARD_SIDEBAR_BIN`, the one the installer put next to the launcher, or the
+    one `cargo build --release` made in a checkout."""
+    candidates = []
+    if os.environ.get("PROJECT_BOARD_SIDEBAR_BIN"):
+        candidates.append(Path(os.environ["PROJECT_BOARD_SIDEBAR_BIN"]))
+    candidates += [TOOL / "bin" / SIDEBAR_NAME, TOOL / "rust" / "target" / "release" / SIDEBAR_NAME]
+    for path in candidates:
+        if path.is_file() and os.access(path, os.X_OK):
+            return path
+    raise ValueError(f"{SIDEBAR_NAME} is not built (run cargo build --release in tools/project-board/rust)")
+
+
 def _sidebar_command(config: str | None) -> list[str]:
-    command = [str(LAUNCHER)]
+    command = [str(sidebar_binary())]
     if config:
         command.extend(("--config", config))
-    command.append("sidebar")
     return command
 
 
@@ -732,48 +736,6 @@ def _reconcile(control: Tmux, directory: Path, snapshot: _Snapshot | None = None
         control.command("set-option", "-g", WIDTH, str(width))
     return {"enabled": enabled, "visible_windows": sorted(visible),
             "created": created, "removed": removed, "failures": failures}
-
-
-def board_visible(socket=None) -> bool:
-    """Whether a client shows the window of this Board pane (read from the pane itself).
-
-    The answer comes from tmux's clients, not from `@project_board_visible`, which is only the
-    change record of project_board_visibility.sh.
-    """
-    control = _control(socket)
-    pane = os.environ.get("TMUX_PANE")
-    if not pane:
-        return True
-    window = control.command("display-message", "-p", "-t", pane, "#{window_id}")
-    return window in _lines(control, "list-clients", "-F", "#{window_id}")
-
-
-def mark_ready(socket=None) -> bool:
-    """Tell project_board_visibility.sh that this pane handles SIGUSR1, then return whether it is shown.
-
-    The mark comes first so that a change after the read is signalled; the read comes after so
-    that a change before the mark is not lost.
-    """
-    control = _control(socket)
-    pane = os.environ.get("TMUX_PANE")
-    if pane:
-        control.command("set-option", "-p", "-t", pane, PANE_READY, "1")
-    return board_visible(socket)
-
-
-def active_context(socket=None) -> dict | None:
-    """The managed project and slot of this Board pane's window, or None (BOARD-009).
-
-    The pane shares its window with every client that watches it, so that window is the active
-    window of each client showing this sidebar. `slot` is `leader`, `seat-N`, or None when the window's
-    target is not a slot. Returns None outside tmux and for a window that is not managed. Which options
-    name the project and slot belongs to agent-session (`agent_session.api.pane_slot`).
-    """
-    pane = os.environ.get("TMUX_PANE")
-    if not pane:
-        return None
-    found = api.pane_slot(pane, _control(socket))
-    return None if found is None else {"project_id": found[0], "slot": found[1]}
 
 
 def reconcile(config=None, socket=None) -> dict:

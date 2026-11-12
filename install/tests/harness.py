@@ -49,12 +49,19 @@ def git(root, *args):
     return result.stdout.strip()
 
 
+def _ignored(directory, names):
+    """What a copy of the product leaves out: caches, the CR files, and the Rust crate's `target/` build output."""
+    skipped = set(shutil.ignore_patterns("__pycache__", ".pytest_cache", "cr")(directory, names))
+    if Path(directory) == REPO / "tools" / "project-board" / "rust":
+        skipped |= {"target"} & set(names)
+    return skipped
+
+
 def build_product_repository(target):
     """A Git repository of the product as it is in this checkout (committed or not), with a VERSION."""
     target.mkdir(parents=True)
     for name in ("tools", "skills", "docs", "integrations", "install"):
-        shutil.copytree(REPO / name, target / name, symlinks=True,
-                        ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", "cr"))
+        shutil.copytree(REPO / name, target / name, symlinks=True, ignore=_ignored)
     for name in ("README.md", "AGENTS.md"):
         shutil.copy2(REPO / name, target / name)
     (target / "VERSION").write_text("1.0.0\n")
@@ -76,6 +83,32 @@ def commit_change(source, version):
 def release_name(source):
     version = (Path(source) / "VERSION").read_text().splitlines()[0].strip()
     return "%s-%s" % (version, git(source, "rev-parse", "HEAD")[:12])
+
+
+# A cargo that stands in for the real one in most tests (the real build takes about a minute). Like cargo it gets
+# `build --release --offline --locked --target-dir DIR` in the crate directory and leaves a program at
+# DIR/release/project-board-sidebar; that program answers `--version`. FAKE_CARGO_MODE: ok (default), fail (exit
+# code 101 with a message on stderr), nobinary (exit code 0 and no program). FAKE_CARGO_LOG gets one line per call.
+FAKE_CARGO = '''\
+#!/bin/sh
+printf 'cwd=%s cargo_home=%s args=%s files=%s\\n' "$PWD" "${CARGO_HOME:-}" "$*" "$(ls -A "$PWD" | tr '\\n' ' ')" \\
+    >> "${FAKE_CARGO_LOG:-/dev/null}"
+target=
+previous=
+for argument in "$@"; do
+    [ "$previous" = --target-dir ] && target=$argument
+    previous=$argument
+done
+case "${FAKE_CARGO_MODE:-ok}" in
+    fail) echo "error: could not compile project-board-sidebar" >&2; echo "FAKE-CARGO-REASON: no space left" >&2; exit 101;;
+    nobinary) exit 0;;
+esac
+[ -n "$target" ] || { echo "the fake cargo needs --target-dir" >&2; exit 2; }
+mkdir -p "$target/release"
+printf '#!/bin/sh\\n[ "$1" = --version ] && echo "project-board-sidebar 0.0.0-stub"\\n' > "$target/release/project-board-sidebar"
+chmod +x "$target/release/project-board-sidebar"
+'''
+REAL_CARGO = "/primehome/tools/Inhouse/Rust/latest/bin/cargo"
 
 
 class Home:
@@ -102,6 +135,17 @@ class Home:
         self.env = {key: value for key, value in os.environ.items()
                     if not (key.startswith(("XDG_", "AGENT_SESSION_", "CLAUDE", "CODEX")) or key in (
                         "TMUX", "TMUX_PANE", "TMPDIR", "PYTHONPATH", "PROJECT_AGENT_PYTHON", "PROJECT_AGENT_PYTHONPATH"))}
+        for name in ("PROJECT_AGENT_CARGO", "PROJECT_AGENT_RUST_VENDOR", "CARGO_HOME", "CARGO_TARGET_DIR", "FAKE_CARGO_MODE"):
+            self.env.pop(name, None)
+        self.fake_cargo = self.root / "fake-cargo" / "cargo"          # outside HOME: not part of any snapshot
+        self.fake_cargo.parent.mkdir()
+        self.fake_cargo.write_text(FAKE_CARGO)
+        self.fake_cargo.chmod(0o755)
+        self.vendor = self.root / "vendor"
+        self.vendor.mkdir()
+        self.cargo_log = self.root / "cargo.log"
+        self.env.update(PROJECT_AGENT_CARGO=str(self.fake_cargo), PROJECT_AGENT_RUST_VENDOR=str(self.vendor),
+                        FAKE_CARGO_LOG=str(self.cargo_log))
         self.env.update(HOME=str(self.home), TMPDIR=str(self.home / "tmp"), PYTHONNOUSERSITE="1",
                         TMUX_TMPDIR=str(self.root / "tt"),          # no command of a test can reach the user's tmux server
                         PATH=str(self.home / ".local/bin") + os.pathsep + os.environ.get("PATH", ""),
@@ -133,16 +177,20 @@ class Home:
     def read(self, relative):
         return (self.home / relative).read_bytes()
 
-    def run(self, *args, source=None, env=None, cwd=None, installer=None):
+    def run(self, *args, source=None, env=None, cwd=None, installer=None, timeout=INSTALLER_TIMEOUT):
         """Run the installer as a user would; `source` is the Git checkout to release."""
         command = [sys.executable, str(installer or INSTALLER), *args]
         if source is not None and args[0] in ("install", "upgrade"):
             command += ["--source", str(source)]
-        return subprocess.run(command, capture_output=True, text=True, timeout=INSTALLER_TIMEOUT, cwd=cwd or self.root,
+        return subprocess.run(command, capture_output=True, text=True, timeout=timeout, cwd=cwd or self.root,
                               env={**self.env, **(env or {})})
 
     def snapshot(self):
         return snapshot(self.home)
+
+    def cargo_calls(self):
+        """The lines the fake cargo logged (one per call)."""
+        return self.cargo_log.read_text().splitlines() if self.cargo_log.exists() else []
 
 
 def snapshot(root):

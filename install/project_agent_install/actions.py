@@ -26,7 +26,7 @@ import shutil
 import stat
 from typing import Callable
 
-from . import bundle, tmuxconf
+from . import bundle, rustbuild, tmuxconf
 from .paths import temp_of
 
 _temp_events = [0]
@@ -141,10 +141,10 @@ def digest_of(names):
     return sha256("\n".join(sorted(names)).encode())
 
 
-def release_digest(files, extra):
+def release_digest(files, extra, built=()):
     """The listing of a release as the plan knows it: every file, and every directory above one (`name/`).
-    The bytecode directories the build adds are not in it."""
-    names = set(files) | set(extra)
+    `built` are the files the Rust build makes. The bytecode directories the build adds are not in it."""
+    names = set(files) | set(extra) | set(built)
     for relative in list(names):
         parts = relative.split("/")
         names.update("/".join(parts[:count]) + "/" for count in range(1, len(parts)))
@@ -543,13 +543,15 @@ def replace_record(places, data):
                       "before_sha": fingerprint, "after_sha": sha256(data), "mtime_ns": mtime})
 
 
-def build_release(places, name, files, source_root, extra):
-    """Copy `files` (relative paths of the source tree) into a new release directory, precompile it and write
-    its start-up bundles for the installing interpreter, make it read-only, then rename it into place, so that the directory appears only
-    when complete. `extra` maps a release-relative path to the bytes written after the copy."""
+def build_release(places, name, files, source_root, extra, toolchain):
+    """Copy `files` (relative paths of the source tree) into a new release directory, build the Rust sidebar
+    from the copied crate (`rustbuild`), precompile it and write its start-up bundles for the installing
+    interpreter, make it read-only, then rename it into place, so that the directory appears only when
+    complete: a failed build (or any failure) leaves no release directory. `extra` maps a release-relative path
+    to the bytes written after the copy."""
     ident = "release:" + name
     destination, temporary = places.tree(ident), places.release_temp(name)
-    count = len(files) + len(extra)
+    count = len(files) + len(extra) + len(rustbuild.OUTPUTS)
 
     def run(ctx):
         if os.path.lexists(temporary):
@@ -569,6 +571,7 @@ def build_release(places, name, files, source_root, extra):
                 target = temporary / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
+            rustbuild.build(toolchain, temporary)
             compileall.compile_dir(str(temporary), quiet=2, force=True, stripdir=str(temporary),
                                    prependdir=str(destination))         # tracebacks name the final path
             bundle.build(temporary, destination)
@@ -578,8 +581,8 @@ def build_release(places, name, files, source_root, extra):
             force_rmtree(temporary)
             raise
         fsync_dir(destination.parent)
-    return Step("create", destination, "tree", "%d files" % count, run,
-                undo={"op": "release", "id": ident, "digest": release_digest(files, extra)})
+    return Step("create", destination, "tree", "%d files, builds %s" % (count, rustbuild.BINARY_NAME), run,
+                undo={"op": "release", "id": ident, "digest": release_digest(files, extra, rustbuild.OUTPUTS)})
 
 
 def backup_file(places, name, source, original, mode):

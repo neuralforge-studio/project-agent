@@ -26,6 +26,7 @@ def home():
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "mutates: the test commits to or edits its source repository")
+    config.addinivalue_line("markers", "slow: runs the real cargo build of the Rust sidebar (about a minute)")
     private_root.configure(config, temp=True)  # the `pi-*` directories below go inside the run's private root
 
 

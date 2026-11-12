@@ -26,7 +26,7 @@
 
 | 경로 | 종류 | 내용 |
 | --- | --- | --- |
-| `~/.local/lib/project-agent/releases/<version>-<hash>/` | 디렉터리 | 불변 release. 도구, skill, 문서, tmux 통합 파일, 설치기(`install/`)를 담고 test·`__pycache__`·`docs/cr`는 담지 않습니다. 설치 interpreter와 그 library 경로를 적은 `tools/python.env`를 더합니다(6.1절). 외부 package는 담지 않습니다(사용자 결정 D-20261109-01 waive). 만들 때 설치 interpreter로 미리 compile하고(`__pycache__`), 시동 번들(6.1절)을 `tools/__pycache__`에 쓰고, 쓰기 권한을 모두 뺍니다. 그래야 실행이 release에 파일을 더하지 않습니다. |
+| `~/.local/lib/project-agent/releases/<version>-<hash>/` | 디렉터리 | 불변 release. 도구, skill, 문서, tmux 통합 파일, 설치기(`install/`)를 담고 test·`__pycache__`·`docs/cr`는 담지 않습니다. Board sidebar의 Rust source(`tools/project-board/rust/`의 추적 파일: `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml`, `src/`. `target/`은 제외)와, 설치기가 그 source로 build한 binary `tools/project-board/bin/project-board-sidebar`(실행 권한)를 더합니다(2.1절). 설치 interpreter와 그 library 경로를 적은 `tools/python.env`를 더합니다(6.1절). 외부 package는 담지 않습니다(사용자 결정 D-20261109-01 waive). 만들 때 설치 interpreter로 미리 compile하고(`__pycache__`), 시동 번들(6.1절)을 `tools/__pycache__`에 쓰고, 쓰기 권한을 모두 뺍니다. 그래야 실행이 release에 파일을 더하지 않습니다. |
 | `~/.local/lib/project-agent/current` | symlink | 활성 release를 가리킵니다. 원자적으로 바꿉니다. |
 | `~/.local/lib/project-agent/tmux.conf` | 파일 | tmux include의 고정 대상입니다. `source-file -q ~/.local/lib/project-agent/current/integrations/tmux/project-agent.conf` 한 줄을 담습니다. 설치 때 한 번 쓰고 갱신하지 않습니다. |
 | `~/.local/lib/project-agent/install.json` | 파일 | 설치 기록 |
@@ -78,6 +78,24 @@
    - 부모 디렉터리가 symlink이면(규칙 4) link는 가리키는 디렉터리 안에서 바뀝니다. 이 workstation의 `~/.claude/skills`는 개발 checkout의 `claude/skills`이므로, 그 안의 link 파일이 바뀝니다. 출력은 실제 위치를 함께 알립니다.
    - `uninstall`은 넘겨받은 진입점을 지우지 않고 `adopted_from`의 글자로 원자적으로 되돌립니다. 지금도 설치기가 만든 link(대상이 기록과 같음)일 때만 되돌리고, 사용자가 바꿨다면 건드리지 않고 알립니다(T12). 되돌림은 release와 `current`를 지우기 전에 합니다. 그래서 제거 도중에도 진입점이 끊어지지 않습니다. 설치 전 상태와 byte 단위로 같아집니다. 규칙 6의 runtime link는 되돌리지 않고 지웁니다(runtime이 다시 만듭니다).
    - `upgrade`·`rollback`은 이 link를 바꾸지 않습니다(7절). 이 옵션은 `install`에만 있습니다. 이 옵션을 쓰는 실행은 격리 HOME의 test(T24~T28)로 검증하며, 이 workstation에서 실제로 실행하는 일은 agent DIST-001 6단계가 합니다.
+
+### 2.1 Rust sidebar의 build
+
+설치기는 release를 만들 때 Board sidebar의 Rust source(`tools/project-board/rust`)를 build해 `tools/project-board/bin/project-board-sidebar`로 둡니다. 저장소에는 binary가 없습니다. 이 절이 build의 전제와 규칙의 원본입니다. README와 직원용 안내문은 이 절을 가리키고 값을 다시 쓰지 않습니다.
+
+**전제**: cargo와 vendored crate 디렉터리입니다. 없으면 `install`·`upgrade`는 아무것도 바꾸기 전에 거절합니다(코드 `cargo_missing`·`vendor_missing`, 종료 코드 3). 문구는 찾아 본 위치와 해소 방법(아래 환경 변수)을 알립니다. 이미 설치된 같은 release의 `install`, 이미 있는 release를 가리키는 `upgrade`, `rollback`은 build하지 않으므로 cargo가 없어도 됩니다.
+
+| 이름 | 뜻 | 없을 때 |
+| --- | --- | --- |
+| `PROJECT_AGENT_CARGO` | 쓸 cargo 실행 파일의 경로. 값이 있는데 실행할 수 없으면 아래 순서로 넘어가지 않고 거절합니다. | `/primehome/tools/Inhouse/Rust/latest/bin/cargo`, 그다음 PATH의 첫 `cargo` |
+| `PROJECT_AGENT_RUST_VENDOR` | vendored crate 디렉터리. 값이 있으면 `cargo --config 'source.vendored-sources.directory="<경로>"'`로 crate의 설정을 덮어씁니다. 빈 값은 없는 것으로 봅니다. | crate의 committed `.cargo/config.toml`의 `[source.vendored-sources]` `directory`(기본값은 사내 경로) |
+
+1. 명령: `cargo build --release --offline --locked --target-dir <임시 디렉터리>`입니다. 실행 위치(cwd)는 만들고 있는 release 안의 crate(`tools/project-board/rust`)이므로 배포되는 source를 build합니다. 설치기는 cargo가 있는 디렉터리를 자식 process의 PATH 앞에 둡니다(cargo가 같은 곳의 `rustc`를 찾도록). 네트워크를 쓰지 않으며 `Cargo.lock`이 어긋나면 실패합니다.
+2. 임시 디렉터리: 설치기가 시스템 임시 디렉터리(`TMPDIR`)에 `project-agent-build-*`를 만들어 target과 `CARGO_HOME`으로 쓰고, 성공해도 실패해도 지웁니다. `CARGO_HOME`을 거기에 두므로 build가 사용자의 `~/.cargo`를 만들거나 읽지 않습니다. SIGKILL로 끊기면 이 디렉터리가 남을 수 있고, 다음 실행은 지우지 않습니다(release의 임시 디렉터리와 달리 설치기의 소유 목록에 없습니다).
+3. 순서: build는 release의 임시 디렉터리(`releases/.tmp-<이름>`) 안에서, source를 복사한 뒤 compile·읽기 전용 처리 전에 합니다. release는 완성된 뒤에 이름을 얻습니다(원칙 B). `current`는 그 뒤의 step이 바꿉니다. 그래서 build가 실패하면 release 디렉터리가 남지 않고 `current`·설치 기록·기존 release·떠 있는 run은 그대로입니다.
+4. 실패: cargo가 0이 아닌 코드로 끝나거나 binary를 만들지 못하면 run은 되돌려지고(규칙 5) 종료 코드 4로 끝납니다. 출력은 `cargo build failed (exit code N)`과 cargo의 stderr 끝(20줄, 2500자까지)을 담습니다. 시간 제한은 30분입니다.
+5. `--dry-run`: build하지 않습니다. cargo의 위치와 vendored 디렉터리를 확인하고(없으면 같은 거절), 변경 목록의 release 항목에 `builds project-board-sidebar`를, 알림에 쓸 cargo와 vendored 디렉터리를 보입니다.
+6. 설치 기록의 release 목록 지문(`digest`)은 binary의 이름을 더한 목록입니다(원칙 B). `prune`·`uninstall`은 binary를 다른 파일처럼 지웁니다.
 
 ## 3. 설치가 고치는 기존 파일은 하나뿐입니다
 
@@ -134,6 +152,7 @@ tmux 통합 파일은 읽힐 때 tmux server에 binding과 hook을 넣습니다(
 - `CLAUDE.md`, `AGENTS.md`, 이 계약의 2절에 없는 다른 skill
 - shell rc와 PATH. `~/.local/bin`이 PATH에 없으면 안내만 출력합니다.
 - 전역 Python package. Board의 외부 package(`textual`)는 설치하지 않습니다. 설치 interpreter에 있어야 하며 `check`가 안내합니다(7절).
+- Rust toolchain과 vendored crate. 설치기는 있는 것을 쓰기만 하고 설치하지 않습니다(2.1절).
 - 등록 project의 저장소: `.gitignore`, `.git/info/exclude`, git 설정, project 안의 어떤 파일도 고치지 않습니다. base의 `agent/` 아래 untracked 파일에 대한 안내는 9.1절이 정합니다.
 - 위 3절의 한 파일을 뺀 모든 기존 파일. 읽기만 해도 되는 파일은 예외 없이 내용·권한·mtime이 같아야 합니다.
 
@@ -196,9 +215,9 @@ grep -rnE '"(new-session|new-window|set-option|set-hook|bind-key|rename-window|k
 | window option | run마다 | `remain-on-exit on`과 `@agent_session_*`(run 식별, 현재 run 포인터) | [tmux.py:220, 274-277, 345, 361, 412](../../tools/agent-session/agent_session/tmux.py) |
 | 알림 | shutdown 등 | 모든 client에 `display-message`, pane tty에 BEL | [tmux.py:458, 470-474](../../tools/agent-session/agent_session/tmux.py) |
 | `run-shell -b` | stop·restart 예약, Board 창(결정·CR) | controller script 실행, `new-pane -W`(Board 창이 끝날 때까지 기다리는 job). 둘 다 `quiet_shell`로 감싸 pane에 아무것도 남기지 않습니다(아래 규칙). Board 창이 실패하면 연 client에 5초 알립니다. tmux가 닫은 창(경계의 닫기 버튼, `kill-window`)이 돌려주는 종료 상태 129는 실패로 기록하지 않습니다. | [tmux.py `run_quiet`·`run_controller`](../../tools/agent-session/agent_session/tmux.py), [tmux_control.py `_popup`](../../tools/project-board/project_board/tmux_control.py) |
-| Board option | Board를 켜고 끌 때, 크기를 바꿀 때 | server option `@project_board_enabled`, `@project_board_config`, `@project_board_width`, `@project_board_expanded`, window option `@project_board_pane`, `@project_board_restore`, `@project_board_seen`(client가 그 window를 마지막으로 보인 시각), pane option `@project_board_managed`, `@project_board_click_socket`, `@project_board_window`(결정·CR 창의 떠 있는 pane. 창이 시작할 때 자기 pane에 1을 씁니다), `@project_board_ready`(TUI가 SIGUSR1 handler를 설치한 뒤 1), `@project_board_visible`(client가 그 pane의 window를 보이면 1) | [tmux_control.py:146, 182-208, 233-237, 289-352](../../tools/project-board/project_board/tmux_control.py) |
+| Board option | Board를 켜고 끌 때, 크기를 바꿀 때 | server option `@project_board_enabled`, `@project_board_config`, `@project_board_width`, `@project_board_expanded`, window option `@project_board_pane`, `@project_board_restore`, `@project_board_seen`(client가 그 window를 마지막으로 보인 시각), pane option `@project_board_managed`, `@project_board_click_socket`, `@project_board_window`(결정·CR 창의 떠 있는 pane. 창이 시작할 때 자기 pane에 1을 씁니다), `@project_board_ready`(sidebar가 SIGUSR1 handler를 설치한 뒤 1. [app.rs](../../tools/project-board/rust/src/app.rs)와 [tmuxio.rs](../../tools/project-board/rust/src/tmuxio.rs)가 씁니다), `@project_board_visible`(client가 그 pane의 window를 보이면 1) | [tmux_control.py:146, 182-208, 233-237, 289-352](../../tools/project-board/project_board/tmux_control.py) |
 | Board 창(결정·CR) | 사용자가 sidebar에서 `O/T/I`·`D`를 누를 때 | 클릭한 client의 현재 window에 `new-pane -W`로 떠 있는 pane 하나를 만듭니다(결정 90%, CR 80%, 가운데). 그 pane의 `remain-on-exit`을 끄고 `@project_board_window`를 씁니다. 창이 이미 있고 같은 종류(CR 또는 결정)이면 떠 있는 창 process에 새 내용을 알립니다(pane option `@project_board_window_kind`·`@project_board_window_link`가 가리키는 unix socket에 한 줄 JSON. 규약은 [Board TUI 계획 5절](../project-board-tui-plan.md#열려-있는-창에-새-내용-알리기-board-025)이 소유합니다). 알릴 수 없을 때(다른 종류, 죽은 process)만 `respawn-pane -k`로 내용을 바꿉니다. 어느 쪽이든 위치와 크기를 유지합니다. 옮기기(위쪽 경계 끌기, Alt 끌기)와 크기 조절(다른 경계 끌기)은 tmux 3.8의 기본 root binding(`MouseDrag1Border`, `M-MouseDrag1Pane`)이며 통합 파일은 binding을 더하지 않습니다. 창이 닫히면 그 pane만 없어지고 sidebar와 그 폭, 관리 pane 판정은 바뀌지 않습니다(`after-resize-pane` hook은 `@project_board_managed`가 1인 pane의 크기만 폭으로 기록합니다). sidebar를 끌 때는 저장한 layout에 지금의 떠 있는 pane을 더해 복원합니다. | [tmux_control.py `_popup`, `_restore`](../../tools/project-board/project_board/tmux_control.py) |
-| Board pane | Board가 켜져 있을 때, client가 처음 보는 window마다 | `split-window`로 사이드바 pane을 추가합니다. Board를 끄거나 그 window의 관리 pane이 끝날 때까지 유지하되, 동시에 유지하는 pane은 8개까지입니다(`tmux_control.MAX_KEPT`). 9번째를 만들 때 어느 client도 보이지 않는 window 중 `@project_board_seen`이 가장 오래된 것의 pane을 제거합니다. 근거: Board process 하나의 RSS가 약 50 MB이므로 8개는 최대 약 400 MB이고, 보이지 않는 pane은 읽지 않으므로 CPU는 들지 않습니다(BOARD-002 실측). 보이지 않는 pane은 갱신을 멈춥니다. 같은 hook이 `project_board_visibility.sh`(plain sh)를 실행해 pane의 `@project_board_visible`을 고치고, 상태가 바뀌었고 `@project_board_ready`인 pane에 SIGUSR1을 보냅니다. pane은 tmux에 자기 window가 보이는지 묻고 읽기를 멈추거나, 보이게 되면 곧바로 한 번 읽습니다. | [tmux_control.py:218-250](../../tools/project-board/project_board/tmux_control.py) |
+| Board pane | Board가 켜져 있을 때, client가 처음 보는 window마다 | `split-window`로 사이드바 pane을 추가합니다. Board를 끄거나 그 window의 관리 pane이 끝날 때까지 유지하되, 동시에 유지하는 pane은 8개까지입니다(`tmux_control.MAX_KEPT`). 9번째를 만들 때 어느 client도 보이지 않는 window 중 `@project_board_seen`이 가장 오래된 것의 pane을 제거합니다. 근거: Board process 하나의 RSS가 Rust sidebar는 약 13 MB(등록 project 10개, BOARD-018 실측)이고 이전 Textual sidebar는 약 50 MB(BOARD-002 실측)였습니다. 8개는 최대 약 100 MB이고, 보이지 않는 pane은 읽지 않으므로 CPU는 들지 않습니다. 보이지 않는 pane은 갱신을 멈춥니다. 같은 hook이 `project_board_visibility.sh`(plain sh)를 실행해 pane의 `@project_board_visible`을 고치고, 상태가 바뀌었고 `@project_board_ready`인 pane에 SIGUSR1을 보냅니다. pane은 tmux에 자기 window가 보이는지 묻고 읽기를 멈추거나, 보이게 되면 곧바로 한 번 읽습니다. | [tmux_control.py:218-250](../../tools/project-board/project_board/tmux_control.py) |
 | 통합 파일의 binding (`source-file`로 읽힐 때. 규칙은 3.1절, 최소 버전은 3.2절) | tmux 설정을 읽을 때 | prefix table의 Board 키(`@project_agent_board_key`, 없으면 `B`)와 root table의 `MouseDown1Pane`·`MouseDragEnd1Border`. 제품 binding은 명령에 `tmux_project_board.sh`가 들어 있고, `MouseDragEnd1Border`는 `@project_board_width`가 들어 있습니다. `MouseDown1Pane`을 되돌리는 기본값은 `select-pane -t = \; send-keys -M`입니다. Board 키 binding은 `key`, Board pane의 click binding은 `drop` 방식으로 `project_agent_run.sh`를 거칩니다(아래 `run-shell` 규칙). | [project_agent_bind.sh](../../integrations/tmux/project_agent_bind.sh), [project-agent-main.conf](../../integrations/tmux/project-agent-main.conf) |
 | 통합 파일의 hook | tmux 설정을 읽을 때 | 이름이 `[project-agent]`인 hook 8개. 앞의 6개(`client-attached`, `client-detached`, `client-session-changed`, `session-window-changed`, `window-created`, `window-closed`)는 `@project_agent_sync_needed` format이 참일 때만 `sync`를 실행합니다. 이미 Board pane이 있고 저장한 폭인 window로 옮길 때는 Python process를 시작하지 않습니다. 이 6개는 Board가 켜져 있으면 `sync` 조건과 별개로 `project_board_visibility.sh`도 실행합니다(위 Board pane 행). session scope(`set-hook -g`로 넣고 `set-hook -gu '<event>[project-agent]'`로 지움) 5개: `client-attached`, `client-detached`, `client-session-changed`, `session-window-changed`, `after-resize-pane`. window scope(`set-hook -gw`로 보이고 `set-hook -gwu`로 지움) 3개: `window-created`, `window-closed`, `pane-died`. 같은 이름의 항목만 바뀌고 사용자 hook은 그대로입니다. `run-shell` 작업은 모두 `hook` 방식으로 `project_agent_run.sh`를 거칩니다(아래 규칙). | [project-agent-main.conf](../../integrations/tmux/project-agent-main.conf) |
 | `agent-session`의 hook | run을 띄울 때마다(`start`·`restart`·`resume`·Worker 배정). 같은 값을 다시 씁니다 | server 전체 hook 요소 `pane-died[agent-session]`(`set-hook -g`로 넣고 `set-hook -gwu 'pane-died[agent-session]'`로 지움) 하나. 관리 window의 pane이 끝날 때만 `python -m agent_session.internal finish-ended`를 `run-shell -b`로 실행합니다(스스로 끝난 run의 마무리, [동작 명세 3절](spec.md#스스로-끝난-run의-마무리)). 이 작업도 `quiet_shell`로 감싸 출력·종료 상태를 pane에 남기지 않고, 실패는 `@project_agent_last_error`에 기록합니다. 사용자 hook과 `[project-agent]` hook은 그대로입니다. 최소 버전은 3.2절입니다. `uninstall` 뒤에도 server가 끝날 때까지 남고 3.1절 4항의 명령으로 지웁니다. | [tmux.py `install_exit_hook`](../../tools/agent-session/agent_session/tmux.py) |
@@ -228,10 +247,11 @@ set-option -ag status-right '#{E:@project_agent_decide_status}'
 
 | 위치 | 언제 | 무엇을 하는가 | 근거 |
 | --- | --- | --- | --- |
-| `/tmp/project-board-<uid>-<tmux pid>/` (mode 0700), `control.lock`, `<16자>.sock` | Board를 켤 때 | 잠금 파일과 클릭 전달용 unix socket. Board pane이 끝나면 socket을 지웁니다. 디렉터리는 그 pid의 tmux server가 살아 있는 동안만 둡니다. `kill-server`·crash로 끝난 server의 디렉터리는 다음 Board 명령(어느 server의 것이든)이 `_private_dir`에서 지웁니다. 지우는 것은 이름이 형식에 맞고 현재 사용자 소유의 mode 0700 디렉터리(symlink 아님)이며 안에 `control.lock`·`<16자>.sock`만 있는 것입니다. pid가 없거나 tmux가 아니거나, tmux라도 디렉터리의 마지막 변경보다 늦게 시작했으면(pid 재사용) 끝난 server로 봅니다. | [tmux_control.py:84-200, 338](../../tools/project-board/project_board/tmux_control.py), [tui.py:196-223](../../tools/project-board/project_board/tui.py) |
+| `/tmp/project-board-<uid>-<tmux pid>/` (mode 0700), `control.lock`, `<16자>.sock` | Board를 켤 때 | 잠금 파일과 클릭 전달용 unix socket. Board pane이 끝나면 socket을 지웁니다. 디렉터리는 그 pid의 tmux server가 살아 있는 동안만 둡니다. `kill-server`·crash로 끝난 server의 디렉터리는 다음 Board 명령(어느 server의 것이든)이 `_private_dir`에서 지웁니다. 지우는 것은 이름이 형식에 맞고 현재 사용자 소유의 mode 0700 디렉터리(symlink 아님)이며 안에 `control.lock`·`<16자>.sock`만 있는 것입니다. pid가 없거나 tmux가 아니거나, tmux라도 디렉터리의 마지막 변경보다 늦게 시작했으면(pid 재사용) 끝난 server로 봅니다. | [tmux_control.py:84-200, 338](../../tools/project-board/project_board/tmux_control.py), [app.rs](../../tools/project-board/rust/src/app.rs)(`start_click_server`) |
 | 사용자 crontab(`crontab -l`·`crontab -`) | Leader를 시작할 때 그 project의 `check` 작업이 없거나 명령이 다를 때, `agent-session cron add`·`rm` | 그 project의 구역(`# >>> project-agent: <project> >>>` … `# <<< project-agent: <project> <<<`) 하나만 고칩니다. 구역 밖의 줄(사용자 작업, 다른 project의 구역)은 바이트 그대로 둡니다. 읽지 못하면 쓰지 않고 실패합니다. 설치·갱신·제거는 crontab을 고치지 않습니다. `uninstall`과 `check`는 읽기만 하고, 남은 구역을 알리며 지우는 명령을 출력합니다(7.3절). | [cron.py](../../tools/agent-session/agent_session/cron.py), 호출 [lifecycle.py `_ensure_check`](../../tools/agent-session/agent_session/lifecycle.py) |
 | `/tmp/as-u-<uid>-<run>.sock` | 원격 seat의 SSH 연결 | bridge socket | [remote_bridge.py:63-64](../../tools/agent-session/agent_session/remote_bridge.py) |
 | `/tmp/as-<uid>-<run>.sock` (원격 host) | 원격 seat run | 원격 tmux socket | [remote_runtime.py:212](../../tools/agent-session/agent_session/remote_runtime.py) |
+| 시스템 임시 디렉터리 `project-agent-build-*` | `install`·`upgrade`가 Rust sidebar를 build할 때 | cargo의 target과 `CARGO_HOME`. 끝나면 지웁니다(2.1절). 제품이 실행 중에 쓰는 위치가 아니라 설치기의 쓰기입니다. | [rustbuild.py](../../install/project_agent_install/rustbuild.py) |
 | 시스템 임시 디렉터리 `project-board-*` | Board에서 결정 답변을 보낼 때 | 답변 본문 파일. 끝나면 지웁니다. | [answer.py:36-38](../../tools/project-board/project_board/answer.py) |
 
 ### 5.5 provider 쪽 부수 효과
@@ -301,13 +321,13 @@ set-option -ag status-right '#{E:@project_agent_decide_status}'
 
 release 이름 `<version>-<hash>`: `<version>`은 원본 root의 `VERSION` 첫 줄(공백 제거, `[0-9A-Za-z][0-9A-Za-z._+~-]*`)이고 파일이 없거나 형식이 틀리면 거절합니다. `<hash>`는 원본 HEAD commit의 앞 12자입니다. release에 들어가는 파일이 commit과 다르면(수정됐거나 추적되지 않은 파일이 있으면) 거절합니다. 내용 해시로 이름을 짓지 않습니다. release에 넣지 않는 경로(test, `__pycache__`, `docs/cr`)의 변경은 거절 사유가 아닙니다. 같은 이름의 release가 이미 있으면 다시 만들지 않고 씁니다.
 
-모든 명령은 `--dry-run`을 받습니다. `--dry-run`은 아무것도 만들지 않고 바뀔 경로를 모두 출력합니다. 출력과 실제 실행의 변경 목록이 같아야 합니다.
+모든 명령은 `--dry-run`을 받습니다. `--dry-run`은 아무것도 만들지 않고(Rust sidebar도 build하지 않습니다) 바뀔 경로를 모두 출력합니다. 출력과 실제 실행의 변경 목록이 같아야 합니다.
 
 | 명령 | 만들거나 바꾸는 것 | 바꾸지 않는 것 |
 | --- | --- | --- |
-| `install` | 2절의 모든 경로, 3절의 tmux 블록, 설치 기록. `--adopt-dev-links`가 있으면 옛 개발 checkout의 link를 새로 만들지 않고 교체합니다. 이미 설치되어 있고 같은 release면 아무것도 바꾸지 않습니다. | 4절 |
-| `upgrade` | 새 `releases/<version>-<hash>/`, `current` 교체, 설치 기록의 `previous`·`current` | shim, skill link, `tmux.conf`, tmux 블록, 등록 파일, 이전 release |
-| `rollback` | `current`를 설치 기록의 `previous` release로 원자적으로 교체. 교체 전의 release를 새 `previous`로 적습니다 | 위와 같음. release를 지우지 않습니다. |
+| `install` | 2절의 모든 경로(release에 build한 Rust sidebar 포함, 2.1절), 3절의 tmux 블록, 설치 기록. `--adopt-dev-links`가 있으면 옛 개발 checkout의 link를 새로 만들지 않고 교체합니다. 이미 설치되어 있고 같은 release면 아무것도 바꾸지 않습니다. | 4절 |
+| `upgrade` | 새 `releases/<version>-<hash>/`(Rust sidebar를 build하고, 성공한 뒤에만 `current`를 바꿉니다. build가 실패하면 아무것도 바꾸지 않습니다. 2.1절), `current` 교체, 설치 기록의 `previous`·`current` | shim, skill link, `tmux.conf`, tmux 블록, 등록 파일, 이전 release |
+| `rollback` | `current`를 설치 기록의 `previous` release로 원자적으로 교체. 교체 전의 release를 새 `previous`로 적습니다. 그 release는 이미 build되어 있으므로 build하지 않습니다 | 위와 같음. release를 지우지 않습니다. |
 | `prune` | `current`·`previous`·떠 있는 run이 쓰는 release가 아닌 release 디렉터리와 그 설치 기록 항목(7.1.2절) | `current`, 그 밖의 모든 경로 |
 | `uninstall` | 설치 기록에 있는 소유만 지웁니다(release 전체, `current`, `tmux.conf`, 설치 기록, `backup/`, shim, skill link). tmux 블록은 3절대로 지웁니다. 넘겨받은 개발 checkout link는 지우지 않고 이전 대상으로 되돌립니다(2절 규칙 8). 설치기가 만든 빈 디렉터리를 지웁니다. | 등록 파일, `<base>/agent/`, `~/.cache`의 잠금·cache, 5.1의 신뢰 기록. 지우지 않은 것은 경로를 출력합니다. |
 | `check` | 읽기만 합니다. | 모든 것 |
@@ -318,6 +338,7 @@ release 이름 `<version>-<hash>`: `<version>`은 원본 root의 `VERSION` 첫 �
 
 - 설치 기록의 모든 소유 경로가 있고, 종류와 link 대상이 기록과 같습니다.
 - `current`가 존재하는 release를 가리키고, release 안의 진입점이 실행됩니다.
+- `current`의 `tools/project-board/bin/project-board-sidebar`가 있고 `--version`이 `project-board-sidebar <버전>`을 출력하며 0으로 끝납니다. 없거나 실행할 수 없거나 다른 출력이면 실패이고 그 경로를 알립니다.
 - tmux 블록이 기록된 파일에 있습니다. symlink 때문에 건너뛴 경우는 실패가 아니라 안내입니다.
 - `~/.local/bin`이 PATH에 있습니다. 없으면 안내입니다(실패가 아닙니다).
 - PATH에서 처음 찾은 `tmux`가 최소 버전(3.2절) 이상입니다. 낮으면 실패이고, 그 tmux의 버전과 경로, 최소 버전, 해소 방법(사내 tmux 경로를 PATH 앞에 둠)을 알립니다. PATH에 `tmux`가 없으면 안내입니다(실패가 아닙니다).
@@ -400,7 +421,8 @@ Leader를 시작하면 `agent-session`이 사용자 crontab에 project 구역의
 3. 판정: 추가·삭제·변경된 경로의 집합이 그 경우의 기대 목록과 **정확히 같아야** 합니다. 기대 밖의 변경은 실패입니다. 기대 목록의 경로가 바뀌지 않은 것도 실패입니다.
 4. 기대 밖의 일반 파일은 내용, 권한, `mtime_ns`가 모두 같아야 합니다.
 5. 모든 경우에서 실제 `~/.claude`, `~/.codex`를 흉내 내는 기존 파일(`settings.json`, `config.toml`, `.claude.json`, `CLAUDE.md`, `AGENTS.md`, 다른 이름의 skill, `.bashrc`)을 격리 HOME에 미리 둡니다. 이 파일들은 어떤 경우에도 바뀌지 않아야 합니다.
-6. tmux 확인이 필요한 경우는 격리 tmux server(private `-S` socket)를 씁니다. 실제 provider 없이, state와 run 파일과 tmux window로 run 증거를 만듭니다.
+6. cargo가 필요한 경우(`install`·`upgrade`의 build)는 test가 `PROJECT_AGENT_CARGO`에 가짜 cargo를, `PROJECT_AGENT_RUST_VENDOR`에 빈 디렉터리를 줍니다. 가짜 cargo는 진짜 cargo와 같은 인자(`build --release --offline --locked --target-dir DIR`)를 받아 `DIR/release/project-board-sidebar`(`--version`을 출력하는 stub)를 만들거나, 실패 모드에서 종료 코드 101과 stderr 메시지를 냅니다. 진짜 cargo로 build하는 경우는 T42 하나이며 느립니다(`slow` 표시). 기대 변경 목록은 가짜와 진짜에서 같습니다.
+7. tmux 확인이 필요한 경우는 격리 tmux server(private `-S` socket)를 씁니다. 실제 provider 없이, state와 run 파일과 tmux window로 run 증거를 만듭니다.
 
 ### 8.2 경우
 
@@ -443,8 +465,15 @@ Leader를 시작하면 `agent-session`이 사용자 crontab에 project 구역의
 | T33 | 설치 interpreter가 빈 환경에서 다른 `sys.prefix`로 뜸(INSTALL-006) | `install`, 빈 환경에서 진입점과 `check`, `python.env`의 `PROJECT_AGENT_PYTHON_PREFIX`·library 경로 변경 후 `check` | 2절의 경로 | `python.env`에 library 경로가 적히고, 빈 환경의 진입점이 설치 때와 같은 `sys.prefix`로 실행됨. 어느 경로로도 같아지지 않으면 `python_environment`로 거절함(종료 코드 3). 값을 틀리게 하거나 library 경로를 지우면 `check`가 실패함 |
 | T34 | 설치된 상태. crontab에 사용자 줄과 project 구역 둘(`--dry-run` 포함), 이름에 정규식 문자(`a.b`)가 있는 구역, 구역 없음·crontab 없음, 끝 줄이 없는 구역, 읽을 수 없는 crontab. 실제 crontab은 쓰지 않고 `fake_crontab`을 씀 | `uninstall` | 7.3절. crontab 파일 변경 없음 | 출력이 구역마다 project와 작업 ID, 지우는 명령 하나를 담음. 명령을 `sh -c`와 `csh -f -c`(`noclobber`일 때도. csh가 없으면 그 경우만 skip)로 실행하면 그 구역만 사라지고 사용자 줄과 다른 구역은 그대로임(`a.b`가 `aXb`를 지우지 않음). crontab을 읽지 못하는 상태에서 명령을 실행하면 쓰지 않고 저장 파일도 남기지 않음. 이름에 `'`·`!`가 있는 구역은 명령 없이 손으로 고치라고 알림. 구역이 없거나 crontab이 없으면 crontab에 대한 출력이 없음. 끝 줄이 없는 구역은 명령 없이 손으로 고치라고 알림. 읽을 수 없으면 그 사실을 알리고 종료 코드 0. `--dry-run`의 출력이 같음 |
 | T35 | 설치된 상태. crontab에 지운 release를 가리키는 구역(명령이 그 경로로 시작하는 줄, `env PATH=...`로 시작하는 줄, `PATH=...` 접두 줄)과 `current`의 진입점을 가리키는 구역, 구역 없음, 읽을 수 없는 crontab | `check` | 없음 | 지운 release를 가리키는 구역의 project·작업 ID·경로만 알리고 종료 코드 0. 구역이 없으면 알리지 않음. 읽을 수 없으면 그 사실을 알림. crontab은 변경 없음 |
+| T36 | 깨끗한 HOME. 가짜 cargo(성공) | `install`(a), 가짜 cargo가 실패(b) | (a) T1과 같음(release는 한 변경). (b) 없음 | (a) release에 `tools/project-board/rust/`의 `Cargo.toml`·`Cargo.lock`·`.cargo/config.toml`·`src/`가 있고 `target/`이 없음. `tools/project-board/bin/project-board-sidebar`가 실행 권한으로 있고 `--version`이 `project-board-sidebar <버전>`을 냄. 저장소에는 binary가 없음. `check`가 통과함. cargo는 `build --release --offline --locked --target-dir`로 release 임시 디렉터리 안의 crate에서 한 번 실행됨. `CARGO_HOME`이 임시 build 디렉터리 안이고 `~/.cargo`가 생기지 않음. 임시 디렉터리가 남지 않음. (b) 종료 코드 4, 출력에 cargo의 stderr 끝(이유)이 있음, snapshot 전체가 같음(`lib`도 없음) |
+| T37 | 설치된 상태. 가짜 cargo(성공) | `upgrade`(build 성공)(a), `rollback`·같은 release의 `upgrade`·같은 release의 `install`(b) | (a) T6과 같음 | (a) 새 release에 binary가 있고 실행됨. 이전 release의 binary는 그대로임. cargo는 한 번 더 실행됨. `check` 통과. (b) cargo를 실행하지 않음(cargo가 없어도 성공함) |
+| T38 | 설치된 상태. 새 release를 만들 commit. 가짜 cargo가 실패(exit 101, 또는 exit 0이지만 binary가 없음) | `upgrade` | 없음 | 종료 코드 4. 출력에 이유가 있음. snapshot 전체가 같음: `current`·설치 기록·기존 release가 그대로이고 새 release 디렉터리와 `.tmp-*`가 없음. `check` 통과. cargo가 고쳐진 뒤의 `upgrade`는 성공함 |
+| T39 | 깨끗한 HOME, 그리고 설치된 상태에서 새 release | `install --dry-run`, `upgrade --dry-run` | 없음 | cargo를 실행하지 않음. snapshot 전체가 같음. 출력에 쓸 cargo와 vendored 디렉터리, `builds project-board-sidebar`가 있음. 변경 목록이 실제 `install`과 같음(T14) |
+| T40 | 설치된 상태에서 binary를 (a) 지움 (b) 실행할 수 없는 파일로 바꿈 (c) 다른 프로그램으로 바꿈 | `check` | 없음 | 종료 코드 1. 출력이 binary 경로를 알림. snapshot 전체가 같음 |
+| T41 | 깨끗한 HOME. (a) `PROJECT_AGENT_CARGO`가 없는 파일 (b) `PROJECT_AGENT_RUST_VENDOR`가 없는 디렉터리 (c) 변수 없음 | `install`(`--dry-run` 포함) | (a)(b) 없음 | (a)(b) 종료 코드 3(`cargo_missing`, `vendor_missing`). 출력이 변수 이름과 경로를 알림. cargo를 실행하지 않음. snapshot 전체가 같음. (c) cargo는 사내 경로, PATH 순으로 찾고, vendored 디렉터리는 crate의 `.cargo/config.toml`의 값을 씀(`--config`를 주지 않음). 변수가 빈 값이면 없는 것으로 봄 |
+| T42 | 깨끗한 HOME. 진짜 cargo(`slow`)와 crate의 기본 vendored 디렉터리 | `install` | T1과 같음 | 진짜 build한 binary가 실행되어 `--version`이 `project-board-sidebar <버전>`을 냄. `check` 통과. `~/.cargo`와 임시 디렉터리가 남지 않음 |
 
-기대 변경 목록의 "정확히"는 T1~T18과 T20~T35에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding은 TMUX-001이 구현했습니다([test](../../integrations/tmux/test_project_agent_conf.py)).
+기대 변경 목록의 "정확히"는 T1~T18과 T20~T42에 적용합니다. T19는 "5절 안"입니다. T20·T21은 binding을 읽는 server의 상태도 판정합니다. T20·T21의 binding은 TMUX-001이 구현했습니다([test](../../integrations/tmux/test_project_agent_conf.py)).
 
 ## 9. 이 계약과 어긋나는 현재 동작
 

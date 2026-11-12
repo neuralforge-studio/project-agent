@@ -173,7 +173,8 @@ class Bench:
         names = {"snapshot1": "board_snapshot_first", "snapshot2": "board_snapshot_warm", "liveness1": "board_liveness",
                  "context": "board_context", "visible": "board_visible"}
         for key, name in names.items():
-            self.row(exe, name, probe[key]["s"], 0, probe[key]["spawns"], cpu=probe[key]["cpu"])
+            if key in probe:
+                self.row(exe, name, probe[key]["s"], 0, probe[key]["spawns"], cpu=probe[key]["cpu"])
 
     # ------------------------------------------------------------------ board commands that need a client
     def attach(self, session="p00"):
@@ -216,8 +217,7 @@ class Bench:
         self.board(exe, "board_sync_off", "sync", "--socket", socket, identity=None)
         self.pane_ready(exe, "board_popup_ready", [exe.bin("project-board"), "--config", self.env.info["config"], "popup",
                                                    "--project", "p00"])
-        self.pane_ready(exe, "board_sidebar_ready", [exe.bin("project-board"), "--config", self.env.info["config"],
-                                                     "sidebar"])
+        self.pane_ready(exe, "board_sidebar_ready", exe.sidebar_argv(self.env.info["config"]))
 
     def wait_board_panes_ready(self, count, seconds=240):
         """Until `count` Board panes have marked themselves ready (@project_board_ready), so that the steady window

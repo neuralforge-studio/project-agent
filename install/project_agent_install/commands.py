@@ -8,7 +8,7 @@ import os
 import stat
 import subprocess
 
-from . import actions, crontab, journal, paths, record as records, release as releases, runs, tmuxconf
+from . import actions, crontab, journal, paths, record as records, release as releases, runs, rustbuild, tmuxconf
 from .layout import SKILLS, TOOLS, InstallerError
 
 
@@ -92,8 +92,11 @@ def plan_install(env, source, python, adopt=None):
     b.ensure_dir(env.lib)
     b.ensure_dir(env.releases)
     extra = {releases.PYTHON_ENV: releases.python_env(*python)}
-    b.add(actions.build_release(places, source.name, source.files, source.root, extra))
-    owned.append(records.owned(env.display(release_dir), "dir", digest=actions.release_digest(source.files, extra)))
+    toolchain = rustbuild.prepare(source.root)
+    b.add(actions.build_release(places, source.name, source.files, source.root, extra, toolchain))
+    b.note(rustbuild.describe(toolchain))
+    owned.append(records.owned(env.display(release_dir), "dir",
+                               digest=actions.release_digest(source.files, extra, rustbuild.OUTPUTS)))
     b.add(actions.new_link(places, "current", "releases/" + source.name))
     owned.append(records.owned(env.display(env.current), "symlink", target="releases/" + source.name))
     tmux_conf = tmuxconf.INTEGRATION.encode()
@@ -327,9 +330,11 @@ def plan_upgrade(env, source, python, root):
         plan.notes.append("Release %s already exists; `current` is pointed at it." % source.name)
     else:
         extra = {releases.PYTHON_ENV: python_env}
-        plan.steps.append(actions.build_release(places, source.name, source.files, source.root, extra))
+        toolchain = rustbuild.prepare(source.root)
+        plan.steps.append(actions.build_release(places, source.name, source.files, source.root, extra, toolchain))
+        plan.notes.append(rustbuild.describe(toolchain))
         new["owned"].append(records.owned(env.display(release_dir), "dir",
-                                          digest=actions.release_digest(source.files, extra)))
+                                          digest=actions.release_digest(source.files, extra, rustbuild.OUTPUTS)))
     plan.steps.append(actions.swap_link(places, "current", "releases/" + source.name))
     plan.steps.append(actions.replace_record(places, records.encode(new)))
     _changed_notes(env, installed, plan)
@@ -572,6 +577,7 @@ def run_check(env, source_root):
                                                                            installed["current"]))
     else:
         failures += _check_entries(env, current)
+        failures += _check_sidebar(env)
         interpreter_failures, interpreter_notices = _check_interpreter(current)
         failures += interpreter_failures
         notices += interpreter_notices
@@ -633,6 +639,18 @@ def _check_entries(env, release):
         if not ok:
             failures.append("The entry point %s does not run." % env.display(entry))
     return failures
+
+
+def _check_sidebar(env):
+    """The Rust sidebar of `current` is there and starts (contract section 7, `check`)."""
+    entry = env.current / rustbuild.BINARY
+    try:
+        result = subprocess.run([str(entry), "--version"], capture_output=True, text=True, timeout=60)
+        ok = result.returncode == 0 and result.stdout.startswith(rustbuild.BINARY_NAME + " ")
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    return [] if ok else ["The Project Board sidebar %s is missing or does not run (`--version`)."
+                          % env.display(entry)]
 
 
 LAUNCH = 'source "$1" && project_agent_select_python && [ -n "$PY" ] && exec "$PY" -c "$2"'

@@ -12,12 +12,12 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | --- | --- | --- |
 | `agent-session` (CLI) | Leader·Worker의 시작·전송·종료·재시작·review·shutdown·resume·watch·check·cron. 배정 state와 tmux 실행 근거 | `tools/agent-session/` |
 | `project-item` (CLI) | CR과 결정 항목의 생성·조회·이동·검사. CR 형식의 실행 코드 | `tools/project-item/` |
-| `project-board` (CLI) | 모든 프로젝트의 CR·결정·seat 상황을 보이는 tmux 화면. 결정 답변 전송 | `tools/project-board/` |
+| `project-board` (CLI, `project-board-sidebar` binary) | 모든 프로젝트의 CR·결정·seat 상황을 보이는 tmux 화면. sidebar는 Rust binary(`tools/project-board/rust/`), popup과 CLI는 Python입니다. 결정 답변 전송 | `tools/project-board/` |
 | `project-team` skill | Leader·Worker·운영자의 역할별 절차 | `skills/project-team/` |
 | `project-item` skill | CR·결정 항목 사용 시점과 상태·전이, 형식 규칙 | `skills/project-item/` |
 | 동작 명세 | 등록, state, start·stop·restart·shutdown·resume·watch·check·cron, CR과 JOB의 연결 | `docs/project-team/spec.md` |
 | 설치 계약 | 설치·갱신·되돌리기·제거가 만들고 고치고 건드리지 않는 경로, 실행 중 HOME 쓰기 목록, 인수 test 명세. | `docs/project-team/install-contract.md` |
-| 설치기 | 설치 계약대로 설치·갱신·되돌리기·제거·점검(`--dry-run` 포함). 표준 library만 씁니다. 인수 test는 `install/tests` | `install/` |
+| 설치기 | 설치 계약대로 설치·갱신·되돌리기·제거·점검(`--dry-run` 포함). 표준 library만 씁니다. release를 만들 때 Rust sidebar를 build합니다(설치 계약 2.1절). 인수 test는 `install/tests` | `install/` |
 | 버전 규칙 | 버전 값(`VERSION`), 형식 버전(`tools/formats.json`)과 호환 범위, git tag 이름, 변경 기록(`CHANGELOG.md`) 작성 | `docs/project-team/release.md` |
 | tmux 연결 | Board 열기·닫기 binding, status 표시, 결정 대기 알림 | `integrations/tmux/tmux_project_board.sh`, `project-agent.conf`, `project-agent-main.conf`, `project_agent_bind.sh`, `project_agent_run.sh`, `project_board_visibility.sh`, `tmux_decide_status.sh`, `tmux_decide_status.py` |
 | 원격 seat 실행본 | SSH Worker seat에 보내는 Python helper와 guidance 문서 | `tools/agent-session/agent_session/remote.py`의 `source_archive()` |
@@ -28,7 +28,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | --- | --- | --- |
 | `agent-session` | [명세](spec.md), [README](../../tools/agent-session/README.md) | `tools/agent-session/tests/` |
 | `project-item` | 형식·상태: [SKILL.md](../../skills/project-item/SKILL.md), [cr.md](../../skills/project-item/references/cr.md), [decide.md](../../skills/project-item/references/decide.md). 명령 사용: [README](../../tools/project-item/README.md)와 `--help` | `tools/project-item/tests/` |
-| `project-board` | [README](../../tools/project-board/README.md). 화면 계약: [TUI 계획](../project-board-tui-plan.md) | `tools/project-board/tests/` |
+| `project-board` | [README](../../tools/project-board/README.md). 화면 계약: [TUI 계획](../project-board-tui-plan.md) | `tools/project-board/tests/`, Rust 단위 test(`tools/project-board/rust`의 `cargo test`) |
 | `project-team` skill | [SKILL.md](../../skills/project-team/SKILL.md) | 위 세 도구의 test와 skill 검사(아래) |
 | tmux 연결 | 각 script의 머리말과 `project-board` README | `integrations/tmux/test_tmux_decide_status.py`, `integrations/tmux/test_project_agent_conf.py` |
 
@@ -38,7 +38,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 
 | 종류 | 진입점 |
 | --- | --- |
-| CLI | `agent-session`, `project-item`, `project-board`. 각 `bin/` 파일을 `~/.local/bin`에 link합니다. 세 파일과 `tmux_decide_status.sh`는 `tools/python-launcher.sh`로 Python을 고릅니다. 설치본의 세 CLI는 `tools/bundle_boot.py`로 시동 번들(release의 모듈을 한 파일에 묶은 것)에서 import합니다. 설치본은 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`(환경 변수 또는 release의 `tools/python.env`)로 interpreter와 package 경로를 넘깁니다([설치 계약 6.1절](install-contract.md#61-python-선택)). |
+| CLI | `agent-session`, `project-item`, `project-board`. 각 `bin/` 파일을 `~/.local/bin`에 link합니다. `project-board`의 하위 명령은 `popup`, `cr`, `toggle`, `sync`, `click`과 sidebar가 클릭으로 실행하는 `open-decision`, `open-cr`, `toggle-fold`, `liveness`입니다(`sync`·`click`·`toggle`과 이 넷은 시동 번들로 시작합니다). Sidebar는 `tools/project-board/bin/project-board-sidebar` binary이고 tmux가 pane에서 직접 실행합니다. 세 파일과 `tmux_decide_status.sh`는 `tools/python-launcher.sh`로 Python을 고릅니다. 설치본의 세 CLI는 `tools/bundle_boot.py`로 시동 번들(release의 모듈을 한 파일에 묶은 것)에서 import합니다. 설치본은 `PROJECT_AGENT_PYTHON`·`PROJECT_AGENT_PYTHONPATH`(환경 변수 또는 release의 `tools/python.env`)로 interpreter와 package 경로를 넘깁니다([설치 계약 6.1절](install-contract.md#61-python-선택)). |
 | Python API | `agent_session.api`: 목록의 원본은 [api.py](../../tools/agent-session/agent_session/api.py)의 `__all__`이고 이름별 계약은 [명세 5절](spec.md#프로젝트-consumer용-python-api)이 기록합니다. `project_item.api`: 목록의 원본은 [api.py](../../tools/project-item/project_item/api.py)의 `__all__`이고 계층은 [project-item README](../../tools/project-item/README.md#layers-and-public-api)가 설명합니다. |
 | Hook·controller | `agent_session.internal`의 `register_from_hook`(Claude SessionStart hook), `register_current`(Codex 초기 도구), `mark_process`, `run_controller`([명세 5절](spec.md#provider-내부-등록)) |
 | 원격 seat | `python -m agent_session.remote_runtime`, `python -m agent_session.remote_bridge` |
@@ -61,6 +61,7 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 | `project_board.answer` | `project_item.api` | |
 | `project_board.tmux_control` | `agent_session.api` | |
 | `integrations/tmux/tmux_decide_status.py` | `project_item.api` | 저장소 상대 경로로 `project-item`을 찾습니다. |
+| `project-board-sidebar` (Rust) | `project-board` CLI | sidebar가 같은 디렉터리의 `project-board`를 실행합니다(클릭 동작, SSH seat의 실행 판정). 환경 변수 `PROJECT_BOARD_LAUNCHER`가 대신할 경로를 줍니다. Python 모듈은 가져오지 않습니다. |
 
 `agent-session`과 `project-item`은 서로를 씁니다(양방향). project-item을 쓰는 쪽은 `project_item.api`만 씁니다([경계 test](../../tools/project-item/tests/test_api_boundary.py)가 확인합니다). 이 표의 project-item 소비자 목록은 그 test의 `CONSUMERS`와 맞춥니다. agent-session을 쓰는 쪽은 `agent_session.api`만 씁니다([경계 test](../../tools/agent-session/tests/test_api_boundary.py)가 `tools`·`integrations/tmux`의 다른 도구 파일을 모두 검사하고, agent-session 안에서 다른 모듈의 밑줄 이름을 import하는 것도 막습니다).
 
@@ -99,6 +100,28 @@ Project team은 등록한 프로젝트에서 Leader와 Worker 대화를 tmux로 
 - **적용 범위**: `project_item.registry`가 `agent_session.api`를 module load 때 import하는 것과, `agent_session.jobs.item_api()`가 `project_item.api`를 함수 안에서 import하는 것입니다. 각 방향은 상대의 공개 모듈만 씁니다. agent-session은 project-item을 지연 import하므로 import 시점 순환이 없습니다.
 - **영향받는 소비자**: `project_item.registry`와 이를 쓰는 project-item 전체, `agent_session.jobs`·`agent_session.remote_bridge`(`jobs.item_api()` 경유), project-board와 tmux script(위 표의 두 도구를 모두 가져옵니다), 원격 zip의 `agent-session/`·`project-item/` 배치.
 - **검증의 한계**: [순환 방지 test](../../tools/agent-session/tests/test_import_cycle.py)는 `agent_session.api`·`project_item.api`·`project_board.model`·`agent_session.internal`을 새 interpreter에서 첫 import로 확인하고, agent-session이 project-item을 import 시점에 싣지 않는지도 봅니다. 이 네 순서만 보며, 다른 `sys.path` 구성이나 동적 import(`importlib`)가 만드는 순환은 보지 못합니다.
+
+### 예외: Rust sidebar와 Python이 같은 규칙을 읽습니다
+
+Rust sidebar(`tools/project-board/rust`, BOARD-018)는 Python 도구와 같은 파일을 읽으므로, 아래 규칙이 Python과 Rust 두 곳에 있습니다(2026-11-11 Leader 판정, 사용자 결정 D-20261111-01 C). 원본의 소유자는 바뀌지 않습니다. 규칙의 원본은 아래 표의 Python 쪽이고, Rust는 그 규칙을 따릅니다.
+
+- **이유**: 첫 화면이 느린 원인은 NFS의 파일 열기 지연이었습니다. Python 읽기는 CPU를 줄여도 파일을 차례로 열어야 하므로 16×16에서 1초 안에 최신 데이터를 그릴 수 없었습니다(BOARD-016). Rust는 파일을 병렬로 열어 이 시간을 줄입니다. Rust가 읽으려면 Python의 읽기 규칙을 다시 구현해야 합니다. Python helper가 읽고 Rust가 받는 방식은 같은 지연이 남아 택하지 않았습니다.
+- **적용 범위**:
+
+| 규칙 | Python 원본 | Rust 구현 |
+| --- | --- | --- |
+| 등록 파일 선택·검증, project·seat 해석 | `agent_session.config` | `rust/src/data/registry.rs` |
+| `state.json` 읽기·검증 | `agent_session.state` | `rust/src/data/state.rs` |
+| CR·결정 파일의 header·절·상태·단계, 파일 목록 | `project_item.cr`·`decide`·`read`·`store`, `project_board.model` | `rust/src/data/items.rs`, `read.rs`, `stamp.rs` |
+| 실행 확인(liveness)과 반납 대기 | `agent_session.api`·`tmux`·`process` ([명세 5절](spec.md#5-내부-세션-등록과-실행-확인)) | `rust/src/data/live.rs`, `tmux.rs`, `process.rs` |
+| 지금 보는 창(project, slot) | `agent_session.api.pane_slot` | `rust/src/tmuxio.rs` |
+| 접힘 상태와 가시성의 tmux option | `project_board.tmux_control` | `rust/src/tmuxio.rs` |
+| 열려 있는 Board 창에 새 내용 알리기(client 쪽) | `project_board.tmux_control._reuse`·`window_link` (규약: TUI 계획 5절) | `rust/src/window.rs` |
+| project·seat 전환(client 확인, 검증한 Worker window) | `project_board.tmux_control.switch_project`·`switch_seat`, `agent_session.tmux.Tmux.find_by_session` | `rust/src/switch.rs`, `rust/src/data/jump.rs` |
+
+  SSH seat의 실행 판정은 Python에 남깁니다. Rust는 `project-board liveness`를 실행해 그 결과를 씁니다.
+- **검증**: [`tools/project-board/tests/test_rust_equivalence.py`](../../tools/project-board/tests/test_rust_equivalence.py)가 같은 디스크 fixture에서 `model.snapshot`·`model.liveness`와 Rust의 결과를 비교합니다. 결정 단계, seat 상태 전부, 원격 seat, 등록·state·CR·결정 오류, path가 없는 project, liveness 판정을 다룹니다. Python의 규칙을 바꾸면 이 test가 Rust 쪽의 수정을 요구합니다. `tmuxio.rs`의 tmux option 규칙은 Rust 단위 test와 [`test_sidebar_binary.py`](../../tools/project-board/tests/test_sidebar_binary.py)가 확인하고, 창 알림은 `test_sidebar_binary.py`의 창 test와 `window.rs` 단위 test가 TUI 계획 5절의 순서와 응답 표대로 하는지 확인하고, 전환 규칙은 [`test_rust_switch.py`](../../tools/project-board/tests/test_rust_switch.py)가 Python과 같은 결과인지 비교합니다.
+- Python `model.snapshot`·`model.liveness`는 popup과 위 test의 기준 구현으로 남습니다.
 
 ### 목표
 

@@ -12,6 +12,7 @@
 | tmux | `tmux -V`가 [계약 3.2절](project-team/install-contract.md#32-tmux-최소-버전)의 최소 버전 이상이어야 합니다. 낮으면 `check`가 실패로 알리고, 그 tmux는 설정을 읽을 때 오류 한 줄만 보이며 Board binding·hook을 넣지 않습니다. 사내 tmux는 `/primehome/tools/Inhouse/tmux/latest/bin/tmux`입니다. PATH에서 새 tmux가 앞에 오는지 확인합니다. |
 | git | `git --version` |
 | Claude Code 또는 Codex CLI | 쓰려는 provider의 CLI가 실행됩니다. |
+| Rust toolchain | Board sidebar를 설치할 때 build하므로 cargo와 vendored crate 디렉터리가 필요합니다. 사내 workstation에는 있습니다. 위치를 바꾸는 환경 변수와 찾는 순서는 [계약 2.1절](project-team/install-contract.md#21-rust-sidebar의-build)입니다. 없으면 설치기가 아무것도 바꾸지 않고 거절합니다(`cargo_missing`, `vendor_missing`). |
 | Board용 `textual` | 설치에 쓰는 Python에 있어야 합니다. 버전은 [requirements.txt](../tools/project-board/requirements.txt)입니다. 사내 workstation의 Python(아래)에는 있습니다. |
 
 - 설치기를 실행한 Python이 설치본의 Python이 됩니다. 설치 뒤에 바꾸려면 다시 설치합니다.
@@ -55,7 +56,7 @@ $PY ~/.local/lib/project-agent/current/install/project-agent-install check
 
 | 경로 | 내용 |
 | --- | --- |
-| `~/.local/lib/project-agent/` | release(`releases/<버전>-<hash>/`), `current` link, `tmux.conf`, 설치 기록 `install.json`, 고친 파일의 원본 `backup/` |
+| `~/.local/lib/project-agent/` | release(`releases/<버전>-<hash>/`, 설치할 때 build한 Board sidebar를 담습니다), `current` link, `tmux.conf`, 설치 기록 `install.json`, 고친 파일의 원본 `backup/` |
 | `~/.local/bin/agent-session`, `project-item`, `project-board` | `current`를 거치는 link |
 | `~/.claude/skills/`, `~/.codex/skills/` 아래 `project-team`, `project-item` | skill link. `CLAUDE_CONFIG_DIR`·`CODEX_HOME`이 있으면 그 디렉터리를 씁니다. |
 | `~/.config/project-agent/project.json` | 등록 파일 초안(`{}`). 등록 파일이 어디에도 없을 때만 만듭니다. |
@@ -174,6 +175,7 @@ agent/decide/decide.html
 각 명령은 `--dry-run`으로 먼저 볼 수 있습니다.
 
 - 갱신과 되돌리기는 `current`만 바꿉니다. shim, skill link, tmux 설정, 등록 파일은 그대로입니다. 이미 떠 있는 run은 시작한 release를 계속 씁니다. 새 run부터 새 release를 씁니다.
+- 설치와 갱신은 새 release를 만들 때 Board sidebar를 build합니다(1분 안팎, 설치 계약 2.1절). build가 실패하면 `current`와 기존 release는 그대로이고 새 release는 남지 않습니다. 되돌리기는 이미 build된 release로 돌아가므로 build하지 않습니다.
 - 갱신은 이전 release를 지우지 않습니다. `rollback`은 바로 이전 release 하나로만 돌아갑니다.
 - `prune`은 `current`, 바로 이전 release, 떠 있는 run이 쓰는 release를 남기고 나머지를 지웁니다.
 - 갱신·`prune` 뒤에는 Board를 닫고 다시 엽니다. 이미 떠 있는 Board는 시작한 release의 파일을 계속 씁니다.
@@ -211,6 +213,8 @@ $PY ~/.local/lib/project-agent/current/install/project-agent-install uninstall
 | `python_unavailable`, `python_version` | 설치에 쓴 Python이 없어졌거나 3.10 미만입니다. 올바른 Python으로 다시 설치합니다. |
 | `check`가 "empty environment"의 `sys.prefix` 불일치로 실패 | 설치 때와 다른 Python으로 뜹니다. 설치 때 쓴 Python이 옮겨지거나 바뀌었는지 확인하고, 그 Python으로 다시 설치합니다. |
 | `python_environment`로 설치가 거절됨 | 설치기를 실행한 Python이 빈 환경에서 자기 `sys.prefix`로 뜨지 않고 `<prefix>/lib`도 도움이 되지 않습니다. 다른 Python으로 설치합니다. |
+| `cargo_missing`, `vendor_missing`로 설치가 거절됨 | 출력이 찾아 본 위치와 환경 변수 이름을 알립니다. 사내 cargo가 없는 계정이면 `PROJECT_AGENT_CARGO`, vendored crate 디렉터리가 없으면 `PROJECT_AGENT_RUST_VENDOR`를 지정합니다([계약 2.1절](project-team/install-contract.md#21-rust-sidebar의-build)). 아무것도 바뀌지 않았으므로 다시 실행하면 됩니다. |
+| 설치가 build 실패(`cargo build failed`)로 끝남(종료 코드 4) | 출력의 cargo 오류 끝을 읽습니다. 설치기가 이미 한 변경을 되돌렸고 `current`는 그대로입니다. 원인(디스크 공간, vendored crate 버전)을 고친 뒤 다시 실행합니다. |
 | Board가 시작하지 않음 | 설치 Python에 `textual`이 있는지 `check`의 안내를 봅니다. |
 
 ## 관련 문서

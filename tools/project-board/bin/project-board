@@ -15,9 +15,10 @@ fi
 export PYTHONPATH="$ROOT${PROJECT_AGENT_PYTHONPATH:+:$PROJECT_AGENT_PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 unset PYTHONHOME
-# Only the TUI commands import textual from the interpreter's site-packages. The tmux hooks and the
-# toggle/click keys (sync, click, toggle) are standard library only and run at every window change: they
-# skip the site step and start from the bundle (`-m project_board`, after the bundle reader).
+# Only the TUI commands import textual from the interpreter's site-packages. The tmux hooks, the toggle/click keys
+# (sync, click, toggle) and the commands the sidebar runs for its clicks (BOARD-018) are standard library only and run
+# at every window change or click: they skip the site step and start from the bundle (`-m project_board`, after the
+# bundle reader).
 # The two windows (cr, popup) start from the bundle as well: textual and what it imports are in it (guarded by
 # their package metadata), and the interpreter's installed packages come last on the path because `-S` skips the
 # site step that would add them. A window is opened by a click and imports about 400 modules otherwise; on NFS
@@ -26,7 +27,7 @@ unset PYTHONHOME
 command="${1:-}"
 [[ "$command" != --config ]] || command="${3:-}"
 case "$command" in
-    sync|click|toggle)
+    sync|click|toggle|open-decision|open-cr|toggle-fold|liveness)
         exec "$PY" -S -c "$PROJECT_AGENT_BOOT
 import sys
 _project_agent_bundle(sys.argv.pop(1))

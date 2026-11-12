@@ -5,21 +5,34 @@ each project's open, todo and in-progress CR counts, open decisions and Worker s
 popup shows a decision's Markdown and accepts the operator's answer. A CR popup shows the
 selected CR's full Markdown. The Board has no HTTP server or browser page.
 
-The current behavior is specified in `docs/project-board-tui-plan.md`. The registry and
-team state are read through `agent_session`; CR and decision files are read through
-`project_item`. The Board does not edit those sources. It sends an answer through
-`agent-session send --job leader`; the Leader moves the decision item.
+The sidebar is the Rust binary `project-board-sidebar` (`rust/`, built with ratatui). The popups and
+the `project-board` command are Python (Textual). The current behavior is specified in
+`docs/project-board-tui-plan.md`. The sidebar reads the registry, `state.json`, the CR and
+decision files and the run liveness itself, with the rules of `agent_session` and `project_item`
+(the exception and its equivalence test are in `docs/project-team/README.md`). The popups read them
+through `agent_session` and `project_item`. The Board does not edit those sources. It sends an
+answer through `agent-session send --job leader`; the Leader moves the decision item.
 
 ## Dependency and install
 
 The launcher selects the Workstation global Python first, then `~/python/.venv/bin/python`,
-then `python3`. Install `requirements.txt` into the interpreter it selects. On macOS and WSL
-with the standard virtual environment:
+then `python3`. Install `requirements.txt` into the interpreter it selects (the popups need
+Textual). On macOS and WSL with the standard virtual environment:
 
 ```sh
 ~/python/.venv/bin/python -m pip install -r tools/project-board/requirements.txt
 ln -s <project-agent 저장소>/tools/project-board/bin/project-board ~/.local/bin/project-board
 ```
+
+The sidebar needs its binary. An installation builds it (`install-contract.md` section 2.1 owns the
+cargo and vendored crate rules) and puts it at `tools/project-board/bin/project-board-sidebar`. A
+development checkout builds it once; the Board then finds `rust/target/release/project-board-sidebar`:
+
+```sh
+cd tools/project-board/rust && cargo build --release --offline --locked
+```
+
+`PROJECT_BOARD_SIDEBAR_BIN` names another binary for the Board to run.
 
 Read `integrations/tmux/project-agent.conf` with `source-file`. An installation reads it
 through `~/.local/lib/project-agent/current/integrations/tmux/project-agent.conf`; a
@@ -48,17 +61,24 @@ instead of creating a virtual environment.
 ```sh
 project-board toggle                          # show or hide the tmux sidebar
 project-board --config PATH toggle            # use a specific project registry
-project-board sidebar                         # run the TUI in the current pane
+project-board-sidebar [--config PATH]         # run the sidebar in the current pane (tmux runs this)
 project-board popup --project PROJECT_ID      # show that project's unfinished decisions
 project-board cr --project PROJECT_ID --state open  # show a CR list
 ```
 
-The sidebar refreshes source files every 2 seconds and run liveness every 10 seconds. A refresh
-parses again only the CR and decision files whose size or modification time changed, and lists a
-directory tree again only when the modification time of one of its directories changed (the same
-for the registry file). It draws again only the projects whose shown content changed; a popup
-reads only its own project.
-The TUI keeps clicks and scrolling responsive during reads and answer delivery. Decision
+The sidebar refreshes source files every 2 seconds, run liveness and the window it is in every 10
+seconds. Its first read opens the files in parallel, so a 16 x 16 Board is drawn with current data
+within a second. A later refresh parses again only the CR and decision files whose size or
+modification time changed, and lists a directory tree again only when the modification time of one
+of its directories changed (the same for the registry file). It writes to the terminal only the
+cells that changed; a popup reads only its own project.
+The sidebar keeps clicks and scrolling responsive during reads. It switches a client to a project or a
+Worker pane itself (`rust/src/switch.rs`, the same rules as `tmux_control.switch_project` and
+`switch_seat`, compared by `tests/test_rust_switch.py`). A CR or decision click tells an open window of the same kind what to show over
+its socket (`rust/src/window.rs`, the BOARD-025 line); otherwise, and for the fold button, it runs a
+`project-board` subcommand from the start bundle (`open-decision`, `open-cr`, `toggle-fold`); the `liveness`
+subcommand judges the runs of SSH seats for it. Every periodic read starts one tmux process
+(the run liveness two). Decision
 answers require the `operator` caller classification from `agent-session`; a managed or
 unmanaged agent session cannot submit an approval.
 
@@ -66,7 +86,7 @@ In tmux, prefix `B` or click `Board` in the status line to toggle the sidebar fo
 attached client. The same window shares one Board pane. A window keeps its Board pane after
 the last client leaves it, so returning to a window shows the Board at once instead of starting
 it again; turning the Board off removes every Board pane. A window that no client has watched
-has none. At most 8 Board panes are kept (about 50 MB each); a ninth removes the pane of the
+has none. At most 8 Board panes are kept (about 13 MB each); a ninth removes the pane of the
 window that no client showed for longest. A pane whose window no client shows stops reading and
 reads once as soon as the window is shown. Each visible window gives the Board
 25 columns by default and shows existing panes in the remaining space. A width adjusted in
@@ -89,8 +109,8 @@ An SSH seat shows `number@host` before its CR ID. Its tooltip shows the register
 host and remote path. An unavailable execution check keeps the seat assigned and shows
 `실행 확인 불가` with the unknown-state color.
 When the window a client is viewing is a managed `agent-session` window (it has
-a project option), the sidebar highlights that project with a blue name row and a
-`▶` mark. For a Leader window that is all. For a seat window it marks the slot too: the seat's row when the seats are expanded, or
+a project option), the sidebar highlights that project with a blue name row (no mark
+before the name). For a Leader window that is all. For a seat window it marks the slot too: the seat's row when the seats are expanded, or
 the `▸` button (with `현재 창: seat N` in its tooltip) when they are folded. Each window's Board
 pane marks its own window, so the mark follows the client when it changes window. It reads the
 window options when the pane starts, when its window is shown again, and every 10 seconds. A
@@ -144,7 +164,8 @@ If a managed pane is respawned while its client stays on the same window, run
 A seat shows `review_wait` when its Worker submitted and the Leader has not answered that
 submission. The owner of this rule is this section; `project_item.cr.review_waiting` implements it
 (the Board's `review_wait` in `project_board/model.py` adds only the in-progress condition, and
-agent-session's `check` uses the same function), and `tests/test_model.py` covers it.
+agent-session's `check` uses the same function), `tests/test_model.py` covers it, and
+`rust/src/data/items.rs` follows the Python result (`tests/test_rust_equivalence.py` compares the two).
 
 - Only a CR in `in-progress/` can wait. A CR in any other state does not.
 - A write CR waits when the last submission line of its `## Result` has a hash that its
@@ -169,5 +190,6 @@ agent-session's `check` uses the same function), and `tests/test_model.py` cover
 
 ```sh
 ~/python/.venv/bin/python -m pytest -q tools/project-board/tests
+(cd tools/project-board/rust && cargo test --offline --locked)
 git diff --check
 ```

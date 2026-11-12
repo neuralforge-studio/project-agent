@@ -1,0 +1,8 @@
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "/primehome/tools/Inhouse/Rust/dependencies/2026-10-29-r3"
+
+[net]
+offline = true
