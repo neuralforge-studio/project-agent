@@ -6,6 +6,11 @@
 //! text colour. The goldens of the scenes that show a Leader time were redrawn for BOARD-023 (no `Leader` row, the time on the name
 //! row): each was accepted only when it equalled the 0.7.1 Textual cells apart from that change. A colour channel may differ by 1: Textual blends the text of a disabled button over the background
 //! with its own rounding.
+//!
+//! BOARD-027 put the cron count `C:n` beside `D:n`, so `D` is no longer as wide as the block. Every golden was redrawn
+//! for it and accepted only when the rows that changed were the `D` rows and nothing else (the scenes show the cron
+//! count as `C:-`: no crontab was read). `basic_cron` and `basic_hover_cron` show each state of `C` and its tooltip;
+//! Textual never drew them, so the unit tests of `ui.rs` hold their colours.
 use crate::render_cmd::{self, Scene};
 use crate::ui;
 use ratatui::style::{Color, Modifier};
@@ -117,5 +122,5 @@ golden!(
     basic_liveness, basic_hover_name, basic_hover_count, basic_hover_fold, basic_hover_seat, basic_hover_empty_seat,
     basic_focus_decision, basic_focus_seat, basic_focus_active_seat, basic_focus_active_name, basic_wide,
     basic_narrow_scrollbar, basic_short_scrolled, long_names, long_names_scrolled_right, long_names_scrolled_end,
-    many_projects, many_projects_scrolled, many_projects_expanded, counts_wide_with_scrollbar,
+    many_projects, many_projects_scrolled, many_projects_expanded, counts_wide_with_scrollbar, basic_cron, basic_hover_cron,
 );

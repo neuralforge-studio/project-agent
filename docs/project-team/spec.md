@@ -621,6 +621,7 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 | project_liveness(project, socket=None, view=None) | `liveness`와 같되 이미 `load_registry`로 얻은 project를 받음. `view`(`server_view`의 반환)를 주면 그 읽기로 판정하고 tmux를 다시 읽지 않음 |
 | server_view(projects, socket=None) | 이미 `load_registry`로 얻은 project들의 tmux 서버를 한 번 읽은 snapshot을 반환. `project_liveness`·`project_pending_releases`의 `view`로 넘김. 읽는 tmux process는 project·slot 수와 무관하게 둘입니다. 서버의 session·window·pane과 각 project의 현재 run window option을 읽고, owner·server identity·pointer 판정은 `get_current`와 같은 함수를 지남. 읽은 뒤의 변화는 보지 않으므로 다시 보려면 새로 만듦. 반환값은 불투명한 객체 |
 | crontab_sections() | 사용자 crontab의 project 구역을 순서대로 `{project, begin, end, jobs: [{id, command}], error}`로 반환([cron](#cron)의 형식). `begin`·`end`는 구역의 시작·끝 줄 그대로입니다. 구역이 깨져 있으면(끝 줄 없음·중복·낯선 줄) `error`가 그 코드(`cron_invalid`)이고 `jobs`는 비어 있으며 다른 구역은 그대로 읽습니다. crontab이 아직 없으면 빈 목록, 읽지 못하면 `crontab_unreadable`·`crontab_unavailable` 오류입니다. 쓰지 않습니다. 설치기가 `uninstall`·`check`에서 남은 구역을 알릴 때 씁니다(설치 계약 5.4절·7.3절) |
+| cron_listing(project) | `project`(`load_registry`가 준 항목)의 cron 작업을 `{project, jobs: [{id, schedule, description, command, next_run, last_run}]}`로 반환합니다. `agent-session cron ls --project`와 같은 값입니다([cron](#cron)). crontab을 읽지 못하거나 그 project의 구역이 깨졌으면 `SessionError`(`crontab_unavailable`, `crontab_unreadable`, `cron_invalid`)입니다. 쓰지 않습니다. Board의 cron 창이 읽을 때 씁니다 |
 | pane_slot(pane, tmux=None) | tmux pane이 든 관리 window의 `(project_id, slot)`을 반환. slot은 `leader`·`seat-N`이고 target이 slot이 아니면 None. 관리 window가 아니면(project_id option이 없거나 JSON이 아님) None. window option만 한 번의 tmux 호출로 읽음. Board가 지금 보는 창의 project·slot을 알 때 씀. Rust sidebar는 같은 option을 같은 규칙으로 읽습니다(제품 지도의 "Rust sidebar와 Python이 같은 규칙을 읽습니다" 절) |
 | caller(project, tmux=None, store=None) | 이 명령을 실행하는 쪽을 `(slot, session_id)`로 반환. slot은 `leader`·`seat-N`·`operator`(관리 실행 밖 CLI, session_id는 None)·`unmanaged-agent`(이 project의 구성원이 아닌 agent). 환경의 대화 ID를 state의 binding과 대조하고, 없으면 관리 실행의 tmux pane으로 판정. project 도구의 유일한 caller 규칙 |
 | require_live(project, slot, identity, tmux=None) | Leader·Worker caller의 slot이 아직 그 대화의 살아 있는 관리 CLI를 가졌는지 확인. 아니면 `caller_not_running` 오류. 반환값 없음 |
@@ -638,7 +639,7 @@ Git 준비 중에는 해당 자리의 종료·교체도 직렬화합니다.
 `PANE_ID_OPTION`·`RemoteSeat`·`SessionError`·`Tmux`는 이름과 형식을 제공하는 값이고, 나머지는 함수입니다.
 agent-session 내부 모듈은 서로의 밑줄 이름을 import하지 않습니다. 함께 쓰는 helper는 소유 모듈의 공개 이름입니다.
 
-`read_state`·`project_state`·`check_binding`·`crontab_sections`·`liveness`·`project_liveness`·`server_view`·`pending_releases`·`project_pending_releases`·`caller`·`require_live`는 읽기 전용이고, `finish_release`는 반납 대기를 마치는 쓰기 호출입니다(project-item이 CR을 옮긴 직후 부름).
+`read_state`·`project_state`·`check_binding`·`crontab_sections`·`cron_listing`·`liveness`·`project_liveness`·`server_view`·`pending_releases`·`project_pending_releases`·`caller`·`require_live`는 읽기 전용이고, `finish_release`는 반납 대기를 마치는 쓰기 호출입니다(project-item이 CR을 옮긴 직후 부름).
 호출자는 선택한 등록 파일과 socket을 전달할 수 있습니다.
 전달하지 않은 등록 경로는 CLI와 같은 표준 경로 규칙을 적용합니다.
 상태 손상·미등록·현재 소유자 불일치·관찰 불가를 구분해 공통 오류로 반환합니다.
@@ -1423,7 +1424,7 @@ M H DOM MON DOW 명령
 
 **다음 실행 시각**은 `agent_session/cron.py`의 `Schedule.next_run`이 한 곳에서 정합니다(주어진 시각보다 엄밀히 뒤의 첫 일치 분, 8년 안에 없으면 없음). 다른 언어의 읽는 쪽(Board의 sidebar)은 같은 결과를 내야 하고 [`tests/fixtures/cron_next_run.json`](../../tools/agent-session/tests/fixtures/cron_next_run.json)의 손으로 쓴 사례(시각은 시간대 없는 local 분)로 일치를 지킵니다.
 
-`ls` 결과는 `{project, jobs: [{id, schedule, description, command, next_run, last_run}]}`입니다. `next_run`은 local 시각 `YYYY-MM-DDTHH:MM`(없으면 null), `last_run`은 그 작업의 명령이 남긴 `{at(UTC), ok, result[, code]}`(없으면 null)입니다. `--summary`는 sidebar가 2초 주기에서 읽는 값으로 `{project, count, next_run}`(작업 수와 가장 가까운 다음 실행)만 냅니다. Board는 이 명령을 부르거나, `crontab -l`을 직접 읽어 위 형식을 해석하고 위 규칙으로 다음 실행을 계산할 수 있습니다.
+`ls` 결과는 `{project, jobs: [{id, schedule, description, command, next_run, last_run}]}`입니다. `next_run`은 local 시각 `YYYY-MM-DDTHH:MM`(없으면 null), `last_run`은 그 작업의 명령이 남긴 `{at(UTC), ok, result[, code]}`(없으면 null)입니다. `--summary`는 `{project, count, next_run}`(작업 수와 가장 가까운 다음 실행)만 냅니다. Board는 이 명령을 부르거나, `crontab -l`을 직접 읽어 위 형식을 해석하고 위 규칙으로 다음 실행을 계산할 수 있습니다. 실제로 Board의 Rust sidebar는 10초마다 `crontab -l` 하나로 모든 project의 구역을 직접 읽어 작업 수(`C:n`)와 다음 실행(tooltip)을 보이고, Python cron 창은 `agent_session.api.cron_listing`(`ls`와 같은 값)으로 읽습니다.
 
 **기본 점검 작업**: project의 작업 `check`는 30분마다(`13,43 * * * *`, `:00`·`:30`을 피함) 그 release의 `bin/agent-session --config <등록 파일> [--socket-name|--socket-path ...] check --project NAME`을 실행합니다. cron이 출력을 메일로 보내지 않도록 `>/dev/null 2>&1`을 붙이며, 결과는 `last_run`이 보입니다.
 
