@@ -114,13 +114,18 @@ def report_background(stopped, meta):
     Background shells and tasks always keep the run from resting. Session crons do only while the CLI could
     hand its conversation to a background session when it ends. Without that handoff they end with the
     instance (spec 7절 watch), so a CLI that ended leaves no work behind in them. The report of the crons
-    stays in `session_crons` for diagnosis."""
+    stays in `session_crons` for diagnosis.
+
+    The handoff is impossible when the launch turned it off (`adopt_disabled`) and also once the CLI process is
+    gone: a handoff that happened is the transcript's `continued-in` record, which the caller reads before it
+    judges the end (`Manager._observe`). The launch record only matters for a CLI that still lives, so a run
+    started by code without that record (a frozen checkout, an old release) is not held by a dead CLI's report."""
     if not (isinstance(stopped, dict) and isinstance(stopped.get("background_tasks"), list)
             and isinstance(stopped.get("session_crons"), list)):
         return None, None
     crons = list(stopped["session_crons"])
     tasks = list(stopped["background_tasks"])
-    return (tasks if adopt_disabled(meta) else tasks + crons), crons
+    return (tasks if adopt_disabled(meta) or _cli_ended(meta) else tasks + crons), crons
 
 
 HOST_QUERY_SECONDS = 8                      # `claude agents` wait inside a hook (its own limit is HOOK_TIMEOUT)
