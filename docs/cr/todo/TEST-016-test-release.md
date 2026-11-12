@@ -15,6 +15,7 @@
   - 일부는 한도 자체를 확인하는 test입니다(`test_fixture_timeout.py`, 일부러 짧은 한도로 `timeout`을 기대하는 test).
   - 나머지는 성공을 기대하면서 원본보다 짧은 한도를 줘서, 부하에 따라 실패합니다. 20초를 준 4곳 중 2곳은 SESSION-009, 2곳은 SESSION-017에서 생겼습니다.
 - [README 검증](../../../README.md#검증): "Agent-session test는 seat 여럿이 같은 host에서 동시에 검증하는 평소 부하에서 같은 결과를 냅니다. 한도(`AGENT_SESSION_TEST_TIMEOUT`, 기본 240초)는 host가 이보다 심하게 느릴 때만 늘립니다." 숫자를 직접 준 test는 이 한도를 따르지 않으므로, `AGENT_SESSION_TEST_TIMEOUT`을 늘려도 고쳐지지 않습니다.
+- 같은 날 TEAM-003 검증(`-n 8` agent-session, 전체 49분)에서도 5건이 load로 실패했고, 직렬 재실행에서 통과했습니다. SESSION-017 restart test 2건(`timeout=20`), `test_git_ops.py::test_timed_out_git_releases_its_lock_and_reports_the_interruption`(git `timeout=2`), `test_tmux.py::test_exit_refuses_tmux_mode_and_preserves_partial_input[False-copy-mode]`(client `wait(timeout=10)`), `test_remote.py::test_dead_report_bridge_reuses_its_token_and_replaces_its_stale_socket`(원인 미확인)입니다. 일부러 짧은 한도를 주는 test도 부하에 흔들리지 않아야 합니다(Contract 2).
 
 ## Contract
 1. 성공을 기대하는 기다림은 모두 기다림 한도의 원본 하나(`command_timeout()` 또는 그 원본에서 나온 값)를 따릅니다. test가 숫자를 따로 갖지 않습니다.
