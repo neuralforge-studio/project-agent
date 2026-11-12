@@ -12,7 +12,7 @@ import sys
 
 sys.dont_write_bytecode = True      # importing the product's agent_session must not write into the checkout or a release
 
-from . import commands, journal, release as releases
+from . import commands, journal, release as releases, tmuxrecord
 from .layout import Env, InstallerError
 
 COMMANDS = {
@@ -129,12 +129,13 @@ def main(argv=None):
         if arguments.command in ("install", "upgrade"):
             source = releases.load_source(arguments.source or root)
             python = releases.installer_python()
+            tmux = tmuxrecord.choose(source.root)
             if arguments.command == "install":
                 adopt = arguments.adopt_dev_links
-                plan = commands.plan_install(env, source, python,
+                plan = commands.plan_install(env, source, python, tmux,
                                              os.path.abspath(os.path.expanduser(adopt)) if adopt else None)
             else:
-                plan = commands.plan_upgrade(env, source, python, root)
+                plan = commands.plan_upgrade(env, source, python, tmux, root)
         elif arguments.command == "rollback":
             plan = commands.plan_rollback(env, root)
         elif arguments.command == "prune":

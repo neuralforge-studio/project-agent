@@ -13,7 +13,8 @@ import time
 
 from .config import RemoteSeat
 from .errors import SessionError
-from . import process
+from . import process, tmux_program
+from .tmux_program import COMPANY_TMUX
 
 
 _PREFIX = "@agent_session_"
@@ -21,7 +22,6 @@ PANE_ID_OPTION = _PREFIX + "pane_id"    # window option naming the managed pane;
 EXIT_HOOK = "pane-died[agent-session]"  # the server-wide hook element that starts the wrap-up of a run that ended itself
 LAST_ERROR_OPTION = "@project_agent_last_error"   # the one record of a failed tmux job (install contract 5.3, project_agent_run.sh)
 _HOOK_WORD = re.compile(r"[A-Za-z0-9_./:@%+=,-]+")  # what a hook command may carry as a path: no quote, space, or `$`
-COMPANY_TMUX = "/primehome/tools/Inhouse/tmux/latest/bin"   # install contract 3.2: put this directory first in PATH
 # The minimum tmux version has one definition: `@project_agent_tmux_min` in the integration file (install
 # contract 3.2). The product tree keeps that file at `integrations/tmux/` beside `tools/`; a tree without it
 # (the remote runtime's bundle) has no minimum to check.
@@ -51,10 +51,13 @@ def quiet_shell(job, name, socket, quote='"', notify_client=None):
     not carry it. `socket` and `notify_client` are shell words. `quote` is the double quote of the text the
     message is in; a hook that nests this text in tmux's own quotes passes `\\"`. The text has no `'`."""
     message = f"{quote}$(date +%F) $(date +%T) {name} failed (exit $*){quote}"
-    record = f"set -- $?; tmux -S {socket} set-option -g {LAST_ERROR_OPTION} {message} >/dev/null 2>&1"
+    tmux = tmux_program.program()
+    if _HOOK_WORD.fullmatch(tmux) is None:      # a hook is only written when it can carry the word (`install_exit_hook`)
+        tmux = shlex.quote(tmux)
+    record = f"set -- $?; {tmux} -S {socket} set-option -g {LAST_ERROR_OPTION} {message} >/dev/null 2>&1"
     if notify_client is not None:
         notice = f"{quote}project-agent: {name} failed (tmux show-options -gv {LAST_ERROR_OPTION}){quote}"
-        record += f"; tmux -S {socket} display-message -c {notify_client} -d 5000 {notice} >/dev/null 2>&1"
+        record += f"; {tmux} -S {socket} display-message -c {notify_client} -d 5000 {notice} >/dev/null 2>&1"
     return f"( {job} ) >/dev/null 2>&1 || {{ {record}; }}; exit 0"
 
 
@@ -332,18 +335,24 @@ class Tmux:
             self.socket_path = str(path.resolve())
 
     def _argv(self, arguments):
-        prefix = ["tmux"]
+        prefix = [tmux_program.program()]
         if self.socket_path is not None:
             prefix.extend(["-S", self.socket_path])
         elif self.socket_name is not None:
             prefix.extend(["-L", self.socket_name])
         return prefix + list(map(str, arguments))
 
+    def program(self):
+        """The tmux executable every command of this control runs (the installer's record, `tmux_program`)."""
+        return tmux_program.program()
+
     def _run(self, *arguments, allow_missing=False):
         try:
-            result = subprocess.run(self._argv(arguments), capture_output=True, text=True, timeout=10)
+            result = subprocess.run(self._argv(arguments), capture_output=True, text=True, timeout=10,
+                                    env=tmux_program.environment())
         except FileNotFoundError as exc:
-            raise SessionError("tmux_unavailable", "The tmux executable is unavailable.", 5) from exc
+            raise SessionError("tmux_unavailable", "The tmux executable is unavailable.", 5,
+                               {"program": tmux_program.program()}) from exc
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise SessionError("tmux_unknown", "Cannot confirm the tmux operation.", 4) from exc
         if result.returncode:
@@ -628,9 +637,11 @@ class Tmux:
             lines = [" ".join(self._quoted(word) for word in command) for command in commands[index:index + 2]]
             script += " ; ".join(lines) + "\n"
         try:
-            result = subprocess.run(self._argv(["source-file", "-"]), input=script, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(self._argv(["source-file", "-"]), input=script, capture_output=True, text=True,
+                                    timeout=10, env=tmux_program.environment())
         except FileNotFoundError as exc:
-            raise SessionError("tmux_unavailable", "The tmux executable is unavailable.", 5) from exc
+            raise SessionError("tmux_unavailable", "The tmux executable is unavailable.", 5,
+                               {"program": tmux_program.program()}) from exc
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise SessionError("tmux_unknown", "Cannot confirm the tmux operation.", 4) from exc
         gone = []
@@ -791,23 +802,28 @@ class Tmux:
         """Refuse a tmux older than the minimum, before a run is started: the named hook index of
         `install_exit_hook` needs the same tmux the integration file does (install contract 3.2).
 
-        The running server's version counts; with no server yet, the first `tmux` in PATH. A tree without
-        the integration file has no minimum, and nothing is checked."""
+        The running server's version counts; with no server yet, the version of the tmux this tree runs
+        (`tmux_program`, the installer's record). A tree without the integration file has no minimum, and
+        nothing is checked."""
         wanted = minimum_version()
         if wanted is None:
             return
         version = self._run("display-message", "-p", "#{version}", allow_missing=True)
+        program = tmux_program.program()
         if not version:
             try:
-                parts = subprocess.run(["tmux", "-V"], capture_output=True, text=True, timeout=10).stdout.split()
+                parts = subprocess.run([program, "-V"], capture_output=True, text=True, timeout=10,
+                                       env=tmux_program.environment()).stdout.split()
             except (OSError, subprocess.SubprocessError) as exc:
-                raise SessionError("tmux_unavailable", "The tmux executable is unavailable.", 5) from exc
+                raise SessionError("tmux_unavailable", "The tmux executable is unavailable.", 5,
+                                   {"program": program}) from exc
             version = parts[-1] if parts else ""
         if _version_number(version) < _version_number(wanted):
             raise SessionError(
-                "tmux_too_old", f"agent-session needs tmux {wanted} or newer; this tmux is {version or 'of an unknown version'}. "
-                f"Put {COMPANY_TMUX} first in PATH and restart the tmux server.", 5,
-                {"version": version, "minimum": wanted, "company_tmux": COMPANY_TMUX})
+                "tmux_too_old", f"agent-session needs tmux {wanted} or newer; the tmux {program} runs is "
+                f"{version or 'of an unknown version'}. Install a newer tmux (the company tmux is in {COMPANY_TMUX}), "
+                "run the installer again, and restart the tmux server (install contract 6.2).", 5,
+                {"version": version, "minimum": wanted, "program": program, "company_tmux": COMPANY_TMUX})
 
     def install_exit_hook(self, python, library):
         """Make the tmux server run the wrap-up of a managed run whose pane died (`internal.finish_ended`).
@@ -817,7 +833,7 @@ class Tmux:
         window. It is an element of its own, so the hooks of a person's configuration still run (a window-scope
         hook would replace them). The command is written again at every launch with that launch's interpreter
         and library. It leaves nothing in the user's pane whatever the wrap-up does (`quiet_shell`). Returns False, without a hook, when a path has a character the command cannot carry."""
-        words = (str(python), str(library))
+        words = (str(python), str(library), tmux_program.program())
         if any(_HOOK_WORD.fullmatch(word) is None for word in words):
             return False
         job = (f"env PYTHONPATH={words[1]} {words[0]} -m agent_session.internal finish-ended "

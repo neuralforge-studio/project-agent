@@ -26,7 +26,9 @@ status=$?
 
 line=$(printf '%s\n' "$output" | sed -n '/[^[:space:]]/{s/^[[:space:]]*//;p;q;}' | cut -c1-200)
 text="${1##*/} failed (exit $status)${line:+: $line}"
-tm() { tmux -S "$socket" "$@" 2>/dev/null; }
+. "${0%/*}/../../tools/tmux-launcher.sh"
+project_agent_select_tmux "${0%/*}/../../tools"
+tm() { "$TMUX_BIN" -S "$socket" "$@" 2>/dev/null; }
 tm set-option -g @project_agent_last_error "$(date '+%F %T') $text" || true
 if [ "$mode" = key ]; then
     # display-message expands formats, so a # in the text is doubled.

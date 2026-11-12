@@ -27,7 +27,7 @@ impl Tmux {
     }
 
     pub fn run(&self, args: &[&str]) -> Result<String, String> {
-        let mut command = Command::new("tmux");
+        let mut command = crate::tmuxprog::command();
         if let Some(socket) = &self.socket {
             command.arg("-S").arg(socket);
         }

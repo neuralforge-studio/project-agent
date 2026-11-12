@@ -1,5 +1,6 @@
-# The installer writes python.env into a release. A development checkout has none.
+# The installer writes python.env and tmux.env into a release. A development checkout has neither.
 tools/python.env
+tools/tmux.env
 # Python caches that test runs create; they must not block a seat release (REPO-002).
 __pycache__/
 *.pyc

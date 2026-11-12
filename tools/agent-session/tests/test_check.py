@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 from agent_session_fixture import command_timeout, session_env  # noqa: F401,E402
 from agent_session import cli, cron, jobs, process
+from agent_session.launch_artifacts import library_path
 from agent_session.lifecycle import Manager
 
 THRESHOLD = 1800
@@ -308,7 +309,7 @@ def test_a_crontab_that_cannot_be_read_does_not_stop_the_leader(session_env, mon
     assert env.crontab.read_text().startswith("0 1 * * * /user\n")
 
 
-# SESSION-016: the check job under cron's environment
+# SESSION-016, TMUX-004: the check job under cron's environment
 
 def cron_run(env, line, path):
     """What cron does: the line in `/bin/sh` with a minimal environment and PATH `path`."""
@@ -337,41 +338,57 @@ def wrong_tmux(tmp_path):
     return wrong
 
 
-def test_the_check_line_reaches_the_leaders_tmux_where_a_wrong_tmux_stands_ahead_in_cron_path(
-        session_env, monkeypatch, tmp_path):
-    import shutil
+def installed_line(env, tmp_path, program, library):
+    """The check line of the project, run from a release-shaped copy of the tools whose `tmux.env` names `program`."""
+    import tmux_record
+    tools = tmux_record.release_tools(tmp_path / "release", program, library)
+    line = cron.check_command(env.project, socket_name=env.socket_name)
+    here = str(library_path())
+    assert line.startswith(here)
+    return str(tools / "agent-session") + line[len(here):]
+
+
+def test_the_check_line_has_the_program_and_no_copy_of_the_environment(session_env):
+    line = cron.check_command(session_env.project, socket_name=session_env.socket_name)
+    assert line.startswith(str(library_path() / "bin" / "agent-session") + " ")
+    assert "env " not in line and "PATH=" not in line
+
+
+def test_the_check_line_reaches_the_recorded_tmux_where_a_wrong_tmux_stands_in_cron_path(
+        session_env, tmp_path):
+    import tmux_record
     env = session_env
     with_a_worker(env)
-    right = tmp_path / "right"
-    right.mkdir()
-    (right / "tmux").symlink_to(shutil.which("tmux"))
-    monkeypatch.setattr(cron, "tmux_directory", lambda: str(right))     # the tmux the Leader start ran with
-    line = cron.check_command(env.project, socket_name=env.socket_name)
-    assert line.startswith(f"env PATH={right}:/usr/bin:/bin ")
+    program, library = tmux_record.real_tmux()
+    line = installed_line(env, tmp_path, program, library)
     done = cron_run(env, line, f"{wrong_tmux(tmp_path)}:/usr/bin:/bin")
     assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
     record = kept_run(env)
     assert record["ok"] is True and record["result"] == "idle" and "code" not in record
 
 
-def test_a_tmux_that_cannot_reach_the_server_leaves_its_code_in_the_run(session_env, monkeypatch, tmp_path):
+def test_a_line_that_ignores_the_record_fails_with_the_wrong_tmux_in_cron_path(session_env, tmp_path):
     env = session_env
     with_a_worker(env)
-    monkeypatch.setattr(cron, "tmux_directory", lambda: None)           # a line without the Leader's tmux
-    line = cron.check_command(env.project, socket_name=env.socket_name)
-    assert not line.startswith("env ")
+    line = cron.check_command(env.project, socket_name=env.socket_name)       # no record in a checkout: PATH decides
     cron_run(env, line, f"{wrong_tmux(tmp_path)}:/usr/bin:/bin")
     record = kept_run(env)
     assert record["ok"] is False and record["result"] == "error" and record["code"] == "tmux_command_failed"
 
 
-def test_without_any_tmux_the_run_names_tmux_unavailable(session_env, capsys, monkeypatch, tmp_path):
+def test_a_record_without_a_tmux_names_tmux_unavailable(session_env, tmp_path):
     env = session_env
     with_a_worker(env)
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    with monkeypatch.context() as search:
-        search.setenv("PATH", str(empty))
-        _, out = check(env, capsys)
-    assert out["data"]["projects"][0]["run"] == {"ok": False, "result": "error", "code": "tmux_unavailable"}
+    line = installed_line(env, tmp_path, "", "")
+    cron_run(env, line, "/usr/bin:/bin")
+    record = kept_run(env)
+    assert record["ok"] is False and record["code"] == "tmux_unavailable"
+
+
+def test_a_missing_tmux_file_names_tmux_unavailable(session_env, tmp_path):
+    env = session_env
+    with_a_worker(env)
+    line = installed_line(env, tmp_path, str(tmp_path / "gone" / "tmux"), "")
+    cron_run(env, line, "/usr/bin:/bin")
     assert kept_run(env)["code"] == "tmux_unavailable"
+

@@ -8,7 +8,7 @@ import os
 import stat
 import subprocess
 
-from . import actions, crontab, journal, paths, record as records, release as releases, runs, rustbuild, tmuxconf
+from . import actions, crontab, journal, paths, record as records, release as releases, runs, rustbuild, tmuxconf, tmuxrecord
 from .layout import SKILLS, TOOLS, InstallerError
 
 
@@ -68,7 +68,7 @@ class Builder:
 
 # ---------------------------------------------------------------- install
 
-def plan_install(env, source, python, adopt=None):
+def plan_install(env, source, python, tmux, adopt=None):
     installed = records.read(env)
     if installed:
         if installed["current"] != source.name:
@@ -91,7 +91,7 @@ def plan_install(env, source, python, adopt=None):
             b.conflict(env.lib, "is not empty and has no install record")
     b.ensure_dir(env.lib)
     b.ensure_dir(env.releases)
-    extra = {releases.PYTHON_ENV: releases.python_env(*python)}
+    extra = {releases.PYTHON_ENV: releases.python_env(*python), tmuxrecord.TMUX_ENV: tmuxrecord.env_text(*tmux[:2])}
     toolchain = rustbuild.prepare(source.root)
     b.add(actions.build_release(places, source.name, source.files, source.root, extra, toolchain))
     b.note(rustbuild.describe(toolchain))
@@ -124,9 +124,8 @@ def plan_install(env, source, python, adopt=None):
     if os.path.realpath(env.bin) not in path_entries:
         b.note("%s is not in PATH; add it to your shell settings (the installer does not edit them)."
                % env.display(env.bin))
-    old_tmux = tmuxconf.too_old(source.root)
-    if old_tmux:
-        b.note(old_tmux[0])
+    for text in tmux[2]:
+        b.note(text)
     plan = b.finish()
     new["created_dirs"] = b.created_dirs
     owned.append(records.owned(env.display(env.record), "file"))
@@ -307,7 +306,7 @@ def _require_compatible(env, root, target_root, target_name):
                              "stop`)." % target_name, {"runs": refused})
 
 
-def plan_upgrade(env, source, python, root):
+def plan_upgrade(env, source, python, tmux, root):
     installed = _require_record(env)
     _require_current(env, installed)
     places = paths.record_places(env, installed)
@@ -318,23 +317,25 @@ def plan_upgrade(env, source, python, root):
     _require_compatible(env, root, source.root, source.name)
     release_dir = env.releases / source.name
     new = _switch(env, installed, source.name, installed["current"])
-    python_env = releases.python_env(*python)
+    extra = {releases.PYTHON_ENV: releases.python_env(*python),
+             tmuxrecord.TMUX_ENV: tmuxrecord.env_text(*tmux[:2])}
     if os.path.lexists(release_dir):
         try:
-            same = (release_dir / releases.PYTHON_ENV).read_bytes() == python_env
+            same = all((release_dir / name).read_bytes() == data for name, data in extra.items())
         except OSError:
             same = False
         if not same:
-            raise InstallerError("release_conflict", "Release %s exists with another interpreter. Run the "
-                                 "installer with the interpreter it was made with, or bump VERSION." % source.name)
+            raise InstallerError("release_conflict", "Release %s exists with another interpreter or tmux. Run the "
+                                 "installer with the interpreter and the tmux it was made with, or bump VERSION."
+                                 % source.name)
         plan.notes.append("Release %s already exists; `current` is pointed at it." % source.name)
     else:
-        extra = {releases.PYTHON_ENV: python_env}
         toolchain = rustbuild.prepare(source.root)
         plan.steps.append(actions.build_release(places, source.name, source.files, source.root, extra, toolchain))
         plan.notes.append(rustbuild.describe(toolchain))
         new["owned"].append(records.owned(env.display(release_dir), "dir",
                                           digest=actions.release_digest(source.files, extra, rustbuild.OUTPUTS)))
+    plan.notes.extend(tmux[2])
     plan.steps.append(actions.swap_link(places, "current", "releases/" + source.name))
     plan.steps.append(actions.replace_record(places, records.encode(new)))
     _changed_notes(env, installed, plan)
@@ -395,7 +396,7 @@ def plan_prune(env, root):
         return plan
     plan.notes.append("The install record drops each removed release.")
     socket = os.environ.get("AGENT_SESSION_SOCKET") or None
-    if runs.server_option("@project_board_enabled", socket) == "1":
+    if runs.server_option(root, "@project_board_enabled", socket) == "1":
         plan.notes.append("Project Board is on. A Board that started before this may call files of a removed release "
                           "(it answers decisions through `agent-session` in the release it started from); reopen "
                           "Board after pruning.")
@@ -466,7 +467,7 @@ def plan_uninstall(env, source_root, socket=None):
     plan.steps.append(actions.remove_file(places, "record"))     # the record goes after everything it lists
     plan.steps.append(actions.drop_journal(plan.journal_path))
     plan.steps += [actions.remove_dir(places, places.dir_id(directory)) for directory in late]
-    _kept_notes(env, plan)
+    _kept_notes(env, plan, source_root)
     _crontab_notes(source_root, plan)
     return plan
 
@@ -491,14 +492,14 @@ def _plan_tmux_removal(env, installed, plan):
     plan.steps.append(actions.cut_block(places, places.tmux_id(path), data, bool(tmux.get("created"))))
 
 
-def _kept_notes(env, plan):
+def _kept_notes(env, plan, source_root):
     kept = [env.display(env.registry)] if os.path.lexists(env.registry) else []
     plan.notes.append("Not removed (not made by the installer, or not its to remove): %s; the project state under "
                       "<base>/agent/; locks and caches under ~/.cache; the Claude and Codex trust records."
                       % ", ".join(kept + ["your project registry files"]))
     socket = os.environ.get("AGENT_SESSION_SOCKET") or None
-    key = runs.server_option("@project_agent_board_key", socket) or "B"
-    skipped = runs.server_option("@project_agent_board_skipped", socket)
+    key = runs.server_option(source_root, "@project_agent_board_key", socket) or "B"
+    skipped = runs.server_option(source_root, "@project_agent_board_skipped", socket)
     plan.notes.append("A running tmux server keeps the bindings and hooks that the integration file set until it "
                       "ends. To remove them now, run:\n"
                       + "\n".join("    " + line for line in binding_undo(key, skipped)))
@@ -581,9 +582,9 @@ def run_check(env, source_root):
         interpreter_failures, interpreter_notices = _check_interpreter(current)
         failures += interpreter_failures
         notices += interpreter_notices
-        old_tmux = tmuxconf.too_old(current)
-        if old_tmux:
-            (failures if old_tmux[1] else notices).append(old_tmux[0])
+        problem = tmuxrecord.check(current, source_root)
+        if problem:
+            (failures if problem[1] else notices).append(problem[0])
     tmux = installed["tmux"]
     if tmux.get("state") == "inserted":
         path = env.expand(tmux["file"])
@@ -595,7 +596,7 @@ def run_check(env, source_root):
     entries = [os.path.realpath(entry) for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
     if os.path.realpath(env.bin) not in entries:
         notices.append("%s is not in PATH." % env.display(env.bin))
-    skipped = runs.server_option("@project_agent_board_skipped", os.environ.get("AGENT_SESSION_SOCKET") or None)
+    skipped = runs.server_option(source_root, "@project_agent_board_skipped", os.environ.get("AGENT_SESSION_SOCKET") or None)
     if skipped:
         notices.append("Binding skipped (binding 건너뜀): %s are bound to something of yours; the Board keys are "
                        "not set there." % ", ".join(skipped.split()))

@@ -169,6 +169,7 @@ def release(tmp_path):
     root = tmp_path / "release"
     (root / "tools").mkdir(parents=True)
     shutil.copy2(TOOLS / "python-launcher.sh", root / "tools")
+    shutil.copy2(TOOLS / "tmux-launcher.sh", root / "tools")
     for name in ENTRIES:
         shutil.copytree(TOOLS / name / "bin", root / "tools" / name / "bin")
     shutil.copytree(ROOT / "integrations" / "tmux", root / "integrations" / "tmux",

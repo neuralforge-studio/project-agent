@@ -157,7 +157,7 @@ def new_decisions(previous, current):
 def tmux(*args):
     """Return the tmux output, or None when the command fails."""
     try:
-        proc = subprocess.run(("tmux",) + args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        proc = subprocess.run((os.environ.get("PROJECT_AGENT_TMUX") or "tmux",) + args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               timeout=5)
     except (OSError, subprocess.SubprocessError):
         return None

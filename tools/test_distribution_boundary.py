@@ -12,7 +12,7 @@ import pytest
 REPOSITORY = Path(__file__).resolve().parents[1]
 PRODUCT_PATHS = (
     "tools/agent-session", "tools/project-item", "tools/project-board",
-    "tools/python-launcher.sh", "tools/bundle_boot.py", "skills/project-team", "skills/project-item",
+    "tools/python-launcher.sh", "tools/tmux-launcher.sh", "tools/bundle_boot.py", "skills/project-team", "skills/project-item",
     "docs/project-team", "integrations/tmux", "CHANGELOG.md", "tools/formats.json",
 )
 SUFFIXES = {".py", ".md", ".sh", ".json", ".yaml", ".yml", ".txt", ".conf", ""}
