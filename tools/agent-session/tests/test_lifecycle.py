@@ -1365,16 +1365,26 @@ def test_claude_stop_again_ends_a_run_that_was_left_stopping_with_only_a_session
 
 
 def test_claude_stop_that_times_out_after_the_signal_tells_it_apart_from_the_unsignalled_wait(session_env, monkeypatch):
+    from agent_session import process
+
     env = session_env
     record = claude_project(env, monkeypatch)
     worker = env.manager().start(env.cr())
     (env.base / "agent" / "fixture-background-seat-0").write_text("")     # idle, but the Stop report keeps a task
-    with pytest.raises(SessionError) as error:
-        env.manager(timeout=5).control("stop", job=worker["job_id"])
+    # The CLI ends on the signal, but a PID the run tracked as its background work still lives.
+    survivor = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        env.tmux.write_meta(worker["window_id"], {"run_id": worker["run_id"], "background_pids": [
+            {"pid": survivor.pid, "birth": process.birth(survivor.pid)}]})
+        with pytest.raises(SessionError) as error:
+            env.manager(timeout=5).control("stop", job=worker["job_id"])
+    finally:
+        survivor.kill()
+        survivor.wait()
     assert error.value.code == "timeout"
     wait = error.value.details["exit_wait"]
     assert wait["exit_requested"] is True and wait["idle"] is True and wait["background"] == ["task"]
-    assert (wait["cli_alive"], wait["pane_dead"]) == (False, True)
+    assert (wait["cli_alive"], wait["pane_dead"], wait["tracked_alive"]) == (False, True, True)
     assert recorded(record) == [{"signal": "SIGTERM"}]
     assert error.value.details["stopping_restored"] is False
 
