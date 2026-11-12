@@ -1,6 +1,6 @@
+# No `version`: a build is named by its release (src/release.rs), the one identity the installer gives it.
 [package]
 name = "project-board-sidebar"
-version = "0.1.0"
 edition = "2021"
 publish = false
 description = "The Project Board sidebar of project-agent (BOARD-018)"

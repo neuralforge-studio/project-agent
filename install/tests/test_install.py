@@ -175,6 +175,7 @@ def test_t6_upgrade_changes_only_the_new_release_current_and_the_record(home, so
                    trees=[tree(second)])
     assert os.readlink(home.path(LIB + "/current")) == "releases/" + second
     assert json.loads(home.read(LIB + "/install.json"))["previous"] == first
+    assert "switches itself to the new release" in result.stdout        # BOARD-028: what happens to an open Board
     assert home.run("check").returncode == 0
 
 
@@ -195,6 +196,7 @@ def test_t8_rollback_swaps_current_back_and_refuses_without_a_previous_release(h
     record = json.loads(home.read(LIB + "/install.json"))
     assert (record["current"], record["previous"]) == (first, second)
     assert os.readlink(home.path(LIB + "/current")) == "releases/" + first
+    assert "switches itself to " + first in result.stdout                # BOARD-028
 
 
 def test_t8_a_reader_never_sees_current_missing_or_dangling_while_it_is_swapped(home, source):

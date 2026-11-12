@@ -25,17 +25,20 @@ pub enum Outcome {
     Fallback,
 }
 
-/// One pane row of `list-panes`: id, `@project_board_window`, kind and link options.
+/// One pane row of `list-panes`: id, `@project_board_window`, kind, release and link options.
 #[derive(Debug, PartialEq)]
 pub struct Row {
     pub pane: String,
     pub is_window: bool,
     pub kind: String,
+    /// The release of the process that started the window ('' when it was not in an installed release, or an older
+    /// Board that did not say).
+    pub release: String,
     pub link: String,
 }
 
 /// The window pane of the window `client` is in, from the tab-separated output of one tmux process:
-/// `C\t<client>\t<window>` rows and `P\t<window>\t<pane>\t<marker>\t<kind>\t<link>` rows.
+/// `C\t<client>\t<window>` rows and `P\t<window>\t<pane>\t<marker>\t<kind>\t<release>\t<link>` rows.
 pub fn window_pane(text: &str, client: &str) -> Option<Row> {
     let mut window: Option<&str> = None;
     for line in text.lines() {
@@ -48,10 +51,10 @@ pub fn window_pane(text: &str, client: &str) -> Option<Row> {
     }
     let window = window?;
     for line in text.lines() {
-        let fields: Vec<&str> = line.splitn(6, '\t').collect();
-        if let ["P", id, pane, marker, kind, link] = fields[..] {
+        let fields: Vec<&str> = line.splitn(7, '\t').collect();
+        if let ["P", id, pane, marker, kind, release, link] = fields[..] {
             if id == window && marker == "1" {
-                return Some(Row { pane: pane.to_string(), is_window: true, kind: kind.to_string(), link: link.to_string() });
+                return Some(Row { pane: pane.to_string(), is_window: true, kind: kind.to_string(), release: release.to_string(), link: link.to_string() });
             }
         }
     }
@@ -91,11 +94,13 @@ pub fn tell(kind: &str, request: &Value, client: &str, title: &str) -> Outcome {
     let tmux = Tmux::from_env();
     let listing = tmux.run(&[
         "list-clients", "-F", "C\t#{client_name}\t#{window_id}", ";",
-        "list-panes", "-a", "-F", "P\t#{window_id}\t#{pane_id}\t#{@project_board_window}\t#{@project_board_window_kind}\t#{@project_board_window_link}",
+        "list-panes", "-a", "-F", "P\t#{window_id}\t#{pane_id}\t#{@project_board_window}\t#{@project_board_window_kind}\t#{@project_board_window_release}\t#{@project_board_window_link}",
     ]);
     let Ok(listing) = listing else { return Outcome::Fallback };
     let Some(row) = window_pane(&listing, client) else { return Outcome::Fallback };
-    if row.kind != kind || row.link.is_empty() {
+    // a window started by another release is not reused: `project-board` starts it again from this one (BOARD-028)
+    let release = crate::release::own().map(|own| own.name).unwrap_or_default();
+    if row.kind != kind || row.release != release || row.link.is_empty() {
         return Outcome::Fallback;
     }
     let mut request = request.clone();
@@ -135,16 +140,16 @@ mod tests {
     use super::*;
     use std::os::unix::net::UnixListener;
 
-    const LISTING: &str = "C\t/dev/pts/3\t@1\nC\t/dev/pts/4\t@2\nP\t@1\t%5\t\t\t\nP\t@1\t%6\t1\tcr\t/tmp/x.win\nP\t@2\t%7\t1\tdecision\t\n";
+    const LISTING: &str = "C\t/dev/pts/3\t@1\nC\t/dev/pts/4\t@2\nP\t@1\t%5\t\t\t\t\nP\t@1\t%6\t1\tcr\t0.11.0-aaaaaaaaaaaa\t/tmp/x.win\nP\t@2\t%7\t1\tdecision\t\t\n";
 
     #[test]
     fn the_window_pane_is_the_marked_pane_of_the_clients_window() {
         let row = window_pane(LISTING, "/dev/pts/3").unwrap();
-        assert_eq!((row.pane.as_str(), row.kind.as_str(), row.link.as_str()), ("%6", "cr", "/tmp/x.win"));
+        assert_eq!((row.pane.as_str(), row.kind.as_str(), row.release.as_str(), row.link.as_str()), ("%6", "cr", "0.11.0-aaaaaaaaaaaa", "/tmp/x.win"));
         let starting = window_pane(LISTING, "/dev/pts/4").unwrap();
-        assert_eq!((starting.pane.as_str(), starting.kind.as_str(), starting.link.as_str()), ("%7", "decision", ""));
+        assert_eq!((starting.pane.as_str(), starting.kind.as_str(), starting.release.as_str(), starting.link.as_str()), ("%7", "decision", "", ""));
         assert_eq!(window_pane(LISTING, "/dev/pts/9"), None);
-        assert_eq!(window_pane("C\tc\t@1\nP\t@1\t%1\t\t\t\n", "c"), None);
+        assert_eq!(window_pane("C\tc\t@1\nP\t@1\t%1\t\t\t\t\n", "c"), None);
     }
 
     #[test]

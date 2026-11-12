@@ -33,6 +33,7 @@ Sidebar를 한 번 표시한 tmux window마다 sidebar 프로세스 하나를 �
 
 Sidebar는 파일 상태를 2초마다, 실행 상태와 지금 보는 창, project별 cron(`crontab -l`)을 10초마다 다시 읽습니다. 각 읽기는 자기 thread에서 실행합니다. 느린 실행 상태 읽기나 crontab 읽기가 파일 읽기를 막지 않습니다.
 
+- 설치본의 release(`current`)도 2초 파일 읽기 안에서 확인합니다(BOARD-028, [설치 계약 2.2절](project-team/install-contract.md#22-release의-식별)). `current`가 가리키는 release 이름을 읽는 일이라 process를 더하지 않고, snapshot을 보낸 뒤에 하므로 첫 그림을 기다리게 하지 않습니다. 보이지 않는 window의 sidebar는 읽지 않다가 보이게 되면 함께 확인합니다. 아래 "Sidebar의 release"가 그 동작입니다.
 - 첫 그림은 첫 파일 읽기만 기다립니다. 실행 상태를 기다리지 않습니다. 읽기 전의 pane은 비어 있습니다.
 - 첫 파일 읽기는 NFS의 파일 열기 지연이 지배하므로 파일을 여러 thread(기본 32, 환경 변수 `PROJECT_BOARD_THREADS`)로 동시에 엽니다. 이후 읽기는 `stat`으로 바뀐 것만 다시 읽습니다.
 - 실행 상태는 tmux 서버를 읽는 일입니다. project·slot 수와 무관하게 tmux process 둘로 모든 project를 판정합니다(`agent_session.api.server_view`의 규칙). 반납 대기(`release_pending`)도 이 10초 읽기가 갱신하고, 다음 파일 읽기의 seat 상태가 씁니다. SSH seat의 실행 판정만 Python의 `project-board liveness`에 맡깁니다(SSH가 필요하기 때문입니다).
@@ -46,6 +47,16 @@ Sidebar는 파일 상태를 2초마다, 실행 상태와 지금 보는 창, proj
 - Popup은 자기 project 하나만 읽습니다(`model.snapshot(project_id=…)`).
 
 답변 알림의 `agent-session send`는 오래 걸릴 수 있습니다. Popup은 접수와 알림 중에도 화면과 스크롤이 멈추지 않게 이 동작을 백그라운드에서 실행합니다. 잠금 안에서 첫 답변만 접수하므로 다시 누르거나 다른 client에서 동시에 제출해도 중복 전송하지 않습니다.
+
+### Sidebar의 release (BOARD-028)
+
+Sidebar process는 시작할 때 import한 코드를 계속 씁니다. 설치본이 새 release로 바뀐 뒤에도 옛 sidebar가 옛 코드로 판정하고 표시하지 않게, sidebar는 자기 release와 `current`의 release를 비교합니다. release의 식별과 비교 규칙은 [설치 계약 2.2절](project-team/install-contract.md#22-release의-식별)이 소유하고, 이 절은 화면과 동작만 정합니다. sidebar와 Board 창은 run이 아니라서 "run은 시작한 release를 고정한다"는 정책의 대상이 아닙니다(정책은 바꾸지 않습니다).
+
+- 같으면 아무것도 보이지 않고 아무 일도 하지 않습니다. release 밖에서 실행한 sidebar(개발 checkout)는 비교하지 않습니다.
+- 다르고 새 release의 `tools/project-board/bin/project-board-sidebar`를 실행할 수 있으면, 같은 process를 그 binary로 바꿉니다(`exec`. `rust/src/release.rs`와 `app.rs`의 `switch_release`). pane, 크기, 위치, 환경 변수, 인자(`--config`)가 그대로입니다. 터미널 상태(마우스·focus 보고, 대체 화면)는 바꾸기 전에 돌려놓고 새 process가 다시 켭니다. click socket 파일은 같은 경로를 새 process가 이어받습니다(환경 변수 `PROJECT_BOARD_SUCCESSOR=1`. 이 값이 있을 때만 옛 process의 socket 파일을 지우고 다시 엽니다). 접힘 상태는 tmux option에 있으므로 그대로이고, 새 process가 첫 읽기로 다시 그립니다. SIGUSR1은 바꾸는 동안 무시하고(handler는 `exec`를 지나지 못하고 기본 동작은 process를 끝냅니다) 새 process가 handler를 설치한 뒤 `mark_ready`와 가시성 확인을 다시 합니다. 새 process도 `current`가 자기 release인지 확인하므로 `current`가 그사이 또 바뀌었으면 한 번 더 바꿉니다.
+- 바꿀 수 없으면(새 release에 binary가 없거나 실행 권한이 없음, `exec` 실패, `current`를 읽을 수 없거나 `releases/` 밖을 가리킴) 옛 코드로 계속 그립니다. 맨 위 줄에 `재시작 필요: <이유>. Board를 껐다 켜세요(prefix B 두 번).`를 보입니다. 등록 오류가 있어도 함께 보입니다(옛 코드의 오류일 수 있어 알림이 가려지지 않게 합니다). `current`가 다시 자기 release가 되면 사라집니다.
+- tmux option에 있는 상태(접힘), click socket·SIGUSR1·`mark_ready` 규약은 새 process에서도 같습니다. 바꾸는 중 click socket에 들어온 클릭은 새 process가 socket을 열 때까지 연결이 거절되고, 그때 누른 사람이 한 번 더 누릅니다.
+- 전환한 sidebar가 여는 창과 popup은 새 release의 `project-board`로 열립니다(sidebar가 자기 binary와 같은 release의 `project-board`를 실행합니다). Board 창의 재사용은 5절이 정합니다.
 
 ## 3. Sidebar 화면
 
@@ -190,6 +201,7 @@ tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합
 | `@project_board_window` | `1`. Board 창의 pane 표시 | 창 pane의 시작 script |
 | `@project_board_window_kind` | `cr`, `decision` 또는 `cron`. 이 process가 시작된 종류 | 시작 script (다시 시작하는 쪽도 먼저 씀) |
 | `@project_board_window_link` | 창 process가 듣는 unix socket의 절대 경로. process가 듣기 시작한 뒤에만 있고, 시작할 때마다 지워집니다 | 창 process |
+| `@project_board_window_release` | 이 창을 시작한 release의 이름([설치 계약 2.2절](project-team/install-contract.md#22-release의-식별)). release 밖(개발 checkout)이면 빈 값입니다. option이 없는 옛 창도 빈 값으로 읽습니다 | 시작 script (다시 시작하는 쪽도 먼저 씀) |
 
 창은 `list-panes -t <window> -F '#{pane_id} #{@project_board_window}'`에서 `1`인 pane입니다. 한 window에 하나입니다.
 
@@ -197,6 +209,7 @@ tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합
 
 1. 창 pane이 없으면 새로 시작합니다(아래 시작).
 2. `kind` option이 요청한 종류와 다르면 그 pane에서 다시 시작합니다(`respawn-pane -k`). 한 process는 한 종류만 그립니다.
+   `release` option이 클릭하는 쪽 자신의 release와 다르면(둘 다 빈 값이면 같음) 같은 방식으로 다시 시작합니다. 창 process는 시작할 때 import한 코드를 계속 쓰므로 다른 release의 창은 쓰지 않습니다(BOARD-028). 클릭하는 쪽은 sidebar(Rust)나 sidebar가 실행한 `project-board`(Python)이고, 둘 다 자기가 속한 release로 비교합니다. 다시 시작한 창은 그 release의 `project-board`로 열립니다.
 3. 같은 종류인데 `link` option이 비어 있으면 process가 시작하는 중입니다. 20초까지 `link`가 생기기를 기다립니다. 그래도 없으면 다시 시작합니다. 시작하는 process를 죽이지 않으려고 기다립니다.
 4. `link`의 socket에 요청 한 줄을 보냅니다. 연결할 수 없거나(파일 없음, 연결 거부, socket이 아니거나 소유자가 다름) 응답이 JSON 한 줄이 아니거나 2초 안에 오지 않으면 죽은 process로 보고 다시 시작합니다.
 5. 응답이 `{"ok": true}`면 끝입니다. pane의 title(`select-pane -T`)만 바꿉니다. 창의 위치와 크기는 그대로입니다.
@@ -223,7 +236,7 @@ tmux hook은 client 연결·이동·분리와 window 생성·종료를 관찰합
 | `invalid` | 요청을 이해하지 못함(종류·project·state가 맞지 않음) | 다시 시작합니다 |
 | `closing` | 창이 닫히는 중 | 다시 시작합니다 |
 
-**시작(창이 없거나 다시 시작할 때).** 새 창은 `new-pane -W -t <window> -x <크기> -y <크기> -X <여백> -Y <여백> -T <title> ...`(결정 90%, CR과 cron 80%, 가운데), 있는 pane은 `respawn-pane -k -t <pane>`에 같은 환경과 명령을 줍니다. 환경은 `-e PROJECT_BOARD_CLIENT=<client>`와 `-e PROJECT_BOARD_WINDOW_SOCKET=<새 socket 경로>`입니다. socket 경로는 Board의 runtime 디렉터리(`/tmp/project-board-<uid>-<server pid>`, 0700) 아래 `<16자리 hex>.win`입니다. 다시 시작하기 전에 옛 `link` option을 지우고(`set-option -pu`) `kind`를 새 종류로 쓰고, 옛 socket 파일을 지웁니다. 명령은 `sh -c`로 시작 script를 실행합니다. script는 자기 pane에 `remain-on-exit off`, `@project_board_window 1`, `@project_board_window_kind`를 쓰고 `link`를 지운 뒤, 창 화면이 그려지기 전의 빈 화면에 `Board 창을 시작하는 중…`을 출력하고, `project-board [--config PATH] cr --project P --state S`, `popup --project P [--decision D]` 또는 `cron --project P`로 `exec`합니다. 창 process는 `PROJECT_BOARD_WINDOW_SOCKET`에 socket을 열고(0600) 듣기 시작한 뒤 자기 pane의 `link` option에 그 경로를 씁니다. 끝나면 socket 파일을 지웁니다.
+**시작(창이 없거나 다시 시작할 때).** 새 창은 `new-pane -W -t <window> -x <크기> -y <크기> -X <여백> -Y <여백> -T <title> ...`(결정 90%, CR과 cron 80%, 가운데), 있는 pane은 `respawn-pane -k -t <pane>`에 같은 환경과 명령을 줍니다. 환경은 `-e PROJECT_BOARD_CLIENT=<client>`와 `-e PROJECT_BOARD_WINDOW_SOCKET=<새 socket 경로>`입니다. socket 경로는 Board의 runtime 디렉터리(`/tmp/project-board-<uid>-<server pid>`, 0700) 아래 `<16자리 hex>.win`입니다. 다시 시작하기 전에 옛 `link` option을 지우고(`set-option -pu`) `kind`를 새 종류로, `release`를 이 client의 release로 쓰고, 옛 socket 파일을 지웁니다. 명령은 `sh -c`로 시작 script를 실행합니다. script는 자기 pane에 `remain-on-exit off`, `@project_board_window 1`, `@project_board_window_kind`, `@project_board_window_release`를 쓰고 `link`를 지운 뒤, 창 화면이 그려지기 전의 빈 화면에 `Board 창을 시작하는 중…`을 출력하고, `project-board [--config PATH] cr --project P --state S`, `popup --project P [--decision D]` 또는 `cron --project P`로 `exec`합니다. 창 process는 `PROJECT_BOARD_WINDOW_SOCKET`에 socket을 열고(0600) 듣기 시작한 뒤 자기 pane의 `link` option에 그 경로를 씁니다. 끝나면 socket 파일을 지웁니다.
 
 **창이 보이는 동안 읽는 중.** 창은 시작하자마자(Python이 뜨기 전에는 시작 script의 문구로, 뜬 뒤에는 화면의 "읽는 중…"으로) 무엇을 읽는지 보입니다. 알림을 받으면 새 항목을 읽는 동안에도 같은 문구를 보인 뒤 바꿉니다.
 

@@ -27,7 +27,7 @@ import subprocess
 import time
 import uuid
 
-from . import model, window_link
+from . import model, release, window_link
 from agent_session import api
 from agent_session.api import PANE_ID_OPTION, SessionError, Tmux
 
@@ -43,6 +43,7 @@ PANE_SOCKET = "@project_board_click_socket"
 PANE_WINDOW = "@project_board_window"
 PANE_WINDOW_KIND = "@project_board_window_kind"        # `cr`, `decision` or `cron`: what the pane's process was started as
 PANE_WINDOW_LINK = "@project_board_window_link"        # the socket it listens on, set by the process once it does
+PANE_WINDOW_RELEASE = "@project_board_window_release"  # the release (`release.name_of`) of the code that started it
 WINDOW_SEEN = "@project_board_seen"
 SIDEBAR_WIDTH = 25
 # The most Board panes kept at once. One Board process holds about 13 MB (RSS of the Rust sidebar with 10 projects; the Textual one held 50 MB) and reads
@@ -55,6 +56,7 @@ CLICK_TIMEOUT = 2
 WINDOW_START = 3
 TOOL = Path(__file__).resolve().parents[1]
 LAUNCHER = TOOL / "bin" / "project-board"
+RELEASE = release.name_of(TOOL)                         # '' in a development checkout
 SIDEBAR_NAME = "project-board-sidebar"
 # How long a click waits for a Board window of the same kind that is still starting, before it starts the window again.
 WINDOW_REUSE_WAIT = 20
@@ -802,34 +804,39 @@ def _window_command(tmux: str, socket: str, args: list[str], kind: str) -> list[
     script = (f"{shlex.quote(tmux)} -S {shlex.quote(socket)} set-option -p -t {pane} remain-on-exit off \\; "
               f"set-option -p -t {pane} {PANE_WINDOW} 1 \\; "
               f"set-option -p -t {pane} {PANE_WINDOW_KIND} {kind} \\; "
+              f"set-option -p -t {pane} {PANE_WINDOW_RELEASE} {shlex.quote(RELEASE)} \\; "
               f"set-option -pu -t {pane} {PANE_WINDOW_LINK}; "
               f"printf '%s\\n' {shlex.quote(STARTING)}; exec \"$@\"")
     return ["sh", "-c", script, "sh", *args]
 
 
-def _window_options(control: Tmux, pane: str) -> tuple[str, str]:
-    """The kind of the pane's window process and the socket it listens on ('' while it is starting)."""
+def _window_options(control: Tmux, pane: str) -> tuple[str, str, str]:
+    """The kind of the pane's window process, the release that started it and the socket it listens on ('' while
+    it is starting)."""
     row = control.command("display-message", "-p", "-t", pane,
-                          f"#{{{PANE_WINDOW_KIND}}}\t#{{{PANE_WINDOW_LINK}}}")
-    kind, _, link = row.partition("\t")
-    return kind, link
+                          f"#{{{PANE_WINDOW_KIND}}}\t#{{{PANE_WINDOW_RELEASE}}}\t#{{{PANE_WINDOW_LINK}}}")
+    kind, _, rest = row.partition("\t")
+    started_by, _, link = rest.partition("\t")
+    return kind, started_by, link
 
 
 def _reuse(control: Tmux, pane: str, kind: str, request: dict, title: str) -> dict | None:
     """Tell the process of the window in `pane` what to show; None when the pane must be started again.
 
     Only a window of the same `kind` is reused: its process is the one that can show that kind of item, and
-    it keeps what it has read, so the new item appears without starting Python and Textual again. A process
-    that is still starting is waited for (`WINDOW_REUSE_WAIT`); one that does not answer is replaced.
+    it keeps what it has read, so the new item appears without starting Python and Textual again. A window
+    that another release started (`RELEASE`: the release of this code, which is the one that starts the
+    replacement) is not reused: its process still runs the code it imported. A process that is still starting
+    is waited for (`WINDOW_REUSE_WAIT`); one that does not answer is replaced.
     """
-    current, link = _window_options(control, pane)
-    if current != kind:
+    current, started_by, link = _window_options(control, pane)
+    if current != kind or started_by != RELEASE:
         return None
     deadline = time.monotonic() + WINDOW_REUSE_WAIT
     while not link and time.monotonic() < deadline:
         time.sleep(0.05)
-        current, link = _window_options(control, pane)
-    if not link or current != kind:
+        current, started_by, link = _window_options(control, pane)
+    if not link or current != kind or started_by != RELEASE:
         return None
     try:
         result = window_link.send(link, request)
@@ -866,12 +873,13 @@ def _popup(control: Tmux, client: str, args: list[str], title: str, size: str, k
         environment = ["-e", f"PROJECT_BOARD_CLIENT={client}", "-e", f"{window_link.SOCKET_ENV}={link}"]
         command_line = _window_command(control.program(), control.effective_socket(), args, kind)
         if pane is not None:
-            old = _window_options(control, pane)[1]
+            old = _window_options(control, pane)[2]
             if old:                                     # the process that is replaced leaves its socket file behind
                 window_link.stop(None, old)
             # the pane's options are the old process's until the new one's script writes its own
             control.command("set-option", "-pu", "-t", pane, PANE_WINDOW_LINK)
             control.command("set-option", "-p", "-t", pane, PANE_WINDOW_KIND, kind)
+            control.command("set-option", "-p", "-t", pane, PANE_WINDOW_RELEASE, RELEASE)
             control.command("respawn-pane", "-k", "-t", pane, *environment, *command_line)
             control.command("select-pane", "-t", pane, "-T", title)
             return _ok({"client": client, "pane": pane})

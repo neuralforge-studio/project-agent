@@ -256,6 +256,6 @@ def test_t42_the_real_cargo_builds_a_sidebar_that_runs(home, source, name):
     assert result.returncode == 0, result.stdout + result.stderr
     assert_changes(before, home.snapshot(), created=install_paths(name) | {".tmux.conf"}, trees=[tree(name)])
     version = sidebar(home, name)
-    assert version.returncode == 0 and version.stdout.startswith("project-board-sidebar "), version
+    assert version.returncode == 0 and version.stdout == "project-board-sidebar " + name + "\n", version   # BOARD-028: the release name
     assert home.run("check", env=env).returncode == 0
     assert not home.path(".cargo").exists() and leftovers(home) == []

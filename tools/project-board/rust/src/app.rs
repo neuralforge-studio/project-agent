@@ -7,6 +7,7 @@
 use crate::data::Reader;
 use crate::cron::Civil;
 use crate::model::{CronView, Liveness, Snapshot};
+use crate::release::{self, Own, Verdict};
 use crate::{switch, window};
 use crate::tmuxio::{self, Tmux};
 use crate::ui::{self, Action, Active, Facts, Hit, Interaction, Key, Layout};
@@ -40,6 +41,8 @@ enum Msg {
     Input(Event),
     Click { client: String, x: i64, y: i64, reply: Sender<Value> },
     Visible(bool),
+    /// What the installed `current` asks of this sidebar, when it changes (BOARD-028).
+    Release(Verdict),
     Toast(String),
     Quit,
 }
@@ -59,6 +62,10 @@ struct App {
     expanded: HashSet<String>,
     active: Option<Active>,
     notice: Option<String>,
+    /// Why this code cannot be replaced by the installed release's: shown until `current` is this release again.
+    release_notice: Option<String>,
+    /// The sidebar to become, once the loop is back at the terminal.
+    switch_to: Option<(String, std::path::PathBuf)>,
     ui: Interaction,
     layout: Layout,
     size: (u16, u16),
@@ -78,6 +85,9 @@ struct App {
 
 pub fn run(config: Option<String>) -> i32 {
     let click_socket = std::env::var("PROJECT_BOARD_CLICK_SOCKET").ok().filter(|v| !v.is_empty());
+    let successor = std::env::var_os(release::SUCCESSOR).is_some();
+    std::env::remove_var(release::SUCCESSOR);
+    let own = release::own();
     let (tx, rx) = mpsc::channel::<Msg>();
     let visible_flag = Arc::new(AtomicBool::new(true));
     let reader = Arc::new(Reader::new(config.as_deref().map(std::path::PathBuf::from)));
@@ -91,7 +101,7 @@ pub fn run(config: Option<String>) -> i32 {
         let (kick_tx, kick_rx) = mpsc::channel::<()>();
         kicks.push(kick_tx);
         let (reader, tmux, tx, flag) = (reader.clone(), tmux.clone(), tx.clone(), visible_flag.clone());
-        std::thread::spawn(move || snapshot_loop(reader, tmux, tx, flag, kick_rx));
+        std::thread::spawn(move || snapshot_loop(reader, tmux, tx, flag, kick_rx, own));
     }
     {
         let (kick_tx, kick_rx) = mpsc::channel::<()>();
@@ -114,7 +124,7 @@ pub fn run(config: Option<String>) -> i32 {
     }
     let mut notice = None;
     if let Some(path) = &click_socket {
-        notice = start_click_server(path, tx.clone());
+        notice = start_click_server(path, tx.clone(), successor);
     }
 
     let mut terminal = ratatui::init();
@@ -140,6 +150,8 @@ pub fn run(config: Option<String>) -> i32 {
         expanded: HashSet::new(),
         active: None,
         notice,
+        release_notice: None,
+        switch_to: None,
         ui: Interaction::default(),
         layout: Layout::default(),
         size,
@@ -173,6 +185,11 @@ pub fn run(config: Option<String>) -> i32 {
             while let Ok(message) = rx.try_recv() {
                 dirty |= app.handle(message, &visible_flag);
             }
+        }
+        if let Some((name, binary)) = app.switch_to.take() {
+            // Only when the exec failed does this return: the screen is drawn again, with the reason.
+            app.switch_release(&mut terminal, &name, &binary);
+            dirty = true;
         }
         if dirty {
             let _ = app.draw(&mut terminal, true);
@@ -213,7 +230,10 @@ fn now_seconds() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-fn snapshot_loop(reader: Arc<Reader>, tmux: Arc<Tmux>, tx: Sender<Msg>, visible: Arc<AtomicBool>, kick: Receiver<()>) {
+/// The files are read every 2 seconds, and so is the installed release: `current` is two path reads, no process, and
+/// it comes after the snapshot is sent so that the first draw does not wait for it. A window nobody sees does neither.
+fn snapshot_loop(reader: Arc<Reader>, tmux: Arc<Tmux>, tx: Sender<Msg>, visible: Arc<AtomicBool>, kick: Receiver<()>, own: Option<Own>) {
+    let mut told: Option<Verdict> = None;
     loop {
         let started = Instant::now();
         if visible.load(Ordering::Relaxed) {
@@ -221,6 +241,15 @@ fn snapshot_loop(reader: Arc<Reader>, tmux: Arc<Tmux>, tx: Sender<Msg>, visible:
             let (expanded, _) = tmux.refresh(false);
             if tx.send(Msg::Snapshot(snapshot, Some(expanded))).is_err() {
                 return;
+            }
+            if let Some(own) = &own {
+                let verdict = release::check(own);
+                if told.as_ref() != Some(&verdict) {
+                    told = Some(verdict.clone());
+                    if tx.send(Msg::Release(verdict)).is_err() {
+                        return;
+                    }
+                }
             }
         }
         if !pause(&kick, SNAPSHOT_EVERY.saturating_sub(started.elapsed())) {
@@ -261,9 +290,14 @@ fn cron_loop(reader: Arc<Reader>, tx: Sender<Msg>, visible: Arc<AtomicBool>, kic
 
 /// Listen on the click socket (`PROJECT_BOARD_CLICK_SOCKET`). A path that is in use or cannot be opened is
 /// reported on the first row, as the Python sidebar did. Returns that text.
-fn start_click_server(path: &str, tx: Sender<Msg>) -> Option<String> {
-    if std::fs::symlink_metadata(path).is_ok() {
-        return Some("Board 클릭 socket 경로가 이미 사용 중입니다.".into());
+fn start_click_server(path: &str, tx: Sender<Msg>, successor: bool) -> Option<String> {
+    if let Ok(info) = std::fs::symlink_metadata(path) {
+        // the socket of the sidebar this process replaced (BOARD-028) is this pane's own: nothing listens on it now
+        let ours = successor && std::os::unix::fs::FileTypeExt::is_socket(&info.file_type())
+            && std::os::unix::fs::MetadataExt::uid(&info) == unsafe { libc::getuid() };
+        if !ours || std::fs::remove_file(path).is_err() {
+            return Some("Board 클릭 socket 경로가 이미 사용 중입니다.".into());
+        }
     }
     let listener = match UnixListener::bind(path) {
         Ok(listener) => listener,
@@ -340,6 +374,11 @@ fn dispatch_request(message: &Value, tx: &Sender<Msg>) -> Value {
         return click_error("click_unavailable", "the Board sidebar is closing");
     }
     answer.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|_| click_error("click_unavailable", "the Board sidebar did not answer"))
+}
+
+/// The notice of a sidebar that stays on the code it started with: that a restart is needed, why, and how.
+fn restart_notice(reason: &str) -> String {
+    format!("재시작 필요: {reason}. Board를 껐다 켜세요(prefix B 두 번).")
 }
 
 impl App {
@@ -422,6 +461,16 @@ impl App {
                 }
                 false
             }
+            Msg::Release(verdict) => {
+                // the last word counts: a switch that `current` took back before the loop got to it is not made
+                self.switch_to = None;
+                match verdict {
+                    Verdict::Same => self.release_notice = None,
+                    Verdict::Switch { name, binary } => self.switch_to = Some((name, binary)),
+                    Verdict::Restart(reason) => self.release_notice = Some(restart_notice(&reason)),
+                }
+                true
+            }
             Msg::Toast(text) => {
                 self.toast = Some((text, Instant::now() + TOAST_TIME));
                 true
@@ -439,8 +488,34 @@ impl App {
         }
     }
 
+    /// The text of the notice rows: what the click socket reported at the start, then the release notice.
+    fn notice(&self) -> Option<String> {
+        let parts: Vec<&str> = [self.notice.as_deref(), self.release_notice.as_deref()].into_iter().flatten().collect();
+        if parts.is_empty() { None } else { Some(parts.join(" ")) }
+    }
+
+    /// Become the sidebar of release `name` in this pane (BOARD-028): the terminal is handed back as it was before this
+    /// process started, SIGUSR1 is ignored across the exec (a handler does not survive it and the default action ends
+    /// the process; the new process reads whether its window is shown itself), and the process image is replaced, so
+    /// the pane, its size and position, the environment and the arguments stay. It returns only when that failed:
+    /// this code carries on and says that a restart is needed.
+    fn switch_release(&mut self, terminal: &mut ratatui::DefaultTerminal, name: &str, binary: &std::path::Path) {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange, crossterm::event::DisableMouseCapture);
+        ratatui::restore();
+        let mut ignore: libc::sigaction = unsafe { std::mem::zeroed() };
+        ignore.sa_sigaction = libc::SIG_IGN;
+        let mut previous: libc::sigaction = unsafe { std::mem::zeroed() };
+        unsafe { libc::sigaction(libc::SIGUSR1, &ignore, &mut previous) };
+        let error = release::exec_into(binary);
+        unsafe { libc::sigaction(libc::SIGUSR1, &previous, std::ptr::null_mut()) };
+        *terminal = ratatui::init();
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture, crossterm::event::EnableFocusChange);
+        self.release_notice = Some(restart_notice(&format!("새 release {name}의 sidebar를 실행하지 못했습니다({error})")));
+    }
+
     fn facts_layout(&mut self) {
-        let facts = Facts { snapshot: &self.snapshot, liveness: &self.live, expanded: &self.expanded, active: self.active.as_ref(), notice: self.notice.as_deref(), loaded: self.loaded, cron: &self.cron, now: Civil::now() };
+        let notice = self.notice();
+        let facts = Facts { snapshot: &self.snapshot, liveness: &self.live, expanded: &self.expanded, active: self.active.as_ref(), notice: notice.as_deref(), loaded: self.loaded, cron: &self.cron, now: Civil::now() };
         self.layout = ui::layout(&facts, self.size.0 as usize, self.size.1 as usize);
         let (max_x, max_y) = self.layout.max_scroll();
         self.ui.scroll_x = self.ui.scroll_x.min(max_x);
